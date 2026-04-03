@@ -1,6 +1,6 @@
 # ADR-07 — Approval Scope & Policy Snapshot Canonicalization
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 1  
