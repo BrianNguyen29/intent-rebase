@@ -1,18 +1,23 @@
 # REST API
 
+## Implementation Status
+
+**Phase 1 First Slice** - Intent Registry endpoints are implemented.
+Other endpoints (diffs, rebases, graph, etc.) are planned for Phase 2+.
+
 ## Design principles
 - JSON over HTTPS
 - idempotency cho create/update có side effects
-- cursor-based pagination
+- cursor-based pagination (future)
 - ETags/version preconditions
 - explicit tenant scoping
 
 ## Base path
 `/v1`
 
-## Resources
+## Implemented Resources (Phase 1)
 
-### POST /intents
+### POST /intents ✅
 Tạo intent mới.
 
 Request:
@@ -30,7 +35,9 @@ Request:
     "references": {"specs":[], "tickets":[], "repos":[],"policies":[]},
     "assumptions": {"explicit":[]},
     "metadata": {"risk_tier":"medium","urgency":"medium","confidence":0.9}
-  }
+  },
+  "created_by": {"actor_type": "user", "actor_id": "user@example.com"},
+  "tags": ["auth", "refactor"]
 }
 ```
 
@@ -43,12 +50,19 @@ Response:
 }
 ```
 
-### POST /intents/{intent_id}/versions
+### POST /intents/{intent_id}/versions ✅
 Tạo version mới từ intent hiện có.
 
-### GET /intents/{intent_id}
-### GET /intents/{intent_id}/versions
-### GET /intents/{intent_id}/versions/{version}
+### GET /intents/{intent_id} ✅
+Get intent head (current version).
+
+### GET /intents/{intent_id}/versions ✅
+List all versions of an intent.
+
+### GET /intents/{intent_id}/versions/{version_number} ✅
+Get specific version by version number.
+
+## Not Yet Implemented (Phase 2+)
 
 ### POST /diffs
 Tính semantic diff giữa hai versions.
@@ -113,6 +127,10 @@ Trả impact graph rút gọn để hiển thị UI.
 ```
 
 ## Security requirements
-- OAuth2 / OIDC access tokens
-- service-to-service mTLS or signed workload identity
-- per-request tenant binding
+- OAuth2 / OIDC access tokens (Phase 2+)
+- service-to-service mTLS or signed workload identity (Phase 2+)
+- per-request tenant binding (Phase 2+)
+
+## OpenAPI
+
+Full OpenAPI 3.0 specification available at `openapi.yaml`.

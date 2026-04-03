@@ -1,11 +1,12 @@
 # Task Breakdown for AI Agents
 
 ## Epic 1 — Intent Registry
-- Create DB migrations for intents, intent_versions, intent_clauses
-- Implement create intent endpoint
-- Implement create version endpoint
-- Implement get current/head/version history
-- Add optimistic concurrency checks
+- [x] Create DB migrations for intents, intent_versions, intent_clauses (Phase 1 - baseline)
+- [x] Implement create intent endpoint (Phase 1 first slice - in-memory repo)
+- [x] Implement create version endpoint (Phase 1 first slice)
+- [x] Implement get current/head/version history (Phase 1 first slice)
+- [ ] Add optimistic concurrency checks (Phase 1 full - planned)
+- [ ] SQL-backed repository (Phase 1 full - planned)
 
 ## Epic 2 — Semantic Diff
 - Implement structured diff for scope/constraints/acceptance/authority
@@ -43,3 +44,18 @@
 - Append-only audit pipeline
 - Forensic export endpoint
 - Timeline UI
+
+---
+
+## Phase 1 First Slice - Completed Items
+- [x] Intent domain types matching `docs/03-spec/01-intent-model.md`
+- [x] Intent service with repository trait (in-memory implementation for tests)
+- [x] `create_intent` operation
+- [x] `create_version` operation
+- [x] `get_intent_head` operation
+- [x] `list_versions` operation
+- [x] Migration baseline: `001_create_intents.sql`
+- [x] Migration baseline: `002_create_intent_versions.sql`
+- [x] Migration baseline: `003_create_intent_clauses.sql`
+- [x] OpenAPI skeleton: `docs/04-api/openapi.yaml`
+- [x] Unit tests for service layer
