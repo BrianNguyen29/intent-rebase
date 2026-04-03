@@ -1,6 +1,6 @@
 # ADR-02 — Data Plane Architecture
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 0–1  

@@ -1,6 +1,6 @@
 # ADR-05 — Observability Baseline
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 0–P1  
