@@ -287,4 +287,4 @@ Notes:
 -
 ```
 
-**Next Phase:** [Phase 4 — Enterprise Expansion](./06-phase-4-expansion.md)
+**Next Phase:** [Phase 4 — Enterprise Expansion](./checklist-phase-4.md)

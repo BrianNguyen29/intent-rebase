@@ -291,4 +291,4 @@ Blocking Issues (if any):
 3.
 ```
 
-**Next Phase:** [Phase 1 — Core Control Plane MVP](./03-phase-1-core-control-plane.md)
+**Next Phase:** [Phase 1 — Core Control Plane MVP](./checklist-phase-1.md)

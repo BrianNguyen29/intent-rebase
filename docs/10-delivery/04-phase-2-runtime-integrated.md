@@ -1,7 +1,7 @@
 # Phase 2 — Runtime Integrated Rebase
 
 ## Scope
-- chọn 1 adapter chính: Temporal hoặc LangGraph
+- runtime adapter mặc định: Temporal (ADR-01); adapter thay thế được phép theo ADR
 - low/medium risk apply path
 - checkpoint selection
 - approval stale detection

@@ -316,4 +316,4 @@ Notes:
 -
 ```
 
-**Next Phase:** [Phase 2 — Runtime-Integrated Rebase](./04-phase-2-runtime-integrated.md)
+**Next Phase:** [Phase 2 — Runtime-Integrated Rebase](./checklist-phase-2.md)

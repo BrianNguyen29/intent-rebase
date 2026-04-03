@@ -291,4 +291,4 @@ Notes:
 -
 ```
 
-**Next Phase:** [Phase 3 — Compensation + Production Hardening](./05-phase-3-hardening.md)
+**Next Phase:** [Phase 3 — Compensation + Production Hardening](./checklist-phase-3.md)
