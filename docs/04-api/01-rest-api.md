@@ -26,11 +26,11 @@ Request:
   "workflow_id": "uuid",
   "source_refs": [{"type":"spec","id":"spec://repo/path/spec.md"}],
   "payload": {
-    "objective": {"summary":"Refactor auth module", "success_statement":"..."},
+    "objective": {"summary":"Refactor auth module", "success_statement":"Auth module refactored successfully", "domain":"backend"},
     "scope": {"in_scope":["auth service"], "out_of_scope":["public API"]},
     "constraints": {"functional":[], "non_functional":[], "policy":[], "budget":[], "time":[]},
     "acceptance_criteria": {"required":[], "optional":[]},
-    "authority": {"allowed_actions":["open_pr"], "forbidden_actions":["merge_main"], "approval_requirements":["approve-code-change"]},
+    "authority": {"allowed_actions":[{"action":"open_pr"}], "forbidden_actions":[{"action":"merge_main"}], "approval_requirements":[{"rule_id":"approve-code-change", "description":"Requires approval for code changes"}]},
     "preferences": {"tradeoffs":[{"dimension":"quality","preference":"prioritize"}]},
     "references": {"specs":[], "tickets":[], "repos":[],"policies":[]},
     "assumptions": {"explicit":[]},

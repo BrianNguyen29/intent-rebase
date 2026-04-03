@@ -92,8 +92,9 @@ impl IntentRepository for InMemoryIntentRepository {
         &self,
         version: IntentVersion,
     ) -> Result<IntentVersion, IntentRebaseError> {
-        let mut versions = self.versions.write().await;
+        // Always acquire versions_by_intent before versions to prevent deadlocks
         let mut versions_by_intent = self.versions_by_intent.write().await;
+        let mut versions = self.versions.write().await;
 
         versions.insert(version.id, version.clone());
         versions_by_intent

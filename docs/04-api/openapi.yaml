@@ -314,6 +314,7 @@ components:
 
     IntentConstraints:
       type: object
+      required: [functional, non_functional, policy, budget, time]
       properties:
         functional:
           type: array
@@ -350,6 +351,7 @@ components:
 
     AcceptanceCriteria:
       type: object
+      required: [required, optional]
       properties:
         required:
           type: array
@@ -362,6 +364,7 @@ components:
 
     ActionRef:
       type: object
+      required: [action]
       properties:
         action:
           type: string
@@ -370,6 +373,7 @@ components:
 
     ApprovalRuleRef:
       type: object
+      required: [rule_id, description]
       properties:
         rule_id:
           type: string
@@ -378,6 +382,7 @@ components:
 
     IntentAuthority:
       type: object
+      required: [allowed_actions, forbidden_actions, approval_requirements]
       properties:
         allowed_actions:
           type: array
@@ -403,6 +408,7 @@ components:
 
     IntentPreferences:
       type: object
+      required: [tradeoffs]
       properties:
         tradeoffs:
           type: array
@@ -411,6 +417,7 @@ components:
 
     DocRef:
       type: object
+      required: [type, id]
       properties:
         type:
           type: string
@@ -421,6 +428,7 @@ components:
 
     IntentReferences:
       type: object
+      required: [specs, tickets, repos, policies]
       properties:
         specs:
           type: array
@@ -441,6 +449,7 @@ components:
 
     IntentAssumptions:
       type: object
+      required: [explicit]
       properties:
         explicit:
           type: array
@@ -552,7 +561,7 @@ components:
     # ----- Request/Response Types -----
     CreateIntentRequest:
       type: object
-      required: [workflow_id, payload, created_by, tags]
+      required: [workflow_id, source_refs, payload, created_by, tags]
       properties:
         workflow_id:
           type: string
