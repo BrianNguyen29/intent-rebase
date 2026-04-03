@@ -1,17 +1,21 @@
 //! Common error types for IRE
 
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum IntentRebaseError {
     #[error("intent not found: {0}")]
-    IntentNotFound(u64),
+    IntentNotFound(Uuid),
+
+    #[error("intent version not found: {0}")]
+    IntentVersionNotFound(Uuid),
 
     #[error("artifact not found: {0}")]
-    ArtifactNotFound(u64),
+    ArtifactNotFound(Uuid),
 
     #[error("graph node not found: {0}")]
-    GraphNodeNotFound(u64),
+    GraphNodeNotFound(Uuid),
 
     #[error("invalid intent version: {0}")]
     InvalidIntentVersion(String),
@@ -27,6 +31,9 @@ pub enum IntentRebaseError {
 
     #[error("serialization error: {0}")]
     SerializationError(String),
+
+    #[error("optimistic concurrency conflict: intent {0} has been modified")]
+    ConcurrencyConflict(Uuid),
 
     #[error("internal error: {0}")]
     Internal(String),

@@ -1,0 +1,664 @@
+# Intent Rebase Engine - OpenAPI Specification
+# Phase 1 First Slice - Intent Registry
+#
+# Note: This is an initial skeleton. Full OpenAPI will be generated as endpoints are implemented.
+# HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
+
+openapi: 3.0.3
+info:
+  title: Intent Rebase Engine API
+  description: |
+    Phase 1 First Slice - Intent Registry API
+    
+    Manages intent lifecycle, versioning, and basic CRUD operations.
+    
+    ## Implemented (Phase 1)
+    - Create intent with initial version
+    - Create new version of existing intent
+    - Get intent head (current version)
+    - List all versions of an intent (descending order)
+    - Get specific version by version number
+    
+    ## Not Yet Implemented
+    - Diff/rebase/graph operations (Phase 2+)
+    - Full authentication/authorization
+  version: 0.1.0
+  contact:
+    name: Intent Rebase Engine Team
+    url: https://github.com/BrianNguyen29/intent-rebase
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: /v1
+    description: Version 1 API
+
+tags:
+  - name: intents
+    description: Intent lifecycle operations
+  - name: versions
+    description: Intent version management
+
+paths:
+  /intents:
+    post:
+      tags:
+        - intents
+      summary: Create a new intent
+      description: Creates a new intent with initial version (v1)
+      operationId: createIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntentRequest'
+      responses:
+        '201':
+          description: Intent created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateIntentResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}:
+    get:
+      tags:
+        - intents
+      summary: Get intent head (current version)
+      description: Returns the intent document with its current (head) version
+      operationId: getIntentHead
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      responses:
+        '200':
+          description: Intent found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentHeadResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/versions:
+    post:
+      tags:
+        - versions
+      summary: Create a new version
+      description: Creates a new version of an existing intent
+      operationId: createVersion
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVersionRequest'
+      responses:
+        '201':
+          description: Version created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateVersionResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - versions
+      summary: List all versions
+      description: Returns all versions of an intent in descending version order
+      operationId: listVersions
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      responses:
+        '200':
+          description: Versions found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListVersionsResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/versions/{version_number}:
+    get:
+      tags:
+        - versions
+      summary: Get specific version
+      description: Returns a specific version of an intent by version number
+      operationId: getVersion
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: version_number
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Version number
+      responses:
+        '200':
+          description: Version found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentVersion'
+        '404':
+          description: Version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    # ----- Core Types -----
+    ActorRef:
+      type: object
+      required: [actor_type, actor_id]
+      properties:
+        actor_type:
+          type: string
+          description: Type of actor (e.g., "user", "service", "system")
+        actor_id:
+          type: string
+          description: Identifier of the actor
+
+    SourceRef:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          description: Type of source (e.g., "spec", "ticket", "doc")
+        id:
+          type: string
+          description: Source identifier
+
+    ChangeChannel:
+      type: string
+      enum: [user_edit, webhook, policy_update, system_normalization]
+      description: How the version was created
+
+    IntentStatus:
+      type: string
+      enum: [active, archived, superseded]
+      description: Status of the intent document
+
+    VersionStatus:
+      type: string
+      enum: [draft, active, rejected, superseded]
+      description: Status of an intent version
+
+    ClauseType:
+      type: string
+      enum: [functional, non_functional, policy, budget, time]
+
+    ConstraintOperator:
+      type: string
+      enum: [eq, neq, lt, lte, gt, gte, contains, not_contains, regex, custom]
+
+    ClausePriority:
+      type: string
+      enum: [must, should, could]
+
+    RiskTier:
+      type: string
+      enum: [low, medium, high, critical]
+
+    Urgency:
+      type: string
+      enum: [low, medium, high, critical]
+
+    TradeoffDimension:
+      type: string
+      enum: [speed, cost, quality, risk, compatibility, latency]
+
+    TradeoffPreference:
+      type: string
+      enum: [prioritize, balance, minimize, maximize]
+
+    # ----- Payload Structure -----
+    IntentObjective:
+      type: object
+      required: [summary, success_statement, domain]
+      properties:
+        summary:
+          type: string
+        success_statement:
+          type: string
+        domain:
+          type: string
+
+    IntentScope:
+      type: object
+      required: [in_scope, out_of_scope]
+      properties:
+        in_scope:
+          type: array
+          items:
+            type: string
+        out_of_scope:
+          type: array
+          items:
+            type: string
+
+    Constraint:
+      type: object
+      required: [type, key, operator, value, priority]
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/ClauseType'
+        key:
+          type: string
+        operator:
+          $ref: '#/components/schemas/ConstraintOperator'
+        value: {}
+        rationale:
+          type: string
+        priority:
+          $ref: '#/components/schemas/ClausePriority'
+
+    IntentConstraints:
+      type: object
+      required: [functional, non_functional, policy, budget, time]
+      properties:
+        functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        non_functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        policy:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        budget:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        time:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+
+    AcceptanceCriterion:
+      type: object
+      required: [description, priority]
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+        description:
+          type: string
+        priority:
+          $ref: '#/components/schemas/ClausePriority'
+
+    AcceptanceCriteria:
+      type: object
+      required: [required, optional]
+      properties:
+        required:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterion'
+        optional:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterion'
+
+    ActionRef:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+        target:
+          type: string
+
+    ApprovalRuleRef:
+      type: object
+      required: [rule_id, description]
+      properties:
+        rule_id:
+          type: string
+        description:
+          type: string
+
+    IntentAuthority:
+      type: object
+      required: [allowed_actions, forbidden_actions, approval_requirements]
+      properties:
+        allowed_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRef'
+        forbidden_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRef'
+        approval_requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRuleRef'
+
+    Tradeoff:
+      type: object
+      required: [dimension, preference]
+      properties:
+        dimension:
+          $ref: '#/components/schemas/TradeoffDimension'
+        preference:
+          $ref: '#/components/schemas/TradeoffPreference'
+
+    IntentPreferences:
+      type: object
+      required: [tradeoffs]
+      properties:
+        tradeoffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tradeoff'
+
+    DocRef:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        uri:
+          type: string
+
+    IntentReferences:
+      type: object
+      required: [specs, tickets, repos, policies]
+      properties:
+        specs:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        tickets:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        repos:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+
+    IntentAssumptions:
+      type: object
+      required: [explicit]
+      properties:
+        explicit:
+          type: array
+          items:
+            type: string
+
+    IntentMetadataV1:
+      type: object
+      required: [risk_tier, urgency, confidence]
+      properties:
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+        urgency:
+          $ref: '#/components/schemas/Urgency'
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    IntentPayload:
+      type: object
+      required: [objective, scope, constraints, acceptance_criteria, authority, preferences, references, assumptions, metadata]
+      properties:
+        objective:
+          $ref: '#/components/schemas/IntentObjective'
+        scope:
+          $ref: '#/components/schemas/IntentScope'
+        constraints:
+          $ref: '#/components/schemas/IntentConstraints'
+        acceptance_criteria:
+          $ref: '#/components/schemas/AcceptanceCriteria'
+        authority:
+          $ref: '#/components/schemas/IntentAuthority'
+        preferences:
+          $ref: '#/components/schemas/IntentPreferences'
+        references:
+          $ref: '#/components/schemas/IntentReferences'
+        assumptions:
+          $ref: '#/components/schemas/IntentAssumptions'
+        metadata:
+          $ref: '#/components/schemas/IntentMetadataV1'
+
+    # ----- Document Types -----
+    Intent:
+      type: object
+      required: [id, tenant_id, workflow_id, current_version, status, created_at, created_by, source_refs, tags]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        current_version:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IntentStatus'
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        source_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRef'
+        tags:
+          type: array
+          items:
+            type: string
+
+    IntentVersion:
+      type: object
+      required: [id, intent_id, version_number, parent_version_id, created_at, created_by, change_reason, change_channel, status, hash, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        parent_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        change_reason:
+          type: string
+        change_channel:
+          $ref: '#/components/schemas/ChangeChannel'
+        status:
+          $ref: '#/components/schemas/VersionStatus'
+        hash:
+          type: string
+          description: SHA-256 hash of payload for integrity verification
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+
+    # ----- Request/Response Types -----
+    CreateIntentRequest:
+      type: object
+      required: [workflow_id, source_refs, payload, created_by, tags]
+      properties:
+        workflow_id:
+          type: string
+          format: uuid
+        source_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRef'
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        tags:
+          type: array
+          items:
+            type: string
+
+    CreateIntentResponse:
+      type: object
+      required: [intent_id, current_version, status]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        current_version:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IntentStatus'
+
+    CreateVersionRequest:
+      type: object
+      required: [payload, change_reason, change_channel, created_by]
+      properties:
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+        change_reason:
+          type: string
+        change_channel:
+          $ref: '#/components/schemas/ChangeChannel'
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+
+    CreateVersionResponse:
+      type: object
+      required: [intent_version_id, intent_id, version_number, status]
+      properties:
+        intent_version_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        status:
+          $ref: '#/components/schemas/VersionStatus'
+
+    IntentHeadResponse:
+      type: object
+      required: [intent, version]
+      properties:
+        intent:
+          $ref: '#/components/schemas/Intent'
+        version:
+          $ref: '#/components/schemas/IntentVersion'
+
+    ListVersionsResponse:
+      type: object
+      required: [intent_id, versions, total]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntentVersion'
+        total:
+          type: integer
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error message
+            retryable:
+              type: boolean
+              default: false
+            details:
+              type: object
+              additionalProperties: true
