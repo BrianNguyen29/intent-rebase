@@ -630,4 +630,160 @@ mod tests {
         let head = service2.get_intent_head(response.intent_id).await;
         assert!(head.is_ok());
     }
+
+    // OCC tests - Optimistic Concurrency Control
+
+    #[tokio::test]
+    async fn test_occ_stale_version_rejected() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Try to create version 2 with OCC expecting version 1 (but current is 1, so this should work)
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // First update with correct version should succeed
+        let result = service
+            .create_version(intent_id, version_request.clone(), Some(1), Some(0))
+            .await;
+        assert!(result.is_ok());
+
+        // Now try to create another version expecting version 1 (stale)
+        // but current is 2, so this should fail with ConcurrencyConflict
+        let stale_result = service
+            .create_version(intent_id, version_request.clone(), Some(1), Some(0))
+            .await;
+        assert!(stale_result.is_err());
+        assert!(matches!(
+            stale_result.unwrap_err(),
+            IntentRebaseError::ConcurrencyConflict(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_occ_omitted_headers_defaults_to_current_state() {
+        // When OCC headers are omitted (None, None), the service uses the current server
+        // state as expected values. This allows the operation to succeed when no one
+        // else has modified the intent, but is unsafe if concurrent modifications exist.
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Without headers, the service defaults to current version (1) and row_version (0)
+        // This succeeds because no concurrent modification has occurred
+        let result = service
+            .create_version(intent_id, version_request.clone(), None, None)
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
+
+        // Subsequent call without headers still succeeds (in-memory repo is single-threaded)
+        // but the SQL repo would detect this as a conflict since row_version changed
+        let result2 = service
+            .create_version(intent_id, version_request, None, None)
+            .await;
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap().version_number, 3);
+    }
+
+    #[tokio::test]
+    async fn test_occ_correct_version_succeeds() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Get the head to see current state
+        let head = service.get_intent_head(intent_id).await.unwrap();
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Create version with correct OCC values
+        let result = service
+            .create_version(
+                intent_id,
+                version_request,
+                Some(head.intent.current_version),
+                Some(head.row_version),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
+    }
+
+    #[tokio::test]
+    async fn test_occ_row_version_not_tracked_in_memory() {
+        // NOTE: In-memory repo does NOT properly track row_version.
+        // This test documents that the wrong row_version is ignored in this implementation.
+        // The SQL repository properly enforces row_version checks.
+        // This test verifies the current (limiting) behavior, not the desired behavior.
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        let head = service.get_intent_head(intent_id).await.unwrap();
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Use correct version but wrong row_version
+        // In-memory repo ignores row_version, so this succeeds despite wrong value
+        // SQL repo would properly reject this with ConcurrencyConflict
+        let result = service
+            .create_version(
+                intent_id,
+                version_request,
+                Some(head.intent.current_version),
+                Some(head.row_version + 999), // wrong row_version
+            )
+            .await;
+
+        // In-memory behavior: succeeds because row_version is not enforced
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
+    }
 }

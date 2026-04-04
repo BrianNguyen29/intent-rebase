@@ -57,7 +57,9 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 **Notes:**
 - `intent-api` crate exposes axum router; `build_router()` returns Router that mounts directly
 - No tracing middleware (only CORS layer enabled in this PR)
-- SQL deserialization returns errors on corruption (fail-fast); no silent payload fabrication
+- OCC headers (`X-Expected-Version`, `X-Expected-Row-Version`) are validated at the API boundary:
+  malformed headers (non-integer values) return 400 Bad Request instead of being silently ignored
+- SQL deserialization returns 500 SerializationError on data corruption; no silent payload fabrication
 
 ### Phase 2+ — Diff, Rebase, Graph
 - Semantic diff engine

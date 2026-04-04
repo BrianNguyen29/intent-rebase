@@ -63,11 +63,23 @@ Tạo version mới từ intent hiện có.
 - `X-Expected-Row-Version`: row_version client last observed
 
 Nếu provided và không match, trả về `409 Conflict`.
+Nếu header present nhưng malformed (không phải integer), trả về `400 Bad Request`.
 
 **Headers:**
 ```
 X-Expected-Version: 3
 X-Expected-Row-Version: 5
+```
+
+**Response 400 (malformed header):**
+```json
+{
+  "error": {
+    "code": "INVALID_HEADER",
+    "message": "X-Expected-Version header must be an integer, got: not-a-number",
+    "retryable": false
+  }
+}
 ```
 
 **Response 409 (conflict):**

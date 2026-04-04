@@ -64,7 +64,10 @@ impl IntoResponse for ApiErrorResponse {
                 (StatusCode::INTERNAL_SERVER_ERROR, "STORAGE_ERROR", true)
             }
             IntentRebaseError::SerializationError(_) => {
-                (StatusCode::BAD_REQUEST, "SERIALIZATION_ERROR", false)
+                (StatusCode::INTERNAL_SERVER_ERROR, "SERIALIZATION_ERROR", true)
+            }
+            IntentRebaseError::InvalidHeader(_) => {
+                (StatusCode::BAD_REQUEST, "INVALID_HEADER", false)
             }
             IntentRebaseError::RebaseConflict(_) => {
                 (StatusCode::CONFLICT, "REBASE_CONFLICT", false)
@@ -128,14 +131,17 @@ async fn get_intent_head(
 /// - `X-Expected-Version`: the version number the client expects to be current
 /// - `X-Expected-Row-Version`: the row_version the client last observed
 /// If provided, enables optimistic concurrency control. Returns 409 on conflict.
+/// If headers are malformed (non-integer), returns 400 Bad Request.
 async fn create_version(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
     headers: HeaderMap,
     Json(request): Json<CreateVersionRequest>,
 ) -> Result<(StatusCode, Json<CreateVersionResponse>), ApiErrorResponse> {
-    let expected_version = parse_optional_header(&headers, "x-expected-version");
-    let expected_row_version = parse_optional_header(&headers, "x-expected-row-version");
+    let expected_version =
+        parse_optional_header(&headers, "x-expected-version").map_err(ApiErrorResponse)?;
+    let expected_row_version =
+        parse_optional_header(&headers, "x-expected-row-version").map_err(ApiErrorResponse)?;
 
     state
         .service
@@ -145,12 +151,27 @@ async fn create_version(
         .map_err(ApiErrorResponse)
 }
 
-/// Parse an optional i32 header value
-fn parse_optional_header(headers: &HeaderMap, name: &str) -> Option<i32> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
+/// Parse an optional i32 header value.
+/// Returns Ok(None) if header is absent, Ok(Some(value)) if present and valid.
+/// Returns Err(InvalidHeader) if header is present but malformed.
+fn parse_optional_header(
+    headers: &HeaderMap,
+    name: &str,
+) -> Result<Option<i32>, IntentRebaseError> {
+    match headers.get(name) {
+        None => Ok(None),
+        Some(v) => {
+            let s = v.to_str().map_err(|_| {
+                IntentRebaseError::InvalidHeader(format!("{} header is not valid UTF-8", name))
+            })?;
+            s.parse::<i32>().map(Some).map_err(|_| {
+                IntentRebaseError::InvalidHeader(format!(
+                    "{} header must be an integer, got: {}",
+                    name, s
+                ))
+            })
+        }
+    }
 }
 
 /// GET /intents/{intent_id}/versions - List all versions (descending order)
@@ -199,6 +220,7 @@ pub fn build_router(service: Arc<intent_service::IntentService>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
     use intent_service::{InMemoryIntentRepository, IntentService};
     use std::sync::Arc;
 
@@ -237,5 +259,63 @@ mod tests {
         let json = serde_json::to_string(&api_error).unwrap();
         assert!(json.contains("TEST_ERROR"));
         assert!(json.contains("Test message"));
+    }
+
+    #[test]
+    fn test_parse_optional_header_absent() {
+        let headers = HeaderMap::new();
+        let result = parse_optional_header(&headers, "x-expected-version").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_optional_header_valid_integer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-expected-version", HeaderValue::from_static("5"));
+        let result = parse_optional_header(&headers, "x-expected-version").unwrap();
+        assert_eq!(result, Some(5));
+    }
+
+    #[test]
+    fn test_parse_optional_header_malformed_non_integer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-expected-version",
+            HeaderValue::from_static("not-a-number"),
+        );
+        let result = parse_optional_header(&headers, "x-expected-version");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidHeader(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("x-expected-version"));
+        assert!(msg.contains("not-a-number"));
+    }
+
+    #[test]
+    fn test_parse_optional_header_malformed_negative_integer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-expected-row-version", HeaderValue::from_static("-1"));
+        let result = parse_optional_header(&headers, "x-expected-row-version");
+        // -1 is a valid i32, so it should parse successfully
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(-1));
+    }
+
+    #[test]
+    fn test_api_error_response_for_invalid_header() {
+        let err =
+            IntentRebaseError::InvalidHeader("X-Expected-Version must be an integer".to_string());
+        let api_err_response = ApiErrorResponse(err).into_response();
+        assert_eq!(api_err_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_api_error_response_for_serialization_error() {
+        // SerializationError represents internal data corruption during SQL read/write,
+        // not client input errors, so it should return 500 Internal Server Error
+        let err = IntentRebaseError::SerializationError("payload corrupted in database".to_string());
+        let api_err_response = ApiErrorResponse(err).into_response();
+        assert_eq!(api_err_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

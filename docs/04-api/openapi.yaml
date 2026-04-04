@@ -113,11 +113,15 @@ paths:
         **Optimistic Concurrency Control (OCC):**
         - `X-Expected-Version` (optional): The version number the client believes is current.
           If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
         - `X-Expected-Row-Version` (optional): The row_version the client last observed.
           If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
 
-        If headers are omitted, the current version and row_version are used as expected values,
-        meaning the OCC check always runs (using current state as the expected state).
+        If headers are omitted, the service uses the current server state (current_version and
+        row_version) as the expected values. This means the OCC check still occurs, but against
+        whatever is currently stored — allowing concurrent overwrites if multiple clients omit headers.
+        Clients that need deterministic OCC protection should provide both headers.
       operationId: createVersion
       parameters:
         - name: intent_id
@@ -152,6 +156,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateVersionResponse'
+        '400':
+          description: Invalid request - malformed header or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: Intent not found
           content:
