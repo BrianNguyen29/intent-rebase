@@ -112,6 +112,14 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", false)
             }
+            IntentRebaseError::InvalidIngestRequest(_) => {
+                (StatusCode::BAD_REQUEST, "INVALID_INGEST_REQUEST", false)
+            }
+            IntentRebaseError::ArtifactTraceabilityEmpty => (
+                StatusCode::BAD_REQUEST,
+                "ARTIFACT_TRACEABILITY_EMPTY",
+                false,
+            ),
         };
 
         let body = ApiError {

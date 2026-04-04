@@ -103,10 +103,18 @@
 
 [x] Graph traversal (BFS, path finding) implemented (PR #10)
     Evidence:
-    - PR: PR #10 (current PR - impact traversal baseline)
+    - PR: PR #10 (merged)
     - Code: crates/graph-service/src/lib.rs (find_reachable, find_path, detect_cycles, list_reachable_nodes, are_connected)
     - Code: crates/intent-rebase-types/src/graph.rs (GraphPath, ReachabilityResult, CycleDetectionResult, TraversalOptions)
     - Tests: BFS traversal, path finding, edge filters, cycle detection tests added
+    - Scope: internal service layer only (no HTTP endpoints)
+
+[x] Graph ingestors baseline (artifact, approval, side-effect) implemented (PR #11)
+    Evidence:
+    - PR: PR #11 (current PR - ingestors baseline)
+    - Code: crates/intent-rebase-types/src/graph.rs (ArtifactIngestRequest, ApprovalIngestRequest, SideEffectIngestRequest, IngestorResult)
+    - Code: crates/graph-service/src/lib.rs (ingest_artifact, ingest_approval, ingest_side_effect methods)
+    - Tests: ingestor tests for artifact, approval, and side-effect node creation and edge wiring
     - Scope: internal service layer only (no HTTP endpoints)
 
 [ ] Graph propagation rules from rule pack applied

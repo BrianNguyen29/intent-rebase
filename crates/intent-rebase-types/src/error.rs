@@ -46,4 +46,10 @@ pub enum IntentRebaseError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("invalid ingest request: {0}")]
+    InvalidIngestRequest(String),
+
+    #[error("artifact must have at least one IntentVersion dependency")]
+    ArtifactTraceabilityEmpty,
 }

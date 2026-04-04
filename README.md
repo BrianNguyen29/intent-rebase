@@ -33,7 +33,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
-| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection) | P1 | 🟡 Partial (traversal baseline done; propagation rules deferred) |
+| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes | P1 | 🟡 Partial (traversal and ingestors done; propagation/classification deferred) |
 
 ## Implementation Status
 
@@ -122,6 +122,20 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Graph propagation rules from rule packs
 - Graph API HTTP endpoints
 - Impact classification output semantics
+
+### Phase 1 Sixth Slice — Graph Ingestors Baseline (PR #11)
+**Implemented:**
+- `ArtifactIngestRequest`, `ApprovalIngestRequest`, `SideEffectIngestRequest` types for structured ingestion
+- `ingest_artifact()` method: creates Artifact node with DependsOn edges to IntentVersion nodes
+- `ingest_approval()` method: creates Approval node with GovernedBy edge to PolicySnapshot and ValidatedBy edge to IntentVersion
+- `ingest_side_effect()` method: creates SideEffect node with Triggers edge from TaskNode, DerivedFrom edge to IntentVersion, and GeneratedFrom edge to Approval
+- `IngestorResult` type wrapping created node and edges
+- Unit tests for deterministic ingestion behavior and edge wiring
+
+**NOT in scope for this slice (deferred to future PRs):**
+- Graph propagation rules from rule packs
+- Graph classification output semantics
+- External runtime adapters
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
