@@ -10,8 +10,8 @@
 
 ## Epic 2 — Semantic Diff
 - [x] Implement structured diff for scope/constraints/acceptance/authority (engine-core only)
-- [ ] Implement severity assignment rules
-- [ ] Implement confidence and manual-review triggers
+- [x] Implement severity assignment rules (PR #6 — engine-local risk rules)
+- [x] Implement confidence and manual-review triggers (PR #6 — engine-local risk rules)
 - [ ] Add diff API (HTTP endpoint)
 - [ ] Add regression fixtures
 
