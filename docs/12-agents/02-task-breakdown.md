@@ -16,10 +16,10 @@
 - [x] Add regression fixtures (rule-pack configuration and fixture corpus)
 
 ## Epic 3 — Graph and Impact
-- Create graph nodes/edges storage
-- Build artifact/approval/side effect edge ingestors
-- Implement impact traversal
-- Implement classification output
+- [x] Create graph nodes/edges storage (Phase 1 PR #9 - storage baseline)
+- [ ] Build artifact/approval/side effect edge ingestors
+- [ ] Implement impact traversal
+- [ ] Implement classification output
 
 ## Epic 4 — Rebase Planner
 - Build preview-only planner
