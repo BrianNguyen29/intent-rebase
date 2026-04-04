@@ -10,6 +10,7 @@
 //! - Rollback: revert to previous rule version if issues detected
 //! - Deterministic replay: same input + same rule pack = same output
 
+use intent_rebase_types::{EdgeDirection, EdgeType, NodeType, PropagationConfig};
 use serde::{Deserialize, Serialize};
 
 /// Rule pack version identifier
@@ -82,6 +83,44 @@ pub struct RulePackRiskConfig {
     pub max_high_severity_sections: usize,
 }
 
+/// Propagation configuration within a rule pack (PR #13 baseline)
+///
+/// This determines how impact propagates through the dependency graph.
+///
+/// Phase 1 baseline uses deterministic explicit rules matching the prior
+/// hardcoded behavior. Future PRs may introduce rule-pack-driven propagation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RulePackPropagationConfig {
+    /// Maximum traversal depth (default: 3)
+    pub max_depth: Option<usize>,
+    /// Edge types to traverse (default: DependsOn, Triggers, GeneratedFrom)
+    pub traversable_edge_types: Vec<EdgeType>,
+    /// Directions to traverse (default: Both)
+    pub traversable_directions: Vec<EdgeDirection>,
+    /// Target node types for classification (default: Artifact, Approval, SideEffect, Generic)
+    pub target_node_types: Vec<NodeType>,
+}
+
+impl Default for RulePackPropagationConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: Some(3),
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![
+                NodeType::Artifact,
+                NodeType::Approval,
+                NodeType::SideEffect,
+                NodeType::Generic,
+            ],
+        }
+    }
+}
+
 impl Default for RulePackRiskConfig {
     fn default() -> Self {
         Self {
@@ -124,6 +163,11 @@ pub struct RulePack {
     /// Risk analysis configuration
     pub risk: RulePackRiskConfig,
 
+    /// Propagation configuration (PR #13 baseline)
+    /// Note: #[serde(default)] allows loading packs without this field (backward compat)
+    #[serde(default)]
+    pub propagation: RulePackPropagationConfig,
+
     /// Pack description
     pub description: Option<String>,
 }
@@ -136,6 +180,7 @@ impl RulePack {
             name: name.to_string(),
             status: RulePackStatus::Active,
             risk: RulePackRiskConfig::default(),
+            propagation: RulePackPropagationConfig::default(),
             description: Some(format!("Default rule pack v{}", RulePackVersion::current())),
         }
     }
@@ -147,6 +192,7 @@ impl RulePack {
             name: name.to_string(),
             status: RulePackStatus::Active,
             risk,
+            propagation: RulePackPropagationConfig::default(),
             description: Some(format!("Custom rule pack v{}", RulePackVersion::current())),
         }
     }
@@ -171,6 +217,16 @@ impl RulePack {
     /// Get the RiskConfig for use with diff risk analysis
     pub fn risk_config(&self) -> super::risk::RiskConfig {
         (&self.risk).into()
+    }
+
+    /// Get the PropagationConfig for use with impact propagation (PR #13)
+    pub fn propagation_config(&self) -> PropagationConfig {
+        PropagationConfig {
+            max_depth: self.propagation.max_depth,
+            traversable_edge_types: self.propagation.traversable_edge_types.clone(),
+            traversable_directions: self.propagation.traversable_directions.clone(),
+            target_node_types: self.propagation.target_node_types.clone(),
+        }
     }
 }
 

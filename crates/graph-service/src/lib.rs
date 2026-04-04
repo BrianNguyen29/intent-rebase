@@ -13,8 +13,8 @@ use intent_rebase_types::{
     ApprovalIngestRequest, ArtifactIngestRequest, ClassificationImpact, ClassificationResult,
     ClassifiedNode, ClassifyRequest, CreateGraphEdgeRequest, CreateGraphNodeRequest,
     CycleDetectionResult, EdgeType, GraphEdge, GraphEdgeFilter, GraphNode, GraphNodeFilter,
-    GraphPath, IngestorResult, IntentRebaseError, NodeState, NodeType, ReachabilityResult,
-    SideEffectIngestRequest, TraversalOptions,
+    GraphPath, IngestorResult, IntentRebaseError, NodeState, NodeType, PropagationConfig,
+    ReachabilityResult, SideEffectIngestRequest, TraversalOptions, DEFAULT_PROPAGATION_CONFIG,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -1197,8 +1197,7 @@ impl GraphService {
     /// Classify the impact of a change originating from a starting node.
     ///
     /// This is a baseline classification implementation that uses deterministic,
-    /// explicit propagation rules with bounded depth. It does NOT use rule-pack-driven
-    /// propagation (deferred to future PRs).
+    /// explicit propagation rules with bounded depth.
     ///
     /// # Graph Edge Direction Semantics
     /// The dependency graph uses edges that point UPSTREAM (from dependent to dependency):
@@ -1206,6 +1205,17 @@ impl GraphService {
     /// - `Triggers`: TaskNode -> SideEffect (task triggers side effect)
     /// - `GeneratedFrom`: SideEffect -> Approval (side effect generated from approval)
     /// - `ValidatedBy`: Approval -> IntentVersion (approval validates intent)
+    ///
+    /// # Propagation Configuration (PR #13 Rule-Pack Baseline)
+    /// When `request.propagation_config` is `Some`, the provided `PropagationConfig` drives:
+    /// - `max_depth`: Maximum traversal depth (default: 3)
+    /// - `traversable_edge_types`: Which edge types to follow (default: DependsOn, Triggers, GeneratedFrom)
+    /// - `target_node_types`: Which node types to classify as affected (default: Artifact, Approval, SideEffect, Generic)
+    ///
+    /// When `request.propagation_config` is `None`, uses `DEFAULT_PROPAGATION_CONFIG`.
+    ///
+    /// Note: `traversable_directions` is accepted for future extension but Phase 1 baseline
+    /// uses hardcoded direction logic per edge type (DependsOn=incoming, Triggers/GeneratedFrom=outgoing).
     ///
     /// # Classification Rules (Baseline)
     /// - **Direct**: Nodes at depth 1 from the starting node (e.g., Artifacts that directly
@@ -1218,7 +1228,7 @@ impl GraphService {
     /// - For DependsOn: traverse INCOMING edges to find dependents
     /// - For Triggers/GeneratedFrom: traverse OUTGOING edges to find downstream
     /// - Depth is bounded by `max_depth` (default 3) to keep baseline bounded
-    /// - Only classifies nodes matching `target_node_types` filter (if provided)
+    /// - Only classifies nodes matching `target_node_types` filter (if provided in config)
     ///
     /// # Example
     /// ```ignore
@@ -1228,6 +1238,7 @@ impl GraphService {
     ///     start_node_id: iv1.id,
     ///     max_depth: Some(3),
     ///     target_node_types: Some(vec![NodeType::Artifact, NodeType::SideEffect]),
+    ///     propagation_config: None, // Uses DEFAULT_PROPAGATION_CONFIG
     /// }).await?;
     ///
     /// // Result: A1 classified as Direct (via incoming DependsOn), SE1 classified as Transitive (via outgoing Triggers)
@@ -1238,9 +1249,23 @@ impl GraphService {
     ) -> Result<ClassificationResult, IntentRebaseError> {
         use std::collections::{HashSet, VecDeque};
 
+        // PR #13: Use propagation_config if provided, otherwise use default
+        let config = request
+            .propagation_config
+            .as_ref()
+            .unwrap_or(&DEFAULT_PROPAGATION_CONFIG);
+
         // Validate start node exists
         let start_node = self.repo.get_node(request.start_node_id).await?;
-        let max_depth = request.max_depth.unwrap_or(3);
+
+        // PR #13: For backward compat, when propagation_config is None, prefer request.max_depth.
+        // When config is explicitly provided, use config.max_depth but fall back to request.max_depth.
+        let use_config_max_depth = request.propagation_config.is_some();
+        let max_depth = if use_config_max_depth {
+            config.max_depth.or(request.max_depth).unwrap_or(3)
+        } else {
+            request.max_depth.unwrap_or(3)
+        };
 
         // BFS traversal to classify nodes by impact
         // We track (node_id, depth, path_reason) for each discovered node
@@ -1250,9 +1275,12 @@ impl GraphService {
 
         // Phase 1: Seed with start node's INCOMING DependsOn edges at depth 1
         // (Artifacts that depend on this IntentVersion)
+        // Note: Direction is hardcoded per edge type for Phase 1 baseline
         let incoming_edges = self.repo.list_edges_to(request.start_node_id).await?;
         for edge in incoming_edges {
-            if edge.edge_type == EdgeType::DependsOn {
+            if edge.edge_type == EdgeType::DependsOn
+                && config.traversable_edge_types.contains(&edge.edge_type)
+            {
                 queue.push_back((edge.from_node_id, 1, "directly depends on".to_string()));
             }
         }
@@ -1274,13 +1302,30 @@ impl GraphService {
                 Err(_) => continue, // Node not found, skip
             };
 
-            // Check if this node type is a target (if filter is specified)
-            if let Some(ref target_types) = request.target_node_types {
-                if !target_types.contains(&node.node_type) {
+            // Check if this node type is a target.
+            // PR #13 backward compat: When propagation_config is None AND request.target_node_types
+            // is Some, prefer request.target_node_types (legacy behavior for existing callers).
+            // When propagation_config is Some, use config.target_node_types (may be empty to override).
+            let use_config = request.propagation_config.is_some();
+            let target_types = if use_config {
+                // Explicit config provided - use it (may be empty to target all types)
+                Some(&config.target_node_types)
+            } else {
+                // No config - use request.target_node_types if provided, else config defaults
+                request
+                    .target_node_types
+                    .as_ref()
+                    .or(Some(&config.target_node_types))
+            };
+
+            if let Some(ref allowed_types) = target_types {
+                if !allowed_types.contains(&node.node_type) {
                     // Skip this node but still explore its outgoing edges for propagation
                     if depth < max_depth {
-                        Self::enqueue_propagation_edges(&self.repo, node_id, depth, &mut queue)
-                            .await?;
+                        Self::enqueue_propagation_edges_with_config(
+                            &self.repo, node_id, depth, &mut queue, config,
+                        )
+                        .await?;
                     }
                     continue;
                 }
@@ -1302,7 +1347,10 @@ impl GraphService {
 
             // Continue traversal if within depth limit
             if depth < max_depth {
-                Self::enqueue_propagation_edges(&self.repo, node_id, depth, &mut queue).await?;
+                Self::enqueue_propagation_edges_with_config(
+                    &self.repo, node_id, depth, &mut queue, config,
+                )
+                .await?;
             }
         }
 
@@ -1313,22 +1361,28 @@ impl GraphService {
         })
     }
 
-    /// Helper: Enqueue edges for impact propagation from a node.
+    /// Helper: Enqueue edges for impact propagation from a node (PR #13 with PropagationConfig).
     ///
     /// Impact propagation follows the dependency chain downstream:
     /// - For DependsOn (artifact -> intent): downstream is the artifact (incoming edges)
     /// - For Triggers (task -> side_effect): downstream is the side_effect (outgoing edges)
     /// - For GeneratedFrom (se -> approval): downstream is the approval (outgoing edges)
-    async fn enqueue_propagation_edges(
+    ///
+    /// Note: Direction is hardcoded per edge type for Phase 1 baseline.
+    async fn enqueue_propagation_edges_with_config(
         repo: &Arc<dyn GraphRepository>,
         node_id: Uuid,
         current_depth: usize,
         queue: &mut VecDeque<(Uuid, usize, String)>,
+        config: &PropagationConfig,
     ) -> Result<(), IntentRebaseError> {
         // For DependsOn: look at INCOMING edges to find dependents (downstream artifacts)
+        // Direction is hardcoded for Phase 1 - DependsOn always uses incoming
         let incoming_edges = repo.list_edges_to(node_id).await?;
         for edge in incoming_edges {
-            if edge.edge_type == EdgeType::DependsOn {
+            if edge.edge_type == EdgeType::DependsOn
+                && config.traversable_edge_types.contains(&edge.edge_type)
+            {
                 queue.push_back((
                     edge.from_node_id,
                     current_depth + 1,
@@ -1337,18 +1391,25 @@ impl GraphService {
             }
         }
 
-        // For Triggers: follow OUTGOING edges to find downstream SideEffects
+        // For Triggers/GeneratedFrom: follow OUTGOING edges to find downstream
+        // Direction is hardcoded for Phase 1 - Triggers/GeneratedFrom always use outgoing
         let outgoing_edges = repo.list_edges_from(node_id).await?;
         for edge in outgoing_edges {
             match edge.edge_type {
-                EdgeType::Triggers => {
+                EdgeType::Triggers
+                    if config.traversable_edge_types.contains(&EdgeType::Triggers) =>
+                {
                     queue.push_back((
                         edge.to_node_id,
                         current_depth + 1,
                         "downstream via triggered".to_string(),
                     ));
                 }
-                EdgeType::GeneratedFrom => {
+                EdgeType::GeneratedFrom
+                    if config
+                        .traversable_edge_types
+                        .contains(&EdgeType::GeneratedFrom) =>
+                {
                     // SideEffect -> Approval (side effect generated from approval)
                     queue.push_back((
                         edge.to_node_id,
@@ -1366,7 +1427,7 @@ impl GraphService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use intent_rebase_types::{EdgeType, ExternalRef, ExternalRefType};
+    use intent_rebase_types::{EdgeDirection, EdgeType, ExternalRef, ExternalRefType};
 
     fn create_test_node_request() -> CreateGraphNodeRequest {
         CreateGraphNodeRequest {
@@ -4075,6 +4136,7 @@ mod tests {
                 start_node_id: iv.id,
                 max_depth: Some(3),
                 target_node_types: Some(vec![NodeType::Artifact]),
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4165,6 +4227,7 @@ mod tests {
                 start_node_id: iv.id,
                 max_depth: Some(3),
                 target_node_types: Some(vec![NodeType::Artifact, NodeType::SideEffect]),
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4249,6 +4312,7 @@ mod tests {
                 start_node_id: iv1.id,
                 max_depth: Some(3),
                 target_node_types: Some(vec![NodeType::Artifact]),
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4330,6 +4394,7 @@ mod tests {
                 start_node_id: iv.id,
                 max_depth: Some(2),
                 target_node_types: Some(vec![NodeType::Artifact]),
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4352,6 +4417,7 @@ mod tests {
                 start_node_id: Uuid::new_v4(),
                 max_depth: Some(3),
                 target_node_types: None,
+                propagation_config: None,
             })
             .await;
 
@@ -4382,6 +4448,7 @@ mod tests {
                 start_node_id: iv.id,
                 max_depth: Some(3),
                 target_node_types: None,
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4472,6 +4539,7 @@ mod tests {
                 start_node_id: iv.id,
                 max_depth: Some(3),
                 target_node_types: Some(vec![NodeType::Artifact]),
+                propagation_config: None,
             })
             .await
             .unwrap();
@@ -4485,5 +4553,614 @@ mod tests {
         assert_eq!(a3_classified.len(), 1);
         // A3 should be transitive (depth 2)
         assert_eq!(a3_classified[0].impact, ClassificationImpact::Transitive);
+    }
+
+    // ===== PR #13 Rule-Pack Propagation Config Tests =====
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_default_backward_compat() {
+        // When propagation_config is None, should use DEFAULT_PROPAGATION_CONFIG
+        // This test verifies backward compatibility - existing behavior preserved
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create IntentVersion
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        // Create Artifact
+        let mut artifact_req = create_test_node_request();
+        artifact_req.tenant_id = tenant_id;
+        artifact_req.workflow_id = workflow_id;
+        artifact_req.node_type = NodeType::Artifact;
+        let artifact = service.add_node(artifact_req).await.unwrap();
+
+        // Create DependsOn edge
+        let edge_req = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: artifact.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(edge_req).await.unwrap();
+
+        // Classify with propagation_config = None (should use default)
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: Some(vec![NodeType::Artifact]),
+                propagation_config: None,
+            })
+            .await
+            .unwrap();
+
+        // Should find the artifact as Direct
+        assert_eq!(result.classified_nodes.len(), 1);
+        assert_eq!(
+            result.classified_nodes[0].impact,
+            ClassificationImpact::Direct
+        );
+    }
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_custom_max_depth() {
+        // Custom propagation config with max_depth=1 should not find transitive nodes
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create chain: IV1 -> A1 -> A2
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut a1_req = create_test_node_request();
+        a1_req.tenant_id = tenant_id;
+        a1_req.workflow_id = workflow_id;
+        a1_req.node_type = NodeType::Artifact;
+        let a1 = service.add_node(a1_req).await.unwrap();
+
+        let mut a2_req = create_test_node_request();
+        a2_req.tenant_id = tenant_id;
+        a2_req.workflow_id = workflow_id;
+        a2_req.node_type = NodeType::Artifact;
+        let a2 = service.add_node(a2_req).await.unwrap();
+
+        // A1 -> IV1, A2 -> A1
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a2.id,
+            to_node_id: a1.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        // Custom config with max_depth=1
+        let custom_config = PropagationConfig {
+            max_depth: Some(1),
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![NodeType::Artifact],
+        };
+
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: None,         // Should be overridden by config
+                target_node_types: None, // Should be overridden by config
+                propagation_config: Some(custom_config),
+            })
+            .await
+            .unwrap();
+
+        // With max_depth=1, only A1 (Direct) should be found, not A2 (Transitive)
+        assert_eq!(result.max_depth, 1);
+        assert_eq!(result.classified_nodes.len(), 1);
+        assert_eq!(result.classified_nodes[0].node.id, a1.id);
+        assert_eq!(
+            result.classified_nodes[0].impact,
+            ClassificationImpact::Direct
+        );
+    }
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_custom_target_types() {
+        // Custom config targeting only SideEffect should not classify Artifacts
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create IntentVersion
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        // Create Artifact
+        let mut artifact_req = create_test_node_request();
+        artifact_req.tenant_id = tenant_id;
+        artifact_req.workflow_id = workflow_id;
+        artifact_req.node_type = NodeType::Artifact;
+        let artifact = service.add_node(artifact_req).await.unwrap();
+
+        // Create SideEffect
+        let mut se_req = create_test_node_request();
+        se_req.tenant_id = tenant_id;
+        se_req.workflow_id = workflow_id;
+        se_req.node_type = NodeType::SideEffect;
+        let side_effect = service.add_node(se_req).await.unwrap();
+
+        // Create edges: Artifact -> IV1 (DependsOn), Artifact -> SideEffect (Triggers)
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: artifact.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: artifact.id,
+            to_node_id: side_effect.id,
+            edge_type: EdgeType::Triggers,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        // Custom config targeting only SideEffect
+        let custom_config = PropagationConfig {
+            max_depth: Some(3),
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![NodeType::SideEffect], // Only SideEffect!
+        };
+
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: None,
+                propagation_config: Some(custom_config),
+            })
+            .await
+            .unwrap();
+
+        // Only SideEffect should be classified, not Artifact
+        // Note: The propagation still goes through Artifact to reach SideEffect,
+        // but Artifact itself is not classified.
+        // SideEffect is at depth 2 (transitive via Artifact -> SideEffect),
+        // so it should be classified as Transitive, not Direct.
+        assert_eq!(result.classified_nodes.len(), 1);
+        assert_eq!(result.classified_nodes[0].node.id, side_effect.id);
+        assert_eq!(
+            result.classified_nodes[0].impact,
+            ClassificationImpact::Transitive
+        );
+    }
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_empty_edge_types() {
+        // With empty traversable_edge_types, no nodes should be reached
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create IntentVersion and Artifact
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut artifact_req = create_test_node_request();
+        artifact_req.tenant_id = tenant_id;
+        artifact_req.workflow_id = workflow_id;
+        artifact_req.node_type = NodeType::Artifact;
+        let artifact = service.add_node(artifact_req).await.unwrap();
+
+        // Create DependsOn edge
+        let edge_req = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: artifact.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(edge_req).await.unwrap();
+
+        // Custom config with EMPTY traversable_edge_types
+        let custom_config = PropagationConfig {
+            max_depth: Some(3),
+            traversable_edge_types: vec![], // Nothing traversable!
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![NodeType::Artifact],
+        };
+
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: None,
+                propagation_config: Some(custom_config),
+            })
+            .await
+            .unwrap();
+
+        // No edges should be traversed, so no nodes classified
+        assert!(result.classified_nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_max_depth_from_request() {
+        // When config.max_depth is None, should fall back to request.max_depth
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create chain: IV1 -> A1 -> A2
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut a1_req = create_test_node_request();
+        a1_req.tenant_id = tenant_id;
+        a1_req.workflow_id = workflow_id;
+        a1_req.node_type = NodeType::Artifact;
+        let a1 = service.add_node(a1_req).await.unwrap();
+
+        let mut a2_req = create_test_node_request();
+        a2_req.tenant_id = tenant_id;
+        a2_req.workflow_id = workflow_id;
+        a2_req.node_type = NodeType::Artifact;
+        let a2 = service.add_node(a2_req).await.unwrap();
+
+        // A1 -> IV1, A2 -> A1
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a2.id,
+            to_node_id: a1.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        // Config with max_depth=None, but request with max_depth=2
+        let custom_config = PropagationConfig {
+            max_depth: None, // Fall back to request
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![NodeType::Artifact],
+        };
+
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(2), // Should be used since config.max_depth is None
+                target_node_types: None,
+                propagation_config: Some(custom_config),
+            })
+            .await
+            .unwrap();
+
+        // max_depth should be 2 from request
+        assert_eq!(result.max_depth, 2);
+        // A1 (Direct) and A2 (Transitive) should be found
+        assert_eq!(result.classified_nodes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_classify_propagation_config_reaches_approval_via_generated_from() {
+        // Graph: IV1 -> A1 (DependsOn), A1 -> SE1 (Triggers), SE1 -> AP1 (GeneratedFrom)
+        // Starting from IV1, we should reach AP1 via the chain
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create nodes
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut a1_req = create_test_node_request();
+        a1_req.tenant_id = tenant_id;
+        a1_req.workflow_id = workflow_id;
+        a1_req.node_type = NodeType::Artifact;
+        let a1 = service.add_node(a1_req).await.unwrap();
+
+        let mut se_req = create_test_node_request();
+        se_req.tenant_id = tenant_id;
+        se_req.workflow_id = workflow_id;
+        se_req.node_type = NodeType::SideEffect;
+        let se1 = service.add_node(se_req).await.unwrap();
+
+        let mut ap_req = create_test_node_request();
+        ap_req.tenant_id = tenant_id;
+        ap_req.workflow_id = workflow_id;
+        ap_req.node_type = NodeType::Approval;
+        let ap1 = service.add_node(ap_req).await.unwrap();
+
+        // Create edges: A1->IV1, A1->SE1, SE1->AP1
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: se1.id,
+            edge_type: EdgeType::Triggers,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        let e3 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: se1.id,
+            to_node_id: ap1.id,
+            edge_type: EdgeType::GeneratedFrom,
+            properties: None,
+        };
+        service.add_edge(e3).await.unwrap();
+
+        // Default config should reach all node types
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: Some(vec![
+                    NodeType::Artifact,
+                    NodeType::SideEffect,
+                    NodeType::Approval,
+                ]),
+                propagation_config: None,
+            })
+            .await
+            .unwrap();
+
+        // Should find all three: A1 (Direct), SE1 (Transitive), AP1 (Transitive)
+        assert_eq!(result.classified_nodes.len(), 3);
+        let ids: Vec<_> = result.classified_nodes.iter().map(|c| c.node.id).collect();
+        assert!(ids.contains(&a1.id));
+        assert!(ids.contains(&se1.id));
+        assert!(ids.contains(&ap1.id));
+    }
+
+    // ===== PR #13 Backward Compat: target_node_types fallback Tests =====
+
+    #[tokio::test]
+    async fn test_classify_backward_compat_request_target_types_when_config_none() {
+        // PR #13 fix: When propagation_config is None AND request.target_node_types is Some,
+        // the request's target_node_types should be used (backward compat for existing callers).
+        //
+        // Graph: IV1 -> (DependsOn) -> Artifact A1 -> (Triggers) -> SideEffect SE1
+        // With request.target_node_types = Some([SideEffect]) and propagation_config = None,
+        // only SE1 should be classified, NOT A1.
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create nodes
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut a1_req = create_test_node_request();
+        a1_req.tenant_id = tenant_id;
+        a1_req.workflow_id = workflow_id;
+        a1_req.node_type = NodeType::Artifact;
+        let a1 = service.add_node(a1_req).await.unwrap();
+
+        let mut se_req = create_test_node_request();
+        se_req.tenant_id = tenant_id;
+        se_req.workflow_id = workflow_id;
+        se_req.node_type = NodeType::SideEffect;
+        let se1 = service.add_node(se_req).await.unwrap();
+
+        // Create edges: Artifact -> IV1, Artifact -> SE1
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: se1.id,
+            edge_type: EdgeType::Triggers,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        // Classify with propagation_config=None but request.target_node_types=Some([SideEffect])
+        // This should classify ONLY SideEffect, not Artifact
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: Some(vec![NodeType::SideEffect]), // Only SideEffect!
+                propagation_config: None, // Uses default config, but should fall back to request types
+            })
+            .await
+            .unwrap();
+
+        // Should classify only SideEffect (at depth 2, transitive)
+        // Artifact should NOT be classified because it's not in request.target_node_types
+        assert_eq!(result.classified_nodes.len(), 1);
+        assert_eq!(result.classified_nodes[0].node.id, se1.id);
+        assert_eq!(
+            result.classified_nodes[0].impact,
+            ClassificationImpact::Transitive
+        );
+        // Verify Artifact A1 is NOT in the results
+        let artifact_in_results = result.classified_nodes.iter().any(|c| c.node.id == a1.id);
+        assert!(
+            !artifact_in_results,
+            "Artifact should NOT be classified when only SideEffect is in target_node_types"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_classify_request_target_types_ignored_when_config_provided() {
+        // When propagation_config is Some, config.target_node_types takes precedence
+        // over request.target_node_types (new behavior with explicit config).
+        //
+        // Graph: IV1 -> (DependsOn) -> Artifact A1 -> (Triggers) -> SideEffect SE1
+        // With config.target_node_types = [SideEffect], only SE1 should be classified.
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create nodes
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        let mut a1_req = create_test_node_request();
+        a1_req.tenant_id = tenant_id;
+        a1_req.workflow_id = workflow_id;
+        a1_req.node_type = NodeType::Artifact;
+        let a1 = service.add_node(a1_req).await.unwrap();
+
+        let mut se_req = create_test_node_request();
+        se_req.tenant_id = tenant_id;
+        se_req.workflow_id = workflow_id;
+        se_req.node_type = NodeType::SideEffect;
+        let se1 = service.add_node(se_req).await.unwrap();
+
+        // Create edges: Artifact -> IV1, Artifact -> SE1
+        let e1 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::DependsOn,
+            properties: None,
+        };
+        service.add_edge(e1).await.unwrap();
+
+        let e2 = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: a1.id,
+            to_node_id: se1.id,
+            edge_type: EdgeType::Triggers,
+            properties: None,
+        };
+        service.add_edge(e2).await.unwrap();
+
+        // Config that only targets SideEffect
+        let config = PropagationConfig {
+            max_depth: Some(3),
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![intent_rebase_types::EdgeDirection::Both],
+            target_node_types: vec![NodeType::SideEffect], // Only SideEffect in config
+        };
+
+        // Classify with explicit config (request.target_node_types is ignored)
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: Some(vec![NodeType::Artifact, NodeType::SideEffect]), // Ignored
+                propagation_config: Some(config),
+            })
+            .await
+            .unwrap();
+
+        // Should classify only SideEffect (config takes precedence)
+        assert_eq!(result.classified_nodes.len(), 1);
+        assert_eq!(result.classified_nodes[0].node.id, se1.id);
     }
 }

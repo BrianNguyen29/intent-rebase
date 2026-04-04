@@ -16,3 +16,4 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+once_cell = { workspace = true }
