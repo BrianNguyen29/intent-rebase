@@ -31,8 +31,17 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     )),
     
     -- External reference (what this node represents in external systems)
+    -- Both must be NULL (no external ref) or both must be present (valid pair)
     external_ref_type VARCHAR(30) REFERENCES meta_ref_types(ref_type), -- nullable
-    external_ref_id UUID,
+    external_ref_id UUID, -- nullable, but ONLY valid when external_ref_type is also set
+
+    -- Enforce all-or-nothing semantics: external_ref_type and external_ref_id must
+    -- either both be NULL (no external reference) or both be NOT NULL (valid pair).
+    -- This prevents partial external_ref states like (type=NULL, id='uuid').
+    CONSTRAINT valid_external_ref_pair CHECK (
+        (external_ref_type IS NULL AND external_ref_id IS NULL) OR
+        (external_ref_type IS NOT NULL AND external_ref_id IS NOT NULL)
+    ),
     
     -- Human-readable label for the node
     label VARCHAR(255) NOT NULL,
@@ -47,8 +56,10 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     
-    -- Unique constraint on external ref to prevent duplicate nodes for same entity
-    CONSTRAINT unique_external_ref UNIQUE (tenant_id, external_ref_type, external_ref_id)
+    -- Unique constraint on external ref within tenant+workflow scope to prevent duplicate
+    -- nodes for the same entity within a given workflow context. Nodes are scoped to
+    -- tenant+workflow per the domain model, so uniqueness must also be scoped accordingly.
+    CONSTRAINT unique_external_ref UNIQUE (tenant_id, workflow_id, external_ref_type, external_ref_id)
 );
 
 -- Indexes for common query patterns
