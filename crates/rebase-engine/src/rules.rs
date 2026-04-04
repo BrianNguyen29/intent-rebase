@@ -255,6 +255,7 @@ fn analyze_acceptance_criterion_category(
 fn compute_acceptance_criterion_severity(diff: &AcceptanceCriterionDiff) -> Severity {
     match diff.change_type {
         ChangeType::Added => {
+            // For Added: diff.priority is the new criterion's priority (correct)
             if diff.priority.contains("Must") {
                 Severity::High
             } else {
@@ -263,11 +264,15 @@ fn compute_acceptance_criterion_severity(diff: &AcceptanceCriterionDiff) -> Seve
         }
         ChangeType::Removed => Severity::Medium,
         ChangeType::Modified => {
-            if diff.priority.contains("Must") {
-                Severity::High
-            } else {
-                Severity::Medium
+            // For Modified: diff.priority is the BEFORE state priority,
+            // but severity should reflect the AFTER state (the new requirement).
+            // If the after state is Must, it's now a high-priority requirement.
+            if let Some(after) = diff.after.as_ref() {
+                if after.priority == ClausePriority::Must {
+                    return Severity::High;
+                }
             }
+            Severity::Medium
         }
     }
 }
@@ -483,7 +488,7 @@ pub fn should_manual_review(
         .filter(|(_, s)| *s == Severity::High || *s == Severity::Critical)
         .count();
 
-    if high_severity_count > config.max_high_severity_before_manual_review {
+    if high_severity_count >= config.max_high_severity_before_manual_review {
         reasons.push(ManualReviewReason::MultipleHighSeverityChanges {
             count: high_severity_count,
         });
@@ -1225,5 +1230,484 @@ mod tests {
             &authority_diff,
         );
         assert!(analysis.rationale.unwrap().contains("high severity"));
+    }
+
+    // === Acceptance Criteria Risk Tests ===
+
+    #[test]
+    fn test_acceptance_criterion_should_to_must_modified_high_severity() {
+        // Transition from Should to Must via modification should be High severity
+        // The AFTER state is Must (now a mandatory requirement)
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Modified,
+            priority: "Should".to_string(), // BEFORE state
+            before: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Should monitor".to_string(),
+                priority: ClausePriority::Should,
+            })),
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must monitor".to_string(),
+                priority: ClausePriority::Must, // AFTER state is Must
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Should->Must upgrade should be High severity (the new requirement is Must)
+        assert_eq!(analysis.severity, Severity::High);
+        // High severity alone does NOT trigger manual review - need multiple high severity
+        // sections, low confidence, or other triggers. Single High section = no manual review.
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_must_to_should_modified_medium_severity() {
+        // Transition from Must to Should via modification should be Medium (not High)
+        // The AFTER state is Should (no longer a mandatory requirement)
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Modified,
+            priority: "Must".to_string(), // BEFORE state
+            before: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must monitor".to_string(),
+                priority: ClausePriority::Must, // BEFORE state
+            })),
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Should monitor".to_string(),
+                priority: ClausePriority::Should, // AFTER state is Should
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Must->Should downgrade should be Medium (the new requirement is Should)
+        assert_eq!(analysis.severity, Severity::Medium);
+        // Medium severity should not trigger manual review by itself
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_added_as_must_high_severity() {
+        // Adding a Must criterion should be High severity
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must have monitoring".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Adding Must criterion should be High
+        assert_eq!(analysis.severity, Severity::High);
+        // High severity alone does NOT trigger manual review - need multiple high severity
+        // sections, low confidence, or other triggers. Single High section = no manual review.
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_added_as_should_medium_severity() {
+        // Adding a Should criterion should be Medium severity
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Added,
+            priority: "Should".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Should have monitoring".to_string(),
+                priority: ClausePriority::Should,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Adding Should criterion should be Medium
+        assert_eq!(analysis.severity, Severity::Medium);
+        // Medium alone should not trigger manual review
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_removed_must_medium_severity() {
+        // Removing a Must criterion should be Medium (not high, since we're not adding a Must)
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Removed,
+            priority: "Must".to_string(),
+            before: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must have monitoring".to_string(),
+                priority: ClausePriority::Must,
+            })),
+            after: None,
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Removing Must criterion is Medium severity
+        assert_eq!(analysis.severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_optional_must_added_high_severity() {
+        // Adding a Must criterion to optional section should still be High
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.optional.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must track metrics".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Adding Must criterion (even to optional) should be High
+        assert_eq!(analysis.severity, Severity::High);
+        // Single High section does NOT trigger manual review by itself
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_multiple_changes_high_manual_review() {
+        // Multiple high-severity AC changes should trigger manual review
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+
+        // First Must AC added
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id1),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id1),
+                description: "Must have auth".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        // Second Must AC added
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id2),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id2),
+                description: "Must have logging".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Multiple Must additions should be High severity
+        // But 2 high-severity sections doesn't trigger manual_review (need >= 3)
+        assert_eq!(analysis.severity, Severity::High);
+        assert!(!analysis.manual_review);
+    }
+
+    #[test]
+    fn test_acceptance_criterion_section_risk_tracked() {
+        // Verify that acceptance_criteria section risk is properly tracked in section_risks
+        let id = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id),
+                description: "Must verify".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &empty_constraints_diff(),
+            &ac_diff,
+            &empty_authority_diff(),
+        );
+
+        // Check that acceptance_criteria is in section_risks with correct severity
+        let ac_section = analysis
+            .section_risks
+            .iter()
+            .find(|r| r.section == "acceptance_criteria");
+        assert!(ac_section.is_some());
+        let ac_section = ac_section.unwrap();
+        assert_eq!(ac_section.severity, Severity::High);
+        assert_eq!(ac_section.change_count, 1);
+    }
+
+    // === MultipleHighSeverityChanges Boundary Tests ===
+
+    #[test]
+    fn test_multiple_high_severity_changes_at_threshold_triggers_review() {
+        // At exactly 3 high-severity sections (threshold = 3), MultipleHighSeverityChanges should trigger.
+        // Create High severity in: authority (any change), constraints (Must), acceptance_criteria (Must)
+
+        // 1. Authority change -> High severity
+        let mut authority_diff = empty_authority_diff();
+        authority_diff.allowed_actions.push(ActionRefDiff {
+            change_type: ChangeType::Added,
+            action: "deploy".to_string(),
+            target: None,
+            before: None,
+            after: Some(Box::new(ActionRef {
+                action: "deploy".to_string(),
+                target: None,
+            })),
+        });
+
+        // 2. Must constraint -> High severity
+        let id1 = Uuid::new_v4();
+        let mut constraints_diff = empty_constraints_diff();
+        constraints_diff.functional.push(ConstraintDiff {
+            clause_id: Some(id1),
+            change_type: ChangeType::Added,
+            constraint_type: ClauseType::Functional,
+            key: "must_have_auth".to_string(),
+            before: None,
+            after: Some(Box::new(make_test_constraint(
+                Some(id1),
+                "must_have_auth",
+                ClausePriority::Must,
+            ))),
+        });
+
+        // 3. Must acceptance criterion -> High severity
+        let id2 = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id2),
+            change_type: ChangeType::Added,
+            priority: "Must".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id2),
+                description: "Must have auth".to_string(),
+                priority: ClausePriority::Must,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &constraints_diff,
+            &ac_diff,
+            &authority_diff,
+        );
+
+        // Verify we have 3 high-severity sections
+        let high_section_count = analysis
+            .section_risks
+            .iter()
+            .filter(|r| r.severity == Severity::High || r.severity == Severity::Critical)
+            .count();
+        assert_eq!(
+            high_section_count, 3,
+            "Should have exactly 3 high-severity sections"
+        );
+
+        // At threshold (3), MultipleHighSeverityChanges SHOULD be triggered (>= threshold)
+        assert!(analysis.manual_review);
+        assert!(analysis
+            .manual_review_reasons
+            .iter()
+            .any(|r| matches!(r, ManualReviewReason::MultipleHighSeverityChanges { count } if *count == 3)));
+    }
+
+    #[test]
+    fn test_multiple_high_severity_changes_below_threshold_no_review() {
+        // Below threshold (2 high-severity sections, threshold = 3), MultipleHighSeverityChanges should NOT trigger.
+        // Create High severity in only 2 sections: authority and constraints (but not acceptance_criteria)
+
+        // 1. Authority change -> High severity
+        let mut authority_diff = empty_authority_diff();
+        authority_diff.allowed_actions.push(ActionRefDiff {
+            change_type: ChangeType::Added,
+            action: "deploy".to_string(),
+            target: None,
+            before: None,
+            after: Some(Box::new(ActionRef {
+                action: "deploy".to_string(),
+                target: None,
+            })),
+        });
+
+        // 2. Must constraint -> High severity (but no Must AC, so acceptance_criteria is Medium/Low)
+        let id1 = Uuid::new_v4();
+        let mut constraints_diff = empty_constraints_diff();
+        constraints_diff.functional.push(ConstraintDiff {
+            clause_id: Some(id1),
+            change_type: ChangeType::Added,
+            constraint_type: ClauseType::Functional,
+            key: "must_have_auth".to_string(),
+            before: None,
+            after: Some(Box::new(make_test_constraint(
+                Some(id1),
+                "must_have_auth",
+                ClausePriority::Must,
+            ))),
+        });
+
+        // 3. Only Should AC -> Medium severity, not High
+        let id2 = Uuid::new_v4();
+        let mut ac_diff = empty_ac_diff();
+        ac_diff.required.push(AcceptanceCriterionDiff {
+            clause_id: Some(id2),
+            change_type: ChangeType::Added,
+            priority: "Should".to_string(),
+            before: None,
+            after: Some(Box::new(AcceptanceCriterion {
+                clause_id: Some(id2),
+                description: "Should have auth".to_string(),
+                priority: ClausePriority::Should,
+            })),
+        });
+
+        let analysis = analyze_diff_risk(
+            &empty_scope_diff(),
+            &constraints_diff,
+            &ac_diff,
+            &authority_diff,
+        );
+
+        // Verify we have exactly 2 high-severity sections
+        let high_section_count = analysis
+            .section_risks
+            .iter()
+            .filter(|r| r.severity == Severity::High || r.severity == Severity::Critical)
+            .count();
+        assert_eq!(
+            high_section_count, 2,
+            "Should have exactly 2 high-severity sections"
+        );
+
+        // Below threshold (2 < 3), MultipleHighSeverityChanges should NOT trigger
+        // Note: manual_review might still be true if other conditions apply (e.g., High severity alone doesn't trigger)
+        // But MultipleHighSeverityChanges should NOT be in the reasons
+        assert!(!analysis
+            .manual_review_reasons
+            .iter()
+            .any(|r| matches!(r, ManualReviewReason::MultipleHighSeverityChanges { .. })));
+    }
+
+    #[test]
+    fn test_multiple_high_severity_changes_with_custom_threshold() {
+        // Test that the threshold is configurable via RiskConfig
+        // With threshold = 2, 2 high-severity sections SHOULD trigger MultipleHighSeverityChanges
+
+        let config = RiskConfig {
+            confidence_threshold: 0.7,
+            max_high_severity_before_manual_review: 2, // Lower threshold
+        };
+
+        // Create exactly 2 high-severity sections: authority and constraints
+        let mut authority_diff = empty_authority_diff();
+        authority_diff.allowed_actions.push(ActionRefDiff {
+            change_type: ChangeType::Added,
+            action: "deploy".to_string(),
+            target: None,
+            before: None,
+            after: Some(Box::new(ActionRef {
+                action: "deploy".to_string(),
+                target: None,
+            })),
+        });
+
+        let id1 = Uuid::new_v4();
+        let mut constraints_diff = empty_constraints_diff();
+        constraints_diff.functional.push(ConstraintDiff {
+            clause_id: Some(id1),
+            change_type: ChangeType::Added,
+            constraint_type: ClauseType::Functional,
+            key: "must_have_auth".to_string(),
+            before: None,
+            after: Some(Box::new(make_test_constraint(
+                Some(id1),
+                "must_have_auth",
+                ClausePriority::Must,
+            ))),
+        });
+
+        let analysis = analyze_diff_risk_with_config(
+            &empty_scope_diff(),
+            &constraints_diff,
+            &empty_ac_diff(),
+            &authority_diff,
+            &config,
+        );
+
+        // With threshold = 2, 2 high-severity sections >= 2 should trigger
+        assert!(analysis
+            .manual_review_reasons
+            .iter()
+            .any(|r| matches!(r, ManualReviewReason::MultipleHighSeverityChanges { count } if *count == 2)));
     }
 }
