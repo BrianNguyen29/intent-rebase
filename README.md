@@ -32,7 +32,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
-| `rebase-engine` | Semantic diff, rebase plan generation | P1 | 🔜 Planned |
+| `rebase-engine` | Structured diff core (scope, constraints, acceptance, authority); rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
 | `graph-service` | Dependency graph CRUD and propagation | P1 | 🔜 Planned |
 
 ## Implementation Status
@@ -50,9 +50,22 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Routes mount directly; intended to be served under `/v1` prefix in production
 
 **Deferred to Phase 2+:**
-- Diff/rebase/graph operations
+- Full diff/rebase/graph operations
 - Full authentication/authorization
 - DB integration tests in CI (SQL repository is implemented but live-DB tests are skipped)
+
+### Phase 1 Second Slice — Structured Diff Core (Current)
+**Implemented:**
+- `rebase-engine` structured diff for 4 sections: scope, constraints, acceptance_criteria, authority
+- Deterministic output ordering (sorted by clause_id/section)
+- Conservative matching rules: prefer clause_id matching; fallback to add/remove when identity ambiguous
+- Typed diff output via `IntentVersionDiff` and related types
+- Synchronous (`compute_diff_sync`) and async (`RebaseEngine::compute_diff`) APIs
+
+**NOT implemented in this slice (deferred to future PRs):**
+- HTTP endpoints for diff (OpenAPI spec not updated)
+- Severity rules, confidence scoring, manual-review triggers
+- Graph model and rebase planner integration
 
 **Notes:**
 - `intent-api` crate exposes axum router; `build_router()` returns Router that mounts directly
@@ -61,11 +74,11 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
   malformed headers (non-integer values) return 400 Bad Request instead of being silently ignored
 - SQL deserialization returns 500 SerializationError on data corruption; no silent payload fabrication
 
-### Phase 2+ — Diff, Rebase, Graph
-- Semantic diff engine
-- Rebase planner
+### Phase 2+ — Rebase, Graph, Extended Diff
+- Rebase planner (graph-based)
 - Impact graph propagation
 - Runtime adapter integration
+- Extended semantic diff with severity/confidence scoring
 
 ## Quick Start
 
