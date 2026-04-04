@@ -89,22 +89,25 @@
 ```
 [x] Graph data model (nodes, edges, labels) implemented
     Evidence:
-    - PR: PR #9 (current PR - in review)
+    - PR: PR #9 (merged)
     - Code: crates/intent-rebase-types/src/graph.rs (GraphNode, GraphEdge, NodeType, EdgeType)
     - Code: crates/graph-service/src/lib.rs (GraphService with repository trait)
     - Schema: infrastructure/migrations/004_create_graph_nodes.sql, 005_create_graph_edges.sql
 
 [x] Graph CRUD operations (add node, add edge, query) implemented
     Evidence:
-    - PR: PR #9 (current PR - in review)
+    - PR: PR #9 (merged)
     - Code: crates/graph-service/src/lib.rs (add_node, get_node, list_nodes, add_edge, get_edge, list_edges, list_edges_from, list_edges_to)
     - Tests: crates/graph-service/src/lib.rs tests (test_create_and_get_node, test_create_and_get_edge, test_list_edges_from_and_to, etc.)
     - Repository pattern: InMemoryGraphRepository for Phase 1 baseline
 
-[ ] Graph traversal (BFS, path finding) implemented
-    Note: Deferred to future PR - requires traversal engine work
+[x] Graph traversal (BFS, path finding) implemented (PR #10)
     Evidence:
-    - Code: not yet implemented
+    - PR: PR #10 (current PR - impact traversal baseline)
+    - Code: crates/graph-service/src/lib.rs (find_reachable, find_path, detect_cycles, list_reachable_nodes, are_connected)
+    - Code: crates/intent-rebase-types/src/graph.rs (GraphPath, ReachabilityResult, CycleDetectionResult, TraversalOptions)
+    - Tests: BFS traversal, path finding, edge filters, cycle detection tests added
+    - Scope: internal service layer only (no HTTP endpoints)
 
 [ ] Graph propagation rules from rule pack applied
     Note: Deferred to future PR - requires rule pack integration

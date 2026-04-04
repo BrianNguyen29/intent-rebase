@@ -1,7 +1,8 @@
 //! Dependency graph domain types
 //!
 //! Phase 1 baseline: storage-first graph with Postgres-backed relational edge tables.
-//! This provides the persisted graph baseline for future traversal/classification work.
+//! Provides graph traversal primitives (BFS reachability, path-finding, cycle detection)
+//! for impact classification work.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -143,4 +144,67 @@ pub struct GraphEdgeFilter {
     pub from_node_id: Option<Uuid>,
     pub to_node_id: Option<Uuid>,
     pub edge_type: Option<EdgeType>,
+}
+
+/// A path through the graph from one node to another
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphPath {
+    /// Sequence of node IDs in the path (including start and end)
+    pub node_ids: Vec<Uuid>,
+    /// Sequence of edge IDs that connect the nodes
+    pub edge_ids: Vec<Uuid>,
+}
+
+impl GraphPath {
+    /// Returns the length of the path (number of hops)
+    pub fn len(&self) -> usize {
+        self.node_ids.len().saturating_sub(1)
+    }
+
+    /// Returns true if the path is empty (no path exists)
+    pub fn is_empty(&self) -> bool {
+        self.node_ids.is_empty()
+    }
+}
+
+/// Result of a reachability query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReachabilityResult {
+    /// All nodes reachable from the source
+    pub reachable_nodes: Vec<Uuid>,
+    /// Edge IDs used to reach each node (in traversal order)
+    pub incoming_edges: Vec<Uuid>,
+}
+
+/// Result of a cycle detection query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleDetectionResult {
+    /// True if a cycle was detected
+    pub has_cycle: bool,
+    /// If a cycle exists, one cycle path (node IDs)
+    pub cycle_path: Option<Vec<Uuid>>,
+}
+
+/// Traversal options for graph queries
+#[derive(Debug, Clone)]
+pub struct TraversalOptions {
+    /// Maximum depth to traverse (None = unlimited)
+    pub max_depth: Option<usize>,
+    /// Edge types to include in traversal
+    pub edge_types: Option<Vec<EdgeType>>,
+    /// Node types to include in traversal
+    pub node_types: Option<Vec<NodeType>>,
+    /// Whether to include the starting node in results
+    pub include_start: bool,
+}
+
+impl Default for TraversalOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: None,
+            edge_types: None,
+            node_types: None,
+            include_start: true,
+        }
+    }
 }
