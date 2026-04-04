@@ -297,3 +297,66 @@ pub struct IngestorResult {
     /// Any edges created during ingestion
     pub edges: Vec<GraphEdge>,
 }
+
+// ============================================================================
+// Classification Types
+// ============================================================================
+
+/// Impact classification level for a node in the dependency graph
+///
+/// - `Direct`: Node is directly affected by the starting change (1 hop)
+/// - `Transitive`: Node is affected through a chain of dependencies (2+ hops)
+/// - `Unchanged`: Node exists in the graph but is not affected by the change
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ClassificationImpact {
+    Direct,
+    Transitive,
+    Unchanged,
+}
+
+/// A node classified with its impact level and a human-readable reason
+#[derive(Debug, Clone, Serialize)]
+pub struct ClassifiedNode {
+    /// The graph node that was classified
+    pub node: GraphNode,
+    /// The impact classification
+    pub impact: ClassificationImpact,
+    /// Human-readable explanation of why this node was classified this way
+    pub reason: String,
+}
+
+/// Request to classify the impact of a change originating from a specific node.
+///
+/// The starting node is typically an IntentVersion that has been modified.
+/// The classification traverses downstream to find affected Artifacts, Approvals,
+/// and SideEffects within the bounded depth.
+#[derive(Debug, Clone)]
+pub struct ClassifyRequest {
+    /// The node where the change originates (typically an IntentVersion)
+    pub start_node_id: Uuid,
+    /// Maximum traversal depth for impact propagation (default: 3)
+    pub max_depth: Option<usize>,
+    /// Optional filter: only consider these node types as affected targets
+    pub target_node_types: Option<Vec<NodeType>>,
+}
+
+impl Default for ClassifyRequest {
+    fn default() -> Self {
+        Self {
+            start_node_id: Uuid::nil(), // Caller must set this
+            max_depth: Some(3),
+            target_node_types: None,
+        }
+    }
+}
+
+/// Result of impact classification, containing all classified nodes
+#[derive(Debug, Clone, Serialize)]
+pub struct ClassificationResult {
+    /// All nodes reachable from the starting node, classified by impact level
+    pub classified_nodes: Vec<ClassifiedNode>,
+    /// The starting node ID that was used for classification
+    pub start_node_id: Uuid,
+    /// Maximum depth used in the traversal
+    pub max_depth: usize,
+}

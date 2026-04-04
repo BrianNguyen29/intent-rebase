@@ -19,7 +19,7 @@
 - [x] Create graph nodes/edges storage (Phase 1 PR #9 - storage baseline)
 - [x] Implement impact traversal baseline (Phase 1 PR #10 - BFS reachability, path finding, cycle detection)
 - [x] Build artifact/approval/side effect edge ingestors (Phase 1 PR #11 - ingestors baseline)
-- [ ] Implement classification output (deferred to future PR)
+- [x] Implement classification output (Phase 1 PR #12 - baseline classification with deterministic propagation rules)
 
 ## Epic 4 — Rebase Planner
 - Build preview-only planner

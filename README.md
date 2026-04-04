@@ -33,7 +33,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
-| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes | P1 | 🟡 Partial (traversal and ingestors done; propagation/classification deferred) |
+| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules | P1 | 🟡 Partial (traversal, ingestors, and classification done; rule-pack propagation and HTTP API deferred) |
 
 ## Implementation Status
 
@@ -136,6 +136,27 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Graph propagation rules from rule packs
 - Graph classification output semantics
 - External runtime adapters
+
+### Phase 1 Seventh Slice — Graph Classification Baseline (PR #12)
+**Implemented:**
+- `ClassificationImpact` enum: Direct, Transitive, Unchanged
+- `ClassifiedNode` type: classified node with impact level and human-readable reason
+- `ClassifyRequest` and `ClassificationResult` types for classification input/output
+- `classify_impact()` method: baseline classification using deterministic explicit propagation rules
+- Edge direction semantics: DependsOn (incoming), Triggers (outgoing), GeneratedFrom (outgoing)
+- Bounded depth traversal (default max_depth=3) for controlled propagation
+- Unit tests: direct/transitive impact, depth bounds, diamond graphs, unreachable nodes, empty graph
+
+**Classification propagation rules (baseline):**
+- Direct: Nodes at depth 1 from start (e.g., Artifacts directly depending on IntentVersion)
+- Transitive: Nodes at depth 2+ (e.g., SideEffects triggered downstream)
+- Bounded depth prevents runaway traversal
+
+**NOT in scope for this slice (deferred to future PRs):**
+- Rule-pack-driven propagation rules
+- Graph HTTP API endpoints
+- Rebase planner integration
+- Full rule-pack integration
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
