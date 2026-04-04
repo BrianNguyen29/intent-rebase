@@ -18,7 +18,7 @@
 ## Epic 3 — Graph and Impact
 - [x] Create graph nodes/edges storage (Phase 1 PR #9 - storage baseline)
 - [x] Implement impact traversal baseline (Phase 1 PR #10 - BFS reachability, path finding, cycle detection)
-- [ ] Build artifact/approval/side effect edge ingestors
+- [x] Build artifact/approval/side effect edge ingestors (Phase 1 PR #11 - ingestors baseline)
 - [ ] Implement classification output (deferred to future PR)
 
 ## Epic 4 — Rebase Planner

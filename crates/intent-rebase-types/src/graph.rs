@@ -208,3 +208,92 @@ impl Default for TraversalOptions {
         }
     }
 }
+
+// ============================================================================
+// Ingestor Request Types
+// ============================================================================
+
+/// Request to ingest an artifact into the graph.
+///
+/// Creates an Artifact node and wires DependsOn edges to the IntentVersion
+/// nodes that this artifact depends on.
+///
+/// # Contract
+/// The `depends_on_intent_versions` field MUST contain at least one IntentVersion node ID.
+/// An artifact without any IntentVersion dependency violates the traceability invariant:
+/// every artifact must trace upstream to at least one IntentVersion.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactIngestRequest {
+    /// Tenant scope
+    pub tenant_id: Uuid,
+    /// Workflow scope
+    pub workflow_id: Uuid,
+    /// External reference to the artifact (e.g., from artifact service)
+    pub external_ref: ExternalRef,
+    /// Human-readable label for the artifact
+    pub label: String,
+    /// IntentVersion node IDs this artifact depends on
+    pub depends_on_intent_versions: Vec<Uuid>,
+    /// Optional properties to attach to the artifact node
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Request to ingest an approval into the graph.
+///
+/// Creates an Approval node and wires a GovernedBy edge to the PolicySnapshot
+/// node that governs this approval.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApprovalIngestRequest {
+    /// Tenant scope
+    pub tenant_id: Uuid,
+    /// Workflow scope
+    pub workflow_id: Uuid,
+    /// External reference to the approval (e.g., from approval service)
+    pub external_ref: ExternalRef,
+    /// Human-readable label for the approval
+    pub label: String,
+    /// PolicySnapshot node ID that governs this approval
+    pub governed_by_policy_snapshot: Option<Uuid>,
+    /// IntentVersion node ID this approval is associated with
+    pub intent_version_id: Option<Uuid>,
+    /// Optional properties to attach to the approval node
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Request to ingest a side effect into the graph.
+///
+/// Creates a SideEffect node and wires appropriate edges to:
+/// - The initiating node that triggered this side effect (Triggers edge)
+/// - The IntentVersion (DerivedFrom edge)
+/// - The Approval snapshot if applicable (GeneratedFrom edge)
+///
+/// Note: The `triggered_by_task` field references any graph node (typically a Workflow
+/// or Generic node) that initiates the side effect. The node type must exist in the graph.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SideEffectIngestRequest {
+    /// Tenant scope
+    pub tenant_id: Uuid,
+    /// Workflow scope
+    pub workflow_id: Uuid,
+    /// External reference to the side effect (e.g., from runtime)
+    pub external_ref: ExternalRef,
+    /// Human-readable label for the side effect
+    pub label: String,
+    /// Node ID that triggered this side effect (typically a Workflow or Generic node)
+    pub triggered_by_task: Uuid,
+    /// IntentVersion this side effect is derived from
+    pub derived_from_intent_version: Option<Uuid>,
+    /// Approval snapshot if this side effect was taken under an approval
+    pub approval_snapshot_id: Option<Uuid>,
+    /// Optional properties to attach to the side effect node
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Result of an ingestor operation, containing created nodes and edges
+#[derive(Debug, Clone, Serialize)]
+pub struct IngestorResult {
+    /// The created graph node
+    pub node: GraphNode,
+    /// Any edges created during ingestion
+    pub edges: Vec<GraphEdge>,
+}
