@@ -1,0 +1,10 @@
+{
+  "version": "v1.0.0",
+  "name": "default-diff-v1",
+  "status": "active",
+  "description": "Phase 1 default rule pack for diff risk analysis",
+  "risk": {
+    "confidence_threshold": 0.7,
+    "max_high_severity_sections": 3
+  }
+}

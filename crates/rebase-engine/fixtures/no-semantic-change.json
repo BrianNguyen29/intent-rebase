@@ -1,0 +1,33 @@
+{
+  "name": "no-semantic-change",
+  "description": "Identical content - Low severity, High confidence",
+  "rule_pack": "default",
+  "input": {
+    "scope": {
+      "in_scope": { "added": [], "removed": [] },
+      "out_of_scope": { "added": [], "removed": [] }
+    },
+    "constraints": {
+      "functional": [],
+      "non_functional": [],
+      "policy": [],
+      "budget": [],
+      "time": []
+    },
+    "acceptance_criteria": {
+      "required": [],
+      "optional": []
+    },
+    "authority": {
+      "allowed_actions": [],
+      "forbidden_actions": [],
+      "approval_requirements": []
+    }
+  },
+  "expected": {
+    "severity": "low",
+    "confidence": 1.0,
+    "manual_review": false,
+    "section_count": 0
+  }
+}

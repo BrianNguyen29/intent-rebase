@@ -1,0 +1,33 @@
+{
+  "name": "scope-add-medium",
+  "description": "Scope item added - Medium severity, low confidence triggers manual review",
+  "rule_pack": "default",
+  "input": {
+    "scope": {
+      "in_scope": { "added": ["item2"], "removed": [] },
+      "out_of_scope": { "added": [], "removed": [] }
+    },
+    "constraints": {
+      "functional": [],
+      "non_functional": [],
+      "policy": [],
+      "budget": [],
+      "time": []
+    },
+    "acceptance_criteria": {
+      "required": [],
+      "optional": []
+    },
+    "authority": {
+      "allowed_actions": [],
+      "forbidden_actions": [],
+      "approval_requirements": []
+    }
+  },
+  "expected": {
+    "severity": "medium",
+    "confidence": 0.5,
+    "manual_review": true,
+    "section_count": 1
+  }
+}

@@ -32,7 +32,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
-| `rebase-engine` | Structured diff core (scope, constraints, acceptance, authority); rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
+| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
 | `graph-service` | Dependency graph CRUD and propagation | P1 | 🔜 Planned |
 
 ## Implementation Status
@@ -83,6 +83,30 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - OCC headers (`X-Expected-Version`, `X-Expected-Row-Version`) are validated at the API boundary:
   malformed headers (non-integer values) return 400 Bad Request instead of being silently ignored
 - SQL deserialization returns 500 SerializationError on data corruption; no silent payload fabrication
+
+### Phase 1 Fourth Slice — Diff Governance Hardening (PR #8)
+**Implemented:**
+- Rule pack versioning support via `RulePack`, `RulePackVersion`, `RulePackRiskConfig` types
+- File-based rule pack configuration (JSON serialization/deserialization)
+- `RulePack::from_file()` for loading rule packs from filesystem
+- `DEFAULT_RULE_PACK` static for Phase 1 default configuration
+- `analyze_diff_risk_with_config()` API for configurable threshold analysis
+- `analyze_diff_risk()` continues to use default configuration for backward compatibility
+- Regression fixtures in `crates/rebase-engine/fixtures/`:
+  - `no-semantic-change.json`: Identical content, Low severity, High confidence
+  - `scope-add-medium.json`: Scope item added, Medium severity
+- Fixture integration tests validating deterministic behavior
+- `RulePackRiskConfig` conversion to/from `RiskConfig` for engine integration
+
+**Engine API additions:**
+- `RulePack` and related types exported from `rebase_engine` crate
+- `analyze_diff_risk_with_config()` exported for custom threshold analysis
+- Full conversion between `RulePackRiskConfig` and `RiskConfig`
+
+**NOT in scope for this slice (deferred to future PRs):**
+- S3-based rule pack storage (ADR-06 full implementation)
+- Multi-tenant pack customization
+- Rule pack registry database table
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
