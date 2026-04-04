@@ -111,11 +111,20 @@
 
 [x] Graph ingestors baseline (artifact, approval, side-effect) implemented (PR #11)
     Evidence:
-    - PR: PR #11 (current PR - ingestors baseline)
+    - PR: PR #11 (stacked dependency / open)
     - Code: crates/intent-rebase-types/src/graph.rs (ArtifactIngestRequest, ApprovalIngestRequest, SideEffectIngestRequest, IngestorResult)
     - Code: crates/graph-service/src/lib.rs (ingest_artifact, ingest_approval, ingest_side_effect methods)
     - Tests: ingestor tests for artifact, approval, and side-effect node creation and edge wiring
     - Scope: internal service layer only (no HTTP endpoints)
+
+[x] Graph classification baseline (PR #12) - IMPLEMENTED THIS PR
+    Evidence:
+    - PR: PR #12 (current PR - classification baseline)
+    - Code: crates/intent-rebase-types/src/graph.rs (ClassificationImpact, ClassifiedNode, ClassifyRequest, ClassificationResult)
+    - Code: crates/graph-service/src/lib.rs (classify_impact method with deterministic propagation rules)
+    - Tests: classification tests for direct/transitive impact, depth bounds, diamond graphs, unreachable nodes
+    - Scope: internal service layer only (no HTTP endpoints)
+    - Note: Uses deterministic explicit propagation rules, NOT rule-pack-driven propagation (deferred to future PRs)
 
 [ ] Graph propagation rules from rule pack applied
     Note: Deferred to future PR - requires rule pack integration
