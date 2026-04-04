@@ -17,3 +17,4 @@ anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+once_cell = { workspace = true }

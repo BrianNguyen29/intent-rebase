@@ -13,7 +13,7 @@
 - [x] Implement severity assignment rules (PR #6 — engine-local risk rules)
 - [x] Implement confidence and manual-review triggers (PR #6 — engine-local risk rules)
 - [x] Add diff API HTTP endpoint (PR #7 — POST /v1/intents/{id}/diff)
-- [ ] Add regression fixtures
+- [x] Add regression fixtures (rule-pack configuration and fixture corpus)
 
 ## Epic 3 — Graph and Impact
 - Create graph nodes/edges storage

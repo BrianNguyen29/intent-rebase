@@ -1,7 +1,7 @@
 # Intent Rebase Engine - OpenAPI Specification
-# Phase 1 First Slice - Intent Registry
+# Phase 1 - Core Control Plane
 #
-# Note: This is an initial skeleton. Full OpenAPI will be generated as endpoints are implemented.
+# Note: OpenAPI spec is maintained alongside code as endpoints are implemented.
 # HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
 
 openapi: 3.0.3

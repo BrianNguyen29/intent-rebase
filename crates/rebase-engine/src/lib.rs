@@ -6,6 +6,7 @@
 
 pub mod diff;
 pub mod risk;
+pub mod rule_pack;
 pub mod rules;
 
 use intent_rebase_types::{IntentRebaseError, IntentVersion};
@@ -14,7 +15,8 @@ pub use diff::{
     AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, IntentVersionDiff, ScopeDiff,
 };
 pub use risk::{DiffRiskAnalysis, ManualReviewReason, RiskConfig, Severity};
-pub use rules::analyze_diff_risk;
+pub use rule_pack::{RulePack, RulePackVersion, DEFAULT_RULE_PACK};
+pub use rules::{analyze_diff_risk, analyze_diff_risk_with_config};
 
 /// RebaseEngine computes semantic diffs and generates rebase plans
 pub struct RebaseEngine;

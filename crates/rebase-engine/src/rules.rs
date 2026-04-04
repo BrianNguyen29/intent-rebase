@@ -612,16 +612,18 @@ pub fn analyze_diff_risk_with_config(
     // Generate rationale
     let rationale = generate_rationale(severity, confidence, &section_severities);
 
+    // Filter out sections with no changes - only include sections that actually changed
+    let section_risks: Vec<_> = section_risks
+        .into_iter()
+        .filter(|r| r.change_count > 0)
+        .collect();
+
     DiffRiskAnalysis {
         severity,
         confidence,
         manual_review,
         manual_review_reasons,
-        section_risks: if section_risks.iter().all(|r| r.change_count == 0) {
-            Vec::new()
-        } else {
-            section_risks
-        },
+        section_risks,
         rationale,
     }
 }

@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 1 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 0 exit gate passed.
 
-**Trạng thái:** `NOT STARTED`  
+**Trạng thái:** `IN PROGRESS`  
 **Phase:** Phase 1  
 **Target Duration:** 4–8 tuần
 
@@ -53,11 +53,13 @@
     - Code: crates/rebase-engine/src/risk.rs, crates/rebase-engine/src/rules.rs
     - Tests: risk.rs, rules.rs, and lib.rs cover severity levels, confidence scoring, manual-review triggers, and engine API behavior
 
-[ ] Diff threshold configuration (via rule pack)
+[x] Diff threshold configuration (via rule pack)
     Evidence:
-    - Rule pack v1 includes diff rules
-    - Tests: threshold behavior verified
-    (Deferred to future PR — not in scope for engine-core slice)
+    - Code: crates/rebase-engine/src/rule_pack.rs (RulePack, RulePackVersion, RulePackRiskConfig)
+    - Code: crates/rebase-engine/src/rules.rs (analyze_diff_risk_with_config)
+    - Tests: fixture_tests module exercises regression fixtures with threshold config
+    - Fixture corpus: no-semantic-change.json, scope-add-medium.json loaded and verified
+    - DEFAULT_RULE_PACK static provides Phase 1 default thresholds
 
 [x] Diff API endpoint: POST /v1/intents/{id}/diff (PR #7)
     Evidence:
