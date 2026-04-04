@@ -8,7 +8,7 @@
 - Error responses mapped to OpenAPI Error schema
 - Base path: routes mount directly (e.g., `POST /intents`), intended to be served under `/v1` prefix in production
 
-Other endpoints (diffs, rebases, graph, etc.) are planned for Phase 2+.
+Other endpoints (rebases, graph, etc.) are planned for Phase 2+. Diff endpoint is implemented in this phase.
 
 ## Design principles
 - JSON over HTTPS
@@ -102,10 +102,45 @@ List all versions of an intent.
 ### GET /intents/{intent_id}/versions/{version_number} ✅
 Get specific version by version number.
 
-## Not Yet Implemented (Phase 2+)
+### POST /intents/{intent_id}/diff ✅ (Phase 1 Diff Preview)
+Compute semantic diff between two versions.
 
-### POST /diffs
-Tính semantic diff giữa hai versions.
+**Request:**
+```json
+{
+  "from_version": 1,
+  "to_version": 2
+}
+```
+
+**Response:**
+```json
+{
+  "intent_id": "uuid",
+  "from_version": { /* IntentVersion */ },
+  "to_version": { /* IntentVersion */ },
+  "diff": {
+    "scope": { "in_scope": { "added": [], "removed": [] }, "out_of_scope": { "added": [], "removed": [] } },
+    "constraints": { "functional": [], "non_functional": [], "policy": [], "budget": [], "time": [] },
+    "acceptance_criteria": { "required": [], "optional": [] },
+    "authority": { "allowed_actions": [], "forbidden_actions": [], "approval_requirements": [] }
+  },
+  "risk": {
+    "severity": "low",
+    "confidence": 1.0,
+    "manual_review": false,
+    "manual_review_reasons": [],
+    "section_risks": [],
+    "rationale": "No semantic changes detected..."
+  }
+}
+```
+
+**Error responses:**
+- `400 Bad Request`: Invalid version ordering (from_version >= to_version)
+- `404 Not Found`: Intent or version not found
+
+## Not Yet Implemented (Phase 2+)
 
 ### POST /rebases
 Tạo rebase plan.

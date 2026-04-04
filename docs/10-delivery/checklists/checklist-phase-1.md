@@ -59,11 +59,13 @@
     - Tests: threshold behavior verified
     (Deferred to future PR — not in scope for engine-core slice)
 
-[ ] Diff API endpoint: POST /api/v1/intents/{id}/diff
+[x] Diff API endpoint: POST /v1/intents/{id}/diff (PR #7)
     Evidence:
-    - OpenAPI spec updated: ../../04-api/01-rest-api.md
-    - Integration test passes
-    (Deferred to future PR — HTTP layer not in scope for this slice)
+    - Code: crates/intent-api/src/lib.rs (handler and route)
+    - Code: crates/intent-service/src/lib.rs (compute_diff method)
+    - OpenAPI spec updated: docs/04-api/openapi.yaml
+    - REST docs updated: docs/04-api/01-rest-api.md
+    - Tests: handler tests and service tests
 
 [x] Structured diff output for scope/constraints/acceptance/authority
     Evidence:
