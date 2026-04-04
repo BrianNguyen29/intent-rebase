@@ -50,7 +50,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Routes mount directly; intended to be served under `/v1` prefix in production
 
 **Deferred to Phase 2+:**
-- Full diff/rebase/graph operations
+- Full rebase/graph operations
 - Full authentication/authorization
 - DB integration tests in CI (SQL repository is implemented but live-DB tests are skipped)
 
@@ -71,8 +71,10 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - APIs: `analyze_diff_risk()`, `compute_diff_with_risk_sync()`, `RebaseEngine::compute_diff_with_risk()`
 - Tests covering all severity levels, confidence thresholds, and manual-review trigger conditions
 
+**Implemented in this slice (PR #7):**
+- Diff API HTTP endpoint: `POST /v1/intents/{intent_id}/diff` with full risk analysis
+
 **NOT implemented in this slice (deferred to future PRs):**
-- HTTP endpoints for diff (OpenAPI spec not updated)
 - Graph model and rebase planner integration
 
 **Notes:**
@@ -119,6 +121,7 @@ Routes are mounted directly (e.g., `POST /intents`) and intended to be served un
 | POST | `/v1/intents/{intent_id}/versions` | Create a new version (supports OCC via `X-Expected-Version` / `X-Expected-Row-Version` headers) |
 | GET | `/v1/intents/{intent_id}/versions` | List all versions |
 | GET | `/v1/intents/{intent_id}/versions/{version_number}` | Get specific version |
+| POST | `/v1/intents/{intent_id}/diff` | Compute semantic diff between two versions (Phase 1 Diff Preview) |
 
 Full OpenAPI spec: `docs/04-api/openapi.yaml`
 

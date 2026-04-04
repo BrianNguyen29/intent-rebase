@@ -12,6 +12,7 @@ use intent_rebase_types::{
     CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
     IntentVersion, ListVersionsResponse, VersionStatus,
 };
+use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -344,6 +345,50 @@ impl IntentService {
             versions,
         })
     }
+
+    /// Compute diff between two versions of an intent
+    ///
+    /// Validates that both versions exist, belong to the same intent,
+    /// and have valid ordering (from_version < to_version).
+    /// Returns (from_version, to_version, diff, risk) tuple.
+    pub async fn compute_diff(
+        &self,
+        intent_id: Uuid,
+        from_version: i32,
+        to_version: i32,
+    ) -> Result<
+        (
+            IntentVersion,
+            IntentVersion,
+            IntentVersionDiff,
+            DiffRiskAnalysis,
+        ),
+        IntentRebaseError,
+    > {
+        // Validate version ordering before fetching
+        if from_version >= to_version {
+            return Err(IntentRebaseError::InvalidIntentVersion(format!(
+                "from_version ({}) must be less than to_version ({})",
+                from_version, to_version
+            )));
+        }
+
+        // Fetch both versions
+        let from = self
+            .repo
+            .get_version_by_intent_and_number(intent_id, from_version)
+            .await?;
+        let to = self
+            .repo
+            .get_version_by_intent_and_number(intent_id, to_version)
+            .await?;
+
+        // Compute diff with risk analysis using the synchronous function
+        // The sync function is safe here since it only does in-memory computation
+        let (diff, risk) = compute_diff_with_risk_sync(&from, &to)?;
+
+        Ok((from, to, diff, risk))
+    }
 }
 
 /// Compute SHA-256 hash of the payload for integrity verification
@@ -365,6 +410,7 @@ mod tests {
         IntentObjective, IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier,
         SourceRef, Urgency,
     };
+    use rebase_engine::Severity;
 
     fn create_test_payload() -> IntentPayload {
         IntentPayload {
@@ -785,5 +831,175 @@ mod tests {
         // In-memory behavior: succeeds because row_version is not enforced
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version_number, 2);
+    }
+
+    // === Diff Tests ===
+
+    #[tokio::test]
+    async fn test_compute_diff_same_versions_error() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Try to diff v1 with v1 - should fail (from_version must be less than to_version)
+        let result = service.compute_diff(intent_id, 1, 1).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("must be less than"));
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_reversed_versions_error() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Try to diff v2 with v1 (reversed order) - should fail
+        let result = service.compute_diff(intent_id, 2, 1).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("must be less than"));
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_nonexistent_intent_error() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let result = service.compute_diff(Uuid::new_v4(), 1, 2).await;
+        assert!(result.is_err());
+        // The in-memory repo's get_versions_by_intent doesn't verify intent exists,
+        // so we get InvalidIntentVersion rather than IntentNotFound
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("version") || err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_nonexistent_version_error() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Try to diff v1 with v99 - should fail with version not found
+        let result = service.compute_diff(intent_id, 1, 99).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_no_change() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Create version 2 with identical payload
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2 identical".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Diff v1 to v2 should show no changes
+        let result = service.compute_diff(intent_id, 1, 2).await;
+        assert!(result.is_ok());
+        let (_, _, diff, risk) = result.unwrap();
+
+        // No changes in any section
+        assert!(diff.scope.in_scope.added.is_empty());
+        assert!(diff.scope.in_scope.removed.is_empty());
+        assert!(diff.scope.out_of_scope.added.is_empty());
+        assert!(diff.scope.out_of_scope.removed.is_empty());
+        assert!(diff.constraints.functional.is_empty());
+        assert!(diff.constraints.non_functional.is_empty());
+        assert!(diff.constraints.policy.is_empty());
+        assert!(diff.constraints.budget.is_empty());
+        assert!(diff.constraints.time.is_empty());
+        assert!(diff.acceptance_criteria.required.is_empty());
+        assert!(diff.acceptance_criteria.optional.is_empty());
+        assert!(diff.authority.allowed_actions.is_empty());
+        assert!(diff.authority.forbidden_actions.is_empty());
+        assert!(diff.authority.approval_requirements.is_empty());
+
+        // Risk should be low with full confidence
+        assert_eq!(risk.severity, Severity::Low);
+        assert_eq!(risk.confidence, 1.0);
+        assert!(!risk.manual_review);
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_with_scope_change() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Create version 2 with scope change
+        let mut payload = create_test_payload();
+        payload.scope.in_scope.push("new item".to_string());
+
+        let version_request = CreateVersionRequest {
+            payload,
+            change_reason: "added scope item".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Diff v1 to v2 should show scope change
+        let result = service.compute_diff(intent_id, 1, 2).await;
+        assert!(result.is_ok());
+        let (_, _, diff, risk) = result.unwrap();
+
+        // Scope has changes
+        assert_eq!(diff.scope.in_scope.added, vec!["new item"]);
+        assert!(diff.scope.in_scope.removed.is_empty());
+
+        // Risk should be medium (scope changes are medium)
+        assert_eq!(risk.severity, Severity::Medium);
+        // Scope changes have no clause_ids, so confidence is 0.5 (below 0.7 threshold),
+        // which triggers manual_review
+        assert!(risk.manual_review);
     }
 }

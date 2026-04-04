@@ -398,3 +398,10 @@ pub struct ListVersionsResponse {
     pub versions: Vec<IntentVersion>,
     pub total: usize,
 }
+
+/// Request to compute diff between two versions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffRequest {
+    pub from_version: i32,
+    pub to_version: i32,
+}

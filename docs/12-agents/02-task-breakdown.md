@@ -12,7 +12,7 @@
 - [x] Implement structured diff for scope/constraints/acceptance/authority (engine-core only)
 - [x] Implement severity assignment rules (PR #6 — engine-local risk rules)
 - [x] Implement confidence and manual-review triggers (PR #6 — engine-local risk rules)
-- [ ] Add diff API (HTTP endpoint)
+- [x] Add diff API HTTP endpoint (PR #7 — POST /v1/intents/{id}/diff)
 - [ ] Add regression fixtures
 
 ## Epic 3 — Graph and Impact
@@ -70,5 +70,11 @@
 - [x] Deterministic output ordering (sorted by clause_id/section)
 - [x] Engine-core API: `RebaseEngine::compute_diff()` and `compute_diff_sync()`
 - [x] Unit tests: no-change, section add/remove/modify, determinism, ambiguity fallback
-- [ ] Diff API HTTP endpoint (deferred)
-- [ ] OpenAPI spec update for diff endpoint (deferred)
+
+## Phase 1 Third Slice - Diff API HTTP (PR #7)
+- [x] Diff API HTTP endpoint: POST /v1/intents/{intent_id}/diff
+- [x] DiffRequest and DiffResponse types
+- [x] Service layer: IntentService::compute_diff method
+- [x] OpenAPI spec: diff endpoint, DiffRequest, DiffResponse, and all diff types
+- [x] REST docs: endpoint documentation in 01-rest-api.md
+- [x] Unit tests: handler tests, service tests, error mapping tests

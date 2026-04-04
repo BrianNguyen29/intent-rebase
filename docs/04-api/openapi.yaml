@@ -18,9 +18,10 @@ info:
     - Get intent head (current version)
     - List all versions of an intent (descending order)
     - Get specific version by version number
+    - Diff computation between two versions (POST /intents/{id}/diff)
     
     ## Not Yet Implemented
-    - Diff/rebase/graph operations (Phase 2+)
+    - Rebase/graph operations (Phase 2+)
     - Full authentication/authorization
   version: 0.1.0
   contact:
@@ -233,6 +234,62 @@ paths:
                 $ref: '#/components/schemas/IntentVersion'
         '404':
           description: Version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/diff:
+    post:
+      tags:
+        - diff
+      summary: Compute diff between two versions
+      description: |
+        Computes a semantic diff between two versions of an intent.
+
+        The diff covers scope, constraints, acceptance_criteria, and authority sections.
+        Returns structured diff output plus risk analysis (severity, confidence, manual-review).
+
+        **Version ordering:**
+        - `from_version` must be less than `to_version`
+        - Both versions must belong to the same intent
+        - Both versions must exist
+      operationId: computeDiff
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Diff computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -685,6 +742,245 @@ components:
           items:
             $ref: '#/components/schemas/IntentVersion'
         total:
+          type: integer
+
+    DiffRequest:
+      type: object
+      required: [from_version, to_version]
+      properties:
+        from_version:
+          type: integer
+          description: Source version number (must be less than to_version)
+        to_version:
+          type: integer
+          description: Target version number (must be greater than from_version)
+
+    DiffResponse:
+      type: object
+      required: [intent_id, from_version, to_version, diff, risk]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        diff:
+          $ref: '#/components/schemas/IntentVersionDiff'
+        risk:
+          $ref: '#/components/schemas/DiffRiskAnalysis'
+
+    IntentVersionDiff:
+      type: object
+      description: Structured diff for intent version changes
+      properties:
+        scope:
+          $ref: '#/components/schemas/ScopeDiff'
+        constraints:
+          $ref: '#/components/schemas/ConstraintsDiff'
+        acceptance_criteria:
+          $ref: '#/components/schemas/AcceptanceCriteriaDiff'
+        authority:
+          $ref: '#/components/schemas/AuthorityDiff'
+
+    ScopeDiff:
+      type: object
+      properties:
+        in_scope:
+          $ref: '#/components/schemas/ScopeItemsDiff'
+        out_of_scope:
+          $ref: '#/components/schemas/ScopeItemsDiff'
+
+    ScopeItemsDiff:
+      type: object
+      properties:
+        added:
+          type: array
+          items:
+            type: string
+        removed:
+          type: array
+          items:
+            type: string
+
+    ConstraintsDiff:
+      type: object
+      properties:
+        functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        non_functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        policy:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        budget:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        time:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+
+    ConstraintDiff:
+      type: object
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+          nullable: true
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        constraint_type:
+          type: string
+          enum: [functional, non_functional, policy, budget, time]
+        key:
+          type: string
+        before:
+          $ref: '#/components/schemas/Constraint'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/Constraint'
+          nullable: true
+
+    AcceptanceCriteriaDiff:
+      type: object
+      properties:
+        required:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterionDiff'
+        optional:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterionDiff'
+
+    AcceptanceCriterionDiff:
+      type: object
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+          nullable: true
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        priority:
+          type: string
+        before:
+          $ref: '#/components/schemas/AcceptanceCriterion'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/AcceptanceCriterion'
+          nullable: true
+
+    AuthorityDiff:
+      type: object
+      properties:
+        allowed_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRefDiff'
+        forbidden_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRefDiff'
+        approval_requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRuleDiff'
+
+    ActionRefDiff:
+      type: object
+      properties:
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        action:
+          type: string
+        target:
+          type: string
+          nullable: true
+        before:
+          $ref: '#/components/schemas/ActionRef'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/ActionRef'
+          nullable: true
+
+    ApprovalRuleDiff:
+      type: object
+      properties:
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        rule_id:
+          type: string
+        description:
+          type: string
+        before:
+          $ref: '#/components/schemas/ApprovalRuleRef'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/ApprovalRuleRef'
+          nullable: true
+
+    DiffRiskAnalysis:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        manual_review:
+          type: boolean
+        manual_review_reasons:
+          description: |
+            Reasons why manual review is recommended. Each reason is either a simple string
+            (for unit variants like "critical_severity") or a structured object for variants
+            with data (e.g., {"low_confidence": {"confidence": 0.5, "threshold": 0.7}}).
+          type: array
+          items:
+            oneOf:
+              - type: string
+                description: Unit variant reasons (e.g., "critical_severity", "high_severity_authority_change", "policy_constraint_changed", "approval_requirement_removed")
+              - type: object
+                description: Structured variant reasons
+                additionalProperties: true
+                example:
+                  low_confidence:
+                    confidence: 0.5
+                    threshold: 0.7
+        section_risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SectionRisk'
+        rationale:
+          type: string
+          nullable: true
+
+    SectionRisk:
+      type: object
+      properties:
+        section:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        change_count:
+          type: integer
+        high_priority_changes:
           type: integer
 
     Error:

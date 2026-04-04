@@ -12,12 +12,24 @@ use axum::{
 };
 use intent_rebase_types::{
     CreateIntentRequest, CreateIntentResponse, CreateVersionRequest, CreateVersionResponse,
-    IntentHeadResponse, IntentRebaseError, IntentVersion, ListVersionsResponse,
+    DiffRequest, IntentHeadResponse, IntentRebaseError, IntentVersion, ListVersionsResponse,
 };
+use intent_service::IntentService;
+use rebase_engine::{DiffRiskAnalysis, IntentVersionDiff};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+
+/// Response for diff computation including version context, diff, and risk
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffResponse {
+    pub intent_id: Uuid,
+    pub from_version: IntentVersion,
+    pub to_version: IntentVersion,
+    pub diff: IntentVersionDiff,
+    pub risk: DiffRiskAnalysis,
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -42,6 +54,7 @@ pub struct ErrorDetails {
 }
 
 /// Newtype wrapper for IntentRebaseError that implements IntoResponse
+#[derive(Debug)]
 pub struct ApiErrorResponse(pub IntentRebaseError);
 
 impl IntoResponse for ApiErrorResponse {
@@ -57,15 +70,24 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::ConcurrencyConflict(_) => {
                 (StatusCode::CONFLICT, "CONCURRENCY_CONFLICT", true)
             }
-            IntentRebaseError::InvalidIntentVersion(_) => {
-                (StatusCode::NOT_FOUND, "VERSION_NOT_FOUND", false)
+            IntentRebaseError::InvalidIntentVersion(msg) => {
+                // Distinguish between "not found" (404) vs "bad request" (400)
+                // Version not found messages contain "not found" or "version {} not found"
+                // Ordering error messages contain "must be less than" or "must be greater than"
+                if msg.contains("must be ") || msg.contains("Cannot diff") {
+                    (StatusCode::BAD_REQUEST, "INVALID_VERSION_ORDER", false)
+                } else {
+                    (StatusCode::NOT_FOUND, "VERSION_NOT_FOUND", false)
+                }
             }
             IntentRebaseError::StorageError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "STORAGE_ERROR", true)
             }
-            IntentRebaseError::SerializationError(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "SERIALIZATION_ERROR", true)
-            }
+            IntentRebaseError::SerializationError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SERIALIZATION_ERROR",
+                true,
+            ),
             IntentRebaseError::InvalidHeader(_) => {
                 (StatusCode::BAD_REQUEST, "INVALID_HEADER", false)
             }
@@ -200,8 +222,32 @@ async fn get_version(
         .map_err(ApiErrorResponse)
 }
 
+/// POST /intents/{intent_id}/diff - Compute diff between two versions
+///
+/// Request body: { from_version, to_version }
+/// Response: version context plus diff and risk analysis
+async fn compute_diff(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    Json(request): Json<DiffRequest>,
+) -> Result<Json<DiffResponse>, ApiErrorResponse> {
+    let (from_version, to_version, diff, risk) = state
+        .service
+        .compute_diff(intent_id, request.from_version, request.to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(DiffResponse {
+        intent_id,
+        from_version,
+        to_version,
+        diff,
+        risk,
+    }))
+}
+
 /// Build the Phase 1 router with CORS enabled
-pub fn build_router(service: Arc<intent_service::IntentService>) -> Router {
+pub fn build_router(service: Arc<IntentService>) -> Router {
     let state = AppState { service };
 
     Router::new()
@@ -213,6 +259,7 @@ pub fn build_router(service: Arc<intent_service::IntentService>) -> Router {
             "/intents/{intent_id}/versions/{version_number}",
             get(get_version),
         )
+        .route("/intents/{intent_id}/diff", post(compute_diff))
         .with_state(state)
         .layer(CorsLayer::permissive())
 }
@@ -314,8 +361,197 @@ mod tests {
     fn test_api_error_response_for_serialization_error() {
         // SerializationError represents internal data corruption during SQL read/write,
         // not client input errors, so it should return 500 Internal Server Error
-        let err = IntentRebaseError::SerializationError("payload corrupted in database".to_string());
+        let err =
+            IntentRebaseError::SerializationError("payload corrupted in database".to_string());
         let api_err_response = ApiErrorResponse(err).into_response();
         assert_eq!(api_err_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // === Diff Handler Tests ===
+
+    #[tokio::test]
+    async fn test_compute_diff_success() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
+            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
+            Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+
+        // Create an intent first
+        let create_request = CreateIntentRequest {
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Test the compute_diff handler directly
+        let diff_request = DiffRequest {
+            from_version: 1,
+            to_version: 2,
+        };
+        let result = compute_diff(State(state), Path(intent_id), Json(diff_request))
+            .await
+            .expect("Diff computation should succeed");
+
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.from_version.version_number, 1);
+        assert_eq!(result.to_version.version_number, 2);
+    }
+
+    #[tokio::test]
+    async fn test_compute_diff_invalid_version_ordering() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+
+        let state = create_test_service();
+
+        // Create an intent
+        let create_request = CreateIntentRequest {
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Test with reversed version order (from_version > to_version)
+        let diff_request = DiffRequest {
+            from_version: 2,
+            to_version: 1,
+        };
+        let result = compute_diff(State(state), Path(intent_id), Json(diff_request)).await;
+        // result is Err(ApiErrorResponse) - verify it maps to BAD_REQUEST
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
