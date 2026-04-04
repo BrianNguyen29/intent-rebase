@@ -100,6 +100,12 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::GraphNodeNotFound(_) => {
                 (StatusCode::NOT_FOUND, "GRAPH_NODE_NOT_FOUND", false)
             }
+            IntentRebaseError::GraphEdgeNotFound(_) => {
+                (StatusCode::NOT_FOUND, "GRAPH_EDGE_NOT_FOUND", false)
+            }
+            IntentRebaseError::GraphIntegrityError(_) => {
+                (StatusCode::BAD_REQUEST, "GRAPH_INTEGRITY_ERROR", false)
+            }
             IntentRebaseError::BrokerError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "BROKER_ERROR", true)
             }

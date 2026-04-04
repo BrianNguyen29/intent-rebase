@@ -7,6 +7,10 @@
 - `002_create_intent_versions.sql` ✅
 - `003_create_intent_clauses.sql` ✅
 
+**Phase 1 PR #9 Graph Storage Baseline**: Graph nodes/edges tables for dependency tracking:
+- `004_create_graph_nodes.sql` ✅
+- `005_create_graph_edges.sql` ✅
+
 Remaining tables planned for Phase 2+.
 
 ## OLTP tables
@@ -68,23 +72,31 @@ Remaining tables planned for Phase 2+.
 - rationale
 - human_confirmation_required
 
-### graph_nodes 🔜 (Phase 2+)
-- node_id PK
-- tenant_id
-- workflow_id
-- node_type
-- external_ref
-- state
-- metadata_jsonb
+### graph_nodes ✅ (Phase 1 - Migration 004)
+- node_id PK (UUID)
+- tenant_id (UUID)
+- workflow_id (UUID)
+- node_type (VARCHAR - intent/intent_version/artifact/approval/policy_snapshot/side_effect/checkpoint/workflow/generic)
+- external_ref_type (VARCHAR, nullable - references meta_ref_types)
+- external_ref_id (UUID, nullable)
+- label (VARCHAR)
+- state (VARCHAR - active/stale/invalid/archived)
+- properties (JSONB)
+- created_at (TIMESTAMPTZ)
+- updated_at (TIMESTAMPTZ)
+- Unique constraint on (tenant_id, external_ref_type, external_ref_id)
 
-### graph_edges 🔜 (Phase 2+)
-- edge_id PK
-- tenant_id
-- workflow_id
-- from_node_id
-- to_node_id
-- edge_type
-- metadata_jsonb
+### graph_edges ✅ (Phase 1 - Migration 005)
+- edge_id PK (UUID)
+- tenant_id (UUID)
+- workflow_id (UUID)
+- from_node_id (UUID FK to graph_nodes)
+- to_node_id (UUID FK to graph_nodes)
+- edge_type (VARCHAR - depends_on/produces/approves/triggers/defines/generated_from/validated_by/governed_by/derived_from/stored_in/supersedes/blocks/compensates)
+- properties (JSONB)
+- created_at (TIMESTAMPTZ)
+- Unique constraint on (tenant_id, from_node_id, to_node_id, edge_type)
+- **Integrity constraint**: `from_node` and `to_node` must have the same `tenant_id` and `workflow_id` as the edge row itself. Enforced by `graph_edges_validate_tenant_workflow` trigger (migration 005). This prevents silent cross-tenant/workflow edges.
 
 ### artifacts 🔜 (Phase 2+)
 - artifact_id PK
@@ -170,3 +182,5 @@ Located in `infrastructure/migrations/`:
 - `001_create_intents.sql` - Creates intents table with indexes
 - `002_create_intent_versions.sql` - Creates intent_versions table with indexes
 - `003_create_intent_clauses.sql` - Creates intent_clauses table with indexes
+- `004_create_graph_nodes.sql` - Creates graph_nodes table with indexes (Phase 1 PR #9)
+- `005_create_graph_edges.sql` - Creates graph_edges table with indexes (Phase 1 PR #9)

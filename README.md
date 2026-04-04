@@ -33,7 +33,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
-| `graph-service` | Dependency graph CRUD and propagation | P1 | 🔜 Planned |
+| `graph-service` | Dependency graph CRUD and propagation | P1 | 🟡 Partial |
 
 ## Implementation Status
 

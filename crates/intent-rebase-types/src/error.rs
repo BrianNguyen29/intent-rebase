@@ -17,6 +17,12 @@ pub enum IntentRebaseError {
     #[error("graph node not found: {0}")]
     GraphNodeNotFound(Uuid),
 
+    #[error("graph edge not found: {0}")]
+    GraphEdgeNotFound(Uuid),
+
+    #[error("graph integrity error: {0}")]
+    GraphIntegrityError(String),
+
     #[error("invalid intent version: {0}")]
     InvalidIntentVersion(String),
 

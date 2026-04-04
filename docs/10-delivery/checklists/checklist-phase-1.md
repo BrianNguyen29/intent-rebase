@@ -87,33 +87,34 @@
 ## 3. Graph Model v1
 
 ```
-[ ] Graph data model (nodes, edges, labels) implemented
+[x] Graph data model (nodes, edges, labels) implemented
     Evidence:
-    - PR merged: <link>
-    - Code: graph-service/model.rs
-    - Schema: 005_dependency_graph.sql
+    - PR: PR #9 (current PR - in review)
+    - Code: crates/intent-rebase-types/src/graph.rs (GraphNode, GraphEdge, NodeType, EdgeType)
+    - Code: crates/graph-service/src/lib.rs (GraphService with repository trait)
+    - Schema: infrastructure/migrations/004_create_graph_nodes.sql, 005_create_graph_edges.sql
 
-[ ] Graph CRUD operations (add node, add edge, query) implemented
+[x] Graph CRUD operations (add node, add edge, query) implemented
     Evidence:
-    - PR merged: <link>
-    - Code: graph-service/crud.rs
-    - Tests: graph-service/tests/crud_tests.rs
+    - PR: PR #9 (current PR - in review)
+    - Code: crates/graph-service/src/lib.rs (add_node, get_node, list_nodes, add_edge, get_edge, list_edges, list_edges_from, list_edges_to)
+    - Tests: crates/graph-service/src/lib.rs tests (test_create_and_get_node, test_create_and_get_edge, test_list_edges_from_and_to, etc.)
+    - Repository pattern: InMemoryGraphRepository for Phase 1 baseline
 
 [ ] Graph traversal (BFS, path finding) implemented
+    Note: Deferred to future PR - requires traversal engine work
     Evidence:
-    - PR merged: <link>
-    - Code: graph-service/traversal.rs
-    - Tests: traversal tests pass
+    - Code: not yet implemented
 
 [ ] Graph propagation rules from rule pack applied
+    Note: Deferred to future PR - requires rule pack integration
     Evidence:
-    - Code: graph-service/propagation.rs
-    - Tests: propagation rule tests pass
+    - Code: not yet implemented
 
 [ ] Graph API endpoints: GET /api/v1/graph, POST /api/v1/graph/nodes, POST /api/v1/graph/edges
+    Note: Deferred to future PR - internal CRUD only in Phase 1 baseline
     Evidence:
-    - OpenAPI spec updated
-    - Integration tests pass
+    - Code: not yet implemented (no public HTTP endpoints per PR #9 scope)
 ```
 
 ---
