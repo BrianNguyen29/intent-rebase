@@ -41,26 +41,29 @@
 ## 2. Semantic Diff v1
 
 ```
-[ ] Diff computation algorithm implemented
+[ ] Diff computation algorithm implemented (engine-core only — PR #5)
     Evidence:
-    - PR merged: <link>
-    - Code: rebase-engine/diff.rs
-    - Tests: rebase-engine/tests/diff_tests.rs
+    - PR pending: PR #5
+    - Code: crates/rebase-engine/src/diff.rs
+    - Tests: crates/rebase-engine/src/diff.rs and crates/rebase-engine/src/lib.rs
 
 [ ] Diff threshold configuration (via rule pack)
     Evidence:
     - Rule pack v1 includes diff rules
     - Tests: threshold behavior verified
+    (Deferred to future PR — not in scope for engine-core slice)
 
 [ ] Diff API endpoint: POST /api/v1/intents/{id}/diff
     Evidence:
     - OpenAPI spec updated: ../../04-api/01-rest-api.md
     - Integration test passes
+    (Deferred to future PR — HTTP layer not in scope for this slice)
 
-[ ] Diff output includes: added fields, removed fields, modified fields, similarity score
+[x] Structured diff output for scope/constraints/acceptance/authority
     Evidence:
-    - Test: output schema validated
-    - Docs: ../../03-spec/02-semantic-diff.md (updated)
+    - Code: crates/rebase-engine/src/diff.rs (IntentVersionDiff and related types)
+    - Tests: 25 tests passing (section add/remove/modify, determinism, ambiguity fallback, duplicate identity handling)
+    - NOT including: severity, confidence, similarity score (deferred to future PRs)
 ```
 
 ---

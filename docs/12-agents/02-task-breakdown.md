@@ -9,11 +9,11 @@
 - [x] SQL-backed repository (Phase 1 - PR #4, uses sqlx with PostgreSQL)
 
 ## Epic 2 — Semantic Diff
-- Implement structured diff for scope/constraints/acceptance/authority
-- Implement severity assignment rules
-- Implement confidence and manual-review triggers
-- Add diff API
-- Add regression fixtures
+- [x] Implement structured diff for scope/constraints/acceptance/authority (engine-core only)
+- [ ] Implement severity assignment rules
+- [ ] Implement confidence and manual-review triggers
+- [ ] Add diff API (HTTP endpoint)
+- [ ] Add regression fixtures
 
 ## Epic 3 — Graph and Impact
 - Create graph nodes/edges storage
@@ -62,3 +62,13 @@
 - [x] SQL-backed repository (`SqlxIntentRepository`) with PostgreSQL/sqlx (PR #4)
 - [x] Optimistic concurrency control (OCC) via `X-Expected-Version` / `X-Expected-Row-Version` headers (PR #4)
 - [x] HTTP transport layer with axum (`intent-api` crate, PR #4)
+
+## Phase 1 Second Slice - Structured Diff Core (PR #5)
+- [x] Structured diff module in `rebase-engine` (`crates/rebase-engine/src/diff.rs`)
+- [x] Typed diff output: `IntentVersionDiff`, `ScopeDiff`, `ConstraintsDiff`, `AcceptanceCriteriaDiff`, `AuthorityDiff`
+- [x] Conservative matching rules: prefer clause_id; fallback to add/remove when ambiguous
+- [x] Deterministic output ordering (sorted by clause_id/section)
+- [x] Engine-core API: `RebaseEngine::compute_diff()` and `compute_diff_sync()`
+- [x] Unit tests: no-change, section add/remove/modify, determinism, ambiguity fallback
+- [ ] Diff API HTTP endpoint (deferred)
+- [ ] OpenAPI spec update for diff endpoint (deferred)
