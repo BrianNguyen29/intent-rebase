@@ -117,19 +117,24 @@
     - Tests: ingestor tests for artifact, approval, and side-effect node creation and edge wiring
     - Scope: internal service layer only (no HTTP endpoints)
 
-[x] Graph classification baseline (PR #12) - IMPLEMENTED THIS PR
+[x] Graph classification baseline (PR #12)
     Evidence:
-    - PR: PR #12 (current PR - classification baseline)
+    - PR: PR #12 (merged)
     - Code: crates/intent-rebase-types/src/graph.rs (ClassificationImpact, ClassifiedNode, ClassifyRequest, ClassificationResult)
     - Code: crates/graph-service/src/lib.rs (classify_impact method with deterministic propagation rules)
     - Tests: classification tests for direct/transitive impact, depth bounds, diamond graphs, unreachable nodes
     - Scope: internal service layer only (no HTTP endpoints)
-    - Note: Uses deterministic explicit propagation rules, NOT rule-pack-driven propagation (deferred to future PRs)
+    - Note: Uses deterministic explicit propagation rules, NOT rule-pack-driven propagation
 
-[ ] Graph propagation rules from rule pack applied
-    Note: Deferred to future PR - requires rule pack integration
+[x] Graph propagation rules from rule pack applied (PR #13) - IMPLEMENTED THIS PR
     Evidence:
-    - Code: not yet implemented
+    - PR: PR #13 (current PR - rule-pack-driven propagation baseline)
+    - Code: crates/intent-rebase-types/src/graph.rs (PropagationConfig, EdgeDirection, DEFAULT_PROPAGATION_CONFIG)
+    - Code: crates/rebase-engine/src/rule_pack.rs (RulePackPropagationConfig, RulePack::propagation_config())
+    - Code: crates/graph-service/src/lib.rs (classify_impact updated to use PropagationConfig)
+    - Tests: backward compat, custom max_depth, custom target_types, empty edge types, approval reachability
+    - Scope: internal service layer only (no HTTP endpoints)
+    - Note: Propagation config with defaults matching prior hardcoded behavior
 
 [ ] Graph API endpoints: GET /api/v1/graph, POST /api/v1/graph/nodes, POST /api/v1/graph/edges
     Note: Deferred to future PR - internal CRUD only in Phase 1 baseline

@@ -33,7 +33,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
-| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules | P1 | 🟡 Partial (traversal, ingestors, and classification done; rule-pack propagation and HTTP API deferred) |
+| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules and rule-pack propagation baseline | P1 | 🟡 Partial (traversal, ingestors, classification, and rule-pack propagation baseline done; HTTP API and full S3-based rule pack registry deferred) |
 
 ## Implementation Status
 
@@ -157,6 +157,30 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Graph HTTP API endpoints
 - Rebase planner integration
 - Full rule-pack integration
+
+### Phase 1 Eighth Slice — Rule-Pack Propagation Baseline (PR #13)
+**Implemented:**
+- `PropagationConfig` type in `intent-rebase-types` for propagation configuration (max_depth, traversable_edge_types, traversable_directions, target_node_types)
+- `EdgeDirection` enum: Incoming, Outgoing, Both
+- `RulePackPropagationConfig` in `rebase-engine` for rule-pack-driven propagation
+- `DEFAULT_PROPAGATION_CONFIG` static for Phase 1 default propagation behavior
+- `RulePack::propagation_config()` method to get `PropagationConfig` from a rule pack
+- `ClassifyRequest.propagation_config` optional field for custom propagation behavior
+- `classify_impact()` updated to use `PropagationConfig` when provided, with backward compatibility for existing callers
+- `enqueue_propagation_edges_with_config()` helper method respecting propagation config
+- Unit tests: backward compat with None config, custom max_depth override, custom target_types, empty edge types, approval reachability
+
+**Propagation configuration defaults (matching Phase 1 baseline):**
+- max_depth: 3
+- traversable_edge_types: DependsOn, Triggers, GeneratedFrom
+- target_node_types: Artifact, Approval, SideEffect, Generic
+- Direction semantics unchanged: DependsOn (incoming), Triggers/GeneratedFrom (outgoing)
+
+**NOT in scope for this slice (deferred to future PRs):**
+- S3 rule pack registry/loader
+- Full rule-pack-driven propagation with custom rule packs
+- Graph HTTP API endpoints
+- Rebase planner integration
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)

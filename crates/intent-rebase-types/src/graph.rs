@@ -299,6 +299,73 @@ pub struct IngestorResult {
 }
 
 // ============================================================================
+// Propagation Configuration (Rule Pack Driven)
+// ============================================================================
+
+/// Direction for edge traversal during impact propagation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeDirection {
+    /// Traverse incoming edges (from dependent to dependency)
+    Incoming,
+    /// Traverse outgoing edges (from dependency to dependent)
+    Outgoing,
+    /// Traverse both directions
+    Both,
+}
+
+impl Default for EdgeDirection {
+    fn default() -> Self {
+        EdgeDirection::Both
+    }
+}
+
+/// Configuration for impact propagation through the dependency graph.
+///
+/// This drives the `classify_impact` behavior and enables rule-pack-driven
+/// propagation rules in future PRs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PropagationConfig {
+    /// Maximum traversal depth for impact propagation (default: 3)
+    pub max_depth: Option<usize>,
+    /// Edge types to traverse during propagation (default: DependsOn, Triggers, GeneratedFrom)
+    pub traversable_edge_types: Vec<EdgeType>,
+    /// Directions to traverse for each edge type (default: Both)
+    pub traversable_directions: Vec<EdgeDirection>,
+    /// Node types that can be affected targets (default: all relevant types)
+    pub target_node_types: Vec<NodeType>,
+}
+
+impl Default for PropagationConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: Some(3),
+            traversable_edge_types: vec![
+                EdgeType::DependsOn,
+                EdgeType::Triggers,
+                EdgeType::GeneratedFrom,
+            ],
+            traversable_directions: vec![EdgeDirection::Both],
+            target_node_types: vec![
+                NodeType::Artifact,
+                NodeType::Approval,
+                NodeType::SideEffect,
+                NodeType::Generic,
+            ],
+        }
+    }
+}
+
+/// Phase 1 default propagation configuration.
+///
+/// This matches the hardcoded behavior in `classify_impact`:
+/// - max_depth: 3
+/// - Edge types: DependsOn (incoming), Triggers (outgoing), GeneratedFrom (outgoing)
+/// - Target node types: Artifact, Approval, SideEffect, Generic
+pub static DEFAULT_PROPAGATION_CONFIG: once_cell::sync::Lazy<PropagationConfig> =
+    once_cell::sync::Lazy::new(|| PropagationConfig::default());
+
+// ============================================================================
 // Classification Types
 // ============================================================================
 
@@ -335,9 +402,15 @@ pub struct ClassifyRequest {
     /// The node where the change originates (typically an IntentVersion)
     pub start_node_id: Uuid,
     /// Maximum traversal depth for impact propagation (default: 3)
+    /// Note: This is used when propagation_config is None; ignored if propagation_config is Some
     pub max_depth: Option<usize>,
     /// Optional filter: only consider these node types as affected targets
+    /// Note: This is used when propagation_config is None; ignored if propagation_config is Some
     pub target_node_types: Option<Vec<NodeType>>,
+    /// Optional propagation configuration (PR #13 rule-pack-driven baseline).
+    /// When Some, this config drives max_depth, traversable edge types/directions,
+    /// and target node types. When None, uses DEFAULT_PROPAGATION_CONFIG.
+    pub propagation_config: Option<PropagationConfig>,
 }
 
 impl Default for ClassifyRequest {
@@ -346,6 +419,7 @@ impl Default for ClassifyRequest {
             start_node_id: Uuid::nil(), // Caller must set this
             max_depth: Some(3),
             target_node_types: None,
+            propagation_config: None,
         }
     }
 }
