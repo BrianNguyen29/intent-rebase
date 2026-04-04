@@ -54,7 +54,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Full authentication/authorization
 - DB integration tests in CI (SQL repository is implemented but live-DB tests are skipped)
 
-### Phase 1 Second Slice — Structured Diff Core (Current)
+### Phase 1 Second Slice — Structured Diff Core (PR #5)
 **Implemented:**
 - `rebase-engine` structured diff for 4 sections: scope, constraints, acceptance_criteria, authority
 - Deterministic output ordering (sorted by clause_id/section)
@@ -62,9 +62,17 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Typed diff output via `IntentVersionDiff` and related types
 - Synchronous (`compute_diff_sync`) and async (`RebaseEngine::compute_diff`) APIs
 
+### Phase 1 Third Slice — Diff Risk Rules (PR #6)
+**Implemented:**
+- Engine-local severity assignment (low/medium/high/critical) based on change type and affected section
+- Deterministic confidence scoring (0.0-1.0) based on clause_id matching quality
+- Manual-review triggers for critical severity, low confidence, policy changes, multiple high-severity changes
+- Typed risk output via `DiffRiskAnalysis`, `Severity`, `RiskConfig` types
+- APIs: `analyze_diff_risk()`, `compute_diff_with_risk_sync()`, `RebaseEngine::compute_diff_with_risk()`
+- Tests covering all severity levels, confidence thresholds, and manual-review trigger conditions
+
 **NOT implemented in this slice (deferred to future PRs):**
 - HTTP endpoints for diff (OpenAPI spec not updated)
-- Severity rules, confidence scoring, manual-review triggers
 - Graph model and rebase planner integration
 
 **Notes:**
@@ -78,7 +86,6 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Rebase planner (graph-based)
 - Impact graph propagation
 - Runtime adapter integration
-- Extended semantic diff with severity/confidence scoring
 
 ## Quick Start
 

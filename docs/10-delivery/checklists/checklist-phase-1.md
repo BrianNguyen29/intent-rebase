@@ -41,11 +41,17 @@
 ## 2. Semantic Diff v1
 
 ```
-[ ] Diff computation algorithm implemented (engine-core only — PR #5)
+[x] Diff computation algorithm implemented (engine-core only — PR #5)
     Evidence:
-    - PR pending: PR #5
+    - PR merged: #5
     - Code: crates/rebase-engine/src/diff.rs
     - Tests: crates/rebase-engine/src/diff.rs and crates/rebase-engine/src/lib.rs
+
+[x] Risk analysis: severity, confidence, manual-review triggers (engine-core only — PR #6)
+    Evidence:
+    - Branch: phase1/diff-risk-rules-v1 (PR pending)
+    - Code: crates/rebase-engine/src/risk.rs, crates/rebase-engine/src/rules.rs
+    - Tests: risk.rs, rules.rs, and lib.rs cover severity levels, confidence scoring, manual-review triggers, and engine API behavior
 
 [ ] Diff threshold configuration (via rule pack)
     Evidence:
@@ -62,8 +68,14 @@
 [x] Structured diff output for scope/constraints/acceptance/authority
     Evidence:
     - Code: crates/rebase-engine/src/diff.rs (IntentVersionDiff and related types)
-    - Tests: 25 tests passing (section add/remove/modify, determinism, ambiguity fallback, duplicate identity handling)
-    - NOT including: severity, confidence, similarity score (deferred to future PRs)
+    - Tests: tests covering section add/remove/modify, determinism, ambiguity fallback, duplicate identity handling
+    - NOT including: similarity score (deferred to future PRs)
+
+[x] Engine-local diff risk rules (severity, confidence, manual-review)
+    Evidence:
+    - Code: crates/rebase-engine/src/risk.rs (DiffRiskAnalysis, Severity, RiskConfig)
+    - Code: crates/rebase-engine/src/rules.rs (analyze_diff_risk, matching stats)
+    - Tests: tests covering all severity levels, confidence thresholds, manual-review triggers, and engine API behavior
 ```
 
 ---
