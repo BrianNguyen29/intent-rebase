@@ -3,6 +3,8 @@
 //! Phase 1: First slice implementation with in-memory repository.
 //! Repository trait allows swapping to SQL-backed implementation.
 
+pub mod sqlx_repository;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use intent_rebase_types::{
@@ -15,18 +17,33 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub use sqlx_repository::SqlxIntentRepository;
+
 /// Repository trait for intent storage
 /// Allows for in-memory (tests) or SQL-backed implementations
 #[async_trait]
 pub trait IntentRepository: Send + Sync {
-    async fn create_intent(&self, intent: Intent) -> Result<Intent, IntentRebaseError>;
-    async fn get_intent(&self, id: Uuid) -> Result<Intent, IntentRebaseError>;
-    async fn update_intent(&self, intent: Intent) -> Result<Intent, IntentRebaseError>;
-
-    async fn create_version(
+    /// Create a new intent with its initial version (transactional)
+    /// This is the primary method for intent creation - it creates both intent and v1 atomically
+    async fn create_intent_tx(
         &self,
-        version: IntentVersion,
-    ) -> Result<IntentVersion, IntentRebaseError>;
+        request: CreateIntentRequest,
+    ) -> Result<CreateIntentResponse, IntentRebaseError>;
+
+    async fn get_intent(&self, id: Uuid) -> Result<Intent, IntentRebaseError>;
+
+    /// Create a new version with optimistic concurrency control
+    /// expected_version: the version number the caller believes is current
+    /// expected_row_version: the row_version the caller last observed
+    /// Returns ConcurrencyConflict if the intent has been modified since read
+    async fn create_version_with_occ(
+        &self,
+        intent_id: Uuid,
+        request: CreateVersionRequest,
+        expected_version: i32,
+        expected_row_version: i32,
+    ) -> Result<CreateVersionResponse, IntentRebaseError>;
+
     async fn get_version(&self, id: Uuid) -> Result<IntentVersion, IntentRebaseError>;
     async fn get_versions_by_intent(
         &self,
@@ -37,6 +54,10 @@ pub trait IntentRepository: Send + Sync {
         intent_id: Uuid,
         version_number: i32,
     ) -> Result<IntentVersion, IntentRebaseError>;
+
+    /// Get intent with FOR UPDATE lock (for OCC workflows)
+    /// Returns (intent, row_version) tuple
+    async fn get_intent_for_update(&self, id: Uuid) -> Result<(Intent, i32), IntentRebaseError>;
 }
 
 /// In-memory implementation for testing and Phase 1
@@ -64,10 +85,59 @@ impl Default for InMemoryIntentRepository {
 
 #[async_trait]
 impl IntentRepository for InMemoryIntentRepository {
-    async fn create_intent(&self, intent: Intent) -> Result<Intent, IntentRebaseError> {
+    async fn create_intent_tx(
+        &self,
+        request: CreateIntentRequest,
+    ) -> Result<CreateIntentResponse, IntentRebaseError> {
+        let intent_id = Uuid::new_v4();
+        let now = Utc::now();
+        let tenant_id = Uuid::new_v4(); // TODO: extract from auth context
+
+        // Create the intent document
+        let intent = Intent {
+            id: intent_id,
+            tenant_id,
+            workflow_id: request.workflow_id,
+            current_version: 1,
+            status: IntentStatus::Active,
+            created_at: now,
+            created_by: request.created_by.clone(),
+            source_refs: request.source_refs.clone(),
+            tags: request.tags.clone(),
+        };
+
+        // Create initial version
+        let version_id = Uuid::new_v4();
+        let payload_hash = compute_payload_hash(&request.payload);
+
+        let version = IntentVersion {
+            id: version_id,
+            intent_id,
+            version_number: 1,
+            parent_version_id: None,
+            created_at: now,
+            created_by: request.created_by.clone(),
+            change_reason: "Initial creation".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            status: VersionStatus::Active,
+            hash: payload_hash,
+            payload: request.payload,
+        };
+
+        // Persist both atomically
         let mut intents = self.intents.write().await;
-        intents.insert(intent.id, intent.clone());
-        Ok(intent)
+        let mut versions = self.versions.write().await;
+        let mut versions_by_intent = self.versions_by_intent.write().await;
+
+        intents.insert(intent.id, intent);
+        versions.insert(version.id, version);
+        versions_by_intent.insert(intent_id, vec![version_id]);
+
+        Ok(CreateIntentResponse {
+            intent_id,
+            current_version: 1,
+            status: IntentStatus::Active,
+        })
     }
 
     async fn get_intent(&self, id: Uuid) -> Result<Intent, IntentRebaseError> {
@@ -78,31 +148,63 @@ impl IntentRepository for InMemoryIntentRepository {
             .ok_or(IntentRebaseError::IntentNotFound(id))
     }
 
-    async fn update_intent(&self, intent: Intent) -> Result<Intent, IntentRebaseError> {
-        let mut intents = self.intents.write().await;
-        if intents.contains_key(&intent.id) {
-            intents.insert(intent.id, intent.clone());
-            Ok(intent)
-        } else {
-            Err(IntentRebaseError::IntentNotFound(intent.id))
-        }
-    }
-
-    async fn create_version(
+    async fn create_version_with_occ(
         &self,
-        version: IntentVersion,
-    ) -> Result<IntentVersion, IntentRebaseError> {
-        // Always acquire versions_by_intent before versions to prevent deadlocks
-        let mut versions_by_intent = self.versions_by_intent.write().await;
+        intent_id: Uuid,
+        request: CreateVersionRequest,
+        expected_version: i32,
+        _expected_row_version: i32,
+    ) -> Result<CreateVersionResponse, IntentRebaseError> {
+        let mut intents = self.intents.write().await;
         let mut versions = self.versions.write().await;
+        let mut versions_by_intent = self.versions_by_intent.write().await;
 
-        versions.insert(version.id, version.clone());
+        let intent = intents
+            .get(&intent_id)
+            .ok_or(IntentRebaseError::IntentNotFound(intent_id))?;
+
+        // OCC check (in-memory version check only, row_version not tracked)
+        if intent.current_version != expected_version {
+            return Err(IntentRebaseError::ConcurrencyConflict(intent_id));
+        }
+
+        let new_version_number = intent.current_version + 1;
+        let now = Utc::now();
+        let payload_hash = compute_payload_hash(&request.payload);
+
+        let version_id = Uuid::new_v4();
+        let version = IntentVersion {
+            id: version_id,
+            intent_id,
+            version_number: new_version_number,
+            parent_version_id: None, // TODO: link to previous version
+            created_at: now,
+            created_by: request.created_by.clone(),
+            change_reason: request.change_reason.clone(),
+            change_channel: request.change_channel.clone(),
+            status: VersionStatus::Active,
+            hash: payload_hash,
+            payload: request.payload,
+        };
+
+        // Update intent's current version
+        let mut updated_intent = intent.clone();
+        updated_intent.current_version = new_version_number;
+        intents.insert(intent_id, updated_intent);
+
+        // Persist version
+        versions.insert(version_id, version.clone());
         versions_by_intent
-            .entry(version.intent_id)
+            .entry(intent_id)
             .or_insert_with(Vec::new)
-            .push(version.id);
+            .push(version_id);
 
-        Ok(version)
+        Ok(CreateVersionResponse {
+            intent_version_id: version_id,
+            intent_id,
+            version_number: new_version_number,
+            status: VersionStatus::Active,
+        })
     }
 
     async fn get_version(&self, id: Uuid) -> Result<IntentVersion, IntentRebaseError> {
@@ -149,6 +251,12 @@ impl IntentRepository for InMemoryIntentRepository {
                 ))
             })
     }
+
+    async fn get_intent_for_update(&self, id: Uuid) -> Result<(Intent, i32), IntentRebaseError> {
+        // In-memory repo doesn't track row_version, return 0 as placeholder
+        let intent = self.get_intent(id).await?;
+        Ok((intent, 0))
+    }
 }
 
 /// IntentService handles intent lifecycle operations
@@ -161,101 +269,32 @@ impl IntentService {
         Self { repo }
     }
 
-    /// Create a new intent with initial version
+    /// Create a new intent with initial version (transactional)
     pub async fn create_intent(
         &self,
         request: CreateIntentRequest,
     ) -> Result<CreateIntentResponse, IntentRebaseError> {
-        let intent_id = Uuid::new_v4();
-        let now = Utc::now();
-        let tenant_id = Uuid::new_v4(); // TODO: extract from auth context
-
-        // Create the intent document
-        let intent = Intent {
-            id: intent_id,
-            tenant_id,
-            workflow_id: request.workflow_id,
-            current_version: 1,
-            status: IntentStatus::Active,
-            created_at: now,
-            created_by: request.created_by.clone(),
-            source_refs: request.source_refs.clone(),
-            tags: request.tags.clone(),
-        };
-
-        // Create initial version
-        let version_id = Uuid::new_v4();
-        let payload_hash = compute_payload_hash(&request.payload);
-
-        let version = IntentVersion {
-            id: version_id,
-            intent_id,
-            version_number: 1,
-            parent_version_id: None,
-            created_at: now,
-            created_by: request.created_by.clone(),
-            change_reason: "Initial creation".to_string(),
-            change_channel: ChangeChannel::UserEdit,
-            status: VersionStatus::Active,
-            hash: payload_hash,
-            payload: request.payload,
-        };
-
-        // Persist both
-        self.repo.create_intent(intent.clone()).await?;
-        self.repo.create_version(version).await?;
-
-        Ok(CreateIntentResponse {
-            intent_id,
-            current_version: 1,
-            status: IntentStatus::Active,
-        })
+        self.repo.create_intent_tx(request).await
     }
 
-    /// Create a new version of an existing intent
+    /// Create a new version of an existing intent with optimistic concurrency control
+    ///
+    /// If `expected_version` and `expected_row_version` are provided (non-zero), performs OCC check:
+    /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
+    /// This allows clients to detect concurrent modifications and retry.
     pub async fn create_version(
         &self,
         intent_id: Uuid,
         request: CreateVersionRequest,
+        expected_version: Option<i32>,
+        expected_row_version: Option<i32>,
     ) -> Result<CreateVersionResponse, IntentRebaseError> {
-        // Get current intent to increment version
-        let intent = self.repo.get_intent(intent_id).await?;
-        let new_version_number = intent.current_version + 1;
-        let now = Utc::now();
-
-        // Compute payload hash
-        let payload_hash = compute_payload_hash(&request.payload);
-
-        // Create new version
-        let version_id = Uuid::new_v4();
-        let version = IntentVersion {
-            id: version_id,
-            intent_id,
-            version_number: new_version_number,
-            parent_version_id: None, // TODO: link to previous version
-            created_at: now,
-            created_by: request.created_by.clone(),
-            change_reason: request.change_reason.clone(),
-            change_channel: request.change_channel.clone(),
-            status: VersionStatus::Active,
-            hash: payload_hash,
-            payload: request.payload,
-        };
-
-        // Persist version
-        self.repo.create_version(version.clone()).await?;
-
-        // Update intent's current version
-        let mut updated_intent = intent;
-        updated_intent.current_version = new_version_number;
-        self.repo.update_intent(updated_intent).await?;
-
-        Ok(CreateVersionResponse {
-            intent_version_id: version_id,
-            intent_id,
-            version_number: new_version_number,
-            status: VersionStatus::Active,
-        })
+        let (intent, row_version) = self.repo.get_intent_for_update(intent_id).await?;
+        let exp_ver = expected_version.unwrap_or(intent.current_version);
+        let exp_row_ver = expected_row_version.unwrap_or(row_version);
+        self.repo
+            .create_version_with_occ(intent_id, request, exp_ver, exp_row_ver)
+            .await
     }
 
     /// Get the current (head) version of an intent
@@ -263,13 +302,17 @@ impl IntentService {
         &self,
         intent_id: Uuid,
     ) -> Result<IntentHeadResponse, IntentRebaseError> {
-        let intent = self.repo.get_intent(intent_id).await?;
+        let (intent, row_version) = self.repo.get_intent_for_update(intent_id).await?;
         let version = self
             .repo
             .get_version_by_intent_and_number(intent_id, intent.current_version)
             .await?;
 
-        Ok(IntentHeadResponse { intent, version })
+        Ok(IntentHeadResponse {
+            intent,
+            version,
+            row_version,
+        })
     }
 
     /// Get a specific version of an intent by version number
@@ -421,7 +464,9 @@ mod tests {
             },
         };
 
-        let version_result = service.create_version(intent_id, version_request).await;
+        let version_result = service
+            .create_version(intent_id, version_request, None, None)
+            .await;
         assert!(version_result.is_ok());
         let version_response = version_result.unwrap();
         assert_eq!(version_response.version_number, 2);
@@ -481,7 +526,7 @@ mod tests {
             },
         };
         service
-            .create_version(intent_id, version_request)
+            .create_version(intent_id, version_request, None, None)
             .await
             .unwrap();
 
@@ -496,7 +541,7 @@ mod tests {
             },
         };
         service
-            .create_version(intent_id, version_request)
+            .create_version(intent_id, version_request, None, None)
             .await
             .unwrap();
 
@@ -528,7 +573,7 @@ mod tests {
             },
         };
         service
-            .create_version(intent_id, version_request)
+            .create_version(intent_id, version_request, None, None)
             .await
             .unwrap();
 
@@ -584,5 +629,161 @@ mod tests {
         // Second service instance should see the same data
         let head = service2.get_intent_head(response.intent_id).await;
         assert!(head.is_ok());
+    }
+
+    // OCC tests - Optimistic Concurrency Control
+
+    #[tokio::test]
+    async fn test_occ_stale_version_rejected() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Try to create version 2 with OCC expecting version 1 (but current is 1, so this should work)
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // First update with correct version should succeed
+        let result = service
+            .create_version(intent_id, version_request.clone(), Some(1), Some(0))
+            .await;
+        assert!(result.is_ok());
+
+        // Now try to create another version expecting version 1 (stale)
+        // but current is 2, so this should fail with ConcurrencyConflict
+        let stale_result = service
+            .create_version(intent_id, version_request.clone(), Some(1), Some(0))
+            .await;
+        assert!(stale_result.is_err());
+        assert!(matches!(
+            stale_result.unwrap_err(),
+            IntentRebaseError::ConcurrencyConflict(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_occ_omitted_headers_defaults_to_current_state() {
+        // When OCC headers are omitted (None, None), the service uses the current server
+        // state as expected values. This allows the operation to succeed when no one
+        // else has modified the intent, but is unsafe if concurrent modifications exist.
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Without headers, the service defaults to current version (1) and row_version (0)
+        // This succeeds because no concurrent modification has occurred
+        let result = service
+            .create_version(intent_id, version_request.clone(), None, None)
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
+
+        // Subsequent call without headers still succeeds (in-memory repo is single-threaded)
+        // but the SQL repo would detect this as a conflict since row_version changed
+        let result2 = service
+            .create_version(intent_id, version_request, None, None)
+            .await;
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap().version_number, 3);
+    }
+
+    #[tokio::test]
+    async fn test_occ_correct_version_succeeds() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Get the head to see current state
+        let head = service.get_intent_head(intent_id).await.unwrap();
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Create version with correct OCC values
+        let result = service
+            .create_version(
+                intent_id,
+                version_request,
+                Some(head.intent.current_version),
+                Some(head.row_version),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
+    }
+
+    #[tokio::test]
+    async fn test_occ_row_version_not_tracked_in_memory() {
+        // NOTE: In-memory repo does NOT properly track row_version.
+        // This test documents that the wrong row_version is ignored in this implementation.
+        // The SQL repository properly enforces row_version checks.
+        // This test verifies the current (limiting) behavior, not the desired behavior.
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        let head = service.get_intent_head(intent_id).await.unwrap();
+
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+
+        // Use correct version but wrong row_version
+        // In-memory repo ignores row_version, so this succeeds despite wrong value
+        // SQL repo would properly reject this with ConcurrencyConflict
+        let result = service
+            .create_version(
+                intent_id,
+                version_request,
+                Some(head.intent.current_version),
+                Some(head.row_version + 999), // wrong row_version
+            )
+            .await;
+
+        // In-memory behavior: succeeds because row_version is not enforced
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version_number, 2);
     }
 }

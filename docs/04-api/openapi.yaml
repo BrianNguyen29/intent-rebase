@@ -107,7 +107,21 @@ paths:
       tags:
         - versions
       summary: Create a new version
-      description: Creates a new version of an existing intent
+      description: |
+        Creates a new version of an existing intent.
+
+        **Optimistic Concurrency Control (OCC):**
+        - `X-Expected-Version` (optional): The version number the client believes is current.
+          If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
+        - `X-Expected-Row-Version` (optional): The row_version the client last observed.
+          If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
+
+        If headers are omitted, the service uses the current server state (current_version and
+        row_version) as the expected values. This means the OCC check still occurs, but against
+        whatever is currently stored — allowing concurrent overwrites if multiple clients omit headers.
+        Clients that need deterministic OCC protection should provide both headers.
       operationId: createVersion
       parameters:
         - name: intent_id
@@ -117,6 +131,18 @@ paths:
             type: string
             format: uuid
           description: Intent ID
+        - name: X-Expected-Version
+          in: header
+          required: false
+          schema:
+            type: integer
+          description: Expected current version for OCC check
+        - name: X-Expected-Row-Version
+          in: header
+          required: false
+          schema:
+            type: integer
+          description: Expected row_version for OCC check
       requestBody:
         required: true
         content:
@@ -130,8 +156,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateVersionResponse'
+        '400':
+          description: Invalid request - malformed header or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Concurrency conflict - intent has been modified since last read
           content:
             application/json:
               schema:
@@ -621,12 +659,19 @@ components:
 
     IntentHeadResponse:
       type: object
-      required: [intent, version]
+      required: [intent, version, row_version]
       properties:
         intent:
           $ref: '#/components/schemas/Intent'
         version:
           $ref: '#/components/schemas/IntentVersion'
+        row_version:
+          type: integer
+          description: |
+            Row version for optimistic concurrency control (OCC).
+            Clients should store this value and send back via X-Expected-Row-Version header
+            when creating new versions to enable OCC detection.
+            The row_version increments each time the intent is modified.
 
     ListVersionsResponse:
       type: object

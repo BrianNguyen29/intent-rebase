@@ -32,6 +32,9 @@ pub enum IntentRebaseError {
     #[error("serialization error: {0}")]
     SerializationError(String),
 
+    #[error("invalid request header: {0}")]
+    InvalidHeader(String),
+
     #[error("optimistic concurrency conflict: intent {0} has been modified")]
     ConcurrencyConflict(Uuid),
 

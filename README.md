@@ -11,6 +11,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 ├── crates/
 │   ├── intent-rebase-types/   # Shared domain types, traits, errors
 │   ├── intent-service/        # Intent CRUD and versioning service
+│   ├── intent-api/            # HTTP transport layer (axum)
 │   ├── rebase-engine/         # Semantic diff and rebase planning
 │   └── graph-service/         # Dependency graph management
 │
@@ -29,7 +30,8 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | Crate | Purpose | Phase | Status |
 |-------|---------|-------|--------|
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
-| `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ First slice |
+| `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
+| `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Semantic diff, rebase plan generation | P1 | 🔜 Planned |
 | `graph-service` | Dependency graph CRUD and propagation | P1 | 🔜 Planned |
 
@@ -39,14 +41,25 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 **Implemented:**
 - Intent domain types matching `docs/03-spec/01-intent-model.md`
 - Intent service with create, version management
-- In-memory repository (SQL repository + migrations as baseline)
+- In-memory repository for testing
+- SQL-backed repository (`SqlxIntentRepository`) with PostgreSQL/sqlx
+- Optimistic concurrency control (OCC) for version creation via `create_version_with_occ`
+- HTTP transport layer using axum with manual route binding (CORS only — no tracing middleware)
 - Migration files for `intents`, `intent_versions`, `intent_clauses` tables
-- OpenAPI 3.0 skeleton at `docs/04-api/openapi.yaml`
+- OpenAPI 3.0 spec at `docs/04-api/openapi.yaml` (manually wired to handlers)
+- Routes mount directly; intended to be served under `/v1` prefix in production
 
-**Planned for Phase 1 full:**
-- SQL-backed repository integration
-- Full optimistic concurrency controls
-- HTTP server framework integration
+**Deferred to Phase 2+:**
+- Diff/rebase/graph operations
+- Full authentication/authorization
+- DB integration tests in CI (SQL repository is implemented but live-DB tests are skipped)
+
+**Notes:**
+- `intent-api` crate exposes axum router; `build_router()` returns Router that mounts directly
+- No tracing middleware (only CORS layer enabled in this PR)
+- OCC headers (`X-Expected-Version`, `X-Expected-Row-Version`) are validated at the API boundary:
+  malformed headers (non-integer values) return 400 Bad Request instead of being silently ignored
+- SQL deserialization returns 500 SerializationError on data corruption; no silent payload fabrication
 
 ### Phase 2+ — Diff, Rebase, Graph
 - Semantic diff engine
@@ -77,11 +90,13 @@ cargo fmt --all -- --check
 
 ## API Endpoints (Phase 1 Implemented)
 
+Routes are mounted directly (e.g., `POST /intents`) and intended to be served under `/v1` prefix in production deployments.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/v1/intents` | Create a new intent |
 | GET | `/v1/intents/{intent_id}` | Get intent head (current version) |
-| POST | `/v1/intents/{intent_id}/versions` | Create a new version |
+| POST | `/v1/intents/{intent_id}/versions` | Create a new version (supports OCC via `X-Expected-Version` / `X-Expected-Row-Version` headers) |
 | GET | `/v1/intents/{intent_id}/versions` | List all versions |
 | GET | `/v1/intents/{intent_id}/versions/{version_number}` | Get specific version |
 
