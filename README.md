@@ -33,7 +33,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
 | `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
-| `graph-service` | Dependency graph CRUD and propagation | P1 | 🟡 Partial |
+| `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection) | P1 | 🟡 Partial (traversal baseline done; propagation rules deferred) |
 
 ## Implementation Status
 
@@ -107,6 +107,21 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - S3-based rule pack storage (ADR-06 full implementation)
 - Multi-tenant pack customization
 - Rule pack registry database table
+
+### Phase 1 Fifth Slice — Graph Traversal Baseline (PR #10)
+**Implemented:**
+- BFS reachability queries via `find_reachable()` and `list_reachable_nodes()`
+- Shortest path finding via `find_path()`
+- Cycle detection via `detect_cycles()`
+- Connectivity checking via `are_connected()`
+- Edge type filtering in traversal options
+- Max depth limiting for bounded traversal
+- Types: `GraphPath`, `ReachabilityResult`, `CycleDetectionResult`, `TraversalOptions`
+
+**NOT in scope for this slice (deferred to future PRs):**
+- Graph propagation rules from rule packs
+- Graph API HTTP endpoints
+- Impact classification output semantics
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
