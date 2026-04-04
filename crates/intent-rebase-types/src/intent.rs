@@ -384,6 +384,11 @@ pub struct CreateVersionResponse {
 pub struct IntentHeadResponse {
     pub intent: Intent,
     pub version: IntentVersion,
+    /// Row version for optimistic concurrency control.
+    /// Clients should store this value and send back via X-Expected-Row-Version header
+    /// when creating new versions to enable OCC detection.
+    #[serde(rename = "row_version")]
+    pub row_version: i32,
 }
 
 /// Response for listing versions

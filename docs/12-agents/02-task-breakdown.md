@@ -5,8 +5,8 @@
 - [x] Implement create intent endpoint (Phase 1 first slice - in-memory repo)
 - [x] Implement create version endpoint (Phase 1 first slice)
 - [x] Implement get current/head/version history (Phase 1 first slice)
-- [ ] Add optimistic concurrency checks (Phase 1 full - planned)
-- [ ] SQL-backed repository (Phase 1 full - planned)
+- [x] Add optimistic concurrency checks (Phase 1 - PR #4)
+- [x] SQL-backed repository (Phase 1 - PR #4, uses sqlx with PostgreSQL)
 
 ## Epic 2 — Semantic Diff
 - Implement structured diff for scope/constraints/acceptance/authority
@@ -57,5 +57,8 @@
 - [x] Migration baseline: `001_create_intents.sql`
 - [x] Migration baseline: `002_create_intent_versions.sql`
 - [x] Migration baseline: `003_create_intent_clauses.sql`
-- [x] OpenAPI skeleton: `docs/04-api/openapi.yaml`
+- [x] OpenAPI spec: `docs/04-api/openapi.yaml` (manually wired)
 - [x] Unit tests for service layer
+- [x] SQL-backed repository (`SqlxIntentRepository`) with PostgreSQL/sqlx (PR #4)
+- [x] Optimistic concurrency control (OCC) via `X-Expected-Version` / `X-Expected-Row-Version` headers (PR #4)
+- [x] HTTP transport layer with axum (`intent-api` crate, PR #4)

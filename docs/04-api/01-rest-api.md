@@ -2,7 +2,12 @@
 
 ## Implementation Status
 
-**Phase 1 First Slice** - Intent Registry endpoints are implemented.
+**Phase 1 First Slice** - Intent Registry endpoints are fully implemented via axum HTTP transport layer.
+- HTTP framework: axum 0.7 with tower-http middleware (CORS only — no tracing middleware in this PR)
+- Routes manually wired to match OpenAPI spec
+- Error responses mapped to OpenAPI Error schema
+- Base path: routes mount directly (e.g., `POST /intents`), intended to be served under `/v1` prefix in production
+
 Other endpoints (diffs, rebases, graph, etc.) are planned for Phase 2+.
 
 ## Design principles
@@ -52,6 +57,29 @@ Response:
 
 ### POST /intents/{intent_id}/versions ✅
 Tạo version mới từ intent hiện có.
+
+**OCC Headers (optional):**
+- `X-Expected-Version`: version number client believes is current
+- `X-Expected-Row-Version`: row_version client last observed
+
+Nếu provided và không match, trả về `409 Conflict`.
+
+**Headers:**
+```
+X-Expected-Version: 3
+X-Expected-Row-Version: 5
+```
+
+**Response 409 (conflict):**
+```json
+{
+  "error": {
+    "code": "CONCURRENCY_CONFLICT",
+    "message": "intent {uuid} has been modified",
+    "retryable": true
+  }
+}
+```
 
 ### GET /intents/{intent_id} ✅
 Get intent head (current version).
