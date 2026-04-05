@@ -12,7 +12,9 @@ use intent_rebase_types::{
     CreateVersionRequest, CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError,
     IntentStatus, IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
 };
-use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
+use rebase_engine::{
+    compute_diff_with_risk_sync, DeferredFields, DiffRiskAnalysis, IntentVersionDiff, RebasePlan,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -496,13 +498,18 @@ impl IntentService {
                 let affected_items =
                     AffectedItemsPreview::from_classification(artifacts, approvals, side_effects);
 
-                // Create new plan with enriched affected_items
+                // Rebuild deferred fields with the enriched affected_items so the
+                // approval-revalidation heuristic sees graph-derived affected approvals
+                let deferred =
+                    DeferredFields::phase1_baseline_for(plan.decision_class, &affected_items);
+
+                // Create new plan with enriched affected_items and updated deferred
                 let enriched_plan = RebasePlan {
                     decision_class: plan.decision_class,
                     rationale: plan.rationale,
                     section_decisions: plan.section_decisions,
                     affected_items,
-                    deferred: plan.deferred,
+                    deferred,
                     manual_review_recommended: plan.manual_review_recommended,
                     risk_level: plan.risk_level,
                 };

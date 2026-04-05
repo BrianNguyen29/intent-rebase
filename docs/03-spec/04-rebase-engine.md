@@ -33,6 +33,15 @@
 - Class E surfaces a manual-handoff boundary without auto-selecting a restart point
 - `CheckpointSelection.ready` remains `false`; no runtime-backed checkpoint execution exists yet
 
+**PR #19 — Internal Approval-Revalidation Heuristic Baseline:**
+- `ApprovalRevalidation::heuristic_baseline()` adds deterministic internal strategy hints by decision class
+- When graph-derived `affected_approvals` are available (via PR #16 graph integration), they are mapped to `ApprovalNeedingRevalidation` entries for Class C and D
+- Class E drops all approvals (clean slate before manual handoff) regardless of graph data
+- Class A and B produce no invalidation candidates (no immediate revalidation needed)
+- When `affected_approvals` is unavailable, the heuristic falls back to empty approvals with a truthful rationale
+- `ApprovalRevalidation.ready` remains `false`; execution deferred to Phase 2 runtime adapter
+- No public API or OpenAPI changes; internal-only heuristic baseline
+
 **NOT YET IMPLEMENTED (Phase 2+):**
 - Runtime-backed checkpoint discovery and execution
 - Approval revalidation execution hooks

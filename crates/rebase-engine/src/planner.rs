@@ -143,6 +143,35 @@ impl ApprovalRevalidation {
             rationale: None,
         }
     }
+
+    /// Internal approval-revalidation heuristic baseline.
+    ///
+    /// This remains non-executable (`ready=false`) until runtime adapter support
+    /// exists, but it surfaces deterministic internal strategy hints about which
+    /// approvals may need revalidation for a given decision class.
+    ///
+    /// When `affected_approvals` is provided (from graph integration via PR #16),
+    /// those known-affected approvals are surfaced in `approvals_needing_revalidation`.
+    /// When `affected_approvals` is empty, the heuristic still produces a strategy
+    /// hint and rationale indicating this is a heuristic baseline with execution deferred.
+    pub fn heuristic_baseline(
+        decision_class: DecisionClass,
+        affected_approvals: &[intent_rebase_types::AffectedItem],
+    ) -> Self {
+        let approvals_needing_revalidation =
+            compute_approvals_needing_revalidation(decision_class, affected_approvals);
+        let strategy =
+            select_revalidation_strategy(decision_class, &approvals_needing_revalidation);
+        let rationale =
+            build_revalidation_rationale(decision_class, strategy, &approvals_needing_revalidation);
+
+        Self {
+            ready: false,
+            approvals_needing_revalidation,
+            strategy,
+            rationale,
+        }
+    }
 }
 
 /// An approval that may need revalidation due to intent changes
@@ -237,15 +266,26 @@ pub struct DeferredFields {
 impl DeferredFields {
     /// Create new deferred fields with Phase 1 baseline
     pub fn phase1_baseline() -> Self {
-        Self::phase1_baseline_for(DecisionClass::A)
+        Self::phase1_baseline_for(DecisionClass::A, &AffectedItemsPreview::unavailable())
     }
 
     /// Create new deferred fields with Phase 1 baseline plus internal
-    /// checkpoint-selection hints for the computed decision class.
-    pub fn phase1_baseline_for(decision_class: DecisionClass) -> Self {
+    /// checkpoint-selection hints and approval-revalidation heuristic for
+    /// the computed decision class.
+    ///
+    /// When `affected_items` has `status: Available`, its `affected_approvals`
+    /// are passed to the approval heuristic. When `status: Unavailable`,
+    /// an empty slice is passed (heuristic falls back truthfully).
+    pub fn phase1_baseline_for(
+        decision_class: DecisionClass,
+        affected_items: &AffectedItemsPreview,
+    ) -> Self {
         Self {
             checkpoint_selection: CheckpointSelection::heuristic_baseline(decision_class),
-            approval_revalidation: ApprovalRevalidation::deferred(),
+            approval_revalidation: ApprovalRevalidation::heuristic_baseline(
+                decision_class,
+                &affected_items.affected_approvals,
+            ),
             compensation: CompensationReadiness::deferred(),
         }
     }
@@ -318,7 +358,10 @@ impl RebasePlan {
             rationale,
             section_decisions,
             affected_items: AffectedItemsPreview::unavailable(),
-            deferred: DeferredFields::phase1_baseline_for(decision_class),
+            deferred: DeferredFields::phase1_baseline_for(
+                decision_class,
+                &AffectedItemsPreview::unavailable(),
+            ),
             manual_review_recommended,
             risk_level,
         }
@@ -725,6 +768,107 @@ fn build_checkpoint_selection_rationale(
     }
 }
 
+/// Map graph-derived affected approvals to revalidation candidates.
+///
+/// Uses the `node_id`, `label`, and `reason` from `AffectedItem` to populate
+/// the `ApprovalNeedingRevalidation` entries. Returns an empty vector for
+/// decision classes A and B (no invalidation expected).
+fn compute_approvals_needing_revalidation(
+    decision_class: DecisionClass,
+    affected_approvals: &[intent_rebase_types::AffectedItem],
+) -> Vec<ApprovalNeedingRevalidation> {
+    match decision_class {
+        // Class A: no changes; no approvals need revalidation
+        DecisionClass::A => vec![],
+        // Class B: soft review only; approvals may stale but no immediate invalidation
+        DecisionClass::B => vec![],
+        // Class C, D: map affected approvals from graph when available
+        DecisionClass::C | DecisionClass::D => affected_approvals
+            .iter()
+            .map(|item| ApprovalNeedingRevalidation {
+                node_id: item.node_id.to_string(),
+                label: item.label.clone(),
+                original_rule_id: format!("original_rule_{}", item.node_id),
+                reason: item.reason.clone(),
+            })
+            .collect(),
+        // Class E: approvals should be dropped before manual handoff (clean slate)
+        DecisionClass::E => vec![],
+    }
+}
+
+/// Select the revalidation strategy hint based on decision class and affected approvals.
+fn select_revalidation_strategy(
+    decision_class: DecisionClass,
+    approvals: &[ApprovalNeedingRevalidation],
+) -> RevalidationStrategy {
+    match decision_class {
+        DecisionClass::A | DecisionClass::B => RevalidationStrategy::Deferred,
+        DecisionClass::C => {
+            if approvals.is_empty() {
+                RevalidationStrategy::Deferred
+            } else {
+                RevalidationStrategy::Incremental
+            }
+        }
+        DecisionClass::D => {
+            if approvals.is_empty() {
+                RevalidationStrategy::Deferred
+            } else {
+                RevalidationStrategy::Full
+            }
+        }
+        DecisionClass::E => RevalidationStrategy::Drop,
+    }
+}
+
+/// Build a human-readable rationale for the revalidation heuristic result.
+fn build_revalidation_rationale(
+    decision_class: DecisionClass,
+    _strategy: RevalidationStrategy,
+    approvals: &[ApprovalNeedingRevalidation],
+) -> Option<String> {
+    match decision_class {
+        DecisionClass::A => Some(
+            "No semantic changes detected; no approvals require revalidation.".to_string(),
+        ),
+        DecisionClass::B => Some(
+            "Soft-review path: approvals may be stale but no immediate revalidation is required by the internal baseline."
+                .to_string(),
+        ),
+        DecisionClass::C => {
+            if approvals.is_empty() {
+                Some(
+                    "Class C: incremental revalidation is indicated for changed scope, but no affected approvals were found in the graph; heuristic baseline defers execution."
+                        .to_string(),
+                )
+            } else {
+                Some(format!(
+                    "Class C: incremental revalidation suggested for {} affected approval(s) given the changed scope; execution deferred to Phase 2 runtime adapter.",
+                    approvals.len()
+                ))
+            }
+        }
+        DecisionClass::D => {
+            if approvals.is_empty() {
+                Some(
+                    "Class D: full revalidation is indicated for compensation+repair path, but no affected approvals were found in the graph; heuristic baseline defers execution."
+                        .to_string(),
+                )
+            } else {
+                Some(format!(
+                    "Class D: full revalidation suggested for {} affected approval(s) to ensure compensation actions are properly gated; execution deferred to Phase 2 runtime adapter.",
+                    approvals.len()
+                ))
+            }
+        }
+        DecisionClass::E => Some(
+            "Class E: stale approvals should be dropped before manual handoff; execution deferred to Phase 2 runtime adapter."
+                .to_string(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,6 +876,7 @@ mod tests {
         AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, ScopeDiff, ScopeItemsDiff,
     };
     use crate::risk::{DiffRiskAnalysis, SectionRisk, Severity};
+    use uuid::Uuid;
 
     fn empty_scope_diff() -> ScopeDiff {
         ScopeDiff {
@@ -1197,7 +1342,12 @@ mod tests {
         // Selected/rationale should be None for deferred state
         assert!(plan.deferred.checkpoint_selection.selected.is_none());
         assert!(plan.deferred.checkpoint_selection.rationale.is_none());
-        assert!(plan.deferred.approval_revalidation.rationale.is_none());
+        // Heuristic baseline provides rationale for all classes (including Class A)
+        // but readiness remains false (execution deferred to Phase 2)
+        assert!(
+            plan.deferred.approval_revalidation.rationale.is_some(),
+            "ApprovalRevalidation rationale should be populated by heuristic baseline"
+        );
         assert!(plan.deferred.compensation.rationale.is_none());
     }
 
@@ -1327,6 +1477,201 @@ mod tests {
         assert!(ar.rationale.is_none());
     }
 
+    #[test]
+    fn test_approval_revalidation_heuristic_class_a() {
+        // Class A: no changes → strategy Deferred, no approvals, rationale provided
+        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::A, &affected);
+
+        assert!(!ar.ready);
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("No semantic changes")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_b_soft_review() {
+        // Class B: soft review → strategy Deferred, no approvals, rationale explains soft review
+        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::B, &affected);
+
+        assert!(!ar.ready);
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("Soft-review")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_c_incremental_with_graph_approvals() {
+        // Class C with affected approvals → Incremental strategy, approvals mapped
+        let affected = vec![intent_rebase_types::AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "TestApproval".to_string(),
+            impact: intent_rebase_types::ClassificationImpact::Direct,
+            reason: "Directly affected by scope change".to_string(),
+            external_ref: None,
+        }];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
+
+        assert!(!ar.ready);
+        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
+        assert_eq!(ar.strategy, RevalidationStrategy::Incremental);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("incremental")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_c_incremental_empty_fallback() {
+        // Class C with no affected approvals → Deferred strategy (nothing to revalidate incrementally)
+        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
+
+        assert!(!ar.ready);
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        // When no affected approvals, strategy defers to Deferred (nothing to revalidate)
+        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("no affected approvals")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_d_full_with_graph_approvals() {
+        // Class D with affected approvals → Full strategy
+        let affected = vec![intent_rebase_types::AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "CompensatedApproval".to_string(),
+            impact: intent_rebase_types::ClassificationImpact::Transitive,
+            reason: "Transitively affected via side effect".to_string(),
+            external_ref: None,
+        }];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::D, &affected);
+
+        assert!(!ar.ready);
+        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
+        assert_eq!(ar.strategy, RevalidationStrategy::Full);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("full revalidation")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_d_full_empty_fallback() {
+        // Class D with no affected approvals → Deferred strategy (nothing to fully revalidate)
+        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::D, &affected);
+
+        assert!(!ar.ready);
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        // When no affected approvals, strategy defers to Deferred (nothing to fully revalidate)
+        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("no affected approvals")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_e_drop() {
+        // Class E → Drop strategy regardless of affected approvals
+        // Note: the heuristic drops affected approvals (Class E needs a clean slate before manual handoff)
+        let affected = vec![
+            intent_rebase_types::AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Approval1".to_string(),
+                impact: intent_rebase_types::ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            },
+            intent_rebase_types::AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Approval2".to_string(),
+                impact: intent_rebase_types::ClassificationImpact::Transitive,
+                reason: "Transitively affected".to_string(),
+                external_ref: None,
+            },
+        ];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::E, &affected);
+
+        assert!(!ar.ready);
+        // Class E drops all approvals — heuristic intentionally discards them
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        assert_eq!(ar.strategy, RevalidationStrategy::Drop);
+        assert!(ar.rationale.is_some());
+        assert!(ar
+            .rationale
+            .as_deref()
+            .is_some_and(|r| r.contains("dropped")));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_maps_graph_affected_approvals_correctly() {
+        // Verify that AffectedItem fields are correctly mapped to ApprovalNeedingRevalidation
+        use uuid::Uuid;
+        let node_id = Uuid::new_v4();
+        let affected = vec![intent_rebase_types::AffectedItem {
+            node_id,
+            label: "MyApprovalLabel".to_string(),
+            impact: intent_rebase_types::ClassificationImpact::Direct,
+            reason: "MyReason".to_string(),
+            external_ref: None,
+        }];
+        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
+
+        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
+        let entry = &ar.approvals_needing_revalidation[0];
+        assert_eq!(entry.node_id, node_id.to_string());
+        assert_eq!(entry.label, "MyApprovalLabel");
+        assert_eq!(entry.reason, "MyReason");
+        assert!(entry.original_rule_id.contains("original_rule_"));
+    }
+
+    #[test]
+    fn test_deferred_fields_uses_heuristic_baseline_not_deferred() {
+        // Verify DeferredFields uses heuristic_baseline (not deferred()) for approval revalidation
+        let diff = empty_intent_version_diff();
+        let risk = DiffRiskAnalysis {
+            severity: Severity::Low,
+            confidence: 1.0,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![],
+            rationale: None,
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+
+        // Heuristic baseline produces Class A with strategy Deferred but rationale populated
+        assert!(!plan.deferred.approval_revalidation.ready);
+        assert_eq!(
+            plan.deferred.approval_revalidation.strategy,
+            RevalidationStrategy::Deferred
+        );
+        // The key difference from pure deferred(): rationale IS populated by heuristic baseline
+        assert!(plan.deferred.approval_revalidation.rationale.is_some());
+        // Class A produces empty approvals_needing_revalidation (no changes at all)
+        assert!(plan
+            .deferred
+            .approval_revalidation
+            .approvals_needing_revalidation
+            .is_empty());
+    }
     #[test]
     fn test_compensation_readiness_deferred() {
         let cr = CompensationReadiness::deferred();
