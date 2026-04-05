@@ -19,6 +19,7 @@ info:
     - List all versions of an intent (descending order)
     - Get specific version by version number
     - Diff computation between two versions (POST /intents/{id}/diff)
+    - Rebase preview (POST /intents/{id}/rebase-preview)
     
     ## Not Yet Implemented
     - Rebase/graph operations (Phase 2+)
@@ -276,6 +277,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DiffResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/rebase-preview:
+    post:
+      tags:
+        - rebase
+      summary: Generate rebase preview plan
+      description: |
+        Generates a preview rebase plan between two versions of an intent.
+
+        The preview uses diff+risk analysis to produce a decision class (A-E),
+        rationale, and section-level decisions.
+
+        **Phase 1 Preview-only:** This endpoint does NOT expose:
+        - `affected_items` (requires graph integration - Phase 2)
+        - `deferred` fields (Phase 2)
+
+        **Version ordering:**
+        - `from_version` must be less than `to_version`
+        - Both versions must belong to the same intent
+        - Both versions must exist
+      operationId: computeRebasePreview
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Rebase preview computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebasePreviewResponse'
         '400':
           description: Invalid request - bad version ordering or versions from different intents
           content:
@@ -770,6 +831,65 @@ components:
           $ref: '#/components/schemas/IntentVersionDiff'
         risk:
           $ref: '#/components/schemas/DiffRiskAnalysis'
+
+    RebasePreviewResponse:
+      type: object
+      description: |
+        Phase 1 preview-only rebase plan response.
+        
+        Exposes semantically reliable planner summary fields only.
+        Does NOT include placeholder fields that require graph integration (Phase 2):
+        - affected_items (empty in Phase 1)
+        - deferred (Phase 2)
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, manual_review_recommended, risk_level]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        decision_class:
+          $ref: '#/components/schemas/DecisionClass'
+        rationale:
+          type: string
+          description: Human-readable decision rationale
+        section_decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SectionDecision'
+        manual_review_recommended:
+          type: boolean
+        risk_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Risk level (1=lowest, 5=highest)
+
+    DecisionClass:
+      type: string
+      enum: [A, B, C, D, E]
+      description: |
+        Decision class for rebase planning:
+        - A: No-op / Metadata update — no execution semantics affected
+        - B: Soft review — no immediate invalidation but review recommended
+        - C: Partial repair — local invalidation, selective checkpoint resume
+        - D: Compensation + repair — side effects need mitigation
+        - E: Hard restart / manual handoff — auto-repair not safe
+
+    SectionDecision:
+      type: object
+      properties:
+        section:
+          type: string
+          description: Section name (scope, constraints, acceptance_criteria, authority)
+        change_summary:
+          type: string
+          description: Human-readable change summary for this section
+        recommended_action:
+          type: string
+          description: Recommended action for this section
 
     IntentVersionDiff:
       type: object

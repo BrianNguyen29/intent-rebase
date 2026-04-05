@@ -12,7 +12,7 @@ use intent_rebase_types::{
     CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
     IntentVersion, ListVersionsResponse, VersionStatus,
 };
-use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff};
+use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -388,6 +388,49 @@ impl IntentService {
         let (diff, risk) = compute_diff_with_risk_sync(&from, &to)?;
 
         Ok((from, to, diff, risk))
+    }
+
+    /// Compute rebase preview between two versions of an intent
+    ///
+    /// Validates that both versions exist, belong to the same intent,
+    /// and have valid ordering (from_version < to_version).
+    /// Returns a rebase plan with decision class, rationale, and section decisions.
+    ///
+    /// This is a preview-only endpoint that does NOT include:
+    /// - affected_items (requires graph integration - Phase 2)
+    /// - deferred fields (Phase 2)
+    pub async fn compute_rebase_preview(
+        &self,
+        intent_id: Uuid,
+        from_version: i32,
+        to_version: i32,
+    ) -> Result<RebasePlan, IntentRebaseError> {
+        // Validate version ordering before fetching
+        if from_version >= to_version {
+            return Err(IntentRebaseError::InvalidIntentVersion(format!(
+                "from_version ({}) must be less than to_version ({})",
+                from_version, to_version
+            )));
+        }
+
+        // Fetch both versions
+        let from = self
+            .repo
+            .get_version_by_intent_and_number(intent_id, from_version)
+            .await?;
+        let to = self
+            .repo
+            .get_version_by_intent_and_number(intent_id, to_version)
+            .await?;
+
+        // Compute diff with risk analysis
+        let (diff, risk) = compute_diff_with_risk_sync(&from, &to)?;
+
+        // Generate rebase plan using the planner (Phase 1 baseline)
+        // Note: This only uses diff+risk - no graph integration in Phase 1
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+
+        Ok(plan)
     }
 }
 

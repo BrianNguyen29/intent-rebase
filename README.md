@@ -244,6 +244,7 @@ Routes are mounted directly (e.g., `POST /intents`) and intended to be served un
 | GET | `/v1/intents/{intent_id}/versions` | List all versions |
 | GET | `/v1/intents/{intent_id}/versions/{version_number}` | Get specific version |
 | POST | `/v1/intents/{intent_id}/diff` | Compute semantic diff between two versions (Phase 1 Diff Preview) |
+| POST | `/v1/intents/{intent_id}/rebase-preview` | Compute preview-only rebase plan summary from diff, risk, and planner baseline |
 
 Full OpenAPI spec: `docs/04-api/openapi.yaml`
 

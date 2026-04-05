@@ -140,6 +140,52 @@ Compute semantic diff between two versions.
 - `400 Bad Request`: Invalid version ordering (from_version >= to_version)
 - `404 Not Found`: Intent or version not found
 
+### POST /intents/{intent_id}/rebase-preview ✅ (Phase 1 Rebase Preview)
+Generate rebase preview plan between two versions.
+
+**Request:**
+```json
+{
+  "from_version": 1,
+  "to_version": 2
+}
+```
+
+**Response:**
+```json
+{
+  "intent_id": "uuid",
+  "from_version": { /* IntentVersion */ },
+  "to_version": { /* IntentVersion */ },
+  "decision_class": "B",
+  "rationale": "medium severity with 80% confidence",
+  "section_decisions": [
+    {
+      "section": "scope",
+      "change_summary": "+1 in_scope",
+      "recommended_action": "Review scope deltas before proceeding"
+    }
+  ],
+  "manual_review_recommended": true,
+  "risk_level": 2
+}
+```
+
+**Decision Classes:**
+- `A`: No semantic changes — no rebase needed
+- `B`: Soft review recommended — no immediate invalidation
+- `C`: Partial repair candidate — limited scope changes
+- `D`: Compensation and repair needed — manual review advised
+- `E`: Hard restart required — manual handoff needed
+
+**Phase 1 Notes:**
+- Does NOT expose `affected_items` (requires graph integration - Phase 2)
+- Does NOT expose `deferred` fields (Phase 2)
+
+**Error responses:**
+- `400 Bad Request`: Invalid version ordering (from_version >= to_version)
+- `404 Not Found`: Intent or version not found
+
 ## Not Yet Implemented (Phase 2+)
 
 ### POST /rebases

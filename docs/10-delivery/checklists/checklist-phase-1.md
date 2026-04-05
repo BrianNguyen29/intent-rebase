@@ -149,17 +149,18 @@
 ```
 [x] Rebase plan computation implemented (PR #14 - planner baseline)
     Evidence:
-    - PR: PR #14 (current PR - planner baseline)
+    - PR: PR #14 (merged)
     - Code: crates/rebase-engine/src/planner.rs (DecisionClass, RebasePlan, section decisions)
     - Code: crates/rebase-engine/src/lib.rs (RebaseEngine::generate_plan, generate_plan_with_risk)
     - Tests: crates/rebase-engine/src/planner.rs unit tests (14 tests covering A/B/C/D/E mapping)
     - Tests: deterministic ordering and risk level mapping tests
 
-[x] Rebase preview includes: affected artifacts list, approval invalidation list, compensation recommendations
+[x] Rebase preview includes decision class, rationale, section decisions, risk level
     Evidence:
-    - Test: AffectedItemsPreview type with empty lists in Phase 1 baseline
-    - Docs: ../../03-spec/04-rebase-engine.md (updated with decision classes A-E)
-    - Note: Full affected items list requires graph integration (Phase 2)
+    - Code: RebasePreviewResponse in crates/intent-api/src/lib.rs (intent_id, from_version, to_version, decision_class, rationale, section_decisions, manual_review_recommended, risk_level)
+    - OpenAPI: RebasePreviewResponse schema in docs/04-api/openapi.yaml
+    - Tests: test_rebase_preview_success verifies rationale and risk_level fields
+    - Note: AffectedItemsPreview uses empty lists in Phase 1 (Phase 2 graph integration required)
 
 [x] NO rebase apply in Phase 1 — preview only
     Evidence:
@@ -167,10 +168,13 @@
     - No apply method exists in RebaseEngine (Phase 2)
     - generate_plan returns typed RebasePlan for preview only
 
-[ ] Rebase preview endpoint: POST /api/v1/intents/{id}/rebase-preview
+[x] Rebase preview endpoint: POST /v1/intents/{id}/rebase-preview
     Evidence:
-    - Not yet implemented (HTTP API deferred to Phase 2)
-    - OpenAPI spec not yet updated
+    - Code: crates/intent-api/src/lib.rs (rebase_preview handler and route)
+    - OpenAPI: docs/04-api/openapi.yaml (RebasePreviewResponse schema, computeRebasePreview operation)
+    - Tests: test_rebase_preview_success, test_rebase_preview_invalid_version_ordering
+    - Phase 1 returns: decision_class, rationale, section_decisions, manual_review_recommended, risk_level
+    - Phase 2: affected_items and deferred fields deferred to graph integration
 ```
 
 ---

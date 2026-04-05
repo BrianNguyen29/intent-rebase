@@ -1,19 +1,21 @@
 # Rebase Engine Specification
 
-## Phase 1 Status (PR #14 — Planner Baseline)
+## Phase 1 Status (PR #15 — Preview Endpoint)
 
 **Implemented:**
 - Decision classes A-E mapping from diff+risk analysis
 - `RebasePlan` output type with typed decision class, rationale, and section decisions
 - Deterministic decision class computation (same input → same output)
 - `RebaseEngine::generate_plan()` for plan generation
+- Rebase preview HTTP endpoint: POST /v1/intents/{id}/rebase-preview (Phase 1 baseline)
 
 **NOT YET IMPLEMENTED (Phase 2+):**
 - Graph-based affected node classification (requires graph HTTP API)
 - Checkpoint selection heuristics
 - Approval revalidation hooks
 - Runtime adapter integration
-- Rebase apply/preview HTTP endpoints
+- Rebase apply (preview-only in Phase 1)
+- `affected_items` list in preview response (requires graph integration)
 
 ## Mục tiêu
 Tạo quyết định có cấu trúc khi intent thay đổi:
