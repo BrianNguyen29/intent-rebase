@@ -27,7 +27,8 @@
 - [x] Add decision classes A–E (Phase 1 PR #14)
 - [x] Apply/checkpoint typed contracts groundwork (Phase 1 PR #17)
 - [x] Add internal checkpoint selection heuristic baseline (Phase 1 PR #18)
-- [ ] Add approval revalidation hooks (Phase 2)
+- [x] Add internal approval revalidation heuristic baseline (Phase 1 PR #19 - heuristic only; execution deferred to Phase 2)
+- [ ] Add approval revalidation execution hooks (Phase 2)
 
 ## Epic 5 — Adapter
 - Define capability contract

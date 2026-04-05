@@ -277,6 +277,23 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Runtime adapter integration
 - Rebase apply HTTP endpoint
 
+### Phase 1 Thirteenth Slice — Internal Approval-Revalidation Heuristic Baseline (PR #19)
+**Implemented:**
+- Internal `ApprovalRevalidation::heuristic_baseline()` for deterministic strategy hints by decision class
+- Uses graph-derived `affected_approvals` when available (via PR #16 graph integration); falls back to empty when unavailable
+- Class C (incremental): maps graph approvals to `ApprovalNeedingRevalidation` when present; falls back to empty with truthful rationale
+- Class D (full): maps graph approvals when present; falls back to empty when unavailable
+- Class E (drop): discards all approvals regardless of graph data (clean slate before manual handoff)
+- Class A/B: no approvals need revalidation; rationale explains no immediate action needed
+- `ApprovalRevalidation.ready` remains `false` because runtime-backed execution is still deferred
+- `compute_rebase_preview_with_graph` in intent-service rebuilds `DeferredFields` with graph-derived affected items so the heuristic can use them
+- `AffectedItemsPreview::unavailable()` is passed in `RebasePlan::from_diff_and_risk` (graph integration happens upstream in the service layer)
+
+**NOT in scope for this slice (deferred to Phase 2):**
+- Approval revalidation runtime execution hooks
+- Runtime adapter integration
+- Rebase apply HTTP endpoint
+
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
 - Impact graph propagation

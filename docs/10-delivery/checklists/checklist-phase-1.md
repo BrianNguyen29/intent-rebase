@@ -203,6 +203,17 @@
     - Tests: test_checkpoint_selection_heuristic_class_c_prefers_nearest_validated, test_checkpoint_selection_heuristic_class_d_prefers_pre_side_effect, test_checkpoint_selection_heuristic_class_e_requires_manual_handoff
     - `CheckpointSelection.ready` remains false; candidates and selected values are internal hints only
     - Apply HTTP endpoint still deferred
+
+[x] Internal approval revalidation heuristic baseline (PR #19)
+    Evidence:
+    - PR: PR #19 (internal approval revalidation heuristic baseline only)
+    - Code: crates/rebase-engine/src/planner.rs (`ApprovalRevalidation::heuristic_baseline`, `compute_approvals_needing_revalidation`, `select_revalidation_strategy`, `build_revalidation_rationale`)
+    - Code: crates/intent-service/src/lib.rs (compute_rebase_preview_with_graph rebuilds deferred with graph-derived affected_items)
+    - Tests: test_approval_revalidation_heuristic_class_a/b/c_incremental_with_graph_approvals/c_incremental_empty_fallback/c_d_full_with_graph_approvals/c_d_full_empty_fallback/c_e_drop/maps_graph_affected_approvals_correctly, test_deferred_fields_uses_heuristic_baseline_not_deferred
+    - Uses graph-derived `affected_approvals` when available (Class C/D); falls back to empty with truthful rationale when unavailable
+    - Class E drops all approvals regardless of graph data (clean slate before manual handoff)
+    - `ApprovalRevalidation.ready` remains false; execution deferred to Phase 2 runtime adapter
+    - No public API or OpenAPI changes; internal-only heuristic baseline
 ```
 
 ---
