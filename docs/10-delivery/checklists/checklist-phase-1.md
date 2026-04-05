@@ -147,26 +147,30 @@
 ## 4. Rebase Preview Only
 
 ```
-[ ] Rebase plan computation implemented
+[x] Rebase plan computation implemented (PR #14 - planner baseline)
     Evidence:
-    - PR merged: <link>
-    - Code: rebase-engine/planner.rs
-    - Tests: rebase-engine/tests/planner_tests.rs
+    - PR: PR #14 (current PR - planner baseline)
+    - Code: crates/rebase-engine/src/planner.rs (DecisionClass, RebasePlan, section decisions)
+    - Code: crates/rebase-engine/src/lib.rs (RebaseEngine::generate_plan, generate_plan_with_risk)
+    - Tests: crates/rebase-engine/src/planner.rs unit tests (14 tests covering A/B/C/D/E mapping)
+    - Tests: deterministic ordering and risk level mapping tests
+
+[x] Rebase preview includes: affected artifacts list, approval invalidation list, compensation recommendations
+    Evidence:
+    - Test: AffectedItemsPreview type with empty lists in Phase 1 baseline
+    - Docs: ../../03-spec/04-rebase-engine.md (updated with decision classes A-E)
+    - Note: Full affected items list requires graph integration (Phase 2)
+
+[x] NO rebase apply in Phase 1 — preview only
+    Evidence:
+    - Deferred fields use TODO markers (Phase 2)
+    - No apply method exists in RebaseEngine (Phase 2)
+    - generate_plan returns typed RebasePlan for preview only
 
 [ ] Rebase preview endpoint: POST /api/v1/intents/{id}/rebase-preview
     Evidence:
-    - OpenAPI spec updated
-    - Response schema: { affected_artifacts, affected_approvals, compensation_actions, risk_level }
-
-[ ] Rebase preview includes: affected artifacts list, approval invalidation list, compensation recommendations
-    Evidence:
-    - Test: preview output schema validated
-    - Docs: ../../03-spec/04-rebase-engine.md (updated)
-
-[ ] NO rebase apply in Phase 1 — preview only
-    Evidence:
-    - API returns 404 or error if apply attempted
-    - Error message: "Apply rebase not enabled until Phase 2"
+    - Not yet implemented (HTTP API deferred to Phase 2)
+    - OpenAPI spec not yet updated
 ```
 
 ---

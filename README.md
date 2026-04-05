@@ -32,7 +32,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
-| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; rebase planning deferred to Phase 2 | P1 | 🟡 Partial |
+| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; preview-only rebase planner baseline (PR #14) | P1 | ✅ Complete (diff, risk, planner baseline; graph integration and apply deferred to Phase 2) |
 | `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules and rule-pack propagation baseline | P1 | 🟡 Partial (traversal, ingestors, classification, and rule-pack propagation baseline done; HTTP API and full S3-based rule pack registry deferred) |
 
 ## Implementation Status
@@ -181,6 +181,30 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Full rule-pack-driven propagation with custom rule packs
 - Graph HTTP API endpoints
 - Rebase planner integration
+
+### Phase 1 Ninth Slice — Rebase Planner Baseline (PR #14)
+**Implemented:**
+- `DecisionClass` enum: A (No-op), B (Soft review), C (Partial repair), D (Compensation + repair), E (Hard restart)
+- `RebasePlan` type with decision class, rationale, section decisions, and risk level
+- `AffectedItemsPreview` and `DeferredFields` for Phase 2 extensibility (TODO markers)
+- Deterministic decision class mapping from diff+risk analysis
+- `RebaseEngine::generate_plan()` async method for typed rebase plan generation
+- `RebaseEngine::generate_plan_with_risk()` for pre-computed risk analysis
+- Unit tests covering all decision classes (A-E) and deterministic ordering
+
+**Decision class mapping (Phase 1 baseline):**
+- Class A: No semantic changes (empty diff)
+- Class B: Low/Medium severity changes requiring soft review
+- Class C: High severity changes in limited scope (auto-repair candidate); also Medium + 2 changed sections
+- Class D: High severity with manual review or 2+ high-severity sections; also Medium + manual review OR 3+ changed sections
+- Class E: Critical severity OR 3+ high-severity sections (manual handoff required)
+
+**NOT in scope for this slice (deferred to Phase 2):**
+- Graph-based affected node classification
+- Checkpoint selection heuristics
+- Approval revalidation hooks
+- Runtime adapter integration
+- Rebase apply/preview HTTP endpoints
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)

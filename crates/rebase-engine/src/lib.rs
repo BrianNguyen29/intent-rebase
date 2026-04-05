@@ -3,8 +3,11 @@
 //! Phase 1: Structured diff core implemented for scope, constraints,
 //! acceptance_criteria, and authority sections. Risk analysis (severity,
 //! confidence, manual-review triggers) is implemented in the `risk` and `rules` modules.
+//!
+//! Rebase planning (preview-only baseline) is implemented in the `planner` module.
 
 pub mod diff;
+pub mod planner;
 pub mod risk;
 pub mod rule_pack;
 pub mod rules;
@@ -13,6 +16,9 @@ use intent_rebase_types::{IntentRebaseError, IntentVersion};
 
 pub use diff::{
     AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, IntentVersionDiff, ScopeDiff,
+};
+pub use planner::{
+    AffectedItemsPreview, DecisionClass, DeferredFields, RebasePlan, SectionDecision,
 };
 pub use risk::{DiffRiskAnalysis, ManualReviewReason, RiskConfig, Severity};
 pub use rule_pack::{RulePack, RulePackVersion, DEFAULT_RULE_PACK};
@@ -109,17 +115,49 @@ impl RebaseEngine {
             .await
     }
 
-    /// Generate a rebase plan (Phase 1 — stub, returns not_yet_implemented)
+    /// Generate a rebase plan (Phase 1 — preview-only baseline)
     ///
-    /// Note: Rebase planning is not yet implemented. This will return an error
-    /// until Phase 2 when the graph model and planner are added.
+    /// Phase 1 baseline implements preview-only planning that maps diff+risk
+    /// analysis to decision classes A-E without graph integration.
+    ///
+    /// The planner uses:
+    /// - `IntentVersionDiff` for structured diff output
+    /// - `DiffRiskAnalysis` (via `compute_diff_with_risk`) for risk metrics
+    ///
+    /// Returns a typed `RebasePlan` with:
+    /// - Decision class (A-E)
+    /// - Rationale and section decisions
+    /// - Affected items preview (empty in Phase 1 baseline — TODO for Phase 2)
+    /// - Deferred fields (TODO markers for Phase 2)
+    ///
+    /// Note: This is a preview-only implementation. Full rebase planning with
+    /// graph integration, checkpoint selection, and approval revalidation is
+    /// deferred to Phase 2.
     pub async fn generate_plan(
         &self,
-        _diff: IntentVersionDiff,
-    ) -> Result<serde_json::Value, IntentRebaseError> {
-        Err(IntentRebaseError::Internal(
-            "Rebase planning not yet implemented (deferred to Phase 2)".into(),
-        ))
+        diff: IntentVersionDiff,
+    ) -> Result<RebasePlan, IntentRebaseError> {
+        // Run risk analysis to get severity and confidence
+        let risk = rules::analyze_diff_risk(
+            &diff.scope,
+            &diff.constraints,
+            &diff.acceptance_criteria,
+            &diff.authority,
+        );
+
+        // Generate typed rebase plan from diff and risk analysis
+        Ok(RebasePlan::from_diff_and_risk(&diff, &risk))
+    }
+
+    /// Generate a rebase plan from diff with explicit risk analysis
+    ///
+    /// This is a convenience wrapper that accepts pre-computed risk analysis.
+    pub async fn generate_plan_with_risk(
+        &self,
+        diff: IntentVersionDiff,
+        risk: DiffRiskAnalysis,
+    ) -> Result<RebasePlan, IntentRebaseError> {
+        Ok(RebasePlan::from_diff_and_risk(&diff, &risk))
     }
 }
 

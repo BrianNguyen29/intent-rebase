@@ -23,10 +23,10 @@
 - [x] Implement rule-pack-driven propagation baseline (Phase 1 PR #13 - PropagationConfig, RulePackPropagationConfig)
 
 ## Epic 4 — Rebase Planner
-- Build preview-only planner
-- Add decision classes A–E
-- Add checkpoint selection heuristics
-- Add approval revalidation hooks
+- [x] Build preview-only planner (Phase 1 PR #14 - baseline)
+- [x] Add decision classes A–E (Phase 1 PR #14)
+- [ ] Add checkpoint selection heuristics (Phase 2)
+- [ ] Add approval revalidation hooks (Phase 2)
 
 ## Epic 5 — Adapter
 - Define capability contract
