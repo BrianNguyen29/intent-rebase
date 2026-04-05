@@ -1,21 +1,28 @@
 # Rebase Engine Specification
 
-## Phase 1 Status (PR #15 — Preview Endpoint)
+## Phase 1 Status (PR #15 + PR #16)
 
-**Implemented:**
+**PR #15 — Preview Endpoint:**
 - Decision classes A-E mapping from diff+risk analysis
 - `RebasePlan` output type with typed decision class, rationale, and section decisions
 - Deterministic decision class computation (same input → same output)
 - `RebaseEngine::generate_plan()` for plan generation
-- Rebase preview HTTP endpoint: POST /v1/intents/{id}/rebase-preview (Phase 1 baseline)
+- Rebase preview HTTP endpoint: POST /v1/intents/{id}/rebase-preview
+
+**PR #16 — Graph-Integrated Affected Items:**
+- `AffectedItemsPreview` with `status` field (available/unavailable)
+- Graph-based impact classification via `classify_impact()` from dependency graph
+- `affected_items` list in preview response when graph data is available
+- Endpoint remains functional even when graph coverage is incomplete
+- Safe default: classification starts from target IntentVersion graph node (to_version)
 
 **NOT YET IMPLEMENTED (Phase 2+):**
-- Graph-based affected node classification (requires graph HTTP API)
 - Checkpoint selection heuristics
 - Approval revalidation hooks
 - Runtime adapter integration
 - Rebase apply (preview-only in Phase 1)
-- `affected_items` list in preview response (requires graph integration)
+- Compensation action generation (identified in `side_effects`, not generated)
+- `deferred` fields in preview response
 
 ## Mục tiêu
 Tạo quyết định có cấu trúc khi intent thay đổi:

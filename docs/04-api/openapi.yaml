@@ -307,9 +307,15 @@ paths:
         The preview uses diff+risk analysis to produce a decision class (A-E),
         rationale, and section-level decisions.
 
-        **Phase 1 Preview-only:** This endpoint does NOT expose:
-        - `affected_items` (requires graph integration - Phase 2)
-        - `deferred` fields (Phase 2)
+        **Phase 1 PR #16: Graph-integrated affected items:**
+        When graph service is available and the IntentVersion node exists in the graph,
+        the response includes classified affected items (artifacts, approvals, side effects).
+        The `affected_items.status` field indicates whether classification succeeded:
+        - `available`: Graph data found and items classified
+        - `unavailable`: Graph node not found or service unavailable
+        
+        **Reliability:** The endpoint remains functional even when graph coverage is incomplete.
+        A `status: unavailable` does NOT cause a 500 error.
 
         **Version ordering:**
         - `from_version` must be less than `to_version`
@@ -380,6 +386,26 @@ components:
         id:
           type: string
           description: Source identifier
+
+    ExternalRef:
+      type: object
+      required: [ref_type, ref_id]
+      properties:
+        ref_type:
+          type: string
+          description: |
+            Type of external reference. Possible values:
+            - intent: References an Intent
+            - intent_version: References an IntentVersion
+            - artifact: References an Artifact
+            - approval: References an Approval
+            - policy_snapshot: References a PolicySnapshot
+            - side_effect: References a SideEffect
+            - checkpoint: References a Checkpoint
+        ref_id:
+          type: string
+          format: uuid
+          description: UUID of the referenced entity
 
     ChangeChannel:
       type: string
@@ -835,13 +861,16 @@ components:
     RebasePreviewResponse:
       type: object
       description: |
-        Phase 1 preview-only rebase plan response.
+        Phase 1 PR #16: Graph-integrated rebase plan response.
         
-        Exposes semantically reliable planner summary fields only.
-        Does NOT include placeholder fields that require graph integration (Phase 2):
-        - affected_items (empty in Phase 1)
-        - deferred (Phase 2)
-      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, manual_review_recommended, risk_level]
+        Exposes planner summary fields plus graph-integrated affected items when available.
+        The `affected_items.status` field indicates whether graph classification succeeded:
+        - `available`: Graph data was found and affected items were classified
+        - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
+        
+        When status is `unavailable`, the endpoint remains functional but the affected
+        items arrays should not be considered authoritative.
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_level]
       properties:
         intent_id:
           type: string
@@ -859,6 +888,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SectionDecision'
+        affected_items:
+          $ref: '#/components/schemas/AffectedItemsPreview'
         manual_review_recommended:
           type: boolean
         risk_level:
@@ -866,6 +897,75 @@ components:
           minimum: 1
           maximum: 5
           description: Risk level (1=lowest, 5=highest)
+
+    AffectedItemsPreview:
+      type: object
+      description: |
+        Graph-integrated affected items preview (Phase 1 PR #16).
+        
+        Contains classified affected items from the dependency graph when available.
+        The `status` field indicates data availability:
+        - `available`: Graph classification succeeded
+        - `unavailable`: Graph node not found or graph service unavailable
+        
+        Note: Compensation actions are NOT generated here (Phase 2 feature).
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/AffectedItemsStatus'
+        affected_artifacts:
+          type: array
+          description: Artifacts that depend on this IntentVersion
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+        affected_approvals:
+          type: array
+          description: Approvals associated with this IntentVersion
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+        side_effects:
+          type: array
+          description: Side effects downstream from this IntentVersion (may need compensation review)
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+
+    AffectedItemsStatus:
+      type: string
+      enum: [available, unavailable]
+      description: |
+        Status of graph-integrated affected items classification:
+        - `available`: Graph data was found and classification succeeded
+        - `unavailable`: Graph node not found or graph service not available
+
+    AffectedItem:
+      type: object
+      description: A single affected item with classification details
+      required: [node_id, label, impact, reason]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+          description: The graph node ID of the affected item
+        label:
+          type: string
+          description: Human-readable label from the graph node
+        impact:
+          $ref: '#/components/schemas/ClassificationImpact'
+        reason:
+          type: string
+          description: Human-readable reason for the classification
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          description: External reference type if available
+
+    ClassificationImpact:
+      type: string
+      enum: [direct, transitive, unchanged]
+      description: |
+        Impact classification level:
+        - `direct`: Node is directly affected by the change (1 hop)
+        - `transitive`: Node is affected through a chain of dependencies (2+ hops)
+        - `unchanged`: Node exists in graph but is not affected
 
     DecisionClass:
       type: string

@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use crate::diff::IntentVersionDiff;
 use crate::risk::{DiffRiskAnalysis, Severity};
 
+// Re-export AffectedItemsPreview from intent_rebase_types for use in RebasePlan
+pub use intent_rebase_types::AffectedItemsPreview;
+
 /// Decision class for rebase planning
 ///
 /// Phase 1 baseline uses these classes based on diff severity and risk analysis:
@@ -88,30 +91,6 @@ pub struct SectionDecision {
     pub recommended_action: String,
 }
 
-/// Preview of affected items (Phase 1 baseline — not yet integrated with graph)
-///
-/// These fields use TODO/None because graph HTTP API is not yet integrated.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AffectedItemsPreview {
-    /// TODO: List of affected artifact IDs (requires graph integration — Phase 2)
-    pub affected_artifacts: Vec<String>,
-    /// TODO: List of affected approval IDs requiring revalidation (requires graph — Phase 2)
-    pub affected_approvals: Vec<String>,
-    /// TODO: List of side effects needing compensation (requires graph — Phase 2)
-    pub side_effects_requiring_compensation: Vec<String>,
-}
-
-impl AffectedItemsPreview {
-    /// Create Phase 1 baseline with empty/None values
-    pub fn phase1_baseline() -> Self {
-        Self {
-            affected_artifacts: vec![],
-            affected_approvals: vec![],
-            side_effects_requiring_compensation: vec![],
-        }
-    }
-}
-
 /// Complete rebase plan output from the planner
 ///
 /// Phase 1 baseline provides typed decision class mapping from diff+risk
@@ -167,7 +146,7 @@ impl RebasePlan {
             decision_class,
             rationale,
             section_decisions,
-            affected_items: AffectedItemsPreview::phase1_baseline(),
+            affected_items: AffectedItemsPreview::unavailable(),
             deferred: DeferredFields::phase1_baseline(),
             manual_review_recommended,
             risk_level,

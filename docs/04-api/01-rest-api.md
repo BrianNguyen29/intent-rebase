@@ -140,8 +140,8 @@ Compute semantic diff between two versions.
 - `400 Bad Request`: Invalid version ordering (from_version >= to_version)
 - `404 Not Found`: Intent or version not found
 
-### POST /intents/{intent_id}/rebase-preview ✅ (Phase 1 Rebase Preview)
-Generate rebase preview plan between two versions.
+### POST /intents/{intent_id}/rebase-preview ✅ (Phase 1 PR #16: Graph-Integrated)
+Generate rebase preview plan between two versions with graph-integrated affected items.
 
 **Request:**
 ```json
@@ -166,10 +166,30 @@ Generate rebase preview plan between two versions.
       "recommended_action": "Review scope deltas before proceeding"
     }
   ],
+  "affected_items": {
+    "status": "available",
+    "affected_artifacts": [
+      {
+        "node_id": "uuid",
+        "label": "artifact-label",
+        "impact": "direct",
+        "reason": "directly depends on",
+        "external_ref": { "ref_type": "artifact", "ref_id": "uuid" }
+      }
+    ],
+    "affected_approvals": [],
+    "side_effects": []
+  },
   "manual_review_recommended": true,
   "risk_level": 2
 }
 ```
+
+**Affected Items Status:**
+- `available`: Graph data was found and affected items were classified
+- `unavailable`: Graph node not found or graph service unavailable
+
+**Reliability:** The endpoint remains functional even when graph coverage is incomplete. A `status: unavailable` does NOT cause a 500 error.
 
 **Decision Classes:**
 - `A`: No semantic changes — no rebase needed
@@ -178,8 +198,9 @@ Generate rebase preview plan between two versions.
 - `D`: Compensation and repair needed — manual review advised
 - `E`: Hard restart required — manual handoff needed
 
-**Phase 1 Notes:**
-- Does NOT expose `affected_items` (requires graph integration - Phase 2)
+**Phase 1 PR #16 Notes:**
+- `affected_items` now includes graph-integrated classification when available
+- `side_effects` identifies items that may need compensation review (Phase 2)
 - Does NOT expose `deferred` fields (Phase 2)
 
 **Error responses:**

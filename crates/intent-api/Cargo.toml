@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 intent-service = { path = "../intent-service" }
+graph-service = { path = "../graph-service" }
 intent-rebase-types = { path = "../intent-rebase-types" }
 rebase-engine = { path = "../rebase-engine" }
 axum = { workspace = true }

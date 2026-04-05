@@ -344,6 +344,7 @@ impl Default for PropagationConfig {
                 EdgeType::DependsOn,
                 EdgeType::Triggers,
                 EdgeType::GeneratedFrom,
+                EdgeType::ValidatedBy,
             ],
             traversable_directions: vec![EdgeDirection::Both],
             target_node_types: vec![
@@ -360,10 +361,101 @@ impl Default for PropagationConfig {
 ///
 /// This matches the hardcoded behavior in `classify_impact`:
 /// - max_depth: 3
-/// - Edge types: DependsOn (incoming), Triggers (outgoing), GeneratedFrom (outgoing)
+/// - Edge types: DependsOn (incoming), Triggers (outgoing), GeneratedFrom (outgoing), ValidatedBy (incoming)
 /// - Target node types: Artifact, Approval, SideEffect, Generic
 pub static DEFAULT_PROPAGATION_CONFIG: once_cell::sync::Lazy<PropagationConfig> =
     once_cell::sync::Lazy::new(|| PropagationConfig::default());
+
+// ============================================================================
+// Rebase Preview Integration Types
+// ============================================================================
+
+/// Status indicating whether graph-integrated affected items could be computed
+///
+/// Used in rebase preview responses to honestly communicate data availability
+/// without failing the endpoint when graph coverage is incomplete.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AffectedItemsStatus {
+    /// Graph data was available and affected items were successfully classified
+    Available,
+    /// Graph data was unavailable or the IntentVersion node was not found in the graph.
+    /// The affected items arrays may be incomplete or empty.
+    Unavailable,
+}
+
+impl Default for AffectedItemsStatus {
+    fn default() -> Self {
+        AffectedItemsStatus::Unavailable
+    }
+}
+
+/// Preview of affected items for rebase planning (Phase 1 PR #16).
+///
+/// Replaces the Phase 1 baseline TODO structure with graph-integrated classification.
+/// The `status` field indicates whether graph data was available for accurate classification.
+///
+/// When `status` is `Available`, the classified arrays contain real graph-derived affected items.
+/// When `status` is `Unavailable`, the arrays may be incomplete - this is NOT an error condition
+/// for the rebase preview endpoint, which remains functional even without graph coverage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AffectedItemsPreview {
+    /// Whether graph data was available and classification succeeded
+    pub status: AffectedItemsStatus,
+    /// List of affected artifact IDs with their impact classification
+    #[serde(default)]
+    pub affected_artifacts: Vec<AffectedItem>,
+    /// List of affected approval IDs requiring revalidation
+    #[serde(default)]
+    pub affected_approvals: Vec<AffectedItem>,
+    /// List of side effects downstream from the changed intent version.
+    /// Note: Side effects are classified but compensation actions are NOT generated here
+    /// (Phase 2 feature) - this field identifies what MAY need compensation review.
+    #[serde(default)]
+    pub side_effects: Vec<AffectedItem>,
+}
+
+impl AffectedItemsPreview {
+    /// Create a preview indicating graph data was unavailable
+    pub fn unavailable() -> Self {
+        Self {
+            status: AffectedItemsStatus::Unavailable,
+            affected_artifacts: vec![],
+            affected_approvals: vec![],
+            side_effects: vec![],
+        }
+    }
+
+    /// Create a preview from a classification result
+    pub fn from_classification(
+        artifacts: Vec<AffectedItem>,
+        approvals: Vec<AffectedItem>,
+        side_effects: Vec<AffectedItem>,
+    ) -> Self {
+        Self {
+            status: AffectedItemsStatus::Available,
+            affected_artifacts: artifacts,
+            affected_approvals: approvals,
+            side_effects,
+        }
+    }
+}
+
+/// A single affected item from graph classification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AffectedItem {
+    /// The graph node ID of the affected item
+    pub node_id: Uuid,
+    /// Human-readable label from the graph node
+    pub label: String,
+    /// The impact classification level
+    pub impact: ClassificationImpact,
+    /// Human-readable reason for the classification
+    pub reason: String,
+    /// External reference type if available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<ExternalRef>,
+}
 
 // ============================================================================
 // Classification Types
