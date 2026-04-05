@@ -56,26 +56,171 @@ impl DecisionClass {
     }
 }
 
+/// Checkpoint selection readiness for apply phase
+///
+/// Phase 1 groundwork: typed placeholder indicating checkpoint selection is deferred.
+/// Phase 2+ will replace this with actual checkpoint selection logic.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CheckpointSelection {
+    /// Whether checkpoint selection is ready to execute
+    pub ready: bool,
+    /// Candidate checkpoint descriptions (populated in Phase 2)
+    pub candidates: Vec<CheckpointCandidate>,
+    /// Selected checkpoint (populated after selection in Phase 2)
+    pub selected: Option<CheckpointCandidate>,
+    /// Selection rationale (populated after selection in Phase 2)
+    pub rationale: Option<String>,
+}
+
+impl CheckpointSelection {
+    /// Phase 1 baseline: checkpoint selection not yet ready
+    pub fn deferred() -> Self {
+        Self {
+            ready: false,
+            candidates: vec![],
+            selected: None,
+            rationale: None,
+        }
+    }
+}
+
+/// A candidate checkpoint for rebase resume
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointCandidate {
+    /// Checkpoint identifier
+    pub id: String,
+    /// Human-readable label
+    pub label: String,
+    /// Description of what state this checkpoint captures
+    pub description: String,
+    /// Whether this checkpoint has been validated
+    pub validated: bool,
+}
+
+/// Approval revalidation readiness for apply phase
+///
+/// Phase 1 groundwork: typed placeholder indicating approval revalidation is deferred.
+/// Phase 2+ will replace this with actual revalidation logic.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApprovalRevalidation {
+    /// Whether approval revalidation is ready to execute
+    pub ready: bool,
+    /// Approvals that need revalidation (populated in Phase 2)
+    pub approvals_needing_revalidation: Vec<ApprovalNeedingRevalidation>,
+    /// Revalidation strategy hint
+    pub strategy: RevalidationStrategy,
+    /// Detailed rationale for revalidation decisions
+    pub rationale: Option<String>,
+}
+
+impl ApprovalRevalidation {
+    /// Phase 1 baseline: approval revalidation not yet ready
+    pub fn deferred() -> Self {
+        Self {
+            ready: false,
+            approvals_needing_revalidation: vec![],
+            strategy: RevalidationStrategy::Deferred,
+            rationale: None,
+        }
+    }
+}
+
+/// An approval that may need revalidation due to intent changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalNeedingRevalidation {
+    /// Approval node ID
+    pub node_id: String,
+    /// Human-readable label
+    pub label: String,
+    /// Original approval rule that was satisfied
+    pub original_rule_id: String,
+    /// Reason why revalidation may be needed
+    pub reason: String,
+}
+
+/// Strategy for approval revalidation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevalidationStrategy {
+    /// Revalidation deferred to Phase 2
+    Deferred,
+    /// Full revalidation required
+    Full,
+    /// Incremental revalidation (only changed scope)
+    Incremental,
+    /// Stale approvals to be dropped
+    Drop,
+}
+
+impl Default for RevalidationStrategy {
+    fn default() -> Self {
+        RevalidationStrategy::Deferred
+    }
+}
+
+/// Compensation action readiness for apply phase
+///
+/// Phase 1 groundwork: typed placeholder indicating compensation planning is deferred.
+/// Phase 2+ will replace this with actual compensation action generation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompensationReadiness {
+    /// Whether compensation planning is ready to execute
+    pub ready: bool,
+    /// Potential compensation actions identified (populated in Phase 2)
+    pub potential_actions: Vec<CompensationAction>,
+    /// Whether any irreversible side effects are present
+    pub has_irreversible_effects: bool,
+    /// Detailed rationale for compensation decisions
+    pub rationale: Option<String>,
+}
+
+impl CompensationReadiness {
+    /// Phase 1 baseline: compensation planning not yet ready
+    pub fn deferred() -> Self {
+        Self {
+            ready: false,
+            potential_actions: vec![],
+            has_irreversible_effects: false,
+            rationale: None,
+        }
+    }
+}
+
+/// A potential compensation action to mitigate side effects
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationAction {
+    /// Action identifier
+    pub id: String,
+    /// Human-readable label
+    pub label: String,
+    /// Description of the action
+    pub description: String,
+    /// Whether this action is reversible
+    pub reversible: bool,
+    /// Priority (lower = higher priority)
+    pub priority: u8,
+}
+
 /// Phase 1 status for features not yet implemented
 ///
 /// These fields are spec-adjacent but deferred to Phase 2+.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeferredFields {
-    /// TODO: Checkpoint selection (Phase 2)
-    pub checkpoint_selection: Option<String>,
-    /// TODO: Approval revalidation status (Phase 2)
-    pub approval_revalidation: Option<String>,
-    /// TODO: Compensation action list (Phase 2)
-    pub compensation_actions: Vec<String>,
+    /// Checkpoint selection readiness (Phase 2)
+    pub checkpoint_selection: CheckpointSelection,
+    /// Approval revalidation readiness (Phase 2)
+    pub approval_revalidation: ApprovalRevalidation,
+    /// Compensation action readiness (Phase 2)
+    pub compensation: CompensationReadiness,
 }
 
 impl DeferredFields {
-    /// Create new deferred fields with TODO markers
+    /// Create new deferred fields with Phase 1 baseline
     pub fn phase1_baseline() -> Self {
         Self {
-            checkpoint_selection: Some("TODO: Phase 2".to_string()),
-            approval_revalidation: Some("TODO: Phase 2".to_string()),
-            compensation_actions: vec!["TODO: Phase 2".to_string()],
+            checkpoint_selection: CheckpointSelection::deferred(),
+            approval_revalidation: ApprovalRevalidation::deferred(),
+            compensation: CompensationReadiness::deferred(),
         }
     }
 }
@@ -854,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deferred_fields_are_todo() {
+    fn test_deferred_fields_typed_groundwork() {
         let diff = empty_intent_version_diff();
         let risk = DiffRiskAnalysis {
             severity: Severity::Low,
@@ -867,9 +1012,61 @@ mod tests {
 
         let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
 
-        assert!(plan.deferred.checkpoint_selection.is_some());
-        assert!(plan.deferred.approval_revalidation.is_some());
-        assert!(!plan.deferred.compensation_actions.is_empty());
+        // Phase 1 groundwork: typed placeholders with ready=false
+        assert!(
+            !plan.deferred.checkpoint_selection.ready,
+            "Checkpoint selection should be deferred in Phase 1"
+        );
+        assert!(
+            !plan.deferred.approval_revalidation.ready,
+            "Approval revalidation should be deferred in Phase 1"
+        );
+        assert!(
+            !plan.deferred.compensation.ready,
+            "Compensation planning should be deferred in Phase 1"
+        );
+
+        // candidates/approvals_needing_revalidation/potential_actions should be empty
+        assert!(plan.deferred.checkpoint_selection.candidates.is_empty());
+        assert!(plan
+            .deferred
+            .approval_revalidation
+            .approvals_needing_revalidation
+            .is_empty());
+        assert!(plan.deferred.compensation.potential_actions.is_empty());
+
+        // Selected/rationale should be None for deferred state
+        assert!(plan.deferred.checkpoint_selection.selected.is_none());
+        assert!(plan.deferred.checkpoint_selection.rationale.is_none());
+        assert!(plan.deferred.approval_revalidation.rationale.is_none());
+        assert!(plan.deferred.compensation.rationale.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_selection_deferred() {
+        let cs = CheckpointSelection::deferred();
+        assert!(!cs.ready);
+        assert!(cs.candidates.is_empty());
+        assert!(cs.selected.is_none());
+        assert!(cs.rationale.is_none());
+    }
+
+    #[test]
+    fn test_approval_revalidation_deferred() {
+        let ar = ApprovalRevalidation::deferred();
+        assert!(!ar.ready);
+        assert!(ar.approvals_needing_revalidation.is_empty());
+        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
+        assert!(ar.rationale.is_none());
+    }
+
+    #[test]
+    fn test_compensation_readiness_deferred() {
+        let cr = CompensationReadiness::deferred();
+        assert!(!cr.ready);
+        assert!(cr.potential_actions.is_empty());
+        assert!(!cr.has_irreversible_effects);
+        assert!(cr.rationale.is_none());
     }
 
     // === Risk Level Tests ===

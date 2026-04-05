@@ -22,7 +22,10 @@ info:
     - Rebase preview (POST /intents/{id}/rebase-preview)
     
     ## Not Yet Implemented
-    - Rebase/graph operations (Phase 2+)
+    - Rebase apply endpoint (Phase 2)
+    - Checkpoint selection heuristics (Phase 2)
+    - Approval revalidation hooks (Phase 2)
+    - Runtime adapter integration (Phase 2)
     - Full authentication/authorization
   version: 0.1.0
   contact:
@@ -314,6 +317,13 @@ paths:
         - `available`: Graph data found and items classified
         - `unavailable`: Graph node not found or service unavailable
         
+        **Phase 1 PR #17: Apply/checkpoint groundwork (internal typed contracts, not executed):**
+        Rebase engine internals now use typed readiness contracts for checkpoint selection,
+        approval revalidation, and compensation planning, but those deferred fields are
+        not exposed in the Phase 1 preview response yet.
+        
+        **Apply endpoint NOT implemented in Phase 1** — POST /intents/{id}/rebase-apply deferred to Phase 2.
+
         **Reliability:** The endpoint remains functional even when graph coverage is incomplete.
         A `status: unavailable` does NOT cause a 500 error.
 
@@ -868,6 +878,9 @@ components:
         - `available`: Graph data was found and affected items were classified
         - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
         
+        Phase 1 PR #17 keeps apply/checkpoint typed contracts internal to the planner.
+        They are not exposed in this preview response yet.
+
         When status is `unavailable`, the endpoint remains functional but the affected
         items arrays should not be considered authoritative.
       required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_level]
@@ -908,7 +921,7 @@ components:
         - `available`: Graph classification succeeded
         - `unavailable`: Graph node not found or graph service unavailable
         
-        Note: Compensation actions are NOT generated here (Phase 2 feature).
+        Note: Compensation action generation is a Phase 2 feature (see `deferred.compensation`).
       required: [status]
       properties:
         status:

@@ -164,7 +164,7 @@
 
 [x] NO rebase apply in Phase 1 — preview only
     Evidence:
-    - Deferred fields use TODO markers (Phase 2)
+    - Deferred fields remain internal typed groundwork only (not exposed in preview response)
     - No apply method exists in RebaseEngine (Phase 2)
     - generate_plan returns typed RebasePlan for preview only
 
@@ -174,7 +174,7 @@
     - OpenAPI: docs/04-api/openapi.yaml (RebasePreviewResponse schema, computeRebasePreview operation)
     - Tests: test_rebase_preview_success, test_rebase_preview_invalid_version_ordering
     - Phase 1 returns: decision_class, rationale, section_decisions, affected_items (graph-integrated), manual_review_recommended, risk_level
-    - Phase 2: deferred fields only
+    - Phase 2: deferred fields remain internal groundwork only
 
 [x] Graph-integrated affected items (PR #16)
     Evidence:
@@ -187,6 +187,14 @@
     - Tests: test_rebase_preview_success (API handler with graph integration)
     - Affected item types: artifacts (DependsOn), approvals (ValidatedBy), side_effects (Triggers/GeneratedFrom)
     - Status tracking: AffectedItemsStatus::Available/Unavailable honestly communicates graph data availability
+
+[x] Apply/checkpoint typed contracts groundwork (PR #17)
+    Evidence:
+    - PR: PR #17 (current PR - typed apply/checkpoint contracts)
+    - Code: crates/rebase-engine/src/planner.rs (CheckpointSelection, ApprovalRevalidation, CompensationReadiness and variants)
+    - Code: crates/rebase-engine/src/lib.rs (exports for new types)
+    - Tests: test_deferred_fields_typed_groundwork, test_checkpoint_selection_deferred, test_approval_revalidation_deferred, test_compensation_readiness_deferred
+    - All Phase 2 fields have ready=false and empty candidate/action lists until Phase 2
 ```
 
 ---

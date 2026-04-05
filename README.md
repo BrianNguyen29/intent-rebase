@@ -32,7 +32,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
-| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; preview-only rebase planner baseline (PR #14); graph-integrated affected items (PR #16) | P1 | ✅ Complete (diff, risk, planner baseline; PR #16 graph integration; apply and checkpoint selection deferred to Phase 2) |
+| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; preview-only rebase planner baseline (PR #14); graph-integrated affected items (PR #16); apply/checkpoint typed contracts groundwork (PR #17) | P1 | ✅ Complete (diff, risk, planner baseline; PR #16 graph integration; PR #17 typed apply/checkpoint contracts; apply and checkpoint execution deferred to Phase 2) |
 | `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules and rule-pack propagation baseline | P1 | 🟡 Partial (traversal, ingestors, classification, and rule-pack propagation baseline done; HTTP API and full S3-based rule pack registry deferred) |
 
 ## Implementation Status
@@ -237,6 +237,31 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Runtime adapter integration
 - Rebase apply (preview-only)
 - `deferred` fields in preview response
+
+### Phase 1 Eleventh Slice — Apply/Checkpoint Groundwork (PR #17)
+**Implemented:**
+- Typed internal contracts replacing stringly TODO placeholders in `DeferredFields`:
+  - `CheckpointSelection`: ready flag, candidates vector, selected option, rationale option
+  - `CheckpointCandidate`: id, label, description, validated flag
+  - `ApprovalRevalidation`: ready flag, approvals_needing_revalidation vector, strategy enum, rationale option
+  - `ApprovalNeedingRevalidation`: node_id, label, original_rule_id, reason
+  - `RevalidationStrategy`: Deferred, Full, Incremental, Drop variants
+  - `CompensationReadiness`: ready flag, potential_actions vector, has_irreversible_effects flag, rationale option
+  - `CompensationAction`: id, label, description, reversible flag, priority
+- All Phase 2 fields have `ready: false` and empty candidate/action lists in Phase 1
+- Deterministic unit tests verify deferred state properties for all new types
+- Apply HTTP endpoint NOT added (deferred to Phase 2)
+
+**New types exported from `rebase_engine` crate:**
+- `CheckpointSelection`, `CheckpointCandidate`
+- `ApprovalRevalidation`, `ApprovalNeedingRevalidation`, `RevalidationStrategy`
+- `CompensationReadiness`, `CompensationAction`
+
+**NOT in scope for this slice (deferred to Phase 2):**
+- Actual checkpoint selection algorithm execution
+- Approval revalidation execution hooks
+- Runtime adapter integration
+- Rebase apply HTTP endpoint
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)

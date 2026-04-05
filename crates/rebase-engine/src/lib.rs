@@ -18,7 +18,9 @@ pub use diff::{
     AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, IntentVersionDiff, ScopeDiff,
 };
 pub use planner::{
-    AffectedItemsPreview, DecisionClass, DeferredFields, RebasePlan, SectionDecision,
+    AffectedItemsPreview, ApprovalNeedingRevalidation, ApprovalRevalidation, CheckpointCandidate,
+    CheckpointSelection, CompensationAction, CompensationReadiness, DecisionClass, DeferredFields,
+    RebasePlan, RevalidationStrategy, SectionDecision,
 };
 pub use risk::{DiffRiskAnalysis, ManualReviewReason, RiskConfig, Severity};
 pub use rule_pack::{RulePack, RulePackVersion, DEFAULT_RULE_PACK};
