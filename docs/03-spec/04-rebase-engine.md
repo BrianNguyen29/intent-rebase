@@ -1,6 +1,6 @@
 # Rebase Engine Specification
 
-## Phase 1 Status (PR #15 + PR #16)
+## Phase 1 Status (PR #15 + PR #16 + PR #17)
 
 **PR #15 — Preview Endpoint:**
 - Decision classes A-E mapping from diff+risk analysis
@@ -16,13 +16,22 @@
 - Endpoint remains functional even when graph coverage is incomplete
 - Safe default: classification starts from target IntentVersion graph node (to_version)
 
+**PR #17 — Apply/Checkpoint Groundwork:**
+- Typed internal contract for checkpoint selection readiness (`CheckpointSelection`)
+- Typed internal contract for approval revalidation readiness (`ApprovalRevalidation`)
+- Typed internal contract for compensation action readiness (`CompensationReadiness`)
+- `DeferredFields` replaced stringly TODO placeholders with structured Phase 1 groundwork types
+- New types exported from `rebase_engine`: `CheckpointSelection`, `CheckpointCandidate`, `ApprovalRevalidation`, `ApprovalNeedingRevalidation`, `RevalidationStrategy`, `CompensationReadiness`, `CompensationAction`
+- All Phase 2 fields have `ready: false` and empty candidate/action lists in Phase 1
+- Deterministic unit tests verify deferred state properties
+- Apply HTTP endpoint NOT added (Phase 2)
+
 **NOT YET IMPLEMENTED (Phase 2+):**
-- Checkpoint selection heuristics
-- Approval revalidation hooks
+- Actual checkpoint selection algorithm execution
+- Approval revalidation execution hooks
 - Runtime adapter integration
 - Rebase apply (preview-only in Phase 1)
 - Compensation action generation (identified in `side_effects`, not generated)
-- `deferred` fields in preview response
 
 ## Mục tiêu
 Tạo quyết định có cấu trúc khi intent thay đổi:
