@@ -194,7 +194,15 @@
     - Code: crates/rebase-engine/src/planner.rs (CheckpointSelection, ApprovalRevalidation, CompensationReadiness and variants)
     - Code: crates/rebase-engine/src/lib.rs (exports for new types)
     - Tests: test_deferred_fields_typed_groundwork, test_checkpoint_selection_deferred, test_approval_revalidation_deferred, test_compensation_readiness_deferred
-    - All Phase 2 fields have ready=false and empty candidate/action lists until Phase 2
+    - All Phase 2 fields have ready=false until Phase 2 runtime execution exists
+
+[x] Internal checkpoint selection heuristic baseline (PR #18)
+    Evidence:
+    - PR: PR #18 (internal checkpoint heuristic baseline only)
+    - Code: crates/rebase-engine/src/planner.rs (`CheckpointSelection::heuristic_baseline`, `compute_checkpoint_candidates`, `select_best_checkpoint`)
+    - Tests: test_checkpoint_selection_heuristic_class_c_prefers_nearest_validated, test_checkpoint_selection_heuristic_class_d_prefers_pre_side_effect, test_checkpoint_selection_heuristic_class_e_requires_manual_handoff
+    - `CheckpointSelection.ready` remains false; candidates and selected values are internal hints only
+    - Apply HTTP endpoint still deferred
 ```
 
 ---
