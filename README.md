@@ -32,7 +32,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 | `intent-rebase-types` | Shared types: Intent, Artifact, GraphNode, AuditEvent, error types | P0 | ✅ Complete |
 | `intent-service` | Intent lifecycle (create, read, update, version) | P1 | ✅ Complete |
 | `intent-api` | HTTP transport layer with axum | P1 | ✅ Complete |
-| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; preview-only rebase planner baseline (PR #14) | P1 | ✅ Complete (diff, risk, planner baseline; graph integration and apply deferred to Phase 2) |
+| `rebase-engine` | Structured diff core with risk analysis; rule-pack versioning and regression fixtures added; preview-only rebase planner baseline (PR #14); graph-integrated affected items (PR #16) | P1 | ✅ Complete (diff, risk, planner baseline; PR #16 graph integration; apply and checkpoint selection deferred to Phase 2) |
 | `graph-service` | Dependency graph CRUD, traversal primitives (BFS, path-finding, cycle detection); ingestors baseline for artifact, approval, and side-effect nodes; classification baseline with deterministic propagation rules and rule-pack propagation baseline | P1 | 🟡 Partial (traversal, ingestors, classification, and rule-pack propagation baseline done; HTTP API and full S3-based rule pack registry deferred) |
 
 ## Implementation Status
@@ -48,11 +48,13 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Migration files for `intents`, `intent_versions`, `intent_clauses` tables
 - OpenAPI 3.0 spec at `docs/04-api/openapi.yaml` (manually wired to handlers)
 - Routes mount directly; intended to be served under `/v1` prefix in production
+- Rebase preview with graph-integrated affected items (PR #16)
 
 **Deferred to Phase 2+:**
-- Full rebase/graph operations
+- Full rebase apply operations
 - Full authentication/authorization
 - DB integration tests in CI (SQL repository is implemented but live-DB tests are skipped)
+- Checkpoint selection and runtime adapter integration
 
 ### Phase 1 Second Slice — Structured Diff Core (PR #5)
 **Implemented:**
@@ -200,11 +202,41 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Class E: Critical severity OR 3+ high-severity sections (manual handoff required)
 
 **NOT in scope for this slice (deferred to Phase 2):**
-- Graph-based affected node classification
 - Checkpoint selection heuristics
 - Approval revalidation hooks
 - Runtime adapter integration
-- Rebase apply/preview HTTP endpoints
+- Rebase apply HTTP endpoint
+
+### Phase 1 Tenth Slice — Graph-Integrated Affected Items (PR #16)
+**Implemented:**
+- `AffectedItemsPreview` updated with `status` field (available/unavailable) for truthful data availability reporting
+- `AffectedItem` type: node_id, label, impact, reason, external_ref
+- `AffectedItemsStatus` enum: available, unavailable
+- `find_intent_version_node()` helper in graph-service: locate IntentVersion node by intent_version_id
+- `classify_affected_items_from_intent_version()` convenience method combining lookup and classification
+- `IntentService::with_graph_service()` constructor accepting GraphService
+- `IntentService::compute_rebase_preview_with_graph()` enriching rebase preview with graph classification
+- Graph integration in rebase-preview endpoint: endpoint remains functional when graph unavailable (status=unavailable)
+- Service wiring: IntentService is the single graph-service owner for preview enrichment
+- OpenAPI spec updated: AffectedItemsPreview, AffectedItemsStatus, AffectedItem, ClassificationImpact schemas
+
+**Classification behavior:**
+- Starts from target IntentVersion graph node (to_version)
+- Classifies reachable Artifact, Approval, SideEffect nodes within max_depth=3
+- Direct: depth 1, Transitive: depth 2+
+- Returns `status: unavailable` gracefully when graph node not found or service unavailable
+
+**Reliability guarantee:**
+- The rebase-preview endpoint does NOT fail with 500/404 when graph coverage is incomplete
+- `status: unavailable` honestly signals incomplete data without pretending arrays are authoritative
+- Compensation actions are NOT generated in this slice (Phase 2 feature)
+
+**NOT in scope for this slice (deferred to Phase 2):**
+- Checkpoint selection heuristics
+- Approval revalidation hooks
+- Runtime adapter integration
+- Rebase apply (preview-only)
+- `deferred` fields in preview response
 
 ### Phase 2+ — Rebase, Graph, Extended Diff
 - Rebase planner (graph-based)
@@ -244,7 +276,7 @@ Routes are mounted directly (e.g., `POST /intents`) and intended to be served un
 | GET | `/v1/intents/{intent_id}/versions` | List all versions |
 | GET | `/v1/intents/{intent_id}/versions/{version_number}` | Get specific version |
 | POST | `/v1/intents/{intent_id}/diff` | Compute semantic diff between two versions (Phase 1 Diff Preview) |
-| POST | `/v1/intents/{intent_id}/rebase-preview` | Compute preview-only rebase plan summary from diff, risk, and planner baseline |
+| POST | `/v1/intents/{intent_id}/rebase-preview` | Compute preview rebase plan with graph-integrated affected items when available (PR #16) |
 
 Full OpenAPI spec: `docs/04-api/openapi.yaml`
 

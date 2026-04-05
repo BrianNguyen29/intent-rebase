@@ -8,9 +8,9 @@ pub mod sqlx_repository;
 use async_trait::async_trait;
 use chrono::Utc;
 use intent_rebase_types::{
-    ChangeChannel, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
-    CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
-    IntentVersion, ListVersionsResponse, VersionStatus,
+    AffectedItem, AffectedItemsPreview, ChangeChannel, CreateIntentRequest, CreateIntentResponse,
+    CreateVersionRequest, CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError,
+    IntentStatus, IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
 };
 use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
@@ -263,11 +263,27 @@ impl IntentRepository for InMemoryIntentRepository {
 /// IntentService handles intent lifecycle operations
 pub struct IntentService {
     repo: Arc<dyn IntentRepository>,
+    /// Optional graph service for impact classification
+    graph_service: Option<Arc<graph_service::GraphService>>,
 }
 
 impl IntentService {
     pub fn new(repo: Arc<dyn IntentRepository>) -> Self {
-        Self { repo }
+        Self {
+            repo,
+            graph_service: None,
+        }
+    }
+
+    /// Create a new IntentService with optional graph service for graph-integrated features
+    pub fn with_graph_service(
+        repo: Arc<dyn IntentRepository>,
+        graph_service: Arc<graph_service::GraphService>,
+    ) -> Self {
+        Self {
+            repo,
+            graph_service: Some(graph_service),
+        }
     }
 
     /// Create a new intent with initial version (transactional)
@@ -431,6 +447,102 @@ impl IntentService {
         let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
 
         Ok(plan)
+    }
+
+    /// Compute rebase preview with graph-integrated affected items.
+    ///
+    /// This method extends `compute_rebase_preview` by enriching the response
+    /// with graph-based impact classification when graph service is available.
+    ///
+    /// If graph service is unavailable or the IntentVersion node is not found in the graph,
+    /// the affected_items will have status=Unavailable but the endpoint will NOT fail.
+    /// This ensures the rebase preview remains reliable even when graph coverage is incomplete.
+    ///
+    /// The affected_items are classified starting from the `to_version` IntentVersion node.
+    pub async fn compute_rebase_preview_with_graph(
+        &self,
+        intent_id: Uuid,
+        from_version: i32,
+        to_version: i32,
+    ) -> Result<RebasePlan, IntentRebaseError> {
+        // First, compute the base rebase plan
+        let plan = self
+            .compute_rebase_preview(intent_id, from_version, to_version)
+            .await?;
+
+        // If no graph service is available, return the plan with unavailable status
+        let graph_service = match &self.graph_service {
+            Some(gs) => gs,
+            None => return Ok(plan),
+        };
+
+        // Get the to_version to find its graph node
+        let to = self
+            .repo
+            .get_version_by_intent_and_number(intent_id, to_version)
+            .await?;
+
+        // Try to classify affected items from the to_version
+        let classification_result = graph_service
+            .classify_affected_items_from_intent_version(to.id, Some(3))
+            .await;
+
+        match classification_result {
+            Ok(Some(result)) => {
+                // Graph classification succeeded - build affected items from result
+                let (artifacts, approvals, side_effects) =
+                    Self::classify_nodes_by_type(&result.classified_nodes);
+
+                let affected_items =
+                    AffectedItemsPreview::from_classification(artifacts, approvals, side_effects);
+
+                // Create new plan with enriched affected_items
+                let enriched_plan = RebasePlan {
+                    decision_class: plan.decision_class,
+                    rationale: plan.rationale,
+                    section_decisions: plan.section_decisions,
+                    affected_items,
+                    deferred: plan.deferred,
+                    manual_review_recommended: plan.manual_review_recommended,
+                    risk_level: plan.risk_level,
+                };
+
+                Ok(enriched_plan)
+            }
+            Ok(None) | Err(_) => {
+                // Graph node not found or classification failed - return with unavailable status
+                // Note: We intentionally do NOT fail the endpoint here
+                Ok(plan)
+            }
+        }
+    }
+
+    /// Helper to classify graph nodes by type from a classification result
+    fn classify_nodes_by_type(
+        classified_nodes: &[intent_rebase_types::ClassifiedNode],
+    ) -> (Vec<AffectedItem>, Vec<AffectedItem>, Vec<AffectedItem>) {
+        let mut artifacts = Vec::new();
+        let mut approvals = Vec::new();
+        let mut side_effects = Vec::new();
+
+        for classified in classified_nodes {
+            let item = AffectedItem {
+                node_id: classified.node.id,
+                label: classified.node.label.clone(),
+                impact: classified.impact.clone(),
+                reason: classified.reason.clone(),
+                external_ref: classified.node.external_ref.clone(),
+            };
+
+            match classified.node.node_type {
+                NodeType::Artifact => artifacts.push(item),
+                NodeType::Approval => approvals.push(item),
+                NodeType::SideEffect => side_effects.push(item),
+                _ => {} // Skip other node types for affected items preview
+            }
+        }
+
+        (artifacts, approvals, side_effects)
     }
 }
 

@@ -385,6 +385,64 @@ impl GraphService {
         }).collect())
     }
 
+    /// Find the IntentVersion graph node by its IntentVersion UUID.
+    ///
+    /// This is used during rebase preview to locate the target IntentVersion node
+    /// in the dependency graph for impact classification.
+    ///
+    /// Returns `Ok(None)` if the IntentVersion node is not found in the graph
+    /// (graph coverage may be incomplete for this intent version).
+    pub async fn find_intent_version_node(
+        &self,
+        intent_version_id: Uuid,
+    ) -> Result<Option<GraphNode>, IntentRebaseError> {
+        let filter = GraphNodeFilter {
+            node_type: Some(NodeType::IntentVersion),
+            ..Default::default()
+        };
+        let nodes = self.repo.list_nodes(filter).await?;
+
+        // Find the node with matching external_ref ref_id
+        Ok(nodes
+            .into_iter()
+            .find(|n| matches!(n.external_ref, Some(ref r) if r.ref_id == intent_version_id)))
+    }
+
+    /// Classify affected items starting from a target IntentVersion node.
+    ///
+    /// This is a convenience method that combines finding the IntentVersion node
+    /// and running impact classification. Returns `Ok(None)` if the IntentVersion
+    /// node is not found in the graph.
+    ///
+    /// # Parameters
+    /// - `intent_version_id`: The UUID of the IntentVersion to classify from
+    /// - `max_depth`: Maximum traversal depth (defaults to 3)
+    ///
+    /// # Returns
+    /// - `Ok(Some(ClassificationResult))` if the node was found and classified
+    /// - `Ok(None)` if the IntentVersion node was not found in the graph
+    pub async fn classify_affected_items_from_intent_version(
+        &self,
+        intent_version_id: Uuid,
+        max_depth: Option<usize>,
+    ) -> Result<Option<ClassificationResult>, IntentRebaseError> {
+        let node = self.find_intent_version_node(intent_version_id).await?;
+
+        match node {
+            Some(start_node) => {
+                let request = ClassifyRequest {
+                    start_node_id: start_node.id,
+                    max_depth,
+                    target_node_types: None,
+                    propagation_config: None,
+                };
+                let result = self.classify_impact(request).await?;
+                Ok(Some(result))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Update node state
     pub async fn update_node_state(
         &self,
@@ -1273,8 +1331,9 @@ impl GraphService {
         let mut classified: Vec<ClassifiedNode> = Vec::new();
         let mut queue: VecDeque<(Uuid, usize, String)> = VecDeque::new();
 
-        // Phase 1: Seed with start node's INCOMING DependsOn edges at depth 1
-        // (Artifacts that depend on this IntentVersion)
+        // Phase 1: Seed with start node's INCOMING edges at depth 1
+        // - DependsOn edges: Artifacts that depend on this IntentVersion
+        // - ValidatedBy edges: Approvals that validate this IntentVersion
         // Note: Direction is hardcoded per edge type for Phase 1 baseline
         let incoming_edges = self.repo.list_edges_to(request.start_node_id).await?;
         for edge in incoming_edges {
@@ -1282,6 +1341,15 @@ impl GraphService {
                 && config.traversable_edge_types.contains(&edge.edge_type)
             {
                 queue.push_back((edge.from_node_id, 1, "directly depends on".to_string()));
+            }
+            if edge.edge_type == EdgeType::ValidatedBy
+                && config.traversable_edge_types.contains(&edge.edge_type)
+            {
+                queue.push_back((
+                    edge.from_node_id,
+                    1,
+                    "directly validates this version".to_string(),
+                ));
             }
         }
 
@@ -1365,6 +1433,9 @@ impl GraphService {
     ///
     /// Impact propagation follows the dependency chain downstream:
     /// - For DependsOn (artifact -> intent): downstream is the artifact (incoming edges)
+    /// - For ValidatedBy (approval -> intent): ValidatedBy is handled in seed phase only;
+    ///   when an IntentVersion is the start node, approvals validating it are found via
+    ///   incoming ValidatedBy edges. Propagation from an Approval continues via Triggers/GeneratedFrom.
     /// - For Triggers (task -> side_effect): downstream is the side_effect (outgoing edges)
     /// - For GeneratedFrom (se -> approval): downstream is the approval (outgoing edges)
     ///
@@ -4997,6 +5068,61 @@ mod tests {
         assert!(ids.contains(&a1.id));
         assert!(ids.contains(&se1.id));
         assert!(ids.contains(&ap1.id));
+    }
+
+    #[tokio::test]
+    async fn test_classify_approval_via_validated_by() {
+        // Graph: AP1 -> (ValidatedBy) -> IV1
+        // Starting from IV1, we should find AP1 via incoming ValidatedBy edge
+        let repo = Arc::new(InMemoryGraphRepository::new());
+        let service = GraphService::new(repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create IntentVersion
+        let mut iv_req = create_test_node_request();
+        iv_req.tenant_id = tenant_id;
+        iv_req.workflow_id = workflow_id;
+        iv_req.node_type = NodeType::IntentVersion;
+        let iv = service.add_node(iv_req).await.unwrap();
+
+        // Create Approval
+        let mut ap_req = create_test_node_request();
+        ap_req.tenant_id = tenant_id;
+        ap_req.workflow_id = workflow_id;
+        ap_req.node_type = NodeType::Approval;
+        let ap = service.add_node(ap_req).await.unwrap();
+
+        // Create ValidatedBy edge: Approval -> IntentVersion
+        // ValidatedBy goes FROM the node doing the validating TO the node being validated
+        let e = CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id: ap.id,
+            to_node_id: iv.id,
+            edge_type: EdgeType::ValidatedBy,
+            properties: None,
+        };
+        service.add_edge(e).await.unwrap();
+
+        // Classify from IntentVersion
+        let result = service
+            .classify_impact(ClassifyRequest {
+                start_node_id: iv.id,
+                max_depth: Some(3),
+                target_node_types: Some(vec![NodeType::Approval]),
+                propagation_config: None,
+            })
+            .await
+            .unwrap();
+
+        // AP should be classified as Direct (depth 1)
+        assert_eq!(result.classified_nodes.len(), 1);
+        let classified = &result.classified_nodes[0];
+        assert_eq!(classified.node.id, ap.id);
+        assert_eq!(classified.impact, ClassificationImpact::Direct);
+        assert!(classified.reason.contains("validates this version"));
     }
 
     // ===== PR #13 Backward Compat: target_node_types fallback Tests =====

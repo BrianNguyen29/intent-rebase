@@ -11,8 +11,9 @@ use axum::{
     Json, Router,
 };
 use intent_rebase_types::{
-    CreateIntentRequest, CreateIntentResponse, CreateVersionRequest, CreateVersionResponse,
-    DiffRequest, IntentHeadResponse, IntentRebaseError, IntentVersion, ListVersionsResponse,
+    AffectedItemsPreview, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
+    CreateVersionResponse, DiffRequest, IntentHeadResponse, IntentRebaseError, IntentVersion,
+    ListVersionsResponse,
 };
 use intent_service::IntentService;
 use rebase_engine::{DecisionClass, DiffRiskAnalysis, IntentVersionDiff, SectionDecision};
@@ -31,11 +32,15 @@ pub struct DiffResponse {
     pub risk: DiffRiskAnalysis,
 }
 
-/// Response for rebase preview (Phase 1 - preview-only baseline)
+/// Response for rebase preview (Phase 1 PR #16 - graph-integrated affected items)
 ///
-/// Exposes semantically reliable planner summary fields only.
-/// Does NOT include placeholder fields like `affected_items` or `deferred`
-/// which require graph integration (Phase 2).
+/// Exposes semantically reliable planner summary fields plus graph-integrated
+/// affected items when graph data is available. The `affected_items.status` field
+/// indicates whether graph classification succeeded.
+///
+/// When `status` is `Unavailable`, the graph service was not available or the
+/// IntentVersion node was not found in the graph. The endpoint remains functional
+/// even without graph coverage - this is NOT an error condition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebasePreviewResponse {
     pub intent_id: Uuid,
@@ -44,6 +49,7 @@ pub struct RebasePreviewResponse {
     pub decision_class: DecisionClass,
     pub rationale: String,
     pub section_decisions: Vec<SectionDecision>,
+    pub affected_items: AffectedItemsPreview,
     pub manual_review_recommended: bool,
     pub risk_level: u8,
 }
@@ -51,7 +57,7 @@ pub struct RebasePreviewResponse {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub service: Arc<intent_service::IntentService>,
+    pub service: Arc<IntentService>,
 }
 
 /// API error response matching OpenAPI Error schema
@@ -280,19 +286,22 @@ async fn compute_diff(
 /// POST /intents/{intent_id}/rebase-preview - Generate rebase preview plan
 ///
 /// Request body: { from_version, to_version }
-/// Response: rebase preview with decision class, rationale, and section decisions
+/// Response: rebase preview with decision class, rationale, section decisions,
+/// and graph-integrated affected items when available.
 ///
-/// Phase 1 preview-only endpoint. Does NOT expose:
-/// - affected_items (requires graph integration - Phase 2)
-/// - deferred fields (Phase 2)
+/// Phase 1 PR #16: Includes graph-integrated affected items when graph service
+/// is available. The `affected_items.status` field indicates whether classification
+/// succeeded. When `status` is `Unavailable`, the endpoint remains functional but
+/// the affected items arrays may be incomplete.
 async fn rebase_preview(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+    // Always use graph-integrated preview - the service handles unavailability gracefully
     let plan = state
         .service
-        .compute_rebase_preview(intent_id, request.from_version, request.to_version)
+        .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
         .await
         .map_err(ApiErrorResponse)?;
 
@@ -315,6 +324,7 @@ async fn rebase_preview(
         decision_class: plan.decision_class,
         rationale: plan.rationale,
         section_decisions: plan.section_decisions,
+        affected_items: plan.affected_items,
         manual_review_recommended: plan.manual_review_recommended,
         risk_level: plan.risk_level,
     }))
@@ -821,5 +831,295 @@ mod tests {
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // === Graph-Available Affected Items Tests ===
+
+    #[tokio::test]
+    async fn test_rebase_preview_with_graph_classifies_affected_items() {
+        use graph_service::{GraphRepository, GraphService, InMemoryGraphRepository};
+        use intent_rebase_types::{
+            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            DiffRequest, ExternalRef, ExternalRefType, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, NodeType, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent with graph".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        // Create service with graph service available
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
+
+        // Create service with graph integration
+        let service = Arc::new(IntentService::with_graph_service(repo, graph_svc));
+        let state = AppState { service };
+
+        // Create an intent
+        let create_request = CreateIntentRequest {
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Get the version to access its ID
+        let to_version = state.service.get_version(intent_id, 2).await.unwrap();
+
+        // Create IntentVersion graph node for v2
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create an IntentVersion node in the graph that maps to our version
+        let iv_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: to_version.id,
+                }),
+                label: "IntentVersion v2".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Create an artifact that depends on this IntentVersion
+        let artifact_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id,
+                workflow_id,
+                node_type: NodeType::Artifact,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::Artifact,
+                    ref_id: Uuid::new_v4(),
+                }),
+                label: "Test Artifact".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Create DependsOn edge: Artifact -> IntentVersion
+        graph_repo
+            .create_edge(intent_rebase_types::CreateGraphEdgeRequest {
+                tenant_id,
+                workflow_id,
+                from_node_id: artifact_node.id,
+                to_node_id: iv_node.id,
+                edge_type: intent_rebase_types::EdgeType::DependsOn,
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Call rebase_preview which should use graph classification
+        let preview_request = DiffRequest {
+            from_version: 1,
+            to_version: 2,
+        };
+        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+            .await
+            .expect("Rebase preview should succeed even with graph");
+
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.affected_items.status, AffectedItemsStatus::Available);
+        // Verify affected artifacts contains our artifact
+        assert!(!result.affected_items.affected_artifacts.is_empty());
+        assert_eq!(
+            result.affected_items.affected_artifacts[0].node_id,
+            artifact_node.id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rebase_preview_fallback_when_graph_node_not_found() {
+        use graph_service::{GraphService, InMemoryGraphRepository};
+        use intent_rebase_types::{
+            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
+            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
+            Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent no graph".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        // Create service with graph service but NO graph data
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
+        let service = Arc::new(IntentService::with_graph_service(repo, graph_svc));
+        let state = AppState { service };
+
+        // Create an intent
+        let create_request = CreateIntentRequest {
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Call rebase_preview - graph node won't be found but should NOT fail
+        let preview_request = DiffRequest {
+            from_version: 1,
+            to_version: 2,
+        };
+        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+            .await
+            .expect("Rebase preview should succeed even when graph node not found");
+
+        assert_eq!(result.intent_id, intent_id);
+        // Status should be Unavailable since IntentVersion node not in graph
+        assert_eq!(
+            result.affected_items.status,
+            AffectedItemsStatus::Unavailable
+        );
+        // But endpoint still returns useful data
+        assert!(result.rationale.len() > 0);
     }
 }

@@ -160,7 +160,7 @@
     - Code: RebasePreviewResponse in crates/intent-api/src/lib.rs (intent_id, from_version, to_version, decision_class, rationale, section_decisions, manual_review_recommended, risk_level)
     - OpenAPI: RebasePreviewResponse schema in docs/04-api/openapi.yaml
     - Tests: test_rebase_preview_success verifies rationale and risk_level fields
-    - Note: AffectedItemsPreview uses empty lists in Phase 1 (Phase 2 graph integration required)
+    - Note: AffectedItemsPreview is graph-integrated in Phase 1 PR #16 (not Phase 2)
 
 [x] NO rebase apply in Phase 1 — preview only
     Evidence:
@@ -173,8 +173,20 @@
     - Code: crates/intent-api/src/lib.rs (rebase_preview handler and route)
     - OpenAPI: docs/04-api/openapi.yaml (RebasePreviewResponse schema, computeRebasePreview operation)
     - Tests: test_rebase_preview_success, test_rebase_preview_invalid_version_ordering
-    - Phase 1 returns: decision_class, rationale, section_decisions, manual_review_recommended, risk_level
-    - Phase 2: affected_items and deferred fields deferred to graph integration
+    - Phase 1 returns: decision_class, rationale, section_decisions, affected_items (graph-integrated), manual_review_recommended, risk_level
+    - Phase 2: deferred fields only
+
+[x] Graph-integrated affected items (PR #16)
+    Evidence:
+    - PR: PR #16 (current PR - graph-integrated affected items)
+    - Code: crates/graph-service/src/lib.rs (classify_impact with ValidatedBy support)
+    - Code: crates/intent-rebase-types/src/graph.rs (DEFAULT_PROPAGATION_CONFIG includes ValidatedBy)
+    - Code: crates/intent-service/src/lib.rs (compute_rebase_preview_with_graph wiring)
+    - Code: crates/intent-api/src/lib.rs (graph-integrated rebase_preview handler)
+    - Tests: test_classify_approval_via_validated_by (Validates ValidatedBy traversal)
+    - Tests: test_rebase_preview_success (API handler with graph integration)
+    - Affected item types: artifacts (DependsOn), approvals (ValidatedBy), side_effects (Triggers/GeneratedFrom)
+    - Status tracking: AffectedItemsStatus::Available/Unavailable honestly communicates graph data availability
 ```
 
 ---
