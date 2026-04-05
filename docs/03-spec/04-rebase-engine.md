@@ -1,6 +1,6 @@
 # Rebase Engine Specification
 
-## Phase 1 Status (PR #15 + PR #16 + PR #17)
+## Phase 1 Status (PR #15 + PR #16 + PR #17 + PR #18)
 
 **PR #15 — Preview Endpoint:**
 - Decision classes A-E mapping from diff+risk analysis
@@ -22,12 +22,19 @@
 - Typed internal contract for compensation action readiness (`CompensationReadiness`)
 - `DeferredFields` replaced stringly TODO placeholders with structured Phase 1 groundwork types
 - New types exported from `rebase_engine`: `CheckpointSelection`, `CheckpointCandidate`, `ApprovalRevalidation`, `ApprovalNeedingRevalidation`, `RevalidationStrategy`, `CompensationReadiness`, `CompensationAction`
-- All Phase 2 fields have `ready: false` and empty candidate/action lists in Phase 1
+- All Phase 2 fields have `ready: false` in Phase 1
 - Deterministic unit tests verify deferred state properties
 - Apply HTTP endpoint NOT added (Phase 2)
 
+**PR #18 — Internal Checkpoint Heuristic Baseline:**
+- `CheckpointSelection::heuristic_baseline()` adds deterministic internal checkpoint strategy hints by decision class
+- Class C prefers the nearest validated checkpoint before the first invalidated node
+- Class D prefers a checkpoint before irreversible side effects when possible
+- Class E surfaces a manual-handoff boundary without auto-selecting a restart point
+- `CheckpointSelection.ready` remains `false`; no runtime-backed checkpoint execution exists yet
+
 **NOT YET IMPLEMENTED (Phase 2+):**
-- Actual checkpoint selection algorithm execution
+- Runtime-backed checkpoint discovery and execution
 - Approval revalidation execution hooks
 - Runtime adapter integration
 - Rebase apply (preview-only in Phase 1)
@@ -112,6 +119,8 @@ Không đủ an toàn để auto-repair.
 - trước node invalid đầu tiên
 - không bỏ sót dependency bắt buộc
 - tránh rerun side effects đã irreversible nếu không cần
+
+PR #18 chỉ mới thêm heuristic baseline nội bộ để xếp hạng checkpoint strategy hints theo decision class; mapping sang checkpoint runtime thật vẫn deferred tới Phase 2.
 
 ## Repair primitives
 - drop_task(node)

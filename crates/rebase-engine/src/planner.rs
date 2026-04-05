@@ -4,9 +4,8 @@
 //! to deterministic decision classes A-E.
 //!
 //! This module does NOT include:
-//! - Graph-based impact classification integration (requires graph HTTP API)
-//! - Checkpoint selection beyond preview fields (TODO/None in Phase 1)
-//! - Approval revalidation hooks (TODO/None in Phase 1)
+//! - Runtime-backed checkpoint discovery/execution
+//! - Approval revalidation hooks
 //! - Runtime adapter integration (Phase 2)
 //!
 //! The planner is deterministic: same diff+risk input always produces
@@ -58,17 +57,20 @@ impl DecisionClass {
 
 /// Checkpoint selection readiness for apply phase
 ///
-/// Phase 1 groundwork: typed placeholder indicating checkpoint selection is deferred.
-/// Phase 2+ will replace this with actual checkpoint selection logic.
+/// Phase 1 groundwork: execution remains deferred.
+///
+/// PR #18 adds an internal heuristic baseline that can rank checkpoint strategy
+/// hints by decision class, while Phase 2+ will replace those hints with
+/// runtime-backed checkpoint discovery and execution logic.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CheckpointSelection {
     /// Whether checkpoint selection is ready to execute
     pub ready: bool,
-    /// Candidate checkpoint descriptions (populated in Phase 2)
+    /// Candidate checkpoint strategy hints (runtime-backed candidates remain Phase 2)
     pub candidates: Vec<CheckpointCandidate>,
-    /// Selected checkpoint (populated after selection in Phase 2)
+    /// Selected internal checkpoint hint (runtime-backed selection remains Phase 2)
     pub selected: Option<CheckpointCandidate>,
-    /// Selection rationale (populated after selection in Phase 2)
+    /// Selection rationale for the internal baseline
     pub rationale: Option<String>,
 }
 
@@ -82,10 +84,28 @@ impl CheckpointSelection {
             rationale: None,
         }
     }
+
+    /// Internal checkpoint heuristic baseline.
+    ///
+    /// This remains non-executable (`ready=false`) until runtime adapter support
+    /// exists, but it can surface deterministic internal hints about which
+    /// checkpoint strategy would be preferred for a given decision class.
+    pub fn heuristic_baseline(decision_class: DecisionClass) -> Self {
+        let candidates = compute_checkpoint_candidates(decision_class);
+        let selected = select_best_checkpoint(decision_class, &candidates);
+        let rationale = build_checkpoint_selection_rationale(decision_class, selected.as_ref());
+
+        Self {
+            ready: false,
+            candidates,
+            selected,
+            rationale,
+        }
+    }
 }
 
 /// A candidate checkpoint for rebase resume
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointCandidate {
     /// Checkpoint identifier
     pub id: String,
@@ -217,8 +237,14 @@ pub struct DeferredFields {
 impl DeferredFields {
     /// Create new deferred fields with Phase 1 baseline
     pub fn phase1_baseline() -> Self {
+        Self::phase1_baseline_for(DecisionClass::A)
+    }
+
+    /// Create new deferred fields with Phase 1 baseline plus internal
+    /// checkpoint-selection hints for the computed decision class.
+    pub fn phase1_baseline_for(decision_class: DecisionClass) -> Self {
         Self {
-            checkpoint_selection: CheckpointSelection::deferred(),
+            checkpoint_selection: CheckpointSelection::heuristic_baseline(decision_class),
             approval_revalidation: ApprovalRevalidation::deferred(),
             compensation: CompensationReadiness::deferred(),
         }
@@ -239,9 +265,9 @@ pub struct SectionDecision {
 /// Complete rebase plan output from the planner
 ///
 /// Phase 1 baseline provides typed decision class mapping from diff+risk
-/// analysis without graph integration. Future PRs will enhance with:
-/// - Graph-based affected node classification
-/// - Checkpoint selection heuristics
+/// analysis, graph-integrated affected items, and internal checkpoint heuristic
+/// hints. Future PRs will enhance with:
+/// - Runtime-backed checkpoint lookup/execution
 /// - Approval revalidation hooks
 /// - Compensation action generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,9 +278,9 @@ pub struct RebasePlan {
     pub rationale: String,
     /// Section-level decisions
     pub section_decisions: Vec<SectionDecision>,
-    /// Affected items preview (Phase 1: empty, TODO in Phase 2)
+    /// Affected items preview (graph integration may populate this downstream)
     pub affected_items: AffectedItemsPreview,
-    /// Deferred fields (Phase 1: TODO markers)
+    /// Deferred internal apply/readiness fields
     pub deferred: DeferredFields,
     /// Whether manual review is recommended
     pub manual_review_recommended: bool,
@@ -292,7 +318,7 @@ impl RebasePlan {
             rationale,
             section_decisions,
             affected_items: AffectedItemsPreview::unavailable(),
-            deferred: DeferredFields::phase1_baseline(),
+            deferred: DeferredFields::phase1_baseline_for(decision_class),
             manual_review_recommended,
             risk_level,
         }
@@ -563,6 +589,139 @@ fn compute_risk_level(decision: &DecisionClass, risk: &DiffRiskAnalysis) -> u8 {
         DecisionClass::C => 3,
         DecisionClass::D => 4,
         DecisionClass::E => 5,
+    }
+}
+
+fn compute_checkpoint_candidates(decision_class: DecisionClass) -> Vec<CheckpointCandidate> {
+    match decision_class {
+        DecisionClass::A | DecisionClass::B => vec![],
+        DecisionClass::C => vec![
+            CheckpointCandidate {
+                id: "nearest-validated".to_string(),
+                label: "Nearest validated checkpoint".to_string(),
+                description:
+                    "Resume from the nearest validated checkpoint before the first invalidated node."
+                        .to_string(),
+                validated: true,
+            },
+            CheckpointCandidate {
+                id: "last-known-good".to_string(),
+                label: "Last known good checkpoint".to_string(),
+                description:
+                    "Fallback checkpoint that preserves required dependencies while limiting reruns."
+                        .to_string(),
+                validated: true,
+            },
+            CheckpointCandidate {
+                id: "minimal-rerun-boundary".to_string(),
+                label: "Minimal rerun boundary".to_string(),
+                description:
+                    "Fallback boundary when a validated checkpoint is unavailable but reruns should stay narrow."
+                        .to_string(),
+                validated: false,
+            },
+        ],
+        DecisionClass::D => vec![
+            CheckpointCandidate {
+                id: "pre-side-effect".to_string(),
+                label: "Checkpoint before side effects".to_string(),
+                description:
+                    "Prefer a checkpoint before irreversible or compensating side effects when available."
+                        .to_string(),
+                validated: true,
+            },
+            CheckpointCandidate {
+                id: "before-invalidated-node".to_string(),
+                label: "Checkpoint before first invalidated node".to_string(),
+                description:
+                    "Fallback checkpoint immediately before the first invalidated node in the repair path."
+                        .to_string(),
+                validated: true,
+            },
+            CheckpointCandidate {
+                id: "last-known-good".to_string(),
+                label: "Last known good checkpoint".to_string(),
+                description:
+                    "Broader rollback point that favors dependency completeness over minimal reruns."
+                        .to_string(),
+                validated: true,
+            },
+        ],
+        DecisionClass::E => vec![CheckpointCandidate {
+            id: "manual-handoff-boundary".to_string(),
+            label: "Manual handoff boundary".to_string(),
+            description:
+                "Execution restart boundary must be confirmed manually before any runtime apply path is attempted."
+                    .to_string(),
+            validated: false,
+        }],
+    }
+}
+
+fn select_best_checkpoint(
+    decision_class: DecisionClass,
+    candidates: &[CheckpointCandidate],
+) -> Option<CheckpointCandidate> {
+    match decision_class {
+        DecisionClass::A | DecisionClass::B => None,
+        DecisionClass::C => candidates
+            .iter()
+            .find(|candidate| candidate.id == "nearest-validated")
+            .cloned()
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.id == "last-known-good")
+                    .cloned()
+            })
+            .or_else(|| candidates.first().cloned()),
+        DecisionClass::D => candidates
+            .iter()
+            .find(|candidate| candidate.id == "pre-side-effect")
+            .cloned()
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.id == "before-invalidated-node")
+                    .cloned()
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.id == "last-known-good")
+                    .cloned()
+            })
+            .or_else(|| candidates.first().cloned()),
+        DecisionClass::E => None,
+    }
+}
+
+fn build_checkpoint_selection_rationale(
+    decision_class: DecisionClass,
+    selected: Option<&CheckpointCandidate>,
+) -> Option<String> {
+    match decision_class {
+        DecisionClass::A => None,
+        DecisionClass::B => Some(
+            "Soft-review path: no rerun checkpoint is suggested by the internal baseline yet."
+                .to_string(),
+        ),
+        DecisionClass::C => selected.map(|candidate| {
+            format!(
+                "Class C favors the nearest safe checkpoint before the first invalidated node; selected internal hint '{}'.",
+                candidate.label
+            )
+        }),
+        DecisionClass::D => selected.map(|candidate| {
+            format!(
+                "Class D favors a checkpoint before irreversible work or the first invalidated node; selected internal hint '{}'.",
+                candidate.label
+            )
+        }),
+        DecisionClass::E => Some(
+            "Class E requires manual handoff; the internal baseline does not auto-select a restart checkpoint."
+                .to_string(),
+        ),
     }
 }
 
@@ -1049,6 +1208,114 @@ mod tests {
         assert!(cs.candidates.is_empty());
         assert!(cs.selected.is_none());
         assert!(cs.rationale.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_selection_heuristic_class_a_is_empty() {
+        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::A);
+
+        assert!(!cs.ready);
+        assert!(cs.candidates.is_empty());
+        assert!(cs.selected.is_none());
+        assert!(cs.rationale.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_selection_heuristic_class_b_skips_checkpoint_selection() {
+        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::B);
+
+        assert!(!cs.ready);
+        assert!(cs.candidates.is_empty());
+        assert!(cs.selected.is_none());
+        assert_eq!(
+            cs.rationale.as_deref(),
+            Some(
+                "Soft-review path: no rerun checkpoint is suggested by the internal baseline yet."
+            )
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_selection_heuristic_class_c_prefers_nearest_validated() {
+        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::C);
+
+        assert!(!cs.ready);
+        assert_eq!(cs.candidates.len(), 3);
+        assert_eq!(
+            cs.selected.as_ref().map(|candidate| candidate.id.as_str()),
+            Some("nearest-validated")
+        );
+        assert!(cs
+            .candidates
+            .iter()
+            .any(|candidate| candidate.id == "last-known-good"));
+        assert!(cs
+            .rationale
+            .as_deref()
+            .is_some_and(|rationale| rationale.contains("nearest safe checkpoint")));
+    }
+
+    #[test]
+    fn test_checkpoint_selection_heuristic_class_d_prefers_pre_side_effect() {
+        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::D);
+
+        assert!(!cs.ready);
+        assert_eq!(cs.candidates.len(), 3);
+        assert_eq!(
+            cs.selected.as_ref().map(|candidate| candidate.id.as_str()),
+            Some("pre-side-effect")
+        );
+        assert!(cs
+            .rationale
+            .as_deref()
+            .is_some_and(|rationale| rationale.contains("irreversible work")));
+    }
+
+    #[test]
+    fn test_checkpoint_selection_heuristic_class_e_requires_manual_handoff() {
+        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::E);
+
+        assert!(!cs.ready);
+        assert_eq!(cs.candidates.len(), 1);
+        assert_eq!(cs.candidates[0].id, "manual-handoff-boundary");
+        assert!(cs.selected.is_none());
+        assert!(cs
+            .rationale
+            .as_deref()
+            .is_some_and(|rationale| rationale.contains("manual handoff")));
+    }
+
+    #[test]
+    fn test_rebase_plan_populates_internal_checkpoint_hint_for_class_c() {
+        let mut diff = empty_intent_version_diff();
+        diff.scope.in_scope.added.push("new_item".to_string());
+
+        let risk = DiffRiskAnalysis {
+            severity: Severity::High,
+            confidence: 0.9,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::High,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: Some("Scope addition".to_string()),
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+
+        assert_eq!(plan.decision_class, DecisionClass::C);
+        assert!(!plan.deferred.checkpoint_selection.ready);
+        assert_eq!(
+            plan.deferred
+                .checkpoint_selection
+                .selected
+                .as_ref()
+                .map(|candidate| candidate.id.as_str()),
+            Some("nearest-validated")
+        );
     }
 
     #[test]

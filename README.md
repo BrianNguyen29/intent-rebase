@@ -232,7 +232,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - Compensation actions are NOT generated in this slice (Phase 2 feature)
 
 **NOT in scope for this slice (deferred to Phase 2):**
-- Checkpoint selection heuristics
+- Runtime-backed checkpoint selection
 - Approval revalidation hooks
 - Runtime adapter integration
 - Rebase apply (preview-only)
@@ -248,7 +248,7 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
   - `RevalidationStrategy`: Deferred, Full, Incremental, Drop variants
   - `CompensationReadiness`: ready flag, potential_actions vector, has_irreversible_effects flag, rationale option
   - `CompensationAction`: id, label, description, reversible flag, priority
-- All Phase 2 fields have `ready: false` and empty candidate/action lists in Phase 1
+- PR #17 established `ready: false` groundwork and empty defaults before later internal heuristics
 - Deterministic unit tests verify deferred state properties for all new types
 - Apply HTTP endpoint NOT added (deferred to Phase 2)
 
@@ -258,7 +258,21 @@ Phase 1 first slice implementation — Intent Registry. A control layer that man
 - `CompensationReadiness`, `CompensationAction`
 
 **NOT in scope for this slice (deferred to Phase 2):**
-- Actual checkpoint selection algorithm execution
+- Runtime-backed checkpoint discovery/execution
+- Approval revalidation execution hooks
+- Runtime adapter integration
+- Rebase apply HTTP endpoint
+
+### Phase 1 Twelfth Slice — Internal Checkpoint Heuristic Baseline (PR #18)
+**Implemented:**
+- Internal `CheckpointSelection::heuristic_baseline()` for deterministic checkpoint strategy hints by decision class
+- Class C prefers the nearest validated checkpoint before the first invalidated node
+- Class D prefers a checkpoint before irreversible side effects when possible
+- Class E surfaces a manual-handoff boundary without auto-selecting a restart point
+- `CheckpointSelection.ready` remains `false` because runtime-backed checkpoint execution is still deferred
+
+**NOT in scope for this slice (deferred to Phase 2):**
+- Runtime-backed checkpoint lookup or replay
 - Approval revalidation execution hooks
 - Runtime adapter integration
 - Rebase apply HTTP endpoint

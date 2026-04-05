@@ -26,7 +26,7 @@
 - [x] Build preview-only planner (Phase 1 PR #14 - baseline)
 - [x] Add decision classes A–E (Phase 1 PR #14)
 - [x] Apply/checkpoint typed contracts groundwork (Phase 1 PR #17)
-- [ ] Add checkpoint selection heuristics (Phase 2)
+- [x] Add internal checkpoint selection heuristic baseline (Phase 1 PR #18)
 - [ ] Add approval revalidation hooks (Phase 2)
 
 ## Epic 5 — Adapter
