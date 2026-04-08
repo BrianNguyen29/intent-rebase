@@ -604,6 +604,53 @@ pub struct RebaseApplyResult {
     pub runtime_execution_result: RuntimeExecutionResult,
 }
 
+impl RebaseApplyResult {
+    /// Generate an internal audit summary for this apply result.
+    ///
+    /// The summary aggregates runtime outcome, checkpoint alignment/id,
+    /// graph update counts, and notification requirement for internal
+    /// audit/reporting purposes.
+    ///
+    /// This is a derived summary that does not add new persistent fields
+    /// to `RebaseApplyResult`, preserving the existing shape.
+    pub fn audit_summary(&self) -> RebaseApplySummary {
+        RebaseApplySummary {
+            outcome: self.outcome.clone(),
+            runtime_status: self.runtime_execution_result.status.clone(),
+            checkpoint_outcome: self.aligned_checkpoint.as_ref().map(|a| a.outcome.clone()),
+            checkpoint_id: self
+                .aligned_checkpoint
+                .as_ref()
+                .and_then(|a| a.checkpoint_id),
+            graph_updates_count: self.graph_updates.len(),
+            notification_required: self.notification_required,
+            rationale: self.rationale.clone(),
+        }
+    }
+}
+
+/// Internal audit summary for rebase apply operations.
+///
+/// Aggregates runtime outcome, checkpoint alignment, graph update counts,
+/// and notification requirement for audit/reporting purposes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RebaseApplySummary {
+    /// Apply outcome (NoOp, AutoProceeded, BlockedManualReview)
+    pub outcome: ApplyOutcome,
+    /// Runtime execution status
+    pub runtime_status: RuntimeExecutionStatus,
+    /// Checkpoint alignment outcome (if checkpoint was aligned)
+    pub checkpoint_outcome: Option<CheckpointAlignmentOutcome>,
+    /// Checkpoint ID if alignment succeeded
+    pub checkpoint_id: Option<Uuid>,
+    /// Number of graph updates applied
+    pub graph_updates_count: usize,
+    /// Whether notification is required
+    pub notification_required: bool,
+    /// Detailed rationale for the decision
+    pub rationale: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1549,5 +1596,440 @@ mod tests {
             .runtime_execution_result
             .status_message
             .contains("not ready"));
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_class_a_noop() {
+        // Test audit_summary for Class A no-op path
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2); // Same content = Class A
+
+        let (diff, _risk) = compute_diff_with_risk_sync(&v1, &v2).unwrap();
+        let plan = RebasePlan::from_diff_and_risk(
+            &diff,
+            &risk::DiffRiskAnalysis {
+                severity: risk::Severity::Low,
+                confidence: 1.0,
+                manual_review: false,
+                manual_review_reasons: vec![],
+                section_risks: vec![],
+                rationale: Some("No changes".to_string()),
+            },
+        );
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::NoOp);
+        assert_eq!(
+            summary.runtime_status,
+            RuntimeExecutionStatus::NotApplicable
+        );
+        assert!(summary.checkpoint_outcome.is_none());
+        assert!(summary.checkpoint_id.is_none());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(!summary.notification_required);
+        assert!(!summary.rationale.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_class_d_blocked() {
+        // Test audit_summary for Class D blocked path
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+
+        let orchestrator =
+            RebaseOrchestrator::with_mock_adapter(checkpoint_repo.clone(), graph_service);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let mut v2 = create_test_version(intent_id, 2);
+        v2.payload.scope.in_scope.push("item2".to_string());
+
+        let (diff, risk) = compute_diff_with_risk_sync(&v1, &v2).unwrap();
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::BlockedManualReview);
+        assert_eq!(
+            summary.runtime_status,
+            RuntimeExecutionStatus::NotApplicable
+        );
+        assert!(summary.checkpoint_outcome.is_none());
+        assert!(summary.checkpoint_id.is_none());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(summary.notification_required);
+        assert!(!summary.rationale.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_proceed_success() {
+        // Test audit_summary for successful proceed path (Class B with checkpoint)
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: audit summary proceed success".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
+        assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Succeeded);
+        assert!(summary.checkpoint_outcome.is_some());
+        assert!(summary.checkpoint_id.is_some());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(!summary.notification_required);
+        assert!(!summary.rationale.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_no_checkpoint() {
+        // Test audit_summary for no-checkpoint proceed path
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: audit summary no checkpoint".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
+        assert_eq!(
+            summary.runtime_status,
+            RuntimeExecutionStatus::SucceededNoReplay
+        );
+        // No checkpoint was found, so checkpoint_outcome should reflect that
+        assert!(summary.checkpoint_outcome.is_some());
+        // checkpoint_id is None because no checkpoint was available
+        assert!(summary.checkpoint_id.is_none());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(!summary.notification_required);
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_degraded() {
+        // Test audit_summary for degraded path (signal sent but replay failed)
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(
+            MockAdapter::ready()
+                .with_signal_success(true)
+                .with_replay_success(false),
+        );
+
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: audit summary degraded".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
+        assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Degraded);
+        assert!(summary.checkpoint_outcome.is_some());
+        assert!(summary.checkpoint_id.is_some());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(!summary.notification_required);
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_skipped_not_ready() {
+        // Test audit_summary for skipped-not-ready path
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::not_ready());
+
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: audit summary skipped not ready".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
+        assert_eq!(
+            summary.runtime_status,
+            RuntimeExecutionStatus::SkippedNotReady
+        );
+        assert!(summary.checkpoint_outcome.is_some());
+        assert!(summary.checkpoint_id.is_some());
+        assert_eq!(summary.graph_updates_count, 0);
+        assert!(!summary.notification_required);
+    }
+
+    #[tokio::test]
+    async fn test_audit_summary_with_graph_updates() {
+        // Test audit_summary with actual graph updates
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+
+        let node_id = Uuid::new_v4();
+        let node = GraphNode {
+            id: node_id,
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            node_type: NodeType::Artifact,
+            external_ref: None,
+            label: "Test Artifact".to_string(),
+            state: NodeState::Active,
+            properties: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
+        };
+        graph_repo.add_node(node).await;
+
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: audit summary with graph updates".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let affected_item = AffectedItem {
+            node_id,
+            label: "Test Artifact".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Directly affected".to_string(),
+            external_ref: None,
+        };
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(vec![affected_item], vec![], vec![]);
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &affected_items,
+            )
+            .await
+            .unwrap();
+
+        let summary = result.audit_summary();
+
+        assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
+        assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Succeeded);
+        assert_eq!(summary.graph_updates_count, 1);
+        assert!(!summary.notification_required);
     }
 }
