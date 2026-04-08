@@ -137,7 +137,28 @@
     - Code: crates/rebase-orchestrator/src/lib.rs (RebaseOrchestrator struct)
     - Coordinates: checkpoint alignment, graph state updates, apply pipeline
     - Methods: align_checkpoint, update_graph_state, apply_rebase, plan_and_apply
-    - Tests: 7 orchestrator tests pass (Class A/B/D/E, graph state update, plan_and_apply)
+    - Tests: orchestrator tests cover Class A no-op, Class D/E blocked, Class B proceed,
+      no-checkpoint proceed, runtime-not-ready skipped execution, graph state update,
+      plan_and_apply, and runtime execution degradation/success paths
+
+[x] RebaseApplyResult exposes runtime_execution_result field - INTERNAL GROUNDWORK DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs (RebaseApplyResult.runtime_execution_result,
+      RuntimeExecutionResult, RuntimeExecutionStatus)
+    - Structured runtime outcome: status, signal_sent, replay_completed, status_message
+    - Populated in no-op/blocked/proceed paths
+    - Tests: runtime execution success/failure tests pass (test_runtime_execution_success,
+      test_runtime_signal_failure_graceful_continuation, test_runtime_replay_failure_graceful_continuation)
+    - No-checkpoint proceed path test: test_orchestrator_class_b_proceeds_no_checkpoint
+
+[x] Runtime readiness gating skips execution when adapter is not ready - INTERNAL GROUNDWORK DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs (send_runtime_rebase_signal gates on adapter readiness)
+    - Structured outcome: RuntimeExecutionStatus::SkippedNotReady distinguishes skipped execution
+      from signal/replay failure
+    - Rationale cleanup: apply rationale remains decision-focused while runtime detail stays in
+      runtime_execution_result.status_message
+    - Tests: test_skipped_not_ready_when_adapter_not_ready
 
 [ ] Rebase apply endpoint: POST /api/v1/intents/{id}/rebase-apply
     Evidence:

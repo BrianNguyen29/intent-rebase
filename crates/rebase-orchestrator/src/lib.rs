@@ -29,25 +29,99 @@
 //!         └── send_rebase_signal, replay_from_checkpoint (internal execution)
 //! ```
 
+/// Status of runtime execution for internal rebase operations.
+///
+/// Distinguishes between different execution outcomes to support
+/// explicit not-ready / execution skipped semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RuntimeExecutionStatus {
+    /// Not applicable — no execution attempted (no-op or blocked path)
+    #[default]
+    NotApplicable,
+    /// Skipped — adapter not ready, execution skipped
+    SkippedNotReady,
+    /// Degraded — signal sent but replay failed or was skipped
+    Degraded,
+    /// Succeeded — signal sent and replay completed
+    Succeeded,
+}
+
+impl std::fmt::Display for RuntimeExecutionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RuntimeExecutionStatus::NotApplicable => write!(f, "NotApplicable"),
+            RuntimeExecutionStatus::SkippedNotReady => write!(f, "SkippedNotReady"),
+            RuntimeExecutionStatus::Degraded => write!(f, "Degraded"),
+            RuntimeExecutionStatus::Succeeded => write!(f, "Succeeded"),
+        }
+    }
+}
+
 /// Runtime execution outcome for internal rebase operations.
 ///
 /// Reports the result of runtime adapter operations during the proceed path.
+/// The status field distinguishes not-applicable, skipped-not-ready, degraded, and succeeded.
 #[derive(Debug, Clone)]
 pub struct RuntimeExecutionResult {
+    /// Execution status enum
+    pub status: RuntimeExecutionStatus,
     /// Signal sent successfully
     pub signal_sent: bool,
     /// Replay completed
     pub replay_completed: bool,
-    /// Human-readable status message
+    /// Human-readable status message (detail lives here, not in rationale)
     pub status_message: String,
 }
 
 impl Default for RuntimeExecutionResult {
     fn default() -> Self {
         Self {
+            status: RuntimeExecutionStatus::NotApplicable,
             signal_sent: false,
             replay_completed: false,
             status_message: "Not executed".to_string(),
+        }
+    }
+}
+
+impl RuntimeExecutionResult {
+    /// Create a result indicating execution was skipped due to adapter not ready
+    pub fn skipped_not_ready() -> Self {
+        Self {
+            status: RuntimeExecutionStatus::SkippedNotReady,
+            signal_sent: false,
+            replay_completed: false,
+            status_message: "Skipped: adapter not ready".to_string(),
+        }
+    }
+
+    /// Create a degraded result: signal sent but replay failed
+    pub fn degraded(signal_sent: bool, replay_completed: bool, reason: &str) -> Self {
+        Self {
+            status: RuntimeExecutionStatus::Degraded,
+            signal_sent,
+            replay_completed,
+            status_message: format!("Degraded: {}", reason),
+        }
+    }
+
+    /// Create a success result: signal sent and replay completed
+    pub fn succeeded() -> Self {
+        Self {
+            status: RuntimeExecutionStatus::Succeeded,
+            signal_sent: true,
+            replay_completed: true,
+            status_message: "Signal sent and replay completed".to_string(),
+        }
+    }
+
+    /// Create a no-checkpoint result: signal sent but no replay (no checkpoint available)
+    pub fn no_checkpoint() -> Self {
+        Self {
+            status: RuntimeExecutionStatus::Succeeded,
+            signal_sent: true,
+            replay_completed: false,
+            status_message: "Signal sent, no checkpoint for replay".to_string(),
         }
     }
 }
@@ -144,8 +218,9 @@ impl RebaseOrchestrator {
 
     /// Send a rebase signal to the runtime adapter for internal execution.
     ///
-    /// This sends a signal to notify the runtime that a rebase operation should
-    /// proceed. The signal is sent after checkpoint alignment is complete.
+    /// Gates execution on adapter readiness. If the adapter is not ready,
+    /// returns `RuntimeExecutionResult::skipped_not_ready()` without attempting
+    /// signal or replay.
     ///
     /// Returns `RuntimeExecutionResult` indicating signal and replay status.
     async fn send_runtime_rebase_signal(
@@ -155,6 +230,29 @@ impl RebaseOrchestrator {
         workflow_id: Uuid,
         aligned: &AlignedCheckpoint,
     ) -> Result<RuntimeExecutionResult, AdapterError> {
+        // Gate on adapter readiness - skip execution if not ready
+        match self.runtime_adapter.is_adapter_ready().await {
+            Ok(runtime_adapter::AdapterStatus::Ready) => {
+                // Ready, proceed
+            }
+            Ok(_) => {
+                // Not ready or initializing
+                tracing::info!(
+                    "Runtime adapter not ready, skipping signal for intent {}",
+                    intent_id
+                );
+                return Ok(RuntimeExecutionResult::skipped_not_ready());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to check adapter readiness for intent {}: {:?}",
+                    intent_id,
+                    e
+                );
+                return Ok(RuntimeExecutionResult::skipped_not_ready());
+            }
+        }
+
         // Build the rebase signal for the runtime
         let signal = RebaseSignal {
             intent_id: intent_id.to_string(),
@@ -168,15 +266,17 @@ impl RebaseOrchestrator {
         };
 
         // Send the signal
-        self.runtime_adapter.send_rebase_signal(signal).await?;
+        if let Err(e) = self.runtime_adapter.send_rebase_signal(signal).await {
+            // Signal failed - return degraded result with signal_sent: false
+            tracing::warn!("Runtime signal failed for intent {}: {:?}", intent_id, e);
+            return Ok(RuntimeExecutionResult::degraded(
+                false,
+                false,
+                &format!("Signal failed: {}", e),
+            ));
+        }
 
-        // If we have a checkpoint, attempt replay from it
-        let mut result = RuntimeExecutionResult {
-            signal_sent: true,
-            replay_completed: false,
-            status_message: "Signal sent, replay pending".to_string(),
-        };
-
+        // Signal sent successfully - now attempt replay if checkpoint available
         if let Some(checkpoint_id) = aligned.checkpoint_id {
             // Convert to runtime checkpoint format for replay
             let runtime_checkpoint = runtime_adapter::Checkpoint {
@@ -200,19 +300,21 @@ impl RebaseOrchestrator {
                 .replay_from_checkpoint(runtime_checkpoint, intent_ref)
                 .await
             {
-                Ok(()) => {
-                    result.replay_completed = true;
-                    result.status_message = "Signal sent and replay completed".to_string();
-                }
+                Ok(()) => Ok(RuntimeExecutionResult::succeeded()),
                 Err(e) => {
-                    result.status_message = format!("Signal sent but replay failed: {}", e);
+                    // Signal sent but replay failed - degraded
+                    tracing::warn!("Replay failed for intent {}: {:?}", intent_id, e);
+                    Ok(RuntimeExecutionResult::degraded(
+                        true,
+                        false,
+                        &format!("Replay failed: {}", e),
+                    ))
                 }
             }
         } else {
-            result.status_message = "Signal sent, no checkpoint for replay".to_string();
+            // Signal sent, no checkpoint for replay - still success (no replay needed)
+            Ok(RuntimeExecutionResult::no_checkpoint())
         }
-
-        Ok(result)
     }
 
     /// Check if the runtime adapter is ready.
@@ -340,6 +442,7 @@ impl RebaseOrchestrator {
                     graph_updates: vec![],
                     notification_required: false,
                     rationale: "Class A: No semantic changes detected".to_string(),
+                    runtime_execution_result: RuntimeExecutionResult::default(),
                 })
             }
 
@@ -357,6 +460,7 @@ impl RebaseOrchestrator {
                     graph_updates: vec![],
                     notification_required: true, // Notify about manual review requirement
                     rationale: reason,
+                    runtime_execution_result: RuntimeExecutionResult::default(),
                 })
             }
 
@@ -384,16 +488,17 @@ impl RebaseOrchestrator {
                     .await?;
 
                 // Step 3: Send rebase signal to runtime (internal execution loop)
+                // Rationale is kept separate from runtime execution detail
                 let runtime_result = self
                     .send_runtime_rebase_signal(intent_id, tenant_id, workflow_id, &aligned)
                     .await
                     .unwrap_or_else(|e| {
                         tracing::warn!("Runtime signal failed, continuing: {:?}", e);
-                        RuntimeExecutionResult {
-                            signal_sent: false,
-                            replay_completed: false,
-                            status_message: format!("Signal failed: {}", e),
-                        }
+                        RuntimeExecutionResult::degraded(
+                            false,
+                            false,
+                            &format!("Signal failed: {}", e),
+                        )
                     });
 
                 // Extract values needed for rationale before moving
@@ -414,13 +519,14 @@ impl RebaseOrchestrator {
                     }),
                     graph_updates,
                     notification_required: notification,
+                    // Rationale focuses on apply decision; runtime detail lives in structured outcome
                     rationale: format!(
-                        "Class {:?} auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied, runtime: {}",
+                        "Class {:?} auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied",
                         plan.decision_class,
                         aligned_outcome,
                         graph_updates_count,
-                        runtime_result.status_message
                     ),
+                    runtime_execution_result: runtime_result,
                 })
             }
         }
@@ -483,6 +589,8 @@ pub struct RebaseApplyResult {
     pub notification_required: bool,
     /// Detailed rationale for the decision
     pub rationale: String,
+    /// Runtime execution result (for proceed path) or default (no-op/blocked)
+    pub runtime_execution_result: RuntimeExecutionResult,
 }
 
 #[cfg(test)]
@@ -830,10 +938,22 @@ mod tests {
         assert!(result.aligned_checkpoint.is_none());
         assert!(result.graph_updates.is_empty());
         assert!(!result.notification_required);
+        // No-op path should have NotApplicable runtime execution status
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::NotApplicable
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, false);
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(
+            result.runtime_execution_result.status_message,
+            "Not executed"
+        );
     }
 
     #[tokio::test]
-    async fn test_orchestrator_class_b_proceeds() {
+    async fn test_orchestrator_class_d_blocked() {
+        // Test Class D blocked path (medium severity + manual review required)
         let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
@@ -869,130 +989,47 @@ mod tests {
             .await
             .unwrap();
 
-        // For this specific diff (scope addition), we get Class D because:
-        // - scope items have no clause_id, causing ambiguous_match=1
-        // - confidence = 0.5 < 0.7 threshold, so manual_review=true
-        // - Medium severity + manual_review = Class D
-        // Class D is blocked, so this will NOT auto-proceed
+        // Class D is blocked due to: medium severity + manual_review required
         assert_eq!(result.outcome, ApplyOutcome::BlockedManualReview);
         assert!(result.notification_required);
-    }
-
-    #[tokio::test]
-    async fn test_orchestrator_class_d_with_direct_plan() {
-        // Test Class D blocking with a directly-constructed plan
-        // This avoids the complexity of diff computation
-        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
-        let graph_repo = Arc::new(MockGraphRepo::new());
-        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
-
-        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
-
-        let intent_id = Uuid::new_v4();
-        let workflow_id = Uuid::new_v4();
-        let tenant_id = Uuid::new_v4();
-
-        let v1 = create_test_version(intent_id, 1);
-        let v2 = create_test_version(intent_id, 2);
-
-        // Directly construct a Class D plan
-        let plan = RebasePlan {
-            decision_class: DecisionClass::D,
-            rationale: "Test: Class D plan".to_string(),
-            section_decisions: vec![],
-            affected_items: AffectedItemsPreview::unavailable(),
-            deferred: rebase_engine::DeferredFields::phase1_baseline(
-                DecisionClass::D,
-                &AffectedItemsPreview::unavailable(),
-            ),
-            manual_review_recommended: true,
-            risk_level: 4,
-        };
-
-        let result = orchestrator
-            .apply_rebase(
-                intent_id,
-                tenant_id,
-                workflow_id,
-                &v1,
-                &v2,
-                &plan,
-                &AffectedItemsPreview::unavailable(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(result.outcome, ApplyOutcome::BlockedManualReview);
-        assert!(result.notification_required);
-    }
-
-    #[tokio::test]
-    async fn test_orchestrator_class_e_with_direct_plan() {
-        // Test Class E blocking with a directly-constructed plan
-        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
-        let graph_repo = Arc::new(MockGraphRepo::new());
-        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
-
-        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
-
-        let intent_id = Uuid::new_v4();
-        let workflow_id = Uuid::new_v4();
-        let tenant_id = Uuid::new_v4();
-
-        let v1 = create_test_version(intent_id, 1);
-        let v2 = create_test_version(intent_id, 2);
-
-        // Directly construct a Class E plan
-        let plan = RebasePlan {
-            decision_class: DecisionClass::E,
-            rationale: "Test: Class E plan".to_string(),
-            section_decisions: vec![],
-            affected_items: AffectedItemsPreview::unavailable(),
-            deferred: rebase_engine::DeferredFields::phase1_baseline(
-                DecisionClass::E,
-                &AffectedItemsPreview::unavailable(),
-            ),
-            manual_review_recommended: true,
-            risk_level: 5,
-        };
-
-        let result = orchestrator
-            .apply_rebase(
-                intent_id,
-                tenant_id,
-                workflow_id,
-                &v1,
-                &v2,
-                &plan,
-                &AffectedItemsPreview::unavailable(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(result.outcome, ApplyOutcome::BlockedManualReview);
-        assert!(result.notification_required);
+        // Blocked path should have NotApplicable runtime execution status
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::NotApplicable
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, false);
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(
+            result.runtime_execution_result.status_message,
+            "Not executed"
+        );
     }
 
     #[tokio::test]
     async fn test_orchestrator_class_e_blocked() {
-        // Test Class E blocking with a directly-constructed plan
+        // Test Class E blocked path (high/critical severity)
         let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
+        let orchestrator =
+            RebaseOrchestrator::with_mock_adapter(checkpoint_repo.clone(), graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
         let tenant_id = Uuid::new_v4();
 
+        // Create a checkpoint
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
         let v1 = create_test_version(intent_id, 1);
         let v2 = create_test_version(intent_id, 2);
 
-        // Directly construct a Class E plan (Critical severity or 3+ high-severity sections)
+        // Directly construct a Class E plan (high/critical severity, manual review required)
         let plan = RebasePlan {
             decision_class: DecisionClass::E,
-            rationale: "Test: Class E plan".to_string(),
+            rationale: "Test: Class E blocked".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -1000,7 +1037,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: true,
-            risk_level: 5,
+            risk_level: 4, // High risk tier
         };
 
         let result = orchestrator
@@ -1016,7 +1053,85 @@ mod tests {
             .await
             .unwrap();
 
+        // Class E is blocked due to: high/critical severity
         assert_eq!(result.outcome, ApplyOutcome::BlockedManualReview);
+        assert!(result.notification_required);
+        // Blocked path should have NotApplicable runtime execution status
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::NotApplicable
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, false);
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(
+            result.runtime_execution_result.status_message,
+            "Not executed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_class_b_proceeds_no_checkpoint() {
+        // Test Class B proceed path when no checkpoint exists (replay skipped)
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // NO checkpoint created - this is the no-checkpoint scenario
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        // Directly construct a Class B plan (low severity, no manual review)
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: Class B no checkpoint".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        // Class B should auto-proceed
+        assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Status should be Succeeded (signal sent, no checkpoint for replay)
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::Succeeded
+        );
+        // Signal should be sent
+        assert_eq!(result.runtime_execution_result.signal_sent, true);
+        // Replay should be skipped because no checkpoint exists
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert!(result
+            .runtime_execution_result
+            .status_message
+            .contains("no checkpoint"));
     }
 
     #[tokio::test]
@@ -1113,6 +1228,13 @@ mod tests {
 
         // Class B should auto-proceed
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Verify runtime_execution_result is Succeeded (signal sent and replay completed)
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::Succeeded
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, true);
+        assert_eq!(result.runtime_execution_result.replay_completed, true);
     }
 
     #[tokio::test]
@@ -1162,8 +1284,15 @@ mod tests {
 
         // Class B should auto-proceed with runtime execution
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
-        // Rationale should include runtime status
-        assert!(result.rationale.contains("runtime"));
+        // Rationale should focus on apply decision (runtime detail lives in structured outcome)
+        assert!(
+            result.rationale.contains("Class B") || result.rationale.contains("auto-proceeded")
+        );
+        // Status should be Succeeded
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::Succeeded
+        );
     }
 
     #[tokio::test]
@@ -1214,8 +1343,16 @@ mod tests {
 
         // Class B should still auto-proceed even if runtime signal fails
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
-        // Rationale should indicate the signal failure
-        assert!(result.rationale.contains("Signal failed") || result.rationale.contains("runtime"));
+        // Rationale should focus on apply decision (not runtime detail)
+        assert!(
+            result.rationale.contains("Class B") || result.rationale.contains("auto-proceeded")
+        );
+        // Verify runtime execution result reflects the failure (degraded)
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::Degraded
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, false);
     }
 
     #[tokio::test]
@@ -1225,7 +1362,7 @@ mod tests {
 
         let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
         let graph_repo = Arc::new(MockGraphRepo::new());
-        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo.clone()));
         // Configure mock to succeed on signal but fail on replay
         let mock_adapter = Arc::new(
             MockAdapter::ready()
@@ -1233,11 +1370,16 @@ mod tests {
                 .with_replay_success(false),
         );
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
         let tenant_id = Uuid::new_v4();
+
+        // Create a checkpoint so replay path is exercised
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
 
         let v1 = create_test_version(intent_id, 1);
         let v2 = create_test_version(intent_id, 2);
@@ -1270,8 +1412,17 @@ mod tests {
 
         // Class B should still auto-proceed even if replay fails
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
-        // Rationale should indicate the replay failure
-        assert!(result.rationale.contains("replay") || result.rationale.contains("runtime"));
+        // Rationale should focus on apply decision (runtime detail lives in structured outcome)
+        assert!(
+            result.rationale.contains("Class B") || result.rationale.contains("auto-proceeded")
+        );
+        // Verify runtime execution result reflects partial success (signal sent but replay failed)
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::Degraded
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, true);
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
     }
 
     #[tokio::test]
@@ -1304,5 +1455,71 @@ mod tests {
 
         let is_ready = orchestrator.is_runtime_ready().await;
         assert!(!is_ready, "MockAdapter should report not ready");
+    }
+
+    #[tokio::test]
+    async fn test_skipped_not_ready_when_adapter_not_ready() {
+        // Test that when adapter is not ready, runtime execution is skipped
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        // Use not_ready adapter - signal and replay should be skipped
+        let mock_adapter = Arc::new(MockAdapter::not_ready());
+
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create a checkpoint (aligns but execution should be skipped)
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test: adapter not ready".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        // Class B should still auto-proceed (apply pipeline proceeds, runtime skipped)
+        assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Runtime execution should be SkippedNotReady
+        assert_eq!(
+            result.runtime_execution_result.status,
+            RuntimeExecutionStatus::SkippedNotReady
+        );
+        assert_eq!(result.runtime_execution_result.signal_sent, false);
+        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert!(result
+            .runtime_execution_result
+            .status_message
+            .contains("not ready"));
     }
 }
