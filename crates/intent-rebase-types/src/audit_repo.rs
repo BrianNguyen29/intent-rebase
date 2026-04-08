@@ -10,6 +10,8 @@ use super::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
+use sqlx::postgres::{PgPool, PgRow};
+use sqlx::Row;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -232,6 +234,171 @@ impl AuditRepository for InMemoryAuditRepository {
     }
 }
 
+// =============================================================================
+// SQLx-backed Audit Repository
+// =============================================================================
+
+/// SQL-backed repository for audit event persistence using PostgreSQL.
+/// Follows the same patterns as SqlxCheckpointRepository and SqlxIntentRepository.
+pub struct SqlxAuditRepository {
+    pool: PgPool,
+}
+
+impl SqlxAuditRepository {
+    /// Create a new SqlxAuditRepository
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Convert a database row to an AuditEvent domain object
+    fn row_to_event(&self, row: PgRow) -> Result<AuditEvent, IntentRebaseError> {
+        let event_type_str: String = row.get("event_type");
+        let payload_json: serde_json::Value = row.get("payload");
+
+        Ok(AuditEvent {
+            id: row.get("id"),
+            tenant_id: row.get("tenant_id"),
+            event_type: audit_event_type_from_string(&event_type_str),
+            actor_id: row.get("actor_id"),
+            intent_id: row.get("intent_id"),
+            artifact_id: row.get("artifact_id"),
+            payload: payload_json,
+            trace_id: row.get("trace_id"),
+            span_id: row.get("span_id"),
+            occurred_at: row.get("occurred_at"),
+        })
+    }
+
+    /// Insert a new audit event into the database
+    async fn insert_event(&self, event: &AuditEvent) -> Result<(), IntentRebaseError> {
+        let payload_json = serde_json::to_value(&event.payload)
+            .map_err(|e| IntentRebaseError::SerializationError(format!("audit payload: {}", e)))?;
+        let event_type_str = audit_event_type_to_string(&event.event_type);
+
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+                payload, trace_id, span_id, occurred_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(event.id)
+        .bind(event.tenant_id)
+        .bind(event_type_str)
+        .bind(&event.actor_id)
+        .bind(event.intent_id)
+        .bind(event.artifact_id)
+        .bind(payload_json)
+        .bind(&event.trace_id)
+        .bind(&event.span_id)
+        .bind(event.occurred_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert audit event: {}", e)))?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AuditRepository for SqlxAuditRepository {
+    async fn create_audit_event(&self, event: AuditEvent) -> Result<(), IntentRebaseError> {
+        self.insert_event(&event).await
+    }
+
+    async fn list_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<AuditEvent>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+                payload, trace_id, span_id, occurred_at
+            FROM audit_events
+            WHERE intent_id = $1 AND tenant_id = $2
+            ORDER BY occurred_at DESC
+            "#,
+        )
+        .bind(intent_id)
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list audit events by intent: {}", e))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_event(r)).collect()
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+                payload, trace_id, span_id, occurred_at
+            FROM audit_events
+            WHERE tenant_id = $1
+            ORDER BY occurred_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list audit events by tenant: {}", e))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_event(r)).collect()
+    }
+}
+
+// =============================================================================
+// Helper functions for audit event type enum conversion
+// =============================================================================
+
+fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
+    match event_type {
+        AuditEventType::IntentCreated => "IntentCreated",
+        AuditEventType::IntentUpdated => "IntentUpdated",
+        AuditEventType::IntentArchived => "IntentArchived",
+        AuditEventType::RebaseDetected => "RebaseDetected",
+        AuditEventType::RebasePreviewGenerated => "RebasePreviewGenerated",
+        AuditEventType::RebaseApplied => "RebaseApplied",
+        AuditEventType::RebaseApplyBlocked => "RebaseApplyBlocked",
+        AuditEventType::ApprovalRequired => "ApprovalRequired",
+        AuditEventType::ApprovalGranted => "ApprovalGranted",
+        AuditEventType::ApprovalRevoked => "ApprovalRevoked",
+        AuditEventType::ArtifactProduced => "ArtifactProduced",
+        AuditEventType::ArtifactInvalidated => "ArtifactInvalidated",
+    }
+}
+
+fn audit_event_type_from_string(s: &str) -> AuditEventType {
+    match s {
+        "IntentCreated" => AuditEventType::IntentCreated,
+        "IntentUpdated" => AuditEventType::IntentUpdated,
+        "IntentArchived" => AuditEventType::IntentArchived,
+        "RebaseDetected" => AuditEventType::RebaseDetected,
+        "RebasePreviewGenerated" => AuditEventType::RebasePreviewGenerated,
+        "RebaseApplied" => AuditEventType::RebaseApplied,
+        "RebaseApplyBlocked" => AuditEventType::RebaseApplyBlocked,
+        "ApprovalRequired" => AuditEventType::ApprovalRequired,
+        "ApprovalGranted" => AuditEventType::ApprovalGranted,
+        "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
+        "ArtifactProduced" => AuditEventType::ArtifactProduced,
+        "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
+        _ => AuditEventType::RebaseApplied, // default fallback
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +594,124 @@ mod tests {
         let events = repo.list_by_intent(intent_id, tenant_2).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tenant_id, tenant_2);
+    }
+}
+
+// =============================================================================
+// SqlxAuditRepository unit tests (helper function tests)
+// These test the enum conversion logic without requiring a database connection.
+// =============================================================================
+
+#[cfg(test)]
+mod sqlx_audit_tests {
+    use super::*;
+
+    #[test]
+    fn test_audit_event_type_to_string() {
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::IntentCreated),
+            "IntentCreated"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::IntentUpdated),
+            "IntentUpdated"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::IntentArchived),
+            "IntentArchived"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::RebaseDetected),
+            "RebaseDetected"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::RebasePreviewGenerated),
+            "RebasePreviewGenerated"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::RebaseApplied),
+            "RebaseApplied"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::RebaseApplyBlocked),
+            "RebaseApplyBlocked"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::ApprovalRequired),
+            "ApprovalRequired"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::ApprovalGranted),
+            "ApprovalGranted"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::ApprovalRevoked),
+            "ApprovalRevoked"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::ArtifactProduced),
+            "ArtifactProduced"
+        );
+        assert_eq!(
+            audit_event_type_to_string(&AuditEventType::ArtifactInvalidated),
+            "ArtifactInvalidated"
+        );
+    }
+
+    #[test]
+    fn test_audit_event_type_from_string() {
+        assert_eq!(
+            audit_event_type_from_string("IntentCreated"),
+            AuditEventType::IntentCreated
+        );
+        assert_eq!(
+            audit_event_type_from_string("IntentUpdated"),
+            AuditEventType::IntentUpdated
+        );
+        assert_eq!(
+            audit_event_type_from_string("IntentArchived"),
+            AuditEventType::IntentArchived
+        );
+        assert_eq!(
+            audit_event_type_from_string("RebaseDetected"),
+            AuditEventType::RebaseDetected
+        );
+        assert_eq!(
+            audit_event_type_from_string("RebasePreviewGenerated"),
+            AuditEventType::RebasePreviewGenerated
+        );
+        assert_eq!(
+            audit_event_type_from_string("RebaseApplied"),
+            AuditEventType::RebaseApplied
+        );
+        assert_eq!(
+            audit_event_type_from_string("RebaseApplyBlocked"),
+            AuditEventType::RebaseApplyBlocked
+        );
+        assert_eq!(
+            audit_event_type_from_string("ApprovalRequired"),
+            AuditEventType::ApprovalRequired
+        );
+        assert_eq!(
+            audit_event_type_from_string("ApprovalGranted"),
+            AuditEventType::ApprovalGranted
+        );
+        assert_eq!(
+            audit_event_type_from_string("ApprovalRevoked"),
+            AuditEventType::ApprovalRevoked
+        );
+        assert_eq!(
+            audit_event_type_from_string("ArtifactProduced"),
+            AuditEventType::ArtifactProduced
+        );
+        assert_eq!(
+            audit_event_type_from_string("ArtifactInvalidated"),
+            AuditEventType::ArtifactInvalidated
+        );
+        // Unknown values default to RebaseApplied
+        assert_eq!(
+            audit_event_type_from_string("Unknown"),
+            AuditEventType::RebaseApplied
+        );
     }
 }

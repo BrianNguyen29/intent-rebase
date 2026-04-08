@@ -48,7 +48,7 @@ info:
     ## Still Open (broader than current bounded slices)
     - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
     - Approval revalidation hooks and policy snapshot lifecycle
-    - Production-grade SQL-backed audit/approval persistence and event streaming
+    - Event streaming (NATS/Kafka)
     - Full authentication/authorization
   version: 0.1.0
   contact:

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 pub use approval_request_repo::{
     ApprovalRequest, ApprovalRequestRepository, ApprovalRequestStatus,
-    InMemoryApprovalRequestRepository,
+    InMemoryApprovalRequestRepository, SqlxApprovalRequestRepository,
 };
 pub use checkpoint_repo::{
     CheckpointRepository, InMemoryCheckpointRepository, SqlxCheckpointRepository,

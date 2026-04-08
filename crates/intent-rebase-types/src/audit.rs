@@ -20,7 +20,7 @@ pub struct AuditEvent {
 }
 
 /// Audit event type taxonomy for Phase 2b bounded slice
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditEventType {
     IntentCreated,
     IntentUpdated,

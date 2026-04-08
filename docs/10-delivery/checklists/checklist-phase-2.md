@@ -189,19 +189,22 @@
 
 [x] Rebase apply audit trail for external apply - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
-    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository trait, InMemoryAuditRepository)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository trait, InMemoryAuditRepository, SqlxAuditRepository)
     - Code: crates/intent-rebase-types/src/audit.rs (RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, AuditEventType::RebaseApplyBlocked)
     - Audit events: RebaseApplied (all outcomes), RebaseApplyBlocked (D/E blocked only)
     - Best-effort actor attribution: fallback external-api/unknown
-    - Tests: 5 audit_repo tests pass, 2 blocked audit tests pass
+    - SQL-backed SqlxAuditRepository wired for production use behind existing trait
+    - Enum conversion: audit_event_type_to_string/from_string for PostgreSQL enum serialization
+    - Tests: 5 audit_repo tests pass, 2 blocked audit tests pass, sqlx_audit_tests pass (enum conversions)
 
 [x] approval_requests schema + bounded repository contract for blocked D/E external apply - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
-    - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository trait, InMemoryApprovalRequestRepository, ApprovalRequest)
+    - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository trait, InMemoryApprovalRequestRepository, SqlxApprovalRequestRepository, ApprovalRequest)
     - Code: infrastructure/migrations/008_create_approval_requests.sql
     - Schema: approval_requests table with pending/approved/rejected/expired/cancelled fields designed for future workflow expansion
-    - Current bounded implementation is repository-driven with in-memory runtime wiring; SQL-backed production persistence remains open
-    - Tests: create/get/list/update approval_request_repo tests pass
+    - SQL-backed SqlxApprovalRequestRepository wired for production use behind existing trait
+    - Enum conversion: approval_request_status_to_string/from_string for PostgreSQL enum serialization
+    - Tests: create/get/list/update approval_request_repo tests pass, sqlx_approval_request_tests pass (enum conversions)
 
 [x] Approval queue read/query API + status-only approve/reject with audit events - PHASE 2b BATCH 2 DELIVERED
     Evidence:
