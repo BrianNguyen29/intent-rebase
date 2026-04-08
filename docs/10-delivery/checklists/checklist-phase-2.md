@@ -145,7 +145,9 @@
     Evidence:
     - Code: crates/rebase-orchestrator/src/lib.rs (RebaseApplyResult.runtime_execution_result,
       RuntimeExecutionResult, RuntimeExecutionStatus)
-    - Structured runtime outcome: status, signal_sent, replay_completed, status_message
+    - Structured runtime outcome: status, signal_sent, replay_completed, replay_attempted, status_message
+    - Status variants: NotApplicable, SkippedNotReady, Degraded, Succeeded, SucceededNoReplay
+    - replay_attempted distinguishes "no checkpoint available" from "replay failed"
     - Populated in no-op/blocked/proceed paths
     - Tests: runtime execution success/failure tests pass (test_runtime_execution_success,
       test_runtime_signal_failure_graceful_continuation, test_runtime_replay_failure_graceful_continuation)

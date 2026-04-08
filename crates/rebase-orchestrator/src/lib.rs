@@ -40,10 +40,12 @@ pub enum RuntimeExecutionStatus {
     NotApplicable,
     /// Skipped — adapter not ready, execution skipped
     SkippedNotReady,
-    /// Degraded — signal sent but replay failed or was skipped
+    /// Degraded — signal sent but replay failed
     Degraded,
-    /// Succeeded — signal sent and replay completed
+    /// Succeeded — signal sent and replay completed successfully
     Succeeded,
+    /// SucceededNoReplay — signal sent but no checkpoint available for replay
+    SucceededNoReplay,
 }
 
 impl std::fmt::Display for RuntimeExecutionStatus {
@@ -53,6 +55,7 @@ impl std::fmt::Display for RuntimeExecutionStatus {
             RuntimeExecutionStatus::SkippedNotReady => write!(f, "SkippedNotReady"),
             RuntimeExecutionStatus::Degraded => write!(f, "Degraded"),
             RuntimeExecutionStatus::Succeeded => write!(f, "Succeeded"),
+            RuntimeExecutionStatus::SucceededNoReplay => write!(f, "SucceededNoReplay"),
         }
     }
 }
@@ -60,15 +63,18 @@ impl std::fmt::Display for RuntimeExecutionStatus {
 /// Runtime execution outcome for internal rebase operations.
 ///
 /// Reports the result of runtime adapter operations during the proceed path.
-/// The status field distinguishes not-applicable, skipped-not-ready, degraded, and succeeded.
+/// The status field distinguishes not-applicable, skipped-not-ready, degraded,
+/// succeeded, and succeeded-no-replay outcomes.
 #[derive(Debug, Clone)]
 pub struct RuntimeExecutionResult {
     /// Execution status enum
     pub status: RuntimeExecutionStatus,
     /// Signal sent successfully
     pub signal_sent: bool,
-    /// Replay completed
+    /// Replay completed successfully
     pub replay_completed: bool,
+    /// Replay was attempted (even if it failed)
+    pub replay_attempted: bool,
     /// Human-readable status message (detail lives here, not in rationale)
     pub status_message: String,
 }
@@ -79,6 +85,7 @@ impl Default for RuntimeExecutionResult {
             status: RuntimeExecutionStatus::NotApplicable,
             signal_sent: false,
             replay_completed: false,
+            replay_attempted: false,
             status_message: "Not executed".to_string(),
         }
     }
@@ -91,16 +98,18 @@ impl RuntimeExecutionResult {
             status: RuntimeExecutionStatus::SkippedNotReady,
             signal_sent: false,
             replay_completed: false,
+            replay_attempted: false,
             status_message: "Skipped: adapter not ready".to_string(),
         }
     }
 
     /// Create a degraded result: signal sent but replay failed
-    pub fn degraded(signal_sent: bool, replay_completed: bool, reason: &str) -> Self {
+    pub fn degraded(signal_sent: bool, replay_attempted: bool, reason: &str) -> Self {
         Self {
             status: RuntimeExecutionStatus::Degraded,
             signal_sent,
-            replay_completed,
+            replay_completed: false,
+            replay_attempted,
             status_message: format!("Degraded: {}", reason),
         }
     }
@@ -111,16 +120,18 @@ impl RuntimeExecutionResult {
             status: RuntimeExecutionStatus::Succeeded,
             signal_sent: true,
             replay_completed: true,
+            replay_attempted: true,
             status_message: "Signal sent and replay completed".to_string(),
         }
     }
 
-    /// Create a no-checkpoint result: signal sent but no replay (no checkpoint available)
+    /// Create a no-checkpoint result: signal sent but no checkpoint available for replay
     pub fn no_checkpoint() -> Self {
         Self {
-            status: RuntimeExecutionStatus::Succeeded,
+            status: RuntimeExecutionStatus::SucceededNoReplay,
             signal_sent: true,
             replay_completed: false,
+            replay_attempted: false,
             status_message: "Signal sent, no checkpoint for replay".to_string(),
         }
     }
@@ -271,7 +282,7 @@ impl RebaseOrchestrator {
             tracing::warn!("Runtime signal failed for intent {}: {:?}", intent_id, e);
             return Ok(RuntimeExecutionResult::degraded(
                 false,
-                false,
+                false, // replay_attempted: false - never reached replay
                 &format!("Signal failed: {}", e),
             ));
         }
@@ -305,8 +316,8 @@ impl RebaseOrchestrator {
                     // Signal sent but replay failed - degraded
                     tracing::warn!("Replay failed for intent {}: {:?}", intent_id, e);
                     Ok(RuntimeExecutionResult::degraded(
-                        true,
-                        false,
+                        true, // signal_sent: true
+                        true, // replay_attempted: true - we attempted replay
                         &format!("Replay failed: {}", e),
                     ))
                 }
@@ -495,8 +506,8 @@ impl RebaseOrchestrator {
                     .unwrap_or_else(|e| {
                         tracing::warn!("Runtime signal failed, continuing: {:?}", e);
                         RuntimeExecutionResult::degraded(
-                            false,
-                            false,
+                            false, // signal_sent: false
+                            false, // replay_attempted: false
                             &format!("Signal failed: {}", e),
                         )
                     });
@@ -945,6 +956,7 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, false);
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -999,6 +1011,7 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, false);
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -1063,6 +1076,7 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, false);
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -1119,15 +1133,17 @@ mod tests {
 
         // Class B should auto-proceed
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
-        // Status should be Succeeded (signal sent, no checkpoint for replay)
+        // Status should be SucceededNoReplay (signal sent, no checkpoint for replay)
         assert_eq!(
             result.runtime_execution_result.status,
-            RuntimeExecutionStatus::Succeeded
+            RuntimeExecutionStatus::SucceededNoReplay
         );
         // Signal should be sent
         assert_eq!(result.runtime_execution_result.signal_sent, true);
         // Replay should be skipped because no checkpoint exists
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        // Replay was NOT attempted because no checkpoint was available
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
         assert!(result
             .runtime_execution_result
             .status_message
@@ -1235,6 +1251,7 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, true);
         assert_eq!(result.runtime_execution_result.replay_completed, true);
+        assert_eq!(result.runtime_execution_result.replay_attempted, true);
     }
 
     #[tokio::test]
@@ -1247,11 +1264,16 @@ mod tests {
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
         let mock_adapter = Arc::new(MockAdapter::ready());
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+        let orchestrator =
+            RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
         let tenant_id = Uuid::new_v4();
+
+        // Create a checkpoint so replay path is exercised
+        let checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+        checkpoint_repo.add_checkpoint(checkpoint).await;
 
         let v1 = create_test_version(intent_id, 1);
         let v2 = create_test_version(intent_id, 2);
@@ -1288,11 +1310,12 @@ mod tests {
         assert!(
             result.rationale.contains("Class B") || result.rationale.contains("auto-proceeded")
         );
-        // Status should be Succeeded
+        // Status should be Succeeded (replay completed successfully)
         assert_eq!(
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::Succeeded
         );
+        assert_eq!(result.runtime_execution_result.replay_attempted, true);
     }
 
     #[tokio::test]
@@ -1353,6 +1376,8 @@ mod tests {
             RuntimeExecutionStatus::Degraded
         );
         assert_eq!(result.runtime_execution_result.signal_sent, false);
+        // Replay was not attempted because signal failed first
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
     }
 
     #[tokio::test]
@@ -1423,6 +1448,8 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, true);
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        // Replay was attempted but failed
+        assert_eq!(result.runtime_execution_result.replay_attempted, true);
     }
 
     #[tokio::test]
@@ -1517,6 +1544,7 @@ mod tests {
         );
         assert_eq!(result.runtime_execution_result.signal_sent, false);
         assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert_eq!(result.runtime_execution_result.replay_attempted, false);
         assert!(result
             .runtime_execution_result
             .status_message
