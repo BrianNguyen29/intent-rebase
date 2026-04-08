@@ -7,7 +7,7 @@
 use super::{
     ApprovalCancelledAuditPayload, ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload,
     AuditEvent, AuditEventType, IntentRebaseError, RebaseApplyAuditPayload,
-    RebaseApplyBlockedAuditPayload,
+    RebaseApplyBlockedAuditPayload, ReplayAuditPayload,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -150,6 +150,33 @@ pub trait AuditRepository: Send + Sync {
             id: Uuid::new_v4(),
             tenant_id,
             event_type: AuditEventType::ApprovalCancelled,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record a ReplayInitiated audit event (Phase 2b bounded replay slice)
+    /// This is emitted when a replay operation is initiated via the public replay endpoint.
+    /// Note: This is bounded cooperative signal-based replay, NOT native Temporal reset.
+    async fn record_replay_initiated(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ReplayAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ReplayInitiated,
             actor_id: actor_id.to_string(),
             intent_id: Some(intent_id),
             artifact_id: None,
@@ -404,6 +431,7 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
         AuditEventType::ApprovalGranted => "ApprovalGranted",
         AuditEventType::ApprovalRevoked => "ApprovalRevoked",
         AuditEventType::ApprovalCancelled => "ApprovalCancelled",
+        AuditEventType::ReplayInitiated => "ReplayInitiated",
         AuditEventType::ArtifactProduced => "ArtifactProduced",
         AuditEventType::ArtifactInvalidated => "ArtifactInvalidated",
     }
@@ -428,6 +456,7 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "ApprovalGranted" => AuditEventType::ApprovalGranted,
         "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
         "ApprovalCancelled" => AuditEventType::ApprovalCancelled,
+        "ReplayInitiated" => AuditEventType::ReplayInitiated,
         "ArtifactProduced" => AuditEventType::ArtifactProduced,
         "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
         _ => AuditEventType::RebaseApplied,

@@ -125,6 +125,21 @@ impl RuntimeExecutionResult {
         }
     }
 
+    /// Create a replay-only success result: replay completed but no signal was sent.
+    ///
+    /// This is used by the standalone replay() path which calls replay_from_checkpoint()
+    /// directly without sending a signal first. The replay operation succeeded,
+    /// but no rebase signal was transmitted.
+    pub fn replay_succeeded() -> Self {
+        Self {
+            status: RuntimeExecutionStatus::Succeeded,
+            signal_sent: false,
+            replay_completed: true,
+            replay_attempted: true,
+            status_message: "Replay completed".to_string(),
+        }
+    }
+
     /// Create a no-checkpoint result: signal sent but no checkpoint available for replay
     pub fn no_checkpoint() -> Self {
         Self {
@@ -159,6 +174,26 @@ use intent_rebase_types::{Checkpoint, IntentRebaseError, IntentVersion};
 use rebase_engine::{AffectedItemsPreview, DecisionClass, RebasePlan, RiskTier};
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Result of a bounded replay operation.
+///
+/// Phase 2b bounded replay slice: Returns cooperative signal-based replay outcome
+/// using existing runtime/checkpoint seams. This is NOT native Temporal reset.
+#[derive(Debug, Clone)]
+pub struct ReplayResult {
+    /// Intent ID being replayed
+    pub intent_id: Uuid,
+    /// Source version for replay
+    pub from_version: i32,
+    /// Target version for replay
+    pub to_version: i32,
+    /// Checkpoint ID used for replay (if any)
+    pub aligned_checkpoint_id: Option<Uuid>,
+    /// Checkpoint selection outcome label
+    pub checkpoint_selection_outcome: String,
+    /// Runtime execution result for the replay attempt
+    pub runtime_execution_result: RuntimeExecutionResult,
+}
 
 /// Internal orchestrator that coordinates checkpoint alignment, graph updates,
 /// and the apply pipeline for rebase operations.
@@ -592,6 +627,141 @@ impl RebaseOrchestrator {
             .await?;
 
         Ok((plan, apply_result))
+    }
+
+    /// Execute a bounded replay operation for an intent.
+    ///
+    /// Phase 2b bounded replay slice: This uses the existing cooperative signal-based
+    /// replay seam (`replay_from_checkpoint`) with bounded checkpoint selection strategy.
+    /// This is NOT native Temporal reset — it is cooperative signal-based replay.
+    ///
+    /// Bounded checkpoint selection strategy:
+    /// - If `checkpoint_id` is provided, use that specific checkpoint
+    /// - Otherwise, use the most recent active checkpoint for the workflow
+    ///
+    /// Returns a result indicating replay outcome without implying full Phase 2 replay compatibility.
+    pub async fn replay(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+        from_version: i32,
+        to_version: i32,
+        checkpoint_id: Option<Uuid>,
+    ) -> Result<ReplayResult, IntentRebaseError> {
+        // Phase 2b: Bounded replay uses existing checkpoint alignment seam
+        let checkpoint_repo = self.checkpoint_aligner.checkpoint_service();
+        let aligned = if let Some(cp_id) = checkpoint_id {
+            // Use specific checkpoint if provided
+            let checkpoint = checkpoint_repo.get_checkpoint(cp_id).await;
+
+            match checkpoint {
+                Ok(cp) => AlignedCheckpoint {
+                    checkpoint_id: Some(cp.checkpoint_id),
+                    checkpoint: Some(cp),
+                    outcome: CheckpointAlignmentOutcome::Aligned,
+                    rationale: format!("Replay using specified checkpoint {}", cp_id),
+                },
+                Err(_) => {
+                    // Map not-found storage error to proper CheckpointNotFound error for 400 response
+                    return Err(IntentRebaseError::CheckpointNotFound(cp_id));
+                }
+            }
+        } else {
+            // Use most recent active checkpoint (best-effort alignment)
+            let checkpoints = checkpoint_repo
+                .list_by_workflow(workflow_id, tenant_id)
+                .await?;
+
+            let most_recent = checkpoints
+                .iter()
+                .filter(|c| c.status == intent_rebase_types::CheckpointStatus::Active)
+                .max_by_key(|c| c.created_at);
+
+            match most_recent {
+                Some(cp) => AlignedCheckpoint {
+                    checkpoint_id: Some(cp.checkpoint_id),
+                    checkpoint: Some(cp.clone()),
+                    outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                    rationale: "Replay using most recent active checkpoint".to_string(),
+                },
+                None => {
+                    // No active checkpoints, try any checkpoint
+                    let any_cp = checkpoints.first();
+                    match any_cp {
+                        Some(cp) => AlignedCheckpoint {
+                            checkpoint_id: Some(cp.checkpoint_id),
+                            checkpoint: Some(cp.clone()),
+                            outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                            rationale: "Replay using most recent checkpoint (no active)"
+                                .to_string(),
+                        },
+                        None => AlignedCheckpoint {
+                            checkpoint_id: None,
+                            checkpoint: None,
+                            outcome: CheckpointAlignmentOutcome::NoCheckpointFound,
+                            rationale: "Replay skipped: no checkpoints available".to_string(),
+                        },
+                    }
+                }
+            }
+        };
+
+        // Build replay result
+        let checkpoint_selection_outcome = format!("{:?}", aligned.outcome);
+        let aligned_checkpoint_id = aligned.checkpoint_id;
+
+        // Attempt replay if checkpoint available and adapter ready
+        let runtime_result = if aligned.checkpoint_id.is_some() {
+            match self.runtime_adapter.is_adapter_ready().await {
+                Ok(runtime_adapter::AdapterStatus::Ready) => {
+                    let cp = aligned.checkpoint.as_ref().unwrap();
+                    let runtime_cp = runtime_adapter::Checkpoint {
+                        id: cp.checkpoint_id.to_string(),
+                        label: format!("Replay checkpoint for intent {}", intent_id),
+                        description: format!(
+                            "Replay from intent {} v{} to v{}",
+                            intent_id, from_version, to_version
+                        ),
+                        timestamp: cp.created_at,
+                        validated: true,
+                    };
+
+                    let intent_ref = runtime_adapter::IntentRef::new(
+                        intent_id.to_string(),
+                        tenant_id.to_string(),
+                        workflow_id.to_string(),
+                        "active".to_string(),
+                    );
+
+                    match self
+                        .runtime_adapter
+                        .replay_from_checkpoint(runtime_cp, intent_ref)
+                        .await
+                    {
+                        Ok(()) => RuntimeExecutionResult::replay_succeeded(),
+                        Err(e) => RuntimeExecutionResult::degraded(
+                            false, // signal_sent: false - replay_from_checkpoint doesn't send signal
+                            true,  // replay_attempted: true - we attempted replay
+                            &format!("Replay failed: {}", e),
+                        ),
+                    }
+                }
+                Ok(_) => RuntimeExecutionResult::skipped_not_ready(),
+                Err(_e) => RuntimeExecutionResult::skipped_not_ready(),
+            }
+        } else {
+            RuntimeExecutionResult::skipped_not_ready()
+        };
+
+        Ok(ReplayResult {
+            intent_id,
+            from_version,
+            to_version,
+            aligned_checkpoint_id,
+            checkpoint_selection_outcome,
+            runtime_execution_result: runtime_result,
+        })
     }
 }
 

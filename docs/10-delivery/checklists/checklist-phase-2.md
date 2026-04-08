@@ -380,25 +380,40 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 ## 7. Replay Compatibility
 
 ```
-[ ] Replay API: POST /api/v1/intents/{id}/replay
+[x] Replay API: POST /intents/{id}/replay — PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
-    - OpenAPI spec updated
-    - Code: rebase-service/replay.rs
+    - Code: crates/intent-api/src/lib.rs (replay_intent handler + route registration)
+    - Code: crates/rebase-orchestrator/src/lib.rs (RebaseOrchestrator::replay method)
+    - OpenAPI: docs/04-api/openapi.yaml (/intents/{intent_id}/replay)
+    - Semantics: bounded cooperative signal-based replay using existing runtime/checkpoint seams
+    - Checkpoint selection: specific checkpoint_id OR most recent active checkpoint (bounded strategy)
+    - Note: This is cooperative signal-based replay, NOT native Temporal reset
 
-[ ] Replay from specific checkpoint supported
+[x] Replay from specific checkpoint supported — BOUNDED SLICE DELIVERED
     Evidence:
-    - PR merged: <link>
-    - Code: runtime-adapter/replay.rs
-    - Tests: replay from checkpoint tests pass
+    - Code: crates/rebase-orchestrator/src/lib.rs (replay() method uses checkpoint_id param)
+    - Code: crates/runtime-adapter/src/lib.rs (RuntimeAdapter trait, replay_from_checkpoint)
+    - Code: crates/runtime-adapter/src/temporal_adapter.rs (TemporalAdapter::replay_from_checkpoint)
+    - Tests: MockAdapter replay tests pass (runtime-adapter tests)
+    - Note: Uses existing replay_from_checkpoint seam; not a new implementation
+
+[x] Replay audit trail — BOUNDED SLICE DELIVERED
+    Evidence:
+    - Code: crates/intent-rebase-types/src/audit.rs (ReplayAuditPayload)
+    - Code: crates/intent-rebase-types/src/audit.rs (AuditEventType::ReplayInitiated)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_replay_initiated)
+    - Audit event: ReplayInitiated emitted on bounded replay initiation
+    - Note: Bounded to initiation event; full replay compatibility audit trail remains open
 
 [ ] Replay with new intent version (intent version override)
     Evidence:
     - Code: rebase-service/replay_override.rs
     - Tests: replay override tests pass
 
-[ ] Replay audit trail (replay initiated by, replay reason)
+[ ] Full replay compatibility (event streaming, replay status tracking)
     Evidence:
-    - Audit event: intent.replayed with full metadata
+    - OpenAPI spec updated
+    - Code: event-service/replay_status.rs
 ```
 
 ---

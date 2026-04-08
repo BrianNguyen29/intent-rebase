@@ -33,6 +33,8 @@ pub enum AuditEventType {
     ApprovalGranted,
     ApprovalRevoked,
     ApprovalCancelled,
+    /// Phase 2b bounded replay slice: replay initiated via public endpoint
+    ReplayInitiated,
     ArtifactProduced,
     ArtifactInvalidated,
 }
@@ -107,4 +109,17 @@ pub struct ApprovalCancelledAuditPayload {
     pub cancelled_by: String,
     pub cancellation_reason: String,
     pub cancelled_count: usize,
+}
+
+/// Payload for ReplayInitiated audit events (Phase 2b bounded replay slice)
+/// This is emitted when a replay operation is initiated via the public replay endpoint.
+/// Note: This is bounded cooperative signal-based replay, NOT native Temporal reset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayAuditPayload {
+    pub from_version: Option<i32>,
+    pub to_version: Option<i32>,
+    pub checkpoint_id: Option<Uuid>,
+    pub checkpoint_selection_outcome: String,
+    pub replay_initiated_via: String,
+    pub rationale: String,
 }

@@ -102,6 +102,42 @@ pub struct RebaseApplyResponse {
     pub graph_updates_failed: usize,
 }
 
+/// Request body for replay endpoint (Phase 2b bounded replay slice).
+///
+/// Bounded checkpoint selection strategy:
+/// - If `checkpoint_id` is provided, use that specific checkpoint
+/// - Otherwise, use the most recent active checkpoint for the workflow
+///
+/// Note: This is cooperative signal-based replay, NOT native Temporal reset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayRequest {
+    /// Source version for replay (optional, uses current head if not specified)
+    #[serde(default)]
+    pub from_version: Option<i32>,
+    /// Target version for replay (required)
+    pub to_version: i32,
+    /// Optional specific checkpoint ID to use for replay
+    #[serde(default)]
+    pub checkpoint_id: Option<Uuid>,
+}
+
+/// Response for replay endpoint (Phase 2b bounded replay slice).
+///
+/// Reflects cooperative signal-based replay semantics using existing
+/// runtime/checkpoint seams. This is NOT native Temporal reset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayResponse {
+    pub intent_id: Uuid,
+    pub from_version: i32,
+    pub to_version: i32,
+    pub aligned_checkpoint_id: Option<Uuid>,
+    pub checkpoint_selection_outcome: String,
+    pub runtime_execution_status: String,
+    pub signal_sent: bool,
+    pub replay_attempted: bool,
+    pub replay_completed: bool,
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -205,6 +241,9 @@ impl IntoResponse for ApiErrorResponse {
             }
             IntentRebaseError::ApprovalRequestNotPending(_, _) => {
                 (StatusCode::CONFLICT, "APPROVAL_REQUEST_NOT_PENDING", false)
+            }
+            IntentRebaseError::CheckpointNotFound(_) => {
+                (StatusCode::BAD_REQUEST, "CHECKPOINT_NOT_FOUND", false)
             }
         };
 
@@ -1206,6 +1245,110 @@ async fn reject_approval_request(
     }))
 }
 
+// ============================================================================
+// Replay Handler (Phase 2b bounded replay slice)
+// ============================================================================
+
+/// POST /intents/{intent_id}/replay - Initiate a bounded replay operation
+///
+/// Phase 2b bounded replay slice: Uses existing cooperative signal-based replay
+/// seam via RebaseOrchestrator::replay(). This is NOT native Temporal reset.
+///
+/// Bounded checkpoint selection strategy:
+/// - If `checkpoint_id` is provided in request, use that specific checkpoint
+/// - Otherwise, use the most recent active checkpoint for the workflow
+///
+/// Returns bounded replay outcome with checkpoint alignment details.
+async fn replay_intent(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    Json(request): Json<ReplayRequest>,
+) -> Result<Json<ReplayResponse>, ApiErrorResponse> {
+    // Get intent head to find workflow_id and tenant_id
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let from_version = request
+        .from_version
+        .unwrap_or(intent_head.version.version_number);
+    let to_version = request.to_version;
+
+    // Phase 2b: Validate target version exists before attempting replay
+    state
+        .service
+        .get_version(intent_id, to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 2b: Validate source version exists if explicitly specified
+    if request.from_version.is_some() {
+        state
+            .service
+            .get_version(intent_id, from_version)
+            .await
+            .map_err(ApiErrorResponse)?;
+    }
+
+    // Execute bounded replay via orchestrator
+    let replay_result = state
+        .orchestrator
+        .replay(
+            intent_id,
+            intent_head.intent.tenant_id,
+            intent_head.intent.workflow_id,
+            from_version,
+            to_version,
+            request.checkpoint_id,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Record ReplayInitiated audit event (best-effort)
+    let actor_id = "external-api/replay";
+    let audit_payload = intent_rebase_types::ReplayAuditPayload {
+        from_version: Some(from_version),
+        to_version: Some(to_version),
+        checkpoint_id: replay_result.aligned_checkpoint_id,
+        checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome.clone(),
+        replay_initiated_via: "post-intents-intent-id-replay".to_string(),
+        rationale: format!(
+            "Bounded replay initiated from v{} to v{} via public replay endpoint",
+            from_version, to_version
+        ),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_replay_initiated(
+            intent_head.intent.tenant_id,
+            actor_id,
+            intent_id,
+            audit_payload,
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ReplayInitiated audit event: {:?}", e);
+    }
+
+    Ok(Json(ReplayResponse {
+        intent_id,
+        from_version,
+        to_version,
+        aligned_checkpoint_id: replay_result.aligned_checkpoint_id,
+        checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome,
+        runtime_execution_status: runtime_execution_status_label(
+            &replay_result.runtime_execution_result.status,
+        )
+        .to_string(),
+        signal_sent: replay_result.runtime_execution_result.signal_sent,
+        replay_attempted: replay_result.runtime_execution_result.replay_attempted,
+        replay_completed: replay_result.runtime_execution_result.replay_completed,
+    }))
+}
+
 /// Initialize tracing with JSON formatting using RUST_LOG env var
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -1292,6 +1435,8 @@ pub fn build_router(
         .route("/intents/{intent_id}/diff", post(compute_diff))
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
+        // Replay endpoint (Phase 2b bounded replay slice)
+        .route("/intents/{intent_id}/replay", post(replay_intent))
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))
@@ -2820,5 +2965,152 @@ mod tests {
             field_names.iter().any(|f| f.contains("confidence")),
             "Expected confidence validation error"
         );
+    }
+
+    // === Replay Endpoint Tests (Phase 2b bounded replay slice) ===
+
+    #[tokio::test]
+    async fn test_replay_intent_no_checkpoint_available() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        let state = create_test_service();
+
+        // Create an intent
+        let create_request = CreateIntentRequest {
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent v2".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            },
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Test the replay endpoint - no checkpoints available, so should get no_checkpoint_found outcome
+        let replay_request = ReplayRequest {
+            from_version: Some(1),
+            to_version: 2,
+            checkpoint_id: None,
+        };
+        let result = replay_intent(State(state), Path(intent_id), Json(replay_request))
+            .await
+            .expect("Replay should return even with no checkpoints");
+
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.from_version, 1);
+        assert_eq!(result.to_version, 2);
+        assert!(result.aligned_checkpoint_id.is_none());
+        assert_eq!(result.checkpoint_selection_outcome, "NoCheckpointFound");
+        // Skipped because no checkpoint and adapter not used for no-checkpoint path
+        assert_eq!(result.runtime_execution_status, "skipped_not_ready");
     }
 }

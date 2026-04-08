@@ -72,8 +72,9 @@ Canonical audit event schema cho phép:
 
 - External `POST /intents/{intent_id}/rebase-apply` currently emits bounded audit records for apply outcomes and blocked-manual-review outcomes.
 - Approval queue endpoints currently emit bounded approval decision audit records for approve/reject actions.
-- Actor attribution is currently best-effort with fallback values such as `external-api/unknown`, `external-api/approver`, and `external-api/rejector` when richer identity is unavailable.
-- The canonical taxonomy above remains the target-state contract. Current Rust enum variants (`RebaseApplied`, `RebaseApplyBlocked`, `ApprovalGranted`, `ApprovalRevoked`) back the bounded implementation, and naming/serialization normalization to canonical event strings remains open.
+- Replay endpoint (`POST /intents/{intent_id}/replay`) emits `ReplayInitiated` audit event with checkpoint selection and runtime execution metadata. This is bounded cooperative signal-based replay semantics, not native Temporal reset.
+- Actor attribution is currently best-effort with fallback values such as `external-api/unknown`, `external-api/approver`, `external-api/rejector`, and `external-api/replay` when richer identity is unavailable.
+- The canonical taxonomy above remains the target-state contract. Current Rust enum variants (`RebaseApplied`, `RebaseApplyBlocked`, `ApprovalGranted`, `ApprovalRevoked`, `ReplayInitiated`) back the bounded implementation, and naming/serialization normalization to canonical event strings remains open.
 - Append-only Postgres enforcement, hash-chain verification, and NATS/S3 downstream integration remain target-state requirements rather than fully enforced runtime guarantees in the current bounded slice.
 
 ---

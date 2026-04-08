@@ -64,4 +64,8 @@ pub enum IntentRebaseError {
 
     #[error("approval request {0} is not pending (current status: {1})")]
     ApprovalRequestNotPending(Uuid, String),
+
+    /// Phase 2b: Checkpoint not found during replay
+    #[error("checkpoint not found: {0}")]
+    CheckpointNotFound(Uuid),
 }

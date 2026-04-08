@@ -85,6 +85,15 @@ impl CheckpointAligner {
         Self { checkpoint_service }
     }
 
+    /// Get the underlying checkpoint service (for bounded replay slice).
+    ///
+    /// Phase 2b bounded replay slice: Exposes the checkpoint service so the
+    /// orchestrator can perform bounded checkpoint selection without duplicating
+    /// the repository access logic.
+    pub fn checkpoint_service(&self) -> Arc<dyn intent_service::CheckpointRepository> {
+        self.checkpoint_service.clone()
+    }
+
     /// Align a rebase plan's checkpoint selection to real checkpoint records.
     ///
     /// Takes the planner's `CheckpointSelection` and resolves it to actual
