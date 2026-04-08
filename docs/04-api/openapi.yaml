@@ -39,11 +39,16 @@ info:
     - GET /v1/graph/edges — List graph edges (with optional filters)
     - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
     
-    ## Not Yet Implemented (Phase 2+)
-    - Rebase apply endpoint
-    - Checkpoint selection heuristics
-    - Approval revalidation hooks
-    - Runtime adapter integration
+    ## Phase 2b Bounded Delivery
+    - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
+    - Bounded runtime adapter integration for Temporal-backed signal/replay execution
+    - Pending approval queue/read endpoints and status-only approve/reject actions
+    - Canonical public `risk_tier` field in rebase preview/apply responses
+
+    ## Still Open (broader than current bounded slices)
+    - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
+    - Approval revalidation hooks and policy snapshot lifecycle
+    - Production-grade SQL-backed audit/approval persistence and event streaming
     - Full authentication/authorization
   version: 0.1.0
   contact:

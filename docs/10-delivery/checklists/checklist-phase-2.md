@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 2 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `PHASE 2a COMPLETE / PHASE 2b BATCH 2 + EXTERNAL APPLY SLICE IN PROGRESS` — Internal groundwork delivered (checkpoint alignment, bounded apply orchestration, mock-backed runtime wiring). Phase 2b now includes real TemporalAdapter connection/query/signal/mapping/cooperative replay and a bounded external rebase-apply endpoint, but broader runtime-integrated scope remains incomplete and prerequisite-gated.
+**Trạng thái:** `PHASE 2a COMPLETE / PHASE 2b BATCHED DELIVERY IN PROGRESS` — Internal groundwork delivered (checkpoint alignment, bounded apply orchestration, mock-backed runtime wiring). Phase 2b now also includes real TemporalAdapter connection/query/signal/mapping/cooperative replay, bounded external rebase-apply, bounded audit hooks, pending approval queue/read APIs, status-only approve/reject, and canonical public `risk_tier` exposure. Broader runtime-integrated scope remains incomplete and prerequisite-gated.
 **Phase:** Phase 2 (split: 2a internal groundwork ✓ | 2b external/integrated pending)  
 **Target Duration:** 6–10 tuần
 
@@ -189,19 +189,19 @@
 
 [x] Rebase apply audit trail for external apply - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
-    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository trait, InMemoryAuditRepository, AuditService)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository trait, InMemoryAuditRepository)
     - Code: crates/intent-rebase-types/src/audit.rs (RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, AuditEventType::RebaseApplyBlocked)
     - Audit events: RebaseApplied (all outcomes), RebaseApplyBlocked (D/E blocked only)
     - Best-effort actor attribution: fallback external-api/unknown
     - Tests: 5 audit_repo tests pass, 2 blocked audit tests pass
 
-[x] DB-backed pending approval_requests for blocked D/E external apply - PHASE 2b BOUNDED SLICE DELIVERED
+[x] approval_requests schema + bounded repository contract for blocked D/E external apply - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
     - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository trait, InMemoryApprovalRequestRepository, ApprovalRequest)
     - Code: infrastructure/migrations/008_create_approval_requests.sql
-    - Schema: approval_requests table with pending status stub
-    - Only pending status in scope for Phase 2b bounded slice
-    - Tests: 4 approval_request_repo tests pass
+    - Schema: approval_requests table with pending/approved/rejected/expired/cancelled fields designed for future workflow expansion
+    - Current bounded implementation is repository-driven with in-memory runtime wiring; SQL-backed production persistence remains open
+    - Tests: create/get/list/update approval_request_repo tests pass
 
 [x] Approval queue read/query API + status-only approve/reject with audit events - PHASE 2b BATCH 2 DELIVERED
     Evidence:
@@ -212,41 +212,44 @@
     - OpenAPI: docs/04-api/openapi.yaml (GET /approval-requests/pending, POST /approval-requests/{id}/approve, POST /approval-requests/{id}/reject)
     - Status-only approve/reject: only updates status and emits audit event; does NOT resume or re-trigger apply
     - Best-effort actor attribution: fallback external-api/approver or external-api/rejector
+    - Error semantics: not-found → 404, non-pending transition → 409
     - Tests: approval_request_repo update tests pass
 
-[ ] Risk classification: low/medium/high/critical
+[x] Public risk classification exposed as canonical risk_tier (low/medium/high/critical) - PHASE 2b BATCH 2 DELIVERED
     Evidence:
-    - PR merged: <link>
-    - Code: rebase-engine/risk_classifier.rs
-    - Tests: classification tests pass
+    - Code: crates/rebase-engine/src/risk.rs (Severity::to_risk_tier)
+    - Code: crates/rebase-engine/src/planner.rs (RebasePlan.risk_tier derived from DiffRiskAnalysis.severity)
+    - Code: crates/intent-api/src/lib.rs (RebasePreviewResponse.risk_tier, RebaseApplyResponse.risk_tier)
+    - OpenAPI: docs/04-api/openapi.yaml (risk_tier documented as primary public risk field)
+    - decision_class and risk_level remain supporting fields
 
-[ ] Apply rebase for LOW risk: automatic, no approval required
+[ ] Apply rebase policy mapped directly from risk_tier for LOW risk: automatic, no approval required
     Evidence:
-    - Code: apply pipeline auto-proceed for low
-    - Tests: auto-apply tests pass
-    - Integration test: rebase applied without manual approval
+    - Current bounded pipeline is decision-class based (A/B/C auto-proceed; D/E blocked)
+    - Direct LOW→auto policy coupling is not yet implemented/documented as the controlling rule
 
-[ ] Apply rebase for MEDIUM risk: automatic with notification
+[ ] Apply rebase policy mapped directly from risk_tier for MEDIUM risk: automatic with notification
     Evidence:
-    - Code: apply pipeline proceeds + webhook notification sent
-    - Tests: medium-risk apply tests pass
-    - Webhook: rebase.applied event sent
+    - Current bounded pipeline can auto-proceed with notification, but not as a finalized MEDIUM-only public policy contract
+    - Notification/webhook delivery remains broader Phase 2b/Phase 3 work
 
-[ ] Apply rebase for HIGH/CRITICAL: blocked, requires manual approval
+[ ] Apply rebase policy mapped directly from risk_tier for HIGH/CRITICAL: blocked, requires manual approval
     Evidence:
-    - Code: apply pipeline blocks + approval workflow triggered
-    - Tests: blocked apply returns 202 Accepted (pending approval)
-    - UI: approval queue visible in console
+    - Current bounded pipeline blocks decision classes D/E and creates approval requests, but HIGH/CRITICAL risk_tier is not yet the finalized controlling policy contract
+    - Console/UI visibility remains open
 
-[ ] Rebase apply audit trail (who applied, when, what changed)
+[x] Rebase apply audit trail (who applied, when, what changed) - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:
-    - Audit event: rebase.applied with full detail
-    - Doc: ../../14-governance/01-audit-event-spec.md (updated)
+    - Audit events: RebaseApplied + RebaseApplyBlocked capture actor, versions, decision class, rationale, runtime outcome, checkpoint alignment, and graph update summary
+    - Code: crates/intent-api/src/lib.rs (external apply emits audit events)
+    - Doc: ../../14-governance/01-audit-event-spec.md (bounded implementation status noted)
 ```
 
 ---
 
 ## 4. Approvals Revalidation
+
+Current bounded approval queue/read/status-only workflow is delivered in Section 3. This section tracks the broader revalidation and policy-snapshot lifecycle that is still open.
 
 ```
 [ ] Approval scope canonicalization implemented
@@ -278,10 +281,10 @@
     - OpenAPI spec updated
     - Tests: revalidation tests pass
 
-[ ] Approval status tracking (pending, approved, rejected, expired)
+[ ] Full approval status lifecycle tracking (including expired/revalidated flows)
     Evidence:
-    - Code: approval-service/status.rs
-    - Tests: status transition tests pass
+    - Current bounded implementation supports pending queue creation plus status-only approved/rejected transitions
+    - Expired/revalidated lifecycle, policy-linked status transitions, and revalidation APIs remain open
 ```
 
 ---
