@@ -3,14 +3,14 @@
 //! This crate provides internal-only orchestration for:
 //! - Checkpoint-to-intent-version alignment logic
 //! - Graph update orchestration for state-only mutations
-//! - Internal low/medium apply pipeline (Class A/B/C auto-apply, D/E blocked)
+//! - Internal low/medium apply pipeline (Low/Medium auto-apply, High/Critical blocked)
 //!
 //! ## Design Principles
 //!
 //! - **No public HTTP endpoints** — this is pure internal compute
 //! - **No Temporal/S3/frontend/auth integration** — deferred to Phase 3
 //! - **MockAdapter/trait seams only** — no real runtime integration
-//! - **Class D/E blocked** — manual review required, no auto-apply
+//! - **High/Critical blocked** — manual review required, no auto-apply
 //! - **Bounded state mutations** — graph updates only, no structural changes
 //! - **Runtime adapter injection** — RuntimeAdapter for internal execution loop
 //!
@@ -23,8 +23,8 @@
 //!   ├── graph_updater: GraphUpdater
 //!   │     └── Applies bounded state mutations from classification results
 //!   ├── apply_pipeline: ApplyPipeline
-//!   │     ├── Class A/B/C: auto-proceed with notification
-//!   │     └── Class D/E: blocked, requires manual review
+//!   │     ├── Low/Medium risk_tier: auto-proceed with notification
+//!   │     └── High/Critical risk_tier: blocked, requires manual review
 //!   └── runtime_adapter: Arc<dyn RuntimeAdapter>
 //!         └── send_rebase_signal, replay_from_checkpoint (internal execution)
 //! ```
@@ -420,9 +420,9 @@ impl RebaseOrchestrator {
     /// Execute the internal apply pipeline for a rebase operation.
     ///
     /// This is the main entry point for Phase 2 internal apply:
-    /// - Class A: No-op, return immediately
-    /// - Class B/C: Auto-proceed with notification, align checkpoint, update graph
-    /// - Class D/E: Blocked, return with manual review required
+    /// - NoOp: No apply needed (no semantic changes or Class A)
+    /// - Low/Medium risk_tier: Auto-proceed with notification, align checkpoint, update graph
+    /// - High/Critical risk_tier: Blocked, return with manual review required
     ///
     /// Returns `RebaseApplyResult` with the outcome and any mutations applied.
     #[allow(clippy::too_many_arguments)]
@@ -444,17 +444,22 @@ impl RebaseOrchestrator {
         match apply_decision {
             ApplyDecision::NoOp => {
                 tracing::info!(
-                    "Rebase for intent {} v{} -> v{} is a no-op (Class A)",
+                    "Rebase for intent {} v{} -> v{} is a no-op (risk_tier {:?})",
                     intent_id,
                     from_version.version_number,
-                    to_version.version_number
+                    to_version.version_number,
+                    plan.risk_tier
                 );
                 Ok(RebaseApplyResult {
                     outcome: ApplyOutcome::NoOp,
                     aligned_checkpoint: None,
                     graph_updates: vec![],
                     notification_required: false,
-                    rationale: "Class A: No semantic changes detected".to_string(),
+                    rationale: format!(
+                        "{:?} risk_tier: no semantic changes detected (decision_class {:?})",
+                        plan.risk_tier, plan.decision_class
+                    )
+                    .to_string(),
                     runtime_execution_result: RuntimeExecutionResult::default(),
                 })
             }
@@ -479,10 +484,11 @@ impl RebaseOrchestrator {
 
             ApplyDecision::Proceed { notification } => {
                 tracing::info!(
-                    "Rebase for intent {} v{} -> v{} auto-proceeding (Class B/C)",
+                    "Rebase for intent {} v{} -> v{} auto-proceeding (risk_tier {:?})",
                     intent_id,
                     from_version.version_number,
-                    to_version.version_number
+                    to_version.version_number,
+                    plan.risk_tier
                 );
 
                 // Step 1: Align checkpoint
@@ -534,8 +540,8 @@ impl RebaseOrchestrator {
                     notification_required: notification,
                     // Rationale focuses on apply decision; runtime detail lives in structured outcome
                     rationale: format!(
-                        "Class {:?} auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied",
-                        plan.decision_class,
+                        "{:?} risk_tier auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied",
+                        plan.risk_tier,
                         aligned_outcome,
                         graph_updates_count,
                     ),
