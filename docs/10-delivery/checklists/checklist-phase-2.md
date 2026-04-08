@@ -344,11 +344,15 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
       revalidate_nodes, archive_nodes, get_state_summary
     - Tests: 4 graph updater tests pass (valid/invalid transitions, terminal state, not found)
 
-[ ] Graph nodes updated when intent changes
+[x] Graph nodes updated when intent changes - BOUNDED SLICE DELIVERED (Phase 2b)
     Evidence:
-    - PR merged: <link>
-    - Code: graph-service/rebase_update.rs
-    - Tests: graph update tests pass
+    - Code: crates/rebase-orchestrator/src/lib.rs
+    - GraphUpdater wired into apply_rebase path (update_graph_state called in Proceed path, lines 500-507)
+    - update_graph_state method iterates affected items and calls graph_updater.update_node_state_if_affected
+    - RebaseApplyResult.graph_updates populated with GraphUpdateResult for each mutation
+    - RebaseApplySummary.graph_updates_applied/graph_updates_failed derived from graph_updates
+    - OpenAPI: RebaseApplyResponse includes graph_updates_applied and graph_updates_failed fields
+    - Tests: test_audit_summary_with_graph_updates passes (proves graph updates occur during apply with affected_items)
 
 [ ] Graph edges re-evaluated on intent change
     Evidence:
