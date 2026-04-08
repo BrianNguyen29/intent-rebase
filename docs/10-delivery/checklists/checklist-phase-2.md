@@ -167,7 +167,7 @@
     - Code: crates/rebase-orchestrator/src/lib.rs (RebaseApplyResult::audit_summary method,
       RebaseApplySummary struct)
     - Derived summary aggregates: outcome, runtime_status, checkpoint_outcome, checkpoint_id,
-      graph_updates_count, notification_required, rationale
+      graph_updates_applied, graph_updates_failed, notification_required, rationale
     - No new persistent fields added to RebaseApplyResult (method-derived, preserves shape)
     - Tests: test_audit_summary_class_a_noop, test_audit_summary_class_d_blocked,
       test_audit_summary_proceed_success, test_audit_summary_no_checkpoint,

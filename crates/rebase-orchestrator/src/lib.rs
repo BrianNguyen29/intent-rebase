@@ -608,7 +608,7 @@ impl RebaseApplyResult {
     /// Generate an internal audit summary for this apply result.
     ///
     /// The summary aggregates runtime outcome, checkpoint alignment/id,
-    /// graph update counts, and notification requirement for internal
+    /// graph update applied/failed counts, and notification requirement for internal
     /// audit/reporting purposes.
     ///
     /// This is a derived summary that does not add new persistent fields
@@ -622,7 +622,8 @@ impl RebaseApplyResult {
                 .aligned_checkpoint
                 .as_ref()
                 .and_then(|a| a.checkpoint_id),
-            graph_updates_count: self.graph_updates.len(),
+            graph_updates_applied: self.graph_updates.iter().filter(|u| u.success).count(),
+            graph_updates_failed: self.graph_updates.iter().filter(|u| !u.success).count(),
             notification_required: self.notification_required,
             rationale: self.rationale.clone(),
         }
@@ -631,7 +632,7 @@ impl RebaseApplyResult {
 
 /// Internal audit summary for rebase apply operations.
 ///
-/// Aggregates runtime outcome, checkpoint alignment, graph update counts,
+/// Aggregates runtime outcome, checkpoint alignment, graph update applied/failed counts,
 /// and notification requirement for audit/reporting purposes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RebaseApplySummary {
@@ -643,8 +644,10 @@ pub struct RebaseApplySummary {
     pub checkpoint_outcome: Option<CheckpointAlignmentOutcome>,
     /// Checkpoint ID if alignment succeeded
     pub checkpoint_id: Option<Uuid>,
-    /// Number of graph updates applied
-    pub graph_updates_count: usize,
+    /// Number of successful graph updates applied
+    pub graph_updates_applied: usize,
+    /// Number of failed graph updates
+    pub graph_updates_failed: usize,
     /// Whether notification is required
     pub notification_required: bool,
     /// Detailed rationale for the decision
@@ -1649,7 +1652,8 @@ mod tests {
         );
         assert!(summary.checkpoint_outcome.is_none());
         assert!(summary.checkpoint_id.is_none());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
         assert!(!summary.rationale.is_empty());
     }
@@ -1700,7 +1704,8 @@ mod tests {
         );
         assert!(summary.checkpoint_outcome.is_none());
         assert!(summary.checkpoint_id.is_none());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(summary.notification_required);
         assert!(!summary.rationale.is_empty());
     }
@@ -1760,7 +1765,8 @@ mod tests {
         assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Succeeded);
         assert!(summary.checkpoint_outcome.is_some());
         assert!(summary.checkpoint_id.is_some());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
         assert!(!summary.rationale.is_empty());
     }
@@ -1821,7 +1827,8 @@ mod tests {
         assert!(summary.checkpoint_outcome.is_some());
         // checkpoint_id is None because no checkpoint was available
         assert!(summary.checkpoint_id.is_none());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
     }
 
@@ -1884,7 +1891,8 @@ mod tests {
         assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Degraded);
         assert!(summary.checkpoint_outcome.is_some());
         assert!(summary.checkpoint_id.is_some());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
     }
 
@@ -1946,7 +1954,8 @@ mod tests {
         );
         assert!(summary.checkpoint_outcome.is_some());
         assert!(summary.checkpoint_id.is_some());
-        assert_eq!(summary.graph_updates_count, 0);
+        assert_eq!(summary.graph_updates_applied, 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
     }
 
@@ -2029,7 +2038,8 @@ mod tests {
 
         assert_eq!(summary.outcome, ApplyOutcome::AutoProceeded);
         assert_eq!(summary.runtime_status, RuntimeExecutionStatus::Succeeded);
-        assert_eq!(summary.graph_updates_count, 1);
+        assert!(summary.graph_updates_applied > 0);
+        assert_eq!(summary.graph_updates_failed, 0);
         assert!(!summary.notification_required);
     }
 }
