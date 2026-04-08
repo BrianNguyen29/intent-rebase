@@ -58,4 +58,10 @@ pub enum IntentRebaseError {
 
     #[error("invalid API key: {0}")]
     InvalidApiKey(String),
+
+    #[error("approval request not found: {0}")]
+    ApprovalRequestNotFound(Uuid),
+
+    #[error("approval request {0} is not pending (current status: {1})")]
+    ApprovalRequestNotPending(Uuid, String),
 }

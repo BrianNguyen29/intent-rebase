@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use graph_service::GraphService;
 use intent_rebase_types::{
     AffectedItemsPreview, CreateGraphEdgeRequest, CreateGraphNodeRequest, CreateIntentRequest,
@@ -25,7 +26,6 @@ use rebase_orchestrator::{
     RebaseOrchestrator, RuntimeExecutionStatus,
 };
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
@@ -185,6 +185,12 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", false),
             IntentRebaseError::InvalidApiKey(_) => {
                 (StatusCode::UNAUTHORIZED, "INVALID_API_KEY", false)
+            }
+            IntentRebaseError::ApprovalRequestNotFound(_) => {
+                (StatusCode::NOT_FOUND, "APPROVAL_REQUEST_NOT_FOUND", false)
+            }
+            IntentRebaseError::ApprovalRequestNotPending(_, _) => {
+                (StatusCode::CONFLICT, "APPROVAL_REQUEST_NOT_PENDING", false)
             }
         };
 

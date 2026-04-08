@@ -173,9 +173,10 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
 
     async fn get_approval_request(&self, id: Uuid) -> Result<ApprovalRequest, IntentRebaseError> {
         let requests = self.requests.read().await;
-        requests.get(&id).cloned().ok_or_else(|| {
-            IntentRebaseError::Internal(format!("approval request not found: {}", id))
-        })
+        requests
+            .get(&id)
+            .cloned()
+            .ok_or(IntentRebaseError::ApprovalRequestNotFound(id))
     }
 
     async fn list_pending_by_intent(
@@ -236,10 +237,10 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
 
         // Only pending requests can be approved/rejected
         if request.status != ApprovalRequestStatus::Pending {
-            return Err(IntentRebaseError::Internal(format!(
-                "approval request {} is not pending (current status: {:?})",
-                id, request.status
-            )));
+            return Err(IntentRebaseError::ApprovalRequestNotPending(
+                id,
+                format!("{:?}", request.status),
+            ));
         }
 
         let now = Utc::now();
@@ -364,7 +365,60 @@ mod tests {
     #[tokio::test]
     async fn test_get_not_found() {
         let repo = Arc::new(InMemoryApprovalRequestRepository::new());
-        let result = repo.get_approval_request(Uuid::new_v4()).await;
+        let id = Uuid::new_v4();
+        let result = repo.get_approval_request(id).await;
         assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotFound(found_id) if found_id == id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_status_not_pending_approved() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        // First approve it
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Approved, "test", None)
+            .await
+            .unwrap();
+
+        // Now try to approve again - should fail with 409
+        let result = repo
+            .update_approval_request_status(id, ApprovalRequestStatus::Approved, "test", None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(found_id, status) if found_id == id && status == "Approved"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_status_not_pending_rejected() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        // First reject it
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Rejected, "test", None)
+            .await
+            .unwrap();
+
+        // Now try to approve - should fail with 409
+        let result = repo
+            .update_approval_request_status(id, ApprovalRequestStatus::Approved, "test", None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(found_id, status) if found_id == id && status == "Rejected"
+        ));
     }
 }
