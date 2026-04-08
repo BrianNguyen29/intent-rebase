@@ -17,7 +17,7 @@ use intent_rebase_types::{
     GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
     ListVersionsResponse, NodeType, ValidateIntentResponse,
 };
-use intent_service::IntentService;
+use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use rebase_engine::{DecisionClass, DiffRiskAnalysis, IntentVersionDiff, SectionDecision};
 use rebase_orchestrator::{
@@ -25,6 +25,7 @@ use rebase_orchestrator::{
     RebaseOrchestrator, RuntimeExecutionStatus,
 };
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
@@ -953,6 +954,236 @@ fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static s
     }
 }
 
+// ============================================================================
+// Approval Request Handlers (Phase 2b bounded slice)
+// ============================================================================
+
+/// Response for listing pending approval requests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPendingApprovalRequestsResponse {
+    pub approval_requests: Vec<ApprovalRequestSummary>,
+    pub total: usize,
+}
+
+/// Summary of an approval request for list responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestSummary {
+    pub id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub reason: String,
+    pub requestor_id: String,
+    pub requestor_type: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl From<ApprovalRequest> for ApprovalRequestSummary {
+    fn from(req: ApprovalRequest) -> Self {
+        Self {
+            id: req.id,
+            intent_id: req.intent_id,
+            intent_version_from: req.intent_version_from,
+            intent_version_to: req.intent_version_to,
+            decision_class: req.decision_class,
+            reason: req.reason,
+            requestor_id: req.requestor_id,
+            requestor_type: req.requestor_type,
+            status: format!("{:?}", req.status),
+            created_at: req.created_at,
+            expires_at: req.expires_at,
+        }
+    }
+}
+
+/// Request body for approving an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveApprovalRequestBody {
+    #[serde(default)]
+    pub resolution_notes: Option<String>,
+}
+
+/// Request body for rejecting an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectApprovalRequestBody {
+    #[serde(default)]
+    pub resolution_notes: Option<String>,
+}
+
+/// Response for approve/reject approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestResponse {
+    pub id: Uuid,
+    pub intent_id: Uuid,
+    pub status: String,
+    pub resolved_by: String,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolution_notes: Option<String>,
+}
+
+/// Query parameters for listing pending approval requests
+#[derive(Debug, Deserialize)]
+pub struct ListPendingApprovalRequestsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// GET /approval-requests/pending - List pending approval requests for a tenant
+async fn list_pending_approval_requests(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListPendingApprovalRequestsQuery>,
+) -> Result<Json<ListPendingApprovalRequestsResponse>, ApiErrorResponse> {
+    let pending = state
+        .approval_request_repo
+        .list_pending_by_tenant(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let summaries: Vec<ApprovalRequestSummary> = pending
+        .into_iter()
+        .map(ApprovalRequestSummary::from)
+        .collect();
+
+    let total = summaries.len();
+
+    Ok(Json(ListPendingApprovalRequestsResponse {
+        approval_requests: summaries,
+        total,
+    }))
+}
+
+/// POST /approval-requests/{id}/approve - Approve a pending approval request
+///
+/// Phase 2b bounded slice: Only updates status to approved and emits audit event.
+/// Does NOT resume or re-trigger apply.
+async fn approve_approval_request(
+    State(state): State<AppState>,
+    Path(approval_request_id): Path<Uuid>,
+    Json(body): Json<ApproveApprovalRequestBody>,
+) -> Result<Json<ApprovalRequestResponse>, ApiErrorResponse> {
+    // Get the approval request first to access its metadata
+    let approval_request = state
+        .approval_request_repo
+        .get_approval_request(approval_request_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Best-effort actor attribution (fallback to external-api/approver)
+    let actor_id = "external-api/approver";
+
+    // Update status to Approved
+    let updated = state
+        .approval_request_repo
+        .update_approval_request_status(
+            approval_request_id,
+            ApprovalRequestStatus::Approved,
+            actor_id,
+            body.resolution_notes.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Emit ApprovalGranted audit event (best-effort)
+    let audit_payload = intent_rebase_types::ApprovalGrantedAuditPayload {
+        approval_request_id,
+        intent_id: approval_request.intent_id,
+        intent_version_from: approval_request.intent_version_from,
+        intent_version_to: approval_request.intent_version_to,
+        decision_class: approval_request.decision_class.clone(),
+        resolved_by: actor_id.to_string(),
+        resolution_notes: body.resolution_notes.clone(),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_approval_granted(
+            approval_request.tenant_id,
+            actor_id,
+            approval_request.intent_id,
+            audit_payload,
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ApprovalGranted audit event: {:?}", e);
+    }
+
+    Ok(Json(ApprovalRequestResponse {
+        id: updated.id,
+        intent_id: updated.intent_id,
+        status: format!("{:?}", updated.status),
+        resolved_by: updated.resolved_by.unwrap_or_default(),
+        resolved_at: updated.resolved_at,
+        resolution_notes: updated.resolution_notes,
+    }))
+}
+
+/// POST /approval-requests/{id}/reject - Reject a pending approval request
+///
+/// Phase 2b bounded slice: Only updates status to rejected and emits audit event.
+/// Does NOT resume or re-trigger apply.
+async fn reject_approval_request(
+    State(state): State<AppState>,
+    Path(approval_request_id): Path<Uuid>,
+    Json(body): Json<RejectApprovalRequestBody>,
+) -> Result<Json<ApprovalRequestResponse>, ApiErrorResponse> {
+    // Get the approval request first to access its metadata
+    let approval_request = state
+        .approval_request_repo
+        .get_approval_request(approval_request_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Best-effort actor attribution (fallback to external-api/rejector)
+    let actor_id = "external-api/rejector";
+
+    // Update status to Rejected
+    let updated = state
+        .approval_request_repo
+        .update_approval_request_status(
+            approval_request_id,
+            ApprovalRequestStatus::Rejected,
+            actor_id,
+            body.resolution_notes.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Emit ApprovalRevoked audit event (best-effort)
+    let audit_payload = intent_rebase_types::ApprovalRevokedAuditPayload {
+        approval_request_id,
+        intent_id: approval_request.intent_id,
+        intent_version_from: approval_request.intent_version_from,
+        intent_version_to: approval_request.intent_version_to,
+        decision_class: approval_request.decision_class.clone(),
+        resolved_by: actor_id.to_string(),
+        resolution_notes: body.resolution_notes.clone(),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_approval_revoked(
+            approval_request.tenant_id,
+            actor_id,
+            approval_request.intent_id,
+            audit_payload,
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ApprovalRevoked audit event: {:?}", e);
+    }
+
+    Ok(Json(ApprovalRequestResponse {
+        id: updated.id,
+        intent_id: updated.intent_id,
+        status: format!("{:?}", updated.status),
+        resolved_by: updated.resolved_by.unwrap_or_default(),
+        resolved_at: updated.resolved_at,
+        resolution_notes: updated.resolution_notes,
+    }))
+}
+
 /// Initialize tracing with JSON formatting using RUST_LOG env var
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -1046,6 +1277,19 @@ pub fn build_router(
         .route("/v1/graph/edges", post(create_graph_edge))
         .route("/v1/graph/edges", get(list_graph_edges))
         .route("/v1/graph/nodes/{node_id}/edges", get(list_edges_from_node))
+        // Approval request endpoints (Phase 2b bounded slice)
+        .route(
+            "/approval-requests/pending",
+            get(list_pending_approval_requests),
+        )
+        .route(
+            "/approval-requests/{approval_request_id}/approve",
+            post(approve_approval_request),
+        )
+        .route(
+            "/approval-requests/{approval_request_id}/reject",
+            post(reject_approval_request),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

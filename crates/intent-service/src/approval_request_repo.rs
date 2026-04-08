@@ -108,6 +108,16 @@ pub trait ApprovalRequestRepository: Send + Sync {
         &self,
         tenant_id: Uuid,
     ) -> Result<Vec<ApprovalRequest>, IntentRebaseError>;
+
+    /// Update the status of an approval request (Phase 2b: approve/reject)
+    /// Returns the updated approval request.
+    async fn update_approval_request_status(
+        &self,
+        id: Uuid,
+        status: ApprovalRequestStatus,
+        resolved_by: &str,
+        resolution_notes: Option<&str>,
+    ) -> Result<ApprovalRequest, IntentRebaseError>;
 }
 
 /// In-memory approval request repository for Phase 2b bounded slice testing
@@ -209,6 +219,37 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
         result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         Ok(result)
+    }
+
+    async fn update_approval_request_status(
+        &self,
+        id: Uuid,
+        status: ApprovalRequestStatus,
+        resolved_by: &str,
+        resolution_notes: Option<&str>,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let mut requests = self.requests.write().await;
+
+        let request = requests.get_mut(&id).ok_or_else(|| {
+            IntentRebaseError::Internal(format!("approval request not found: {}", id))
+        })?;
+
+        // Only pending requests can be approved/rejected
+        if request.status != ApprovalRequestStatus::Pending {
+            return Err(IntentRebaseError::Internal(format!(
+                "approval request {} is not pending (current status: {:?})",
+                id, request.status
+            )));
+        }
+
+        let now = Utc::now();
+        request.status = status;
+        request.updated_at = now;
+        request.resolved_at = Some(now);
+        request.resolved_by = Some(resolved_by.to_string());
+        request.resolution_notes = resolution_notes.map(|s| s.to_string());
+
+        Ok(request.clone())
     }
 }
 

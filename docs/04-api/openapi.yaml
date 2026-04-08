@@ -458,6 +458,141 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /approval-requests/pending:
+    get:
+      tags:
+        - approvals
+      summary: List pending approval requests
+      description: |
+        Returns all pending approval requests for a given tenant.
+
+        **Phase 2b bounded slice:** This endpoint only lists pending approval requests.
+        Approval requests are created when external rebase-apply hits blocked D/E path.
+      operationId: listPendingApprovalRequests
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to filter pending approval requests
+      responses:
+        '200':
+          description: Pending approval requests retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPendingApprovalRequestsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/{approval_request_id}/approve:
+    post:
+      tags:
+        - approvals
+      summary: Approve an approval request
+      description: |
+        Approves a pending approval request.
+
+        **Phase 2b bounded slice:** Only updates status to approved and emits ApprovalGranted audit event.
+        Does NOT resume or re-trigger apply.
+      operationId: approveApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveApprovalRequestBody'
+      responses:
+        '200':
+          description: Approval request approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestResponse'
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Approval request is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/{approval_request_id}/reject:
+    post:
+      tags:
+        - approvals
+      summary: Reject an approval request
+      description: |
+        Rejects a pending approval request.
+
+        **Phase 2b bounded slice:** Only updates status to rejected and emits ApprovalRevoked audit event.
+        Does NOT resume or re-trigger apply.
+      operationId: rejectApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectApprovalRequestBody'
+      responses:
+        '200':
+          description: Approval request rejected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestResponse'
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Approval request is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /health:
     get:
       tags:
@@ -1896,6 +2031,87 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GraphEdge'
+
+    ListPendingApprovalRequestsResponse:
+      type: object
+      required: [approval_requests, total]
+      properties:
+        approval_requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRequestSummary'
+        total:
+          type: integer
+
+    ApprovalRequestSummary:
+      type: object
+      required: [id, intent_id, intent_version_from, intent_version_to, decision_class, reason, requestor_id, requestor_type, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        intent_version_from:
+          type: integer
+        intent_version_to:
+          type: integer
+        decision_class:
+          type: string
+        reason:
+          type: string
+        requestor_id:
+          type: string
+        requestor_type:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApproveApprovalRequestBody:
+      type: object
+      properties:
+        resolution_notes:
+          type: string
+          nullable: true
+          description: Optional notes from the approver
+
+    RejectApprovalRequestBody:
+      type: object
+      properties:
+        resolution_notes:
+          type: string
+          nullable: true
+          description: Optional notes from the rejector
+
+    ApprovalRequestResponse:
+      type: object
+      required: [id, intent_id, status, resolved_by]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        resolved_by:
+          type: string
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        resolution_notes:
+          type: string
+          nullable: true
 
     Error:
       type: object

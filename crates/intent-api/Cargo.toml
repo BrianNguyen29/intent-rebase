@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 validator = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 runtime-adapter = { path = "../runtime-adapter" }

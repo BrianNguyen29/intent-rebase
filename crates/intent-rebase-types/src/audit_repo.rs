@@ -5,8 +5,8 @@
 //! In-memory implementation for tests, SQL-backed for production.
 
 use super::{
-    AuditEvent, AuditEventType, IntentRebaseError, RebaseApplyAuditPayload,
-    RebaseApplyBlockedAuditPayload,
+    ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload, AuditEvent, AuditEventType,
+    IntentRebaseError, RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -71,6 +71,56 @@ pub trait AuditRepository: Send + Sync {
             id: Uuid::new_v4(),
             tenant_id,
             event_type: AuditEventType::RebaseApplyBlocked,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record an ApprovalGranted audit event (Phase 2b bounded slice)
+    async fn record_approval_granted(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalGrantedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ApprovalGranted,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record an ApprovalRevoked audit event (Phase 2b bounded slice)
+    async fn record_approval_revoked(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalRevokedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ApprovalRevoked,
             actor_id: actor_id.to_string(),
             intent_id: Some(intent_id),
             artifact_id: None,

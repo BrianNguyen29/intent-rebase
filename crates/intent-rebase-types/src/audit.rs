@@ -68,3 +68,29 @@ pub struct RebaseApplyBlockedAuditPayload {
     pub requestor_id: String,
     pub requestor_type: String,
 }
+
+/// Payload for ApprovalGranted audit events (Phase 2b bounded slice)
+/// This is emitted when an approval request is approved
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalGrantedAuditPayload {
+    pub approval_request_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub resolved_by: String,
+    pub resolution_notes: Option<String>,
+}
+
+/// Payload for ApprovalRevoked audit events (Phase 2b bounded slice)
+/// This is emitted when an approval request is rejected
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRevokedAuditPayload {
+    pub approval_request_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub resolved_by: String,
+    pub resolution_notes: Option<String>,
+}

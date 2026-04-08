@@ -203,6 +203,17 @@
     - Only pending status in scope for Phase 2b bounded slice
     - Tests: 4 approval_request_repo tests pass
 
+[x] Approval queue read/query API + status-only approve/reject with audit events - PHASE 2b BATCH 2 DELIVERED
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (list_pending_approval_requests, approve_approval_request, reject_approval_request handlers)
+    - Code: crates/intent-service/src/approval_request_repo.rs (update_approval_request_status method added)
+    - Code: crates/intent-rebase-types/src/audit.rs (ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_approval_granted, record_approval_revoked helper methods)
+    - OpenAPI: docs/04-api/openapi.yaml (GET /approval-requests/pending, POST /approval-requests/{id}/approve, POST /approval-requests/{id}/reject)
+    - Status-only approve/reject: only updates status and emits audit event; does NOT resume or re-trigger apply
+    - Best-effort actor attribution: fallback external-api/approver or external-api/rejector
+    - Tests: approval_request_repo update tests pass
+
 [ ] Risk classification: low/medium/high/critical
     Evidence:
     - PR merged: <link>
