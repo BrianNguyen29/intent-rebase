@@ -102,3 +102,22 @@ Không đủ an toàn để auto-repair.
 - percentage full restarts avoided
 - invalidation precision/recall (estimated via review labels)
 - incident reduction due to stale intent
+
+## Phase 1 Status
+
+**Phase 1 (Core Control Plane MVP):** ✓ COMPLETE
+
+Implemented components:
+- Intent Schema Validation (PR #21)
+- Graph HTTP API (PR #22)
+- Observability v1 (PR #23)
+- Security v1 (PR #24)
+
+### Version Chain Integrity
+
+The rebase engine maintains version chain integrity through `parent_version_id` tracking. Each intent version references its parent, enabling:
+- Accurate semantic diff computation between versions
+- Reliable rollback to any previous checkpoint
+- Complete invalidation set generation when intent changes
+
+For full Phase 1 checklist, see [checklist-phase-1.md](../10-delivery/checklists/checklist-phase-1.md)

@@ -1,0 +1,1771 @@
+# Intent Rebase Engine - OpenAPI Specification
+# Phase 1 - Core Control Plane
+#
+# Note: OpenAPI spec is maintained alongside code as endpoints are implemented.
+# HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
+
+openapi: 3.1.0
+info:
+  title: Intent Rebase Engine API
+  description: |
+    Phase 1 - Core Control Plane API
+    
+    Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
+    
+    ## Implemented (Phase 1)
+    
+    ### Health & Observability
+    - GET /health — Service health check
+    - GET /ready — Service readiness check
+    - GET /metrics — Prometheus metrics endpoint
+    
+    ### Intent Lifecycle
+    - POST /intents — Create intent with initial version
+    - GET /intents/{intent_id} — Get intent head (current version)
+    - POST /intents/{intent_id}/versions — Create new version
+    - GET /intents/{intent_id}/versions — List all versions (descending order)
+    - GET /intents/{intent_id}/versions/{version_number} — Get specific version
+    
+    ### Intent Analysis
+    - POST /v1/intents/validate — Validate intent payload structure
+    - POST /intents/{intent_id}/diff — Compute diff between two versions
+    - POST /intents/{intent_id}/rebase-preview — Generate rebase preview plan
+    
+    ### Dependency Graph (Phase 1 - CRUD only)
+    - POST /v1/graph/nodes — Create graph node
+    - GET /v1/graph/nodes — List graph nodes (with optional filters)
+    - GET /v1/graph/nodes/{node_id} — Get specific graph node
+    - POST /v1/graph/edges — Create graph edge
+    - GET /v1/graph/edges — List graph edges (with optional filters)
+    - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
+    
+    ## Not Yet Implemented (Phase 2+)
+    - Rebase apply endpoint
+    - Checkpoint selection heuristics
+    - Approval revalidation hooks
+    - Runtime adapter integration
+    - Full authentication/authorization
+  version: 0.1.0
+  contact:
+    name: Intent Rebase Engine Team
+    url: https://github.com/BrianNguyen29/intent-rebase
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: /v1
+    description: Version 1 API
+
+tags:
+  - name: intents
+    description: Intent lifecycle operations
+  - name: versions
+    description: Intent version management
+  - name: health
+    description: Health and observability endpoints
+  - name: graph
+    description: Dependency graph CRUD operations
+
+paths:
+  /intents:
+    post:
+      tags:
+        - intents
+      summary: Create a new intent
+      description: Creates a new intent with initial version (v1)
+      operationId: createIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntentRequest'
+      responses:
+        '201':
+          description: Intent created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateIntentResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}:
+    get:
+      tags:
+        - intents
+      summary: Get intent head (current version)
+      description: Returns the intent document with its current (head) version
+      operationId: getIntentHead
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      responses:
+        '200':
+          description: Intent found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentHeadResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/versions:
+    post:
+      tags:
+        - versions
+      summary: Create a new version
+      description: |
+        Creates a new version of an existing intent.
+
+        **Optimistic Concurrency Control (OCC):**
+        - `X-Expected-Version` (optional): The version number the client believes is current.
+          If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
+        - `X-Expected-Row-Version` (optional): The row_version the client last observed.
+          If provided and doesn't match, returns 409 Conflict.
+          If header is present but not a valid integer, returns 400 Bad Request.
+
+        If headers are omitted, the service uses the current server state (current_version and
+        row_version) as the expected values. This means the OCC check still occurs, but against
+        whatever is currently stored — allowing concurrent overwrites if multiple clients omit headers.
+        Clients that need deterministic OCC protection should provide both headers.
+      operationId: createVersion
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: X-Expected-Version
+          in: header
+          required: false
+          schema:
+            type: integer
+          description: Expected current version for OCC check
+        - name: X-Expected-Row-Version
+          in: header
+          required: false
+          schema:
+            type: integer
+          description: Expected row_version for OCC check
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVersionRequest'
+      responses:
+        '201':
+          description: Version created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateVersionResponse'
+        '400':
+          description: Invalid request - malformed header or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Concurrency conflict - intent has been modified since last read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - versions
+      summary: List all versions
+      description: Returns all versions of an intent in descending version order
+      operationId: listVersions
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      responses:
+        '200':
+          description: Versions found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListVersionsResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/versions/{version_number}:
+    get:
+      tags:
+        - versions
+      summary: Get specific version
+      description: Returns a specific version of an intent by version number
+      operationId: getVersion
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: version_number
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Version number
+      responses:
+        '200':
+          description: Version found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentVersion'
+        '404':
+          description: Version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/diff:
+    post:
+      tags:
+        - diff
+      summary: Compute diff between two versions
+      description: |
+        Computes a semantic diff between two versions of an intent.
+
+        The diff covers scope, constraints, acceptance_criteria, and authority sections.
+        Returns structured diff output plus risk analysis (severity, confidence, manual-review).
+
+        **Version ordering:**
+        - `from_version` must be less than `to_version`
+        - Both versions must belong to the same intent
+        - Both versions must exist
+      operationId: computeDiff
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Diff computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/rebase-preview:
+    post:
+      tags:
+        - rebase
+      summary: Generate rebase preview plan
+      description: |
+        Generates a preview rebase plan between two versions of an intent.
+
+        The preview uses diff+risk analysis to produce a decision class (A-E),
+        rationale, and section-level decisions.
+
+        **Phase 1 PR #16: Graph-integrated affected items:**
+        When graph service is available and the IntentVersion node exists in the graph,
+        the response includes classified affected items (artifacts, approvals, side effects).
+        The `affected_items.status` field indicates whether classification succeeded:
+        - `available`: Graph data found and items classified
+        - `unavailable`: Graph node not found or service unavailable
+        
+        **Phase 1 PR #17: Apply/checkpoint groundwork (internal typed contracts, not executed):**
+        Rebase engine internals now use typed readiness contracts for checkpoint selection,
+        approval revalidation, and compensation planning, but those deferred fields are
+        not exposed in the Phase 1 preview response yet.
+        
+        **Apply endpoint NOT implemented in Phase 1** — POST /intents/{id}/rebase-apply deferred to Phase 2.
+
+        **Reliability:** The endpoint remains functional even when graph coverage is incomplete.
+        A `status: unavailable` does NOT cause a 500 error.
+
+        **Version ordering:**
+        - `from_version` must be less than `to_version`
+        - Both versions must belong to the same intent
+        - Both versions must exist
+      operationId: computeRebasePreview
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Rebase preview computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebasePreviewResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      description: Returns service health status
+      operationId: health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags:
+        - health
+      summary: Readiness check
+      description: Returns service readiness status
+      operationId: ready
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+
+  /metrics:
+    get:
+      tags:
+        - health
+      summary: Prometheus metrics
+      description: Returns Prometheus-compatible metrics
+      operationId: metrics
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/intents/validate:
+    post:
+      tags:
+        - intents
+      summary: Validate intent payload
+      description: Validates the structure of an intent payload without creating an intent
+      operationId: validateIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateIntentRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateIntentResponse'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/nodes:
+    post:
+      tags:
+        - graph
+      summary: Create graph node
+      description: Creates a new node in the dependency graph
+      operationId: createGraphNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphNodeRequest'
+      responses:
+        '201':
+          description: Node created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph nodes
+      description: Returns graph nodes with optional filtering
+      operationId: listGraphNodes
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: node_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeType'
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeState'
+      responses:
+        '200':
+          description: Nodes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphNodesResponse'
+
+  /v1/graph/nodes/{node_id}:
+    get:
+      tags:
+        - graph
+      summary: Get graph node
+      description: Returns a specific graph node by ID
+      operationId: getGraphNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Node found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/edges:
+    post:
+      tags:
+        - graph
+      summary: Create graph edge
+      description: Creates a new edge in the dependency graph
+      operationId: createGraphEdge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphEdgeRequest'
+      responses:
+        '201':
+          description: Edge created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphEdge'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Source or target node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph edges
+      description: Returns graph edges with optional filtering
+      operationId: listGraphEdges
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: from_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: to_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: edge_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EdgeType'
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphEdgesResponse'
+
+  /v1/graph/nodes/{node_id}/edges:
+    get:
+      tags:
+        - graph
+      summary: List edges from node
+      description: Returns all edges originating from a specific node
+      operationId: listEdgesFromNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListEdgesFromNodeResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    # ----- Core Types -----
+    ActorRef:
+      type: object
+      required: [actor_type, actor_id]
+      properties:
+        actor_type:
+          type: string
+          description: Type of actor (e.g., "user", "service", "system")
+        actor_id:
+          type: string
+          description: Identifier of the actor
+
+    SourceRef:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          description: Type of source (e.g., "spec", "ticket", "doc")
+        id:
+          type: string
+          description: Source identifier
+
+    ExternalRef:
+      type: object
+      required: [ref_type, ref_id]
+      properties:
+        ref_type:
+          $ref: '#/components/schemas/ExternalRefType'
+        ref_id:
+          type: string
+          format: uuid
+          description: UUID of the referenced entity
+
+    ChangeChannel:
+      type: string
+      enum: [user_edit, webhook, policy_update, system_normalization]
+      description: How the version was created
+
+    IntentStatus:
+      type: string
+      enum: [active, archived, superseded]
+      description: Status of the intent document
+
+    VersionStatus:
+      type: string
+      enum: [draft, active, rejected, superseded]
+      description: Status of an intent version
+
+    ClauseType:
+      type: string
+      enum: [functional, non_functional, policy, budget, time]
+
+    ConstraintOperator:
+      type: string
+      enum: [eq, neq, lt, lte, gt, gte, contains, not_contains, regex, custom]
+
+    ClausePriority:
+      type: string
+      enum: [must, should, could]
+
+    RiskTier:
+      type: string
+      enum: [low, medium, high, critical]
+
+    Urgency:
+      type: string
+      enum: [low, medium, high, critical]
+
+    TradeoffDimension:
+      type: string
+      enum: [speed, cost, quality, risk, compatibility, latency]
+
+    TradeoffPreference:
+      type: string
+      enum: [prioritize, balance, minimize, maximize]
+
+    # ----- Payload Structure -----
+    IntentObjective:
+      type: object
+      required: [summary, success_statement, domain]
+      properties:
+        summary:
+          type: string
+        success_statement:
+          type: string
+        domain:
+          type: string
+
+    IntentScope:
+      type: object
+      required: [in_scope, out_of_scope]
+      properties:
+        in_scope:
+          type: array
+          items:
+            type: string
+        out_of_scope:
+          type: array
+          items:
+            type: string
+
+    Constraint:
+      type: object
+      required: [type, key, operator, value, priority]
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/ClauseType'
+        key:
+          type: string
+        operator:
+          $ref: '#/components/schemas/ConstraintOperator'
+        value: {}
+        rationale:
+          type: string
+        priority:
+          $ref: '#/components/schemas/ClausePriority'
+
+    IntentConstraints:
+      type: object
+      required: [functional, non_functional, policy, budget, time]
+      properties:
+        functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        non_functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        policy:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        budget:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        time:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+
+    AcceptanceCriterion:
+      type: object
+      required: [description, priority]
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+        description:
+          type: string
+        priority:
+          $ref: '#/components/schemas/ClausePriority'
+
+    AcceptanceCriteria:
+      type: object
+      required: [required, optional]
+      properties:
+        required:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterion'
+        optional:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterion'
+
+    ActionRef:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+        target:
+          type: string
+
+    ApprovalRuleRef:
+      type: object
+      required: [rule_id, description]
+      properties:
+        rule_id:
+          type: string
+        description:
+          type: string
+
+    IntentAuthority:
+      type: object
+      required: [allowed_actions, forbidden_actions, approval_requirements]
+      properties:
+        allowed_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRef'
+        forbidden_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRef'
+        approval_requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRuleRef'
+
+    Tradeoff:
+      type: object
+      required: [dimension, preference]
+      properties:
+        dimension:
+          $ref: '#/components/schemas/TradeoffDimension'
+        preference:
+          $ref: '#/components/schemas/TradeoffPreference'
+
+    IntentPreferences:
+      type: object
+      required: [tradeoffs]
+      properties:
+        tradeoffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tradeoff'
+
+    DocRef:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        uri:
+          type: string
+
+    IntentReferences:
+      type: object
+      required: [specs, tickets, repos, policies]
+      properties:
+        specs:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        tickets:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        repos:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocRef'
+
+    IntentAssumptions:
+      type: object
+      required: [explicit]
+      properties:
+        explicit:
+          type: array
+          items:
+            type: string
+
+    IntentMetadataV1:
+      type: object
+      required: [risk_tier, urgency, confidence]
+      properties:
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+        urgency:
+          $ref: '#/components/schemas/Urgency'
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    IntentPayload:
+      type: object
+      required: [objective, scope, constraints, acceptance_criteria, authority, preferences, references, assumptions, metadata]
+      properties:
+        objective:
+          $ref: '#/components/schemas/IntentObjective'
+        scope:
+          $ref: '#/components/schemas/IntentScope'
+        constraints:
+          $ref: '#/components/schemas/IntentConstraints'
+        acceptance_criteria:
+          $ref: '#/components/schemas/AcceptanceCriteria'
+        authority:
+          $ref: '#/components/schemas/IntentAuthority'
+        preferences:
+          $ref: '#/components/schemas/IntentPreferences'
+        references:
+          $ref: '#/components/schemas/IntentReferences'
+        assumptions:
+          $ref: '#/components/schemas/IntentAssumptions'
+        metadata:
+          $ref: '#/components/schemas/IntentMetadataV1'
+
+    # ----- Document Types -----
+    Intent:
+      type: object
+      required: [id, tenant_id, workflow_id, current_version, status, created_at, created_by, source_refs, tags]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        current_version:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IntentStatus'
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        source_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRef'
+        tags:
+          type: array
+          items:
+            type: string
+
+    IntentVersion:
+      type: object
+      required: [id, intent_id, version_number, parent_version_id, created_at, created_by, change_reason, change_channel, status, hash, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        parent_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        change_reason:
+          type: string
+        change_channel:
+          $ref: '#/components/schemas/ChangeChannel'
+        status:
+          $ref: '#/components/schemas/VersionStatus'
+        hash:
+          type: string
+          description: SHA-256 hash of payload for integrity verification
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+
+    # ----- Request/Response Types -----
+    CreateIntentRequest:
+      type: object
+      required: [workflow_id, source_refs, payload, created_by, tags]
+      properties:
+        workflow_id:
+          type: string
+          format: uuid
+        source_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRef'
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+        tags:
+          type: array
+          items:
+            type: string
+
+    CreateIntentResponse:
+      type: object
+      required: [intent_id, current_version, status]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        current_version:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IntentStatus'
+
+    CreateVersionRequest:
+      type: object
+      required: [payload, change_reason, change_channel, created_by]
+      properties:
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+        change_reason:
+          type: string
+        change_channel:
+          $ref: '#/components/schemas/ChangeChannel'
+        created_by:
+          $ref: '#/components/schemas/ActorRef'
+
+    CreateVersionResponse:
+      type: object
+      required: [intent_version_id, intent_id, version_number, status]
+      properties:
+        intent_version_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        status:
+          $ref: '#/components/schemas/VersionStatus'
+
+    IntentHeadResponse:
+      type: object
+      required: [intent, version, row_version]
+      properties:
+        intent:
+          $ref: '#/components/schemas/Intent'
+        version:
+          $ref: '#/components/schemas/IntentVersion'
+        row_version:
+          type: integer
+          description: |
+            Row version for optimistic concurrency control (OCC).
+            Clients should store this value and send back via X-Expected-Row-Version header
+            when creating new versions to enable OCC detection.
+            The row_version increments each time the intent is modified.
+
+    ListVersionsResponse:
+      type: object
+      required: [intent_id, versions, total]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntentVersion'
+        total:
+          type: integer
+
+    DiffRequest:
+      type: object
+      required: [from_version, to_version]
+      properties:
+        from_version:
+          type: integer
+          description: Source version number (must be less than to_version)
+        to_version:
+          type: integer
+          description: Target version number (must be greater than from_version)
+
+    DiffResponse:
+      type: object
+      required: [intent_id, from_version, to_version, diff, risk]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        diff:
+          $ref: '#/components/schemas/IntentVersionDiff'
+        risk:
+          $ref: '#/components/schemas/DiffRiskAnalysis'
+
+    RebasePreviewResponse:
+      type: object
+      description: |
+        Phase 1 PR #16: Graph-integrated rebase plan response.
+        
+        Exposes planner summary fields plus graph-integrated affected items when available.
+        The `affected_items.status` field indicates whether graph classification succeeded:
+        - `available`: Graph data was found and affected items were classified
+        - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
+        
+        Phase 1 PR #17 keeps apply/checkpoint typed contracts internal to the planner.
+        They are not exposed in this preview response yet.
+
+        When status is `unavailable`, the endpoint remains functional but the affected
+        items arrays should not be considered authoritative.
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_level]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        decision_class:
+          $ref: '#/components/schemas/DecisionClass'
+        rationale:
+          type: string
+          description: Human-readable decision rationale
+        section_decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SectionDecision'
+        affected_items:
+          $ref: '#/components/schemas/AffectedItemsPreview'
+        manual_review_recommended:
+          type: boolean
+        risk_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Risk level (1=lowest, 5=highest)
+
+    AffectedItemsPreview:
+      type: object
+      description: |
+        Graph-integrated affected items preview (Phase 1 PR #16).
+        
+        Contains classified affected items from the dependency graph when available.
+        The `status` field indicates data availability:
+        - `available`: Graph classification succeeded
+        - `unavailable`: Graph node not found or graph service unavailable
+        
+        Note: Compensation action generation is a Phase 2 feature (see `deferred.compensation`).
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/AffectedItemsStatus'
+        affected_artifacts:
+          type: array
+          description: Artifacts that depend on this IntentVersion
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+        affected_approvals:
+          type: array
+          description: Approvals associated with this IntentVersion
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+        side_effects:
+          type: array
+          description: Side effects downstream from this IntentVersion (may need compensation review)
+          items:
+            $ref: '#/components/schemas/AffectedItem'
+
+    AffectedItemsStatus:
+      type: string
+      enum: [available, unavailable]
+      description: |
+        Status of graph-integrated affected items classification:
+        - `available`: Graph data was found and classification succeeded
+        - `unavailable`: Graph node not found or graph service not available
+
+    AffectedItem:
+      type: object
+      description: A single affected item with classification details
+      required: [node_id, label, impact, reason]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+          description: The graph node ID of the affected item
+        label:
+          type: string
+          description: Human-readable label from the graph node
+        impact:
+          $ref: '#/components/schemas/ClassificationImpact'
+        reason:
+          type: string
+          description: Human-readable reason for the classification
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          description: External reference type if available
+
+    ClassificationImpact:
+      type: string
+      enum: [direct, transitive, unchanged]
+      description: |
+        Impact classification level:
+        - `direct`: Node is directly affected by the change (1 hop)
+        - `transitive`: Node is affected through a chain of dependencies (2+ hops)
+        - `unchanged`: Node exists in graph but is not affected
+
+    DecisionClass:
+      type: string
+      enum: [A, B, C, D, E]
+      description: |
+        Decision class for rebase planning:
+        - A: No-op / Metadata update — no execution semantics affected
+        - B: Soft review — no immediate invalidation but review recommended
+        - C: Partial repair — local invalidation, selective checkpoint resume
+        - D: Compensation + repair — side effects need mitigation
+        - E: Hard restart / manual handoff — auto-repair not safe
+
+    SectionDecision:
+      type: object
+      properties:
+        section:
+          type: string
+          description: Section name (scope, constraints, acceptance_criteria, authority)
+        change_summary:
+          type: string
+          description: Human-readable change summary for this section
+        recommended_action:
+          type: string
+          description: Recommended action for this section
+
+    IntentVersionDiff:
+      type: object
+      description: Structured diff for intent version changes
+      properties:
+        scope:
+          $ref: '#/components/schemas/ScopeDiff'
+        constraints:
+          $ref: '#/components/schemas/ConstraintsDiff'
+        acceptance_criteria:
+          $ref: '#/components/schemas/AcceptanceCriteriaDiff'
+        authority:
+          $ref: '#/components/schemas/AuthorityDiff'
+
+    ScopeDiff:
+      type: object
+      properties:
+        in_scope:
+          $ref: '#/components/schemas/ScopeItemsDiff'
+        out_of_scope:
+          $ref: '#/components/schemas/ScopeItemsDiff'
+
+    ScopeItemsDiff:
+      type: object
+      properties:
+        added:
+          type: array
+          items:
+            type: string
+        removed:
+          type: array
+          items:
+            type: string
+
+    ConstraintsDiff:
+      type: object
+      properties:
+        functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        non_functional:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        policy:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        budget:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+        time:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintDiff'
+
+    ConstraintDiff:
+      type: object
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+          nullable: true
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        constraint_type:
+          type: string
+          enum: [functional, non_functional, policy, budget, time]
+        key:
+          type: string
+        before:
+          $ref: '#/components/schemas/Constraint'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/Constraint'
+          nullable: true
+
+    AcceptanceCriteriaDiff:
+      type: object
+      properties:
+        required:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterionDiff'
+        optional:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCriterionDiff'
+
+    AcceptanceCriterionDiff:
+      type: object
+      properties:
+        clause_id:
+          type: string
+          format: uuid
+          nullable: true
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        priority:
+          type: string
+        before:
+          $ref: '#/components/schemas/AcceptanceCriterion'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/AcceptanceCriterion'
+          nullable: true
+
+    AuthorityDiff:
+      type: object
+      properties:
+        allowed_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRefDiff'
+        forbidden_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionRefDiff'
+        approval_requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRuleDiff'
+
+    ActionRefDiff:
+      type: object
+      properties:
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        action:
+          type: string
+        target:
+          type: string
+          nullable: true
+        before:
+          $ref: '#/components/schemas/ActionRef'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/ActionRef'
+          nullable: true
+
+    ApprovalRuleDiff:
+      type: object
+      properties:
+        change_type:
+          type: string
+          enum: [added, removed, modified]
+        rule_id:
+          type: string
+        description:
+          type: string
+        before:
+          $ref: '#/components/schemas/ApprovalRuleRef'
+          nullable: true
+        after:
+          $ref: '#/components/schemas/ApprovalRuleRef'
+          nullable: true
+
+    DiffRiskAnalysis:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        manual_review:
+          type: boolean
+        manual_review_reasons:
+          description: |
+            Reasons why manual review is recommended. Each reason is either a simple string
+            (for unit variants like "critical_severity") or a structured object for variants
+            with data (e.g., {"low_confidence": {"confidence": 0.5, "threshold": 0.7}}).
+          type: array
+          items:
+            oneOf:
+              - type: string
+                description: Unit variant reasons (e.g., "critical_severity", "high_severity_authority_change", "policy_constraint_changed", "approval_requirement_removed")
+              - type: object
+                description: Structured variant reasons
+                additionalProperties: true
+                example:
+                  low_confidence:
+                    confidence: 0.5
+                    threshold: 0.7
+        section_risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SectionRisk'
+        rationale:
+          type: string
+          nullable: true
+
+    SectionRisk:
+      type: object
+      properties:
+        section:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        change_count:
+          type: integer
+        high_priority_changes:
+          type: integer
+
+    # ----- Health & Observability -----
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+          description: Service version
+
+    ReadyResponse:
+      type: object
+      required: [status, ready]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        ready:
+          type: boolean
+        checks:
+          type: array
+          description: Individual readiness checks
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              ready:
+                type: boolean
+              error:
+                type: string
+                nullable: true
+
+    # ----- Intent Validation -----
+    ValidateIntentRequest:
+      type: object
+      required: [payload]
+      properties:
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+
+    ValidateIntentResponse:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationWarning'
+
+    ValidationError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the invalid field
+        message:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+
+    ValidationWarning:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the field with a warning
+        message:
+          type: string
+          description: Human-readable warning message
+        code:
+          type: string
+          description: Machine-readable warning code
+
+    # ----- Graph Types -----
+    NodeType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint, Workflow, Generic]
+      description: Type of a graph node
+
+    NodeState:
+      type: string
+      enum: [Active, Stale, Invalid, Archived]
+      description: State of a graph node
+
+    EdgeType:
+      type: string
+      enum: [DependsOn, Produces, Approves, Triggers, Defines, GeneratedFrom, ValidatedBy, GovernedBy, DerivedFrom, StoredIn, Supersedes, Blocks, Compensates]
+      description: Type label for a graph edge
+
+    ExternalRefType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint]
+      description: Type of external reference
+
+    GraphNode:
+      type: object
+      required: [id, tenant_id, workflow_id, node_type, label, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        state:
+          $ref: '#/components/schemas/NodeState'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    GraphEdge:
+      type: object
+      required: [id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateGraphNodeRequest:
+      type: object
+      required: [tenant_id, workflow_id, node_type, label]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    CreateGraphEdgeRequest:
+      type: object
+      required: [tenant_id, workflow_id, from_node_id, to_node_id, edge_type]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    ListGraphNodesResponse:
+      type: object
+      required: [nodes, total]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        total:
+          type: integer
+
+    ListGraphEdgesResponse:
+      type: object
+      required: [edges, total]
+      properties:
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+        total:
+          type: integer
+
+    ListEdgesFromNodeResponse:
+      type: object
+      required: [node_id, edges]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error message
+            retryable:
+              type: boolean
+              default: false
+            details:
+              type: object
+              additionalProperties: true

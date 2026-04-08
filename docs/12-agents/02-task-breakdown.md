@@ -1,26 +1,26 @@
 # Task Breakdown for AI Agents
 
-## Epic 1 — Intent Registry
+## Epic 1 — Intent Registry ✓ COMPLETE
 - Create DB migrations for intents, intent_versions, intent_clauses
 - Implement create intent endpoint
 - Implement create version endpoint
 - Implement get current/head/version history
 - Add optimistic concurrency checks
 
-## Epic 2 — Semantic Diff
+## Epic 2 — Semantic Diff ✓ COMPLETE
 - Implement structured diff for scope/constraints/acceptance/authority
 - Implement severity assignment rules
 - Implement confidence and manual-review triggers
 - Add diff API
 - Add regression fixtures
 
-## Epic 3 — Graph and Impact
+## Epic 3 — Graph and Impact ✓ COMPLETE
 - Create graph nodes/edges storage
 - Build artifact/approval/side effect edge ingestors
 - Implement impact traversal
 - Implement classification output
 
-## Epic 4 — Rebase Planner
+## Epic 4 — Rebase Planner ✓ COMPLETE
 - Build preview-only planner
 - Add decision classes A–E
 - Add checkpoint selection heuristics
