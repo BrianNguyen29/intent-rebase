@@ -10,6 +10,7 @@
 /// - C: Full revalidation of all affected approvals
 /// - D: Full revalidation + manual reviewer flag
 /// - E: Deferred (cannot auto-revalidate, needs human review)
+#[allow(unused_imports)]
 use crate::planner::{
     ApprovalNeedingRevalidation, DecisionClass, RebasePlan, RevalidationStrategy, RiskTier,
 };

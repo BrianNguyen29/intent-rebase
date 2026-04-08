@@ -1,35 +1,44 @@
-//! Apply pipeline — internal low/medium auto-apply with D/E blocking
+//! Apply pipeline — risk-tier-controlled auto-apply policy
 //!
-//! This module implements the internal apply pipeline for Phase 2:
-//! - Class A: No-op, return immediately
-//! - Class B/C: Auto-proceed with optional notification
-//! - Class D/E: Blocked, requires manual review
+//! Phase 2b: This module implements the internal apply pipeline with `risk_tier`
+//! as the controlling apply-policy contract:
+//! - LOW risk_tier: Automatic, no approval required
+//! - MEDIUM risk_tier: Automatic with notification
+//! - HIGH/CRITICAL risk_tier: Blocked, requires manual approval
 //!
 //! ## Design Principles
 //!
 //! - **No public endpoints**: Pure internal orchestration
-//! - **Class D/E blocked**: Manual review required, no auto-apply
-//! - **Risk-tier aware**: Low/Medium risk can auto-apply, High/Critical blocked
+//! - **Risk-tier controlled**: `risk_tier` is the primary policy contract (Phase 2b)
+//! - **Decision class secondary**: `decision_class` preserved for audit/display purposes
 //! - **Notification-ready**: Supports notification hooks (Phase 3 integration point)
 //!
 //! ## Guard Pattern
 //!
-//! The pipeline uses a guard pattern to enforce decision class policies:
-//! - `LowMediumGuard`: Allows Class A/B/C to proceed
-//! - `HighCriticalGuard`: Blocks Class D/E, returns manual review required
+//! The pipeline uses a guard pattern to enforce risk-tier policies:
+//! - `LowRiskTierGuard`: Allows LOW risk_tier to auto-apply (no notification)
+//! - `MediumRiskTierGuard`: Allows MEDIUM risk_tier to auto-apply (with notification)
+//! - `HighCriticalRiskTierGuard`: Blocks HIGH/CRITICAL risk_tier, returns manual review required
 
+use intent_rebase_types::RiskTier;
 use rebase_engine::DecisionClass;
 
 /// Outcome of an apply decision
+///
+/// Phase 2b: Outcomes are driven by risk_tier policy:
+/// - NoOp: No apply needed (no semantic changes or Class A)
+/// - AutoProceeded: Auto-proceeded without notification (LOW risk_tier)
+/// - AutoProceededWithNotification: Auto-proceeded with notification sent (MEDIUM risk_tier)
+/// - BlockedManualReview: Blocked, requires manual review (HIGH/CRITICAL risk_tier)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApplyOutcome {
-    /// No apply needed (Class A - no semantic changes)
+    /// No apply needed (no semantic changes or Class A)
     NoOp,
-    /// Auto-proceeded without notification (Class B/C with low risk)
+    /// Auto-proceeded without notification (LOW risk_tier)
     AutoProceeded,
-    /// Auto-proceeded with notification sent (Class B/C with medium risk)
+    /// Auto-proceeded with notification sent (MEDIUM risk_tier)
     AutoProceededWithNotification,
-    /// Blocked, requires manual review (Class D/E)
+    /// Blocked, requires manual review (HIGH/CRITICAL risk_tier)
     BlockedManualReview,
 }
 
@@ -52,40 +61,63 @@ pub enum ApplyDecision {
 
 /// Guard trait for apply decisions
 ///
-/// Guards evaluate the decision class and determine whether
-/// to allow auto-apply or block for manual review.
+/// Phase 2b: Guards evaluate the risk_tier as the controlling policy contract,
+/// with decision_class available for secondary context (e.g., no-op detection).
+/// Policy contract:
+/// - LOW risk_tier: auto-apply, no notification
+/// - MEDIUM risk_tier: auto-apply with notification
+/// - HIGH/CRITICAL risk_tier: blocked, manual review required
 pub trait ApplyGuard: Send + Sync {
-    /// Evaluate the decision class and return the apply decision
-    fn evaluate(&self, decision_class: DecisionClass) -> ApplyDecision;
+    /// Evaluate the apply decision based on risk_tier and decision_class.
+    ///
+    /// # Arguments
+    /// * `risk_tier` - The controlling policy contract (Phase 2b)
+    /// * `decision_class` - Secondary context for audit/display (Class A = no-op)
+    fn evaluate(&self, risk_tier: &RiskTier, decision_class: DecisionClass) -> ApplyDecision;
 }
 
-/// Guard that allows Class A/B/C (low/medium risk) auto-apply
+/// Guard that enforces risk-tier controlled policy (Phase 2b)
 ///
-/// Blocks Class D/E for manual review.
+/// Policy contract:
+/// - LOW risk_tier: auto-apply, no notification
+/// - MEDIUM risk_tier: auto-apply with notification
+/// - HIGH/CRITICAL risk_tier: blocked, manual review required
+///
+/// Class A is always NoOp regardless of risk_tier.
 #[derive(Default)]
-pub struct LowMediumGuard;
+pub struct RiskTierGuard;
 
-impl LowMediumGuard {
+impl RiskTierGuard {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl ApplyGuard for LowMediumGuard {
-    fn evaluate(&self, decision_class: DecisionClass) -> ApplyDecision {
-        match decision_class {
-            DecisionClass::A => ApplyDecision::NoOp,
-            DecisionClass::B | DecisionClass::C => {
-                // Low/Medium severity changes can auto-apply
-                // Class B typically no notification, Class C may need notification
-                let notification = decision_class == DecisionClass::C;
-                ApplyDecision::Proceed { notification }
+impl ApplyGuard for RiskTierGuard {
+    fn evaluate(&self, risk_tier: &RiskTier, decision_class: DecisionClass) -> ApplyDecision {
+        // Class A is always NoOp regardless of risk_tier
+        if decision_class == DecisionClass::A {
+            return ApplyDecision::NoOp;
+        }
+
+        // Phase 2b risk-tier policy contract
+        match risk_tier {
+            RiskTier::Low => {
+                // LOW risk_tier: automatic, no approval required, no notification
+                ApplyDecision::Proceed {
+                    notification: false,
+                }
             }
-            DecisionClass::D | DecisionClass::E => {
+            RiskTier::Medium => {
+                // MEDIUM risk_tier: automatic with notification
+                ApplyDecision::Proceed { notification: true }
+            }
+            RiskTier::High | RiskTier::Critical => {
+                // HIGH/CRITICAL risk_tier: blocked, requires manual approval
                 ApplyDecision::Blocked {
                     reason: format!(
-                        "Class {:?} requires manual review. High-severity or critical changes detected.",
-                        decision_class
+                        "{:?} risk_tier requires manual review. Auto-apply not permitted for high/critical risk changes.",
+                        risk_tier
                     ),
                 }
             }
@@ -95,8 +127,9 @@ impl ApplyGuard for LowMediumGuard {
 
 /// Guard that blocks all auto-apply (for high-security environments)
 ///
-/// This guard blocks ALL classes including A/B/C, requiring manual review for all.
-/// Useful for environments where human approval is required for all changes.
+/// Phase 2b: This guard blocks ALL risk tiers including LOW/MEDIUM,
+/// requiring manual review for all changes. Useful for environments
+/// where human approval is required for all changes.
 #[derive(Default)]
 pub struct HighCriticalGuard;
 
@@ -107,29 +140,30 @@ impl HighCriticalGuard {
 }
 
 impl ApplyGuard for HighCriticalGuard {
-    fn evaluate(&self, decision_class: DecisionClass) -> ApplyDecision {
-        match decision_class {
-            DecisionClass::A => ApplyDecision::Blocked {
+    fn evaluate(&self, risk_tier: &RiskTier, decision_class: DecisionClass) -> ApplyDecision {
+        // Even Class A is blocked in high-critical mode
+        if decision_class == DecisionClass::A {
+            return ApplyDecision::Blocked {
                 reason: "All changes require manual review (HighCriticalGuard mode)".to_string(),
-            },
-            DecisionClass::B | DecisionClass::C | DecisionClass::D | DecisionClass::E => {
-                ApplyDecision::Blocked {
-                    reason: format!(
-                        "Class {:?} requires manual review (HighCriticalGuard mode)",
-                        decision_class
-                    ),
-                }
-            }
+            };
+        }
+
+        ApplyDecision::Blocked {
+            reason: format!(
+                "{:?} risk_tier requires manual review (HighCriticalGuard mode)",
+                risk_tier
+            ),
         }
     }
 }
 
-/// Guard that blocks only Class D/E (standard mode)
+/// Guard that enforces standard Phase 2b risk-tier policy (default)
 ///
-/// This is the default guard for Phase 2:
-/// - Class A: No-op
-/// - Class B/C: Auto-proceed
-/// - Class D/E: Blocked for manual review
+/// This is the default guard for Phase 2b:
+/// - LOW risk_tier: Auto-proceed, no notification
+/// - MEDIUM risk_tier: Auto-proceed with notification
+/// - HIGH/CRITICAL risk_tier: Blocked for manual review
+/// - Class A: Always NoOp regardless of risk_tier
 #[derive(Default)]
 pub struct StandardGuard;
 
@@ -140,8 +174,8 @@ impl StandardGuard {
 }
 
 impl ApplyGuard for StandardGuard {
-    fn evaluate(&self, decision_class: DecisionClass) -> ApplyDecision {
-        LowMediumGuard::new().evaluate(decision_class)
+    fn evaluate(&self, risk_tier: &RiskTier, decision_class: DecisionClass) -> ApplyDecision {
+        RiskTierGuard::new().evaluate(risk_tier, decision_class)
     }
 }
 
@@ -175,9 +209,12 @@ impl ApplyPipeline {
         }
     }
 
-    /// Evaluate the decision class and return the apply decision
-    pub fn evaluate(&self, decision_class: DecisionClass) -> ApplyDecision {
-        self.guard.evaluate(decision_class)
+    /// Evaluate the apply decision based on risk_tier and decision_class.
+    ///
+    /// Phase 2b: risk_tier is the controlling policy contract.
+    /// decision_class is preserved for secondary context (e.g., Class A = NoOp).
+    pub fn evaluate(&self, risk_tier: &RiskTier, decision_class: DecisionClass) -> ApplyDecision {
+        self.guard.evaluate(risk_tier, decision_class)
     }
 
     /// Convert an ApplyDecision to an ApplyOutcome
@@ -206,9 +243,13 @@ impl Default for ApplyPipeline {
 }
 
 /// Request for apply operation
+///
+/// Phase 2b: risk_tier is the controlling policy contract.
 #[derive(Debug, Clone)]
 pub struct ApplyRequest {
-    /// The decision class from the rebase plan
+    /// The controlling risk tier (Phase 2b policy contract)
+    pub risk_tier: RiskTier,
+    /// The decision class from the rebase plan (secondary context)
     pub decision_class: DecisionClass,
     /// Whether to use strict mode (HighCriticalGuard)
     pub strict: bool,
@@ -217,9 +258,10 @@ pub struct ApplyRequest {
 }
 
 impl ApplyRequest {
-    /// Create a new ApplyRequest from a decision class
-    pub fn from_decision_class(decision_class: DecisionClass) -> Self {
+    /// Create a new ApplyRequest from risk_tier and decision_class
+    pub fn new(risk_tier: RiskTier, decision_class: DecisionClass) -> Self {
         Self {
+            risk_tier,
             decision_class,
             strict: false,
             blocked_reason: None,
@@ -227,8 +269,9 @@ impl ApplyRequest {
     }
 
     /// Create a strict mode request
-    pub fn strict(decision_class: DecisionClass) -> Self {
+    pub fn strict(risk_tier: RiskTier, decision_class: DecisionClass) -> Self {
         Self {
+            risk_tier,
             decision_class,
             strict: true,
             blocked_reason: None,
@@ -284,63 +327,140 @@ impl ApplyResult {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_low_medium_guard_class_a() {
-        let guard = LowMediumGuard::new();
-        let decision = guard.evaluate(DecisionClass::A);
+    // =========================================================================
+    // RiskTierGuard tests — Phase 2b risk-tier policy contract
+    // =========================================================================
 
-        assert!(matches!(decision, ApplyDecision::NoOp));
+    #[test]
+    fn test_risk_tier_guard_class_a_always_noop() {
+        let guard = RiskTierGuard::new();
+
+        // Class A is always NoOp regardless of risk_tier
+        assert!(matches!(
+            guard.evaluate(&RiskTier::Low, DecisionClass::A),
+            ApplyDecision::NoOp
+        ));
+        assert!(matches!(
+            guard.evaluate(&RiskTier::Medium, DecisionClass::A),
+            ApplyDecision::NoOp
+        ));
+        assert!(matches!(
+            guard.evaluate(&RiskTier::High, DecisionClass::A),
+            ApplyDecision::NoOp
+        ));
+        assert!(matches!(
+            guard.evaluate(&RiskTier::Critical, DecisionClass::A),
+            ApplyDecision::NoOp
+        ));
     }
 
     #[test]
-    fn test_low_medium_guard_class_b() {
-        let guard = LowMediumGuard::new();
-        let decision = guard.evaluate(DecisionClass::B);
+    fn test_risk_tier_guard_low_auto_proceed_no_notification() {
+        let guard = RiskTierGuard::new();
 
-        match decision {
-            ApplyDecision::Proceed { notification } => {
-                assert!(!notification, "Class B should not require notification");
+        // LOW risk_tier: auto-apply, no notification
+        for class in [
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let decision = guard.evaluate(&RiskTier::Low, class);
+            match decision {
+                ApplyDecision::Proceed { notification } => {
+                    assert!(
+                        !notification,
+                        "LOW risk_tier should not require notification"
+                    );
+                }
+                _ => panic!(
+                    "Expected Proceed decision for LOW risk_tier, got {:?}",
+                    decision
+                ),
             }
-            _ => panic!("Expected Proceed decision"),
         }
     }
 
     #[test]
-    fn test_low_medium_guard_class_c() {
-        let guard = LowMediumGuard::new();
-        let decision = guard.evaluate(DecisionClass::C);
+    fn test_risk_tier_guard_medium_auto_proceed_with_notification() {
+        let guard = RiskTierGuard::new();
 
-        match decision {
-            ApplyDecision::Proceed { notification } => {
-                assert!(notification, "Class C should require notification");
+        // MEDIUM risk_tier: auto-apply with notification
+        for class in [
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let decision = guard.evaluate(&RiskTier::Medium, class);
+            match decision {
+                ApplyDecision::Proceed { notification } => {
+                    assert!(notification, "MEDIUM risk_tier should require notification");
+                }
+                _ => panic!(
+                    "Expected Proceed decision for MEDIUM risk_tier, got {:?}",
+                    decision
+                ),
             }
-            _ => panic!("Expected Proceed decision"),
         }
     }
 
     #[test]
-    fn test_low_medium_guard_class_d_blocked() {
-        let guard = LowMediumGuard::new();
-        let decision = guard.evaluate(DecisionClass::D);
+    fn test_risk_tier_guard_high_blocked() {
+        let guard = RiskTierGuard::new();
 
-        match decision {
-            ApplyDecision::Blocked { reason } => {
-                assert!(reason.contains("manual review"));
+        // HIGH risk_tier: blocked, requires manual approval
+        for class in [
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let decision = guard.evaluate(&RiskTier::High, class);
+            match decision {
+                ApplyDecision::Blocked { reason } => {
+                    assert!(reason.contains("High"), "Should mention High risk_tier");
+                    assert!(
+                        reason.contains("manual review"),
+                        "Should mention manual review"
+                    );
+                }
+                _ => panic!(
+                    "Expected Blocked decision for HIGH risk_tier, got {:?}",
+                    decision
+                ),
             }
-            _ => panic!("Expected Blocked decision"),
         }
     }
 
     #[test]
-    fn test_low_medium_guard_class_e_blocked() {
-        let guard = LowMediumGuard::new();
-        let decision = guard.evaluate(DecisionClass::E);
+    fn test_risk_tier_guard_critical_blocked() {
+        let guard = RiskTierGuard::new();
 
-        match decision {
-            ApplyDecision::Blocked { reason } => {
-                assert!(reason.contains("manual review"));
+        // CRITICAL risk_tier: blocked, requires manual approval
+        for class in [
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let decision = guard.evaluate(&RiskTier::Critical, class);
+            match decision {
+                ApplyDecision::Blocked { reason } => {
+                    assert!(
+                        reason.contains("Critical"),
+                        "Should mention Critical risk_tier"
+                    );
+                    assert!(
+                        reason.contains("manual review"),
+                        "Should mention manual review"
+                    );
+                }
+                _ => panic!(
+                    "Expected Blocked decision for CRITICAL risk_tier, got {:?}",
+                    decision
+                ),
             }
-            _ => panic!("Expected Blocked decision"),
         }
     }
 
@@ -348,62 +468,100 @@ mod tests {
     fn test_high_critical_guard_all_blocked() {
         let guard = HighCriticalGuard::new();
 
-        // Class A should still be blocked
-        let decision = guard.evaluate(DecisionClass::A);
+        // Class A should still be blocked in high-critical mode
+        let decision = guard.evaluate(&RiskTier::Low, DecisionClass::A);
         assert!(matches!(decision, ApplyDecision::Blocked { .. }));
 
-        // Class B should be blocked
-        let decision = guard.evaluate(DecisionClass::B);
-        assert!(matches!(decision, ApplyDecision::Blocked { .. }));
-
-        // Class C should be blocked
-        let decision = guard.evaluate(DecisionClass::C);
-        assert!(matches!(decision, ApplyDecision::Blocked { .. }));
+        // All risk tiers should be blocked
+        for risk_tier in [
+            &RiskTier::Low,
+            &RiskTier::Medium,
+            &RiskTier::High,
+            &RiskTier::Critical,
+        ] {
+            for class in [
+                DecisionClass::B,
+                DecisionClass::C,
+                DecisionClass::D,
+                DecisionClass::E,
+            ] {
+                let decision = guard.evaluate(risk_tier, class);
+                assert!(
+                    matches!(decision, ApplyDecision::Blocked { .. }),
+                    "HighCriticalGuard should block {:?} + {:?}",
+                    risk_tier,
+                    class
+                );
+            }
+        }
     }
 
     #[test]
-    fn test_standard_guard_default() {
+    fn test_standard_guard_risk_tier_policy() {
         let pipeline = ApplyPipeline::new();
 
-        // Standard guard should behave like LowMediumGuard
+        // Standard guard enforces risk-tier policy
+        // Class A: always NoOp
         assert!(matches!(
-            pipeline.evaluate(DecisionClass::A),
+            pipeline.evaluate(&RiskTier::Low, DecisionClass::A),
             ApplyDecision::NoOp
         ));
+
+        // LOW: auto-proceed, no notification
         assert!(matches!(
-            pipeline.evaluate(DecisionClass::B),
-            ApplyDecision::Proceed { .. }
+            pipeline.evaluate(&RiskTier::Low, DecisionClass::B),
+            ApplyDecision::Proceed {
+                notification: false
+            }
         ));
+
+        // MEDIUM: auto-proceed, with notification
         assert!(matches!(
-            pipeline.evaluate(DecisionClass::C),
-            ApplyDecision::Proceed { .. }
+            pipeline.evaluate(&RiskTier::Medium, DecisionClass::B),
+            ApplyDecision::Proceed { notification: true }
         ));
+
+        // HIGH: blocked
         assert!(matches!(
-            pipeline.evaluate(DecisionClass::D),
+            pipeline.evaluate(&RiskTier::High, DecisionClass::B),
             ApplyDecision::Blocked { .. }
         ));
+
+        // CRITICAL: blocked
         assert!(matches!(
-            pipeline.evaluate(DecisionClass::E),
+            pipeline.evaluate(&RiskTier::Critical, DecisionClass::B),
             ApplyDecision::Blocked { .. }
         ));
     }
 
     #[test]
-    fn test_high_critical_mode() {
+    fn test_high_critical_mode_all_blocked() {
         let pipeline = ApplyPipeline::with_high_critical_mode();
 
-        // All should be blocked
-        for class in [
-            DecisionClass::A,
-            DecisionClass::B,
-            DecisionClass::C,
-            DecisionClass::D,
-            DecisionClass::E,
+        // All should be blocked in high-critical mode
+        for risk_tier in [
+            &RiskTier::Low,
+            &RiskTier::Medium,
+            &RiskTier::High,
+            &RiskTier::Critical,
         ] {
-            assert!(matches!(
-                pipeline.evaluate(class),
-                ApplyDecision::Blocked { .. }
-            ));
+            for class in [
+                DecisionClass::A,
+                DecisionClass::B,
+                DecisionClass::C,
+                DecisionClass::D,
+                DecisionClass::E,
+            ] {
+                assert!(
+                    matches!(
+                        pipeline.evaluate(risk_tier, class),
+                        ApplyDecision::Blocked { .. }
+                    ),
+                    "HighCriticalGuard should block {:?} + {:?}",
+                    risk_tier,
+                    class
+                );
+            }
         }
     }
 
@@ -455,11 +613,13 @@ mod tests {
 
     #[test]
     fn test_apply_request_factory() {
-        let request = ApplyRequest::from_decision_class(DecisionClass::B);
+        let request = ApplyRequest::new(RiskTier::Low, DecisionClass::B);
+        assert_eq!(request.risk_tier, RiskTier::Low);
         assert_eq!(request.decision_class, DecisionClass::B);
         assert!(!request.strict);
 
-        let request = ApplyRequest::strict(DecisionClass::D);
+        let request = ApplyRequest::strict(RiskTier::High, DecisionClass::D);
+        assert_eq!(request.risk_tier, RiskTier::High);
         assert_eq!(request.decision_class, DecisionClass::D);
         assert!(request.strict);
     }
@@ -469,7 +629,11 @@ mod tests {
         struct DummyGuard;
 
         impl ApplyGuard for DummyGuard {
-            fn evaluate(&self, _decision_class: DecisionClass) -> ApplyDecision {
+            fn evaluate(
+                &self,
+                _risk_tier: &RiskTier,
+                _decision_class: DecisionClass,
+            ) -> ApplyDecision {
                 ApplyDecision::NoOp
             }
         }
@@ -477,14 +641,24 @@ mod tests {
         let pipeline = ApplyPipeline::with_guard(DummyGuard);
 
         // All decisions should be no-op with DummyGuard
-        for class in [
-            DecisionClass::A,
-            DecisionClass::B,
-            DecisionClass::C,
-            DecisionClass::D,
-            DecisionClass::E,
+        for risk_tier in [
+            &RiskTier::Low,
+            &RiskTier::Medium,
+            &RiskTier::High,
+            &RiskTier::Critical,
         ] {
-            assert!(matches!(pipeline.evaluate(class), ApplyDecision::NoOp));
+            for class in [
+                DecisionClass::A,
+                DecisionClass::B,
+                DecisionClass::C,
+                DecisionClass::D,
+                DecisionClass::E,
+            ] {
+                assert!(matches!(
+                    pipeline.evaluate(risk_tier, class),
+                    ApplyDecision::NoOp
+                ));
+            }
         }
     }
 }

@@ -407,15 +407,24 @@ paths:
       description: |
         Executes the current bounded rebase-apply path for an intent version transition.
 
-        The endpoint reuses the preview planner, then runs the Phase 2 internal apply pipeline:
-        - Class A: no-op
-        - Class B/C: auto-proceed
-        - Class D/E: return accepted/manual-review-required without auto-apply
+        **Phase 2b risk-tier policy contract:**
+        The apply decision is controlled by `risk_tier` (the primary public risk field):
+        - LOW risk_tier: automatic, no approval required, no notification
+        - MEDIUM risk_tier: automatic with notification
+        - HIGH/CRITICAL risk_tier: blocked, requires manual approval
+        - Class A (no semantic changes): always no-op regardless of risk_tier
+
+        The `decision_class` (A-E) and `risk_level` (1-5) fields remain available
+        as supporting context for audit and display purposes.
 
         **Runtime execution semantics:**
         - Runtime signal delivery is best-effort and does not block the API response.
         - Temporal replay is currently implemented as cooperative signal-based replay with
           checkpoint context, not native Temporal reset.
+
+        **HTTP status codes:**
+        - 200: Rebase applied (auto-proceed or no-op)
+        - 202: Rebase blocked, requires manual review (HIGH/CRITICAL risk_tier)
       operationId: applyRebase
       parameters:
         - name: intent_id

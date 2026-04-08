@@ -143,7 +143,7 @@ pub mod graph_updater;
 
 pub use apply_pipeline::{
     ApplyDecision, ApplyGuard, ApplyOutcome, ApplyPipeline, ApplyRequest, ApplyResult,
-    HighCriticalGuard, LowMediumGuard,
+    HighCriticalGuard, RiskTierGuard,
 };
 pub use checkpoint_aligner::{
     AlignedCheckpoint, CheckpointAligner, CheckpointAlignmentOutcome, CheckpointAlignmentResult,
@@ -436,8 +436,10 @@ impl RebaseOrchestrator {
         plan: &RebasePlan,
         affected_items: &AffectedItemsPreview,
     ) -> Result<RebaseApplyResult, IntentRebaseError> {
-        // Check if apply should proceed based on decision class
-        let apply_decision = self.apply_pipeline.evaluate(plan.decision_class);
+        // Phase 2b: risk_tier is the controlling policy contract
+        let apply_decision = self
+            .apply_pipeline
+            .evaluate(&plan.risk_tier, plan.decision_class);
 
         match apply_decision {
             ApplyDecision::NoOp => {
@@ -1014,8 +1016,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_orchestrator_class_d_blocked() {
-        // Test Class D blocked path (medium severity + manual review required)
+    async fn test_orchestrator_high_risk_tier_blocked() {
+        // Phase 2b: Test HIGH risk_tier blocked path (new risk-tier policy)
+        // HIGH/CRITICAL risk_tier: blocked, requires manual approval
         let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
@@ -1032,11 +1035,22 @@ mod tests {
         checkpoint_repo.add_checkpoint(checkpoint).await;
 
         let v1 = create_test_version(intent_id, 1);
-        let mut v2 = create_test_version(intent_id, 2);
-        v2.payload.scope.in_scope.push("item2".to_string()); // Medium severity change (scope addition)
+        let v2 = create_test_version(intent_id, 2);
 
-        let (diff, risk) = compute_diff_with_risk_sync(&v1, &v2).unwrap();
-        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        // Directly construct a plan with HIGH risk_tier to test blocked policy
+        let plan = RebasePlan {
+            decision_class: DecisionClass::D,
+            rationale: "Test: HIGH risk_tier blocked".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::D,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: true,
+            risk_tier: RiskTier::High, // HIGH risk_tier triggers blocked
+            risk_level: 4,
+        };
 
         let result = orchestrator
             .apply_rebase(
@@ -1051,7 +1065,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Class D is blocked due to: medium severity + manual_review required
+        // HIGH risk_tier is blocked due to: risk-tier policy
         assert_eq!(result.outcome, ApplyOutcome::BlockedManualReview);
         assert!(result.notification_required);
         // Blocked path should have NotApplicable runtime execution status
@@ -1666,8 +1680,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_audit_summary_class_d_blocked() {
-        // Test audit_summary for Class D blocked path
+    async fn test_audit_summary_high_risk_tier_blocked() {
+        // Phase 2b: Test audit_summary for HIGH risk_tier blocked path (new risk-tier policy)
         let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
@@ -1683,11 +1697,22 @@ mod tests {
         checkpoint_repo.add_checkpoint(checkpoint).await;
 
         let v1 = create_test_version(intent_id, 1);
-        let mut v2 = create_test_version(intent_id, 2);
-        v2.payload.scope.in_scope.push("item2".to_string());
+        let v2 = create_test_version(intent_id, 2);
 
-        let (diff, risk) = compute_diff_with_risk_sync(&v1, &v2).unwrap();
-        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        // Directly construct a plan with HIGH risk_tier to test blocked policy
+        let plan = RebasePlan {
+            decision_class: DecisionClass::D,
+            rationale: "Test: HIGH risk_tier blocked".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::D,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: true,
+            risk_tier: RiskTier::High, // HIGH risk_tier triggers blocked
+            risk_level: 4,
+        };
 
         let result = orchestrator
             .apply_rebase(

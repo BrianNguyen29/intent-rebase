@@ -223,20 +223,26 @@
     - OpenAPI: docs/04-api/openapi.yaml (risk_tier documented as primary public risk field)
     - decision_class and risk_level remain supporting fields
 
-[ ] Apply rebase policy mapped directly from risk_tier for LOW risk: automatic, no approval required
+[x] Apply rebase policy mapped directly from risk_tier for LOW risk: automatic, no approval required - PHASE 2b DELIVERED
     Evidence:
-    - Current bounded pipeline is decision-class based (A/B/C auto-proceed; D/E blocked)
-    - Direct LOW→auto policy coupling is not yet implemented/documented as the controlling rule
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (RiskTierGuard evaluates risk_tier as controlling policy)
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (LOW → AutoProceeded, no notification)
+    - Tests: test_risk_tier_guard_low_auto_proceed_no_notification passes
+    - Policy: LOW risk_tier → automatic, no approval required
 
-[ ] Apply rebase policy mapped directly from risk_tier for MEDIUM risk: automatic with notification
+[x] Apply rebase policy mapped directly from risk_tier for MEDIUM risk: automatic with notification - PHASE 2b DELIVERED
     Evidence:
-    - Current bounded pipeline can auto-proceed with notification, but not as a finalized MEDIUM-only public policy contract
-    - Notification/webhook delivery remains broader Phase 2b/Phase 3 work
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (RiskTierGuard evaluates risk_tier as controlling policy)
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (MEDIUM → AutoProceededWithNotification)
+    - Tests: test_risk_tier_guard_medium_auto_proceed_with_notification passes
+    - Policy: MEDIUM risk_tier → automatic with notification
 
-[ ] Apply rebase policy mapped directly from risk_tier for HIGH/CRITICAL: blocked, requires manual approval
+[x] Apply rebase policy mapped directly from risk_tier for HIGH/CRITICAL: blocked, requires manual approval - PHASE 2b DELIVERED
     Evidence:
-    - Current bounded pipeline blocks decision classes D/E and creates approval requests, but HIGH/CRITICAL risk_tier is not yet the finalized controlling policy contract
-    - Console/UI visibility remains open
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (RiskTierGuard evaluates risk_tier as controlling policy)
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (HIGH/CRITICAL → BlockedManualReview)
+    - Tests: test_risk_tier_guard_high_blocked, test_risk_tier_guard_critical_blocked pass
+    - Policy: HIGH/CRITICAL risk_tier → blocked, requires manual approval
 
 [x] Rebase apply audit trail (who applied, when, what changed) - PHASE 2b BOUNDED SLICE DELIVERED
     Evidence:

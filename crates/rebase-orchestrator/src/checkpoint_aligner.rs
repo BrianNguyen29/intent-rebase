@@ -14,9 +14,7 @@
 
 #[allow(unused_imports)]
 use intent_rebase_types::{Checkpoint, CheckpointStatus, CheckpointType, IntentRebaseError};
-use rebase_engine::{
-    CheckpointCandidate, CheckpointSelection, DecisionClass, RebasePlan,
-};
+use rebase_engine::{CheckpointCandidate, CheckpointSelection, DecisionClass, RebasePlan};
 use std::sync::Arc;
 use uuid::Uuid;
 
