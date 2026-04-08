@@ -381,6 +381,12 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
     }
 }
 
+/// Decode an event type string from the database into an AuditEventType enum.
+///
+/// Falls back to `RebaseApplied` for unknown strings. This is a pragmatic fallback since
+/// RebaseApplied is the most common event type and treating unknown events as applied
+/// preserves audit continuity rather than failing. Unknown event types should be
+/// investigated as a data integrity issue.
 fn audit_event_type_from_string(s: &str) -> AuditEventType {
     match s {
         "IntentCreated" => AuditEventType::IntentCreated,
@@ -395,7 +401,7 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
         "ArtifactProduced" => AuditEventType::ArtifactProduced,
         "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
-        _ => AuditEventType::RebaseApplied, // default fallback
+        _ => AuditEventType::RebaseApplied,
     }
 }
 

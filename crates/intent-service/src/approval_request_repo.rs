@@ -347,7 +347,9 @@ impl SqlxApprovalRequestRepository {
         Ok(request.clone())
     }
 
-    /// Update the status of an approval request in the database
+    /// Update the status of an approval request in the database using atomic conditional UPDATE.
+    /// The WHERE clause includes status = 'pending' to prevent TOCTOU races between concurrent
+    /// approve/reject operations on the same approval request.
     async fn update_status_in_db(
         &self,
         id: Uuid,
@@ -358,11 +360,13 @@ impl SqlxApprovalRequestRepository {
         let status_str = approval_request_status_to_string(&status);
         let now = Utc::now();
 
-        sqlx::query(
+        // Atomic conditional UPDATE: only succeeds if current status is 'pending'
+        // This eliminates the TOCTOU race between checking status and updating it
+        let result = sqlx::query(
             r#"
             UPDATE approval_requests
             SET status = $1, updated_at = $2, resolved_at = $2, resolved_by = $3, resolution_notes = $4
-            WHERE id = $5
+            WHERE id = $5 AND status = 'pending'
             "#,
         )
         .bind(status_str)
@@ -375,6 +379,15 @@ impl SqlxApprovalRequestRepository {
         .map_err(|e| {
             IntentRebaseError::StorageError(format!("update approval request status: {}", e))
         })?;
+
+        // If no rows were affected, the request was not in pending status
+        // (either already processed, not found, or concurrent operation won the race)
+        if result.rows_affected() == 0 {
+            return Err(IntentRebaseError::ApprovalRequestNotPending(
+                id,
+                "atomic update failed - request not in pending status".to_string(),
+            ));
+        }
 
         self.get_approval_request(id).await
     }
@@ -479,15 +492,9 @@ impl ApprovalRequestRepository for SqlxApprovalRequestRepository {
         resolved_by: &str,
         resolution_notes: Option<&str>,
     ) -> Result<ApprovalRequest, IntentRebaseError> {
-        // First check current status
-        let current = self.get_approval_request(id).await?;
-        if current.status != ApprovalRequestStatus::Pending {
-            return Err(IntentRebaseError::ApprovalRequestNotPending(
-                id,
-                format!("{:?}", current.status),
-            ));
-        }
-
+        // Atomic conditional UPDATE handles the pending-status check internally
+        // to prevent TOCTOU races between concurrent approve/reject operations.
+        // Returns error if no rows affected (not pending or not found).
         self.update_status_in_db(id, status, resolved_by, resolution_notes)
             .await
     }
@@ -507,6 +514,12 @@ fn approval_request_status_to_string(status: &ApprovalRequestStatus) -> &'static
     }
 }
 
+/// Decode a status string from the database into an ApprovalRequestStatus enum.
+///
+/// Falls back to `Pending` for unknown strings. This is intentional: unknown status values
+/// are treated as requiring further review rather than being incorrectly classified as
+/// a terminal state (approved/rejected). Unknown status should be investigated as a data
+/// integrity issue.
 fn approval_request_status_from_string(s: &str) -> ApprovalRequestStatus {
     match s {
         "approved" => ApprovalRequestStatus::Approved,
