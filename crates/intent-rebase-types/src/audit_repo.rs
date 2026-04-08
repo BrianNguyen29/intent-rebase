@@ -11,7 +11,6 @@ use super::{
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -183,72 +182,10 @@ impl AuditRepository for InMemoryAuditRepository {
     }
 }
 
-/// AuditService provides audit event creation helpers for Phase 2b bounded slice
-pub struct AuditService {
-    repo: Arc<dyn AuditRepository>,
-}
-
-impl AuditService {
-    pub fn new(repo: Arc<dyn AuditRepository>) -> Self {
-        Self { repo }
-    }
-
-    /// Record a RebaseApplied audit event
-    pub async fn record_rebase_applied(
-        &self,
-        tenant_id: Uuid,
-        actor_id: &str,
-        intent_id: Uuid,
-        payload: RebaseApplyAuditPayload,
-    ) -> Result<(), IntentRebaseError> {
-        let event = AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id,
-            event_type: AuditEventType::RebaseApplied,
-            actor_id: actor_id.to_string(),
-            intent_id: Some(intent_id),
-            artifact_id: None,
-            payload: serde_json::to_value(payload).map_err(|e| {
-                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
-            })?,
-            trace_id: None,
-            span_id: None,
-            occurred_at: Utc::now(),
-        };
-
-        self.repo.create_audit_event(event).await
-    }
-
-    /// Record a RebaseApplyBlocked audit event (when external apply hits D/E blocked path)
-    pub async fn record_rebase_apply_blocked(
-        &self,
-        tenant_id: Uuid,
-        actor_id: &str,
-        intent_id: Uuid,
-        payload: RebaseApplyBlockedAuditPayload,
-    ) -> Result<(), IntentRebaseError> {
-        let event = AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id,
-            event_type: AuditEventType::RebaseApplyBlocked,
-            actor_id: actor_id.to_string(),
-            intent_id: Some(intent_id),
-            artifact_id: None,
-            payload: serde_json::to_value(payload).map_err(|e| {
-                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
-            })?,
-            trace_id: None,
-            span_id: None,
-            occurred_at: Utc::now(),
-        };
-
-        self.repo.create_audit_event(event).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn create_test_payload() -> RebaseApplyAuditPayload {
         RebaseApplyAuditPayload {
@@ -273,7 +210,6 @@ mod tests {
     #[tokio::test]
     async fn test_create_audit_event() {
         let repo = Arc::new(InMemoryAuditRepository::new());
-        let _service = AuditService::new(repo.clone());
 
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -299,13 +235,12 @@ mod tests {
     #[tokio::test]
     async fn test_record_rebase_applied() {
         let repo = Arc::new(InMemoryAuditRepository::new());
-        let service = AuditService::new(repo.clone());
 
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let payload = create_test_payload();
 
-        let result = service
+        let result = repo
             .record_rebase_applied(tenant_id, "test-user", intent_id, payload)
             .await;
 
@@ -323,7 +258,6 @@ mod tests {
     #[tokio::test]
     async fn test_record_rebase_apply_blocked() {
         let repo = Arc::new(InMemoryAuditRepository::new());
-        let service = AuditService::new(repo.clone());
 
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
@@ -337,7 +271,7 @@ mod tests {
             requestor_type: "external-api".to_string(),
         };
 
-        let result = service
+        let result = repo
             .record_rebase_apply_blocked(tenant_id, "test-user", intent_id, payload)
             .await;
 
