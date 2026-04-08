@@ -522,6 +522,7 @@ impl IntentService {
                     affected_items,
                     deferred: plan.deferred,
                     manual_review_recommended: plan.manual_review_recommended,
+                    risk_tier: plan.risk_tier,
                     risk_level: plan.risk_level,
                 };
 

@@ -11,7 +11,7 @@
 /// - D: Full revalidation + manual reviewer flag
 /// - E: Deferred (cannot auto-revalidate, needs human review)
 use crate::planner::{
-    ApprovalNeedingRevalidation, DecisionClass, RebasePlan, RevalidationStrategy,
+    ApprovalNeedingRevalidation, DecisionClass, RebasePlan, RevalidationStrategy, RiskTier,
 };
 use intent_rebase_types::ClassificationImpact;
 
@@ -193,6 +193,7 @@ mod tests {
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: DeferredFields::default(),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 1,
         }
     }
@@ -213,6 +214,7 @@ mod tests {
             },
             deferred: DeferredFields::default(),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 1,
         }
     }

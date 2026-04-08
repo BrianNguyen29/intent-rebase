@@ -156,7 +156,7 @@ use intent_rebase_types::AffectedItemsStatus;
 #[allow(unused_imports)]
 use intent_rebase_types::{Checkpoint, IntentRebaseError, IntentVersion};
 #[allow(unused_imports)]
-use rebase_engine::{AffectedItemsPreview, DecisionClass, RebasePlan};
+use rebase_engine::{AffectedItemsPreview, DecisionClass, RebasePlan, RiskTier};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -1100,6 +1100,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: true,
+            risk_tier: RiskTier::High,
             risk_level: 4, // High risk tier
         };
 
@@ -1165,6 +1166,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1276,6 +1278,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1338,6 +1341,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1354,7 +1358,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Class B should auto-proceed with runtime execution
+        // Class B is auto-proceeded (low/medium severity, no manual review required)
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
         // Rationale should focus on apply decision (runtime detail lives in structured outcome)
         assert!(
@@ -1398,6 +1402,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1461,7 +1466,7 @@ mod tests {
 
         let plan = RebasePlan {
             decision_class: DecisionClass::B,
-            rationale: "Test runtime replay failure".to_string(),
+            rationale: "Test runtime execution".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -1469,6 +1474,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1569,6 +1575,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1585,7 +1592,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Class B should still auto-proceed (apply pipeline proceeds, runtime skipped)
+        // Class B is auto-proceeded (low/medium severity, no manual review required)
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
         // Runtime execution should be SkippedNotReady
         assert_eq!(
@@ -1735,7 +1742,7 @@ mod tests {
 
         let plan = RebasePlan {
             decision_class: DecisionClass::B,
-            rationale: "Test: audit summary proceed success".to_string(),
+            rationale: "Test: audit summary skipped not ready".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -1743,6 +1750,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1800,6 +1808,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1861,7 +1870,7 @@ mod tests {
 
         let plan = RebasePlan {
             decision_class: DecisionClass::B,
-            rationale: "Test: audit summary degraded".to_string(),
+            rationale: "Test runtime replay failure".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -1869,6 +1878,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1921,7 +1931,7 @@ mod tests {
 
         let plan = RebasePlan {
             decision_class: DecisionClass::B,
-            rationale: "Test: audit summary skipped not ready".to_string(),
+            rationale: "Test: adapter not ready".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -1929,6 +1939,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -1999,7 +2010,7 @@ mod tests {
 
         let plan = RebasePlan {
             decision_class: DecisionClass::B,
-            rationale: "Test: audit summary with graph updates".to_string(),
+            rationale: "Test: audit summary degraded".to_string(),
             section_decisions: vec![],
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: rebase_engine::DeferredFields::phase1_baseline(
@@ -2007,6 +2018,7 @@ mod tests {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 

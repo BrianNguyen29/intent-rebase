@@ -20,7 +20,9 @@ use intent_rebase_types::{
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use rebase_engine::{DecisionClass, DiffRiskAnalysis, IntentVersionDiff, SectionDecision};
+use rebase_engine::{
+    DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier, SectionDecision,
+};
 use rebase_orchestrator::{
     apply_pipeline::ApplyOutcome, checkpoint_aligner::CheckpointAlignmentOutcome,
     RebaseOrchestrator, RuntimeExecutionStatus,
@@ -53,6 +55,9 @@ pub struct DiffResponse {
 /// When `status` is `Unavailable`, the graph service was not available or the
 /// IntentVersion node was not found in the graph. The endpoint remains functional
 /// even without graph coverage - this is NOT an error condition.
+///
+/// Phase 2b: `risk_tier` is the canonical public risk enum field (Low/Medium/High/Critical).
+/// `risk_level` (u8 1-5) and `decision_class` remain as supporting fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebasePreviewResponse {
     pub intent_id: Uuid,
@@ -63,16 +68,25 @@ pub struct RebasePreviewResponse {
     pub section_decisions: Vec<SectionDecision>,
     pub affected_items: AffectedItemsPreview,
     pub manual_review_recommended: bool,
+    /// Phase 2b: Canonical public risk tier (primary public risk field)
+    pub risk_tier: RiskTier,
+    /// Supporting risk level (1=lowest, 5=highest)
     pub risk_level: u8,
 }
 
 /// Response for rebase apply.
+///
+/// Phase 2b: `risk_tier` is the canonical public risk enum field (Low/Medium/High/Critical).
+/// `risk_level` (u8 1-5) and `decision_class` remain as supporting fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebaseApplyResponse {
     pub intent_id: Uuid,
     pub from_version: IntentVersion,
     pub to_version: IntentVersion,
     pub decision_class: DecisionClass,
+    /// Phase 2b: Canonical public risk tier (primary public risk field)
+    pub risk_tier: RiskTier,
+    /// Supporting risk level (1=lowest, 5=highest)
     pub risk_level: u8,
     pub outcome: String,
     pub manual_review_required: bool,
@@ -739,6 +753,7 @@ async fn rebase_preview(
         section_decisions: plan.section_decisions,
         affected_items: plan.affected_items,
         manual_review_recommended: plan.manual_review_recommended,
+        risk_tier: plan.risk_tier,
         risk_level: plan.risk_level,
     }))
 }
@@ -887,6 +902,7 @@ async fn rebase_apply(
         from_version,
         to_version,
         decision_class: plan.decision_class,
+        risk_tier: plan.risk_tier,
         risk_level: plan.risk_level,
         outcome: apply_outcome_label(&apply_result.outcome).to_string(),
         manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),

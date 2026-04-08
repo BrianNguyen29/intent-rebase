@@ -1372,7 +1372,10 @@ components:
 
         When status is `unavailable`, the endpoint remains functional but the affected
         items arrays should not be considered authoritative.
-      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_level]
+
+        **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
+        `risk_level` (1-5) and `decision_class` remain as supporting fields.
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_tier, risk_level]
       properties:
         intent_id:
           type: string
@@ -1394,11 +1397,16 @@ components:
           $ref: '#/components/schemas/AffectedItemsPreview'
         manual_review_recommended:
           type: boolean
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+          description: |
+            Phase 2b: Canonical public risk tier (primary public risk field).
+            Maps from DiffRiskAnalysis.severity: Low/Medium/High/Critical.
         risk_level:
           type: integer
           minimum: 1
           maximum: 5
-          description: Risk level (1=lowest, 5=highest)
+          description: Supporting risk level (1=lowest, 5=highest)
 
     RebaseApplyResponse:
       type: object
@@ -1407,11 +1415,15 @@ components:
 
         D/E outcomes are surfaced as `blocked_manual_review` with HTTP 202.
         Runtime replay status reflects cooperative runtime signaling, not native Temporal reset.
+
+        **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
+        `risk_level` (1-5) and `decision_class` remain as supporting fields.
       required:
         - intent_id
         - from_version
         - to_version
         - decision_class
+        - risk_tier
         - risk_level
         - outcome
         - manual_review_required
@@ -1433,10 +1445,16 @@ components:
           $ref: '#/components/schemas/IntentVersion'
         decision_class:
           $ref: '#/components/schemas/DecisionClass'
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+          description: |
+            Phase 2b: Canonical public risk tier (primary public risk field).
+            Maps from DiffRiskAnalysis.severity: Low/Medium/High/Critical.
         risk_level:
           type: integer
           minimum: 1
           maximum: 5
+          description: Supporting risk level (1=lowest, 5=highest)
         outcome:
           type: string
           enum:

@@ -22,7 +22,7 @@ use crate::diff::IntentVersionDiff;
 use crate::risk::{DiffRiskAnalysis, Severity};
 
 // Re-export AffectedItemsPreview and ClassificationImpact from intent_rebase_types
-pub use intent_rebase_types::{AffectedItemsPreview, ClassificationImpact};
+pub use intent_rebase_types::{AffectedItemsPreview, ClassificationImpact, RiskTier};
 
 /// Decision class for rebase planning
 ///
@@ -384,6 +384,10 @@ pub struct SectionDecision {
 /// - Selects best checkpoint per heuristic rules
 /// - `deferred.checkpoint_selection.ready` remains false (Phase 2 execution)
 ///
+/// Phase 2b: `risk_tier` is the canonical public risk field, mapping from
+/// `DiffRiskAnalysis.severity`. `risk_level` (u8 1-5) and `decision_class`
+/// remain available as supporting fields.
+///
 /// Future PRs will enhance with:
 /// - Graph-based affected node classification (already in rebase-preview)
 /// - Approval revalidation hooks
@@ -403,7 +407,10 @@ pub struct RebasePlan {
     pub deferred: DeferredFields,
     /// Whether manual review is recommended
     pub manual_review_recommended: bool,
-    /// Risk level from 1-5 (1=lowest, 5=highest)
+    /// Canonical public risk tier (Phase 2b): derived from `DiffRiskAnalysis.severity`.
+    /// Use this as the primary public risk field in API responses.
+    pub risk_tier: RiskTier,
+    /// Risk level from 1-5 (1=lowest, 5=highest) — supporting field
     pub risk_level: u8,
 }
 
@@ -432,6 +439,9 @@ impl RebasePlan {
 
         let risk_level = compute_risk_level(&decision_class, risk);
 
+        // Phase 2b: Canonical public risk_tier from DiffRiskAnalysis severity
+        let risk_tier = risk.severity.to_risk_tier();
+
         Self {
             decision_class,
             rationale,
@@ -442,6 +452,7 @@ impl RebasePlan {
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended,
+            risk_tier,
             risk_level,
         }
     }
@@ -1013,6 +1024,7 @@ mod tests {
         let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
         assert_eq!(plan.decision_class, DecisionClass::A);
         assert_eq!(plan.risk_level, 1);
+        assert_eq!(plan.risk_tier, RiskTier::Low);
         assert!(!plan.manual_review_recommended);
     }
 

@@ -14,7 +14,9 @@
 
 #[allow(unused_imports)]
 use intent_rebase_types::{Checkpoint, CheckpointStatus, CheckpointType, IntentRebaseError};
-use rebase_engine::{CheckpointCandidate, CheckpointSelection, DecisionClass, RebasePlan};
+use rebase_engine::{
+    CheckpointCandidate, CheckpointSelection, DecisionClass, RebasePlan,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -347,6 +349,7 @@ impl CheckpointAligner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rebase_engine::RiskTier;
 
     // Mock implementation for testing
     struct MockCheckpointRepo {
@@ -466,6 +469,7 @@ mod tests {
                 &intent_rebase_types::AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 1,
         };
 
@@ -498,6 +502,7 @@ mod tests {
                 &intent_rebase_types::AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -546,6 +551,7 @@ mod tests {
                 &intent_rebase_types::AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
@@ -592,6 +598,7 @@ mod tests {
                 &intent_rebase_types::AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended: false,
+            risk_tier: RiskTier::Low,
             risk_level: 2,
         };
 
