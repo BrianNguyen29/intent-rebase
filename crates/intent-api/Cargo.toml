@@ -28,6 +28,7 @@ uuid = { workspace = true }
 validator = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
 runtime-adapter = { path = "../runtime-adapter" }

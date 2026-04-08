@@ -193,7 +193,7 @@
     - Code: crates/intent-rebase-types/src/audit.rs (RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, AuditEventType::RebaseApplyBlocked)
     - Audit events: RebaseApplied (all outcomes), RebaseApplyBlocked (D/E blocked only)
     - Best-effort actor attribution: fallback external-api/unknown
-    - SQL-backed SqlxAuditRepository implemented behind existing trait (production wiring deferred)
+    - SQL-backed SqlxAuditRepository wired to production via build_router_with_sql_audit_and_approval bootstrap helper
     - Enum conversion: audit_event_type_to_string/from_string for PostgreSQL enum serialization
     - Tests: 5 audit_repo tests pass, 2 blocked audit tests pass, sqlx_audit_tests pass (enum conversions)
 
@@ -202,7 +202,7 @@
     - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository trait, InMemoryApprovalRequestRepository, SqlxApprovalRequestRepository, ApprovalRequest)
     - Code: infrastructure/migrations/008_create_approval_requests.sql
     - Schema: approval_requests table with pending/approved/rejected/expired/cancelled fields designed for future workflow expansion
-    - SQL-backed SqlxApprovalRequestRepository implemented behind existing trait (production wiring deferred)
+    - SQL-backed SqlxApprovalRequestRepository wired to production via build_router_with_sql_audit_and_approval bootstrap helper
     - Enum conversion: approval_request_status_to_string/from_string for PostgreSQL enum serialization
     - Tests: create/get/list/update approval_request_repo tests pass, sqlx_approval_request_tests pass (enum conversions)
 

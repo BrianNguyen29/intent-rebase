@@ -1317,6 +1317,63 @@ pub fn build_router(
         .layer(TraceLayer::new_for_http())
 }
 
+/// Build the router with SQL-backed audit and approval repositories.
+///
+/// This is the production bootstrap helper that constructs SQL-backed repositories
+/// from a `PgPool` and injects them into the router. Use this in production
+/// deployments where PostgreSQL-backed persistence is required.
+///
+/// For testing or in-memory deployments, use `build_router` directly with
+/// `InMemoryAuditRepository` and `InMemoryApprovalRequestRepository`.
+///
+/// # Arguments
+///
+/// * `pool` - PostgreSQL connection pool used to construct SQL-backed repositories
+/// * `service` - Pre-configured intent service (typically with SQL-backed intent repository)
+/// * `graph_service` - Graph service instance
+/// * `orchestrator` - Pre-configured orchestrator (typically with SQL-backed checkpoint repository)
+///
+/// # Example
+///
+/// ```ignore
+/// let pool = PgPool::connect(&database_url).await?;
+/// let intent_repo = SqlxIntentRepository::new(pool.clone());
+/// let intent_service = IntentService::new(Arc::new(intent_repo));
+/// let checkpoint_repo = SqlxCheckpointRepository::new(pool.clone());
+/// let orchestrator = RebaseOrchestrator::new(
+///     Arc::new(checkpoint_repo),
+///     graph_service.clone(),
+///     runtime_adapter,
+/// );
+///
+/// let router = build_router_with_sql_audit_and_approval(
+///     pool,
+///     Arc::new(intent_service),
+///     Arc::new(graph_service),
+///     Arc::new(orchestrator),
+/// );
+/// ```
+pub fn build_router_with_sql_audit_and_approval(
+    pool: sqlx::PgPool,
+    service: Arc<IntentService>,
+    graph_service: Arc<GraphService>,
+    orchestrator: Arc<RebaseOrchestrator>,
+) -> Router {
+    // Construct SQL-backed audit and approval repositories from the pool
+    let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
+    let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> =
+        Arc::new(intent_service::SqlxApprovalRequestRepository::new(pool));
+
+    build_router(
+        service,
+        graph_service,
+        orchestrator,
+        audit_service,
+        approval_request_repo,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
