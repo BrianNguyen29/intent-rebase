@@ -6,6 +6,7 @@
 //!
 //! Rebase planning (preview-only baseline) is implemented in the `planner` module.
 
+pub mod approval_revalidation;
 pub mod diff;
 pub mod planner;
 pub mod risk;
@@ -14,6 +15,7 @@ pub mod rules;
 
 use intent_rebase_types::{IntentRebaseError, IntentVersion};
 
+pub use approval_revalidation::{classify_approvals, ApprovalRevalidationResult};
 pub use diff::{
     AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, IntentVersionDiff, ScopeDiff,
 };

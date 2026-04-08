@@ -21,11 +21,21 @@ CREATE TABLE IF NOT EXISTS intent_versions (
 );
 
 -- Indexes
-CREATE INDEX idx_intent_versions_intent_id ON intent_versions(intent_id);
-CREATE INDEX idx_intent_versions_version_number ON intent_versions(intent_id, version_number DESC);
-CREATE INDEX idx_intent_versions_parent_id ON intent_versions(parent_version_id);
-CREATE INDEX idx_intent_versions_status ON intent_versions(status);
-CREATE INDEX idx_intent_versions_created_at ON intent_versions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intent_versions_intent_id ON intent_versions(intent_id);
+CREATE INDEX IF NOT EXISTS idx_intent_versions_version_number ON intent_versions(intent_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_intent_versions_parent_id ON intent_versions(parent_version_id);
+CREATE INDEX IF NOT EXISTS idx_intent_versions_status ON intent_versions(status);
+CREATE INDEX IF NOT EXISTS idx_intent_versions_created_at ON intent_versions(created_at DESC);
+
+-- Post-migration validation notes:
+-- 1. Verify table exists: SELECT COUNT(*) FROM intent_versions;
+-- 2. Verify indexes exist: SELECT indexname FROM pg_indexes WHERE tablename = 'intent_versions';
+-- 3. Verify foreign key: SELECT conname FROM pg_constraint WHERE conrelid = 'intent_versions'::regclass AND contype = 'f';
+-- 4. Verify unique constraint: SELECT conname FROM pg_constraint WHERE conrelid = 'intent_versions'::regclass AND contype = 'u';
+
+-- Rollback:
+-- DROP TABLE IF EXISTS intent_versions;
+-- (CASCADE will drop dependent objects due to ON DELETE CASCADE on FK from intent_versions)
 
 -- Comments
 COMMENT ON TABLE intent_versions IS 'Phase 1: Stores intent version snapshots';

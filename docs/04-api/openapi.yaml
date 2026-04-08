@@ -4,28 +4,46 @@
 # Note: OpenAPI spec is maintained alongside code as endpoints are implemented.
 # HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
 
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: Intent Rebase Engine API
   description: |
-    Phase 1 First Slice - Intent Registry API
+    Phase 1 - Core Control Plane API
     
-    Manages intent lifecycle, versioning, and basic CRUD operations.
+    Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
     
     ## Implemented (Phase 1)
-    - Create intent with initial version
-    - Create new version of existing intent
-    - Get intent head (current version)
-    - List all versions of an intent (descending order)
-    - Get specific version by version number
-    - Diff computation between two versions (POST /intents/{id}/diff)
-    - Rebase preview (POST /intents/{id}/rebase-preview)
     
-    ## Not Yet Implemented
-    - Rebase apply endpoint (Phase 2)
-    - Checkpoint selection heuristics (Phase 2)
-    - Approval revalidation hooks (Phase 2)
-    - Runtime adapter integration (Phase 2)
+    ### Health & Observability
+    - GET /health — Service health check
+    - GET /ready — Service readiness check
+    - GET /metrics — Prometheus metrics endpoint
+    
+    ### Intent Lifecycle
+    - POST /intents — Create intent with initial version
+    - GET /intents/{intent_id} — Get intent head (current version)
+    - POST /intents/{intent_id}/versions — Create new version
+    - GET /intents/{intent_id}/versions — List all versions (descending order)
+    - GET /intents/{intent_id}/versions/{version_number} — Get specific version
+    
+    ### Intent Analysis
+    - POST /v1/intents/validate — Validate intent payload structure
+    - POST /intents/{intent_id}/diff — Compute diff between two versions
+    - POST /intents/{intent_id}/rebase-preview — Generate rebase preview plan
+    
+    ### Dependency Graph (Phase 1 - CRUD only)
+    - POST /v1/graph/nodes — Create graph node
+    - GET /v1/graph/nodes — List graph nodes (with optional filters)
+    - GET /v1/graph/nodes/{node_id} — Get specific graph node
+    - POST /v1/graph/edges — Create graph edge
+    - GET /v1/graph/edges — List graph edges (with optional filters)
+    - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
+    
+    ## Not Yet Implemented (Phase 2+)
+    - Rebase apply endpoint
+    - Checkpoint selection heuristics
+    - Approval revalidation hooks
+    - Runtime adapter integration
     - Full authentication/authorization
   version: 0.1.0
   contact:
@@ -43,6 +61,10 @@ tags:
     description: Intent lifecycle operations
   - name: versions
     description: Intent version management
+  - name: health
+    description: Health and observability endpoints
+  - name: graph
+    description: Dependency graph CRUD operations
 
 paths:
   /intents:
@@ -372,6 +394,283 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      description: Returns service health status
+      operationId: health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags:
+        - health
+      summary: Readiness check
+      description: Returns service readiness status
+      operationId: ready
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+
+  /metrics:
+    get:
+      tags:
+        - health
+      summary: Prometheus metrics
+      description: Returns Prometheus-compatible metrics
+      operationId: metrics
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/intents/validate:
+    post:
+      tags:
+        - intents
+      summary: Validate intent payload
+      description: Validates the structure of an intent payload without creating an intent
+      operationId: validateIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateIntentRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateIntentResponse'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/nodes:
+    post:
+      tags:
+        - graph
+      summary: Create graph node
+      description: Creates a new node in the dependency graph
+      operationId: createGraphNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphNodeRequest'
+      responses:
+        '201':
+          description: Node created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph nodes
+      description: Returns graph nodes with optional filtering
+      operationId: listGraphNodes
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: node_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeType'
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeState'
+      responses:
+        '200':
+          description: Nodes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphNodesResponse'
+
+  /v1/graph/nodes/{node_id}:
+    get:
+      tags:
+        - graph
+      summary: Get graph node
+      description: Returns a specific graph node by ID
+      operationId: getGraphNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Node found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/edges:
+    post:
+      tags:
+        - graph
+      summary: Create graph edge
+      description: Creates a new edge in the dependency graph
+      operationId: createGraphEdge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphEdgeRequest'
+      responses:
+        '201':
+          description: Edge created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphEdge'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Source or target node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph edges
+      description: Returns graph edges with optional filtering
+      operationId: listGraphEdges
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: from_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: to_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: edge_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EdgeType'
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphEdgesResponse'
+
+  /v1/graph/nodes/{node_id}/edges:
+    get:
+      tags:
+        - graph
+      summary: List edges from node
+      description: Returns all edges originating from a specific node
+      operationId: listEdgesFromNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListEdgesFromNodeResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----
@@ -402,16 +701,7 @@ components:
       required: [ref_type, ref_id]
       properties:
         ref_type:
-          type: string
-          description: |
-            Type of external reference. Possible values:
-            - intent: References an Intent
-            - intent_version: References an IntentVersion
-            - artifact: References an Artifact
-            - approval: References an Approval
-            - policy_snapshot: References a PolicySnapshot
-            - side_effect: References a SideEffect
-            - checkpoint: References a Checkpoint
+          $ref: '#/components/schemas/ExternalRefType'
         ref_id:
           type: string
           format: uuid
@@ -1215,6 +1505,249 @@ components:
           type: integer
         high_priority_changes:
           type: integer
+
+    # ----- Health & Observability -----
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+          description: Service version
+
+    ReadyResponse:
+      type: object
+      required: [status, ready]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        ready:
+          type: boolean
+        checks:
+          type: array
+          description: Individual readiness checks
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              ready:
+                type: boolean
+              error:
+                type: string
+                nullable: true
+
+    # ----- Intent Validation -----
+    ValidateIntentRequest:
+      type: object
+      required: [payload]
+      properties:
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+
+    ValidateIntentResponse:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationWarning'
+
+    ValidationError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the invalid field
+        message:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+
+    ValidationWarning:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the field with a warning
+        message:
+          type: string
+          description: Human-readable warning message
+        code:
+          type: string
+          description: Machine-readable warning code
+
+    # ----- Graph Types -----
+    NodeType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint, Workflow, Generic]
+      description: Type of a graph node
+
+    NodeState:
+      type: string
+      enum: [Active, Stale, Invalid, Archived]
+      description: State of a graph node
+
+    EdgeType:
+      type: string
+      enum: [DependsOn, Produces, Approves, Triggers, Defines, GeneratedFrom, ValidatedBy, GovernedBy, DerivedFrom, StoredIn, Supersedes, Blocks, Compensates]
+      description: Type label for a graph edge
+
+    ExternalRefType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint]
+      description: Type of external reference
+
+    GraphNode:
+      type: object
+      required: [id, tenant_id, workflow_id, node_type, label, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        state:
+          $ref: '#/components/schemas/NodeState'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    GraphEdge:
+      type: object
+      required: [id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateGraphNodeRequest:
+      type: object
+      required: [tenant_id, workflow_id, node_type, label]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    CreateGraphEdgeRequest:
+      type: object
+      required: [tenant_id, workflow_id, from_node_id, to_node_id, edge_type]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    ListGraphNodesResponse:
+      type: object
+      required: [nodes, total]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        total:
+          type: integer
+
+    ListGraphEdgesResponse:
+      type: object
+      required: [edges, total]
+      properties:
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+        total:
+          type: integer
+
+    ListEdgesFromNodeResponse:
+      type: object
+      required: [node_id, edges]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
 
     Error:
       type: object

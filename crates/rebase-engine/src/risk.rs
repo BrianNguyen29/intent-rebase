@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 /// Severity levels for diff changes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Severity {
     /// No semantic change or clarification only
+    #[default]
     Low,
     /// Minor functional change with limited impact
     Medium,
@@ -21,12 +23,6 @@ pub enum Severity {
     High,
     /// Critical change affecting policy, compliance, or security
     Critical,
-}
-
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::Low
-    }
 }
 
 /// Manual review trigger reason

@@ -31,17 +31,32 @@ CREATE TABLE IF NOT EXISTS graph_edges (
 );
 
 -- Indexes for common query patterns
-CREATE INDEX idx_graph_edges_tenant_id ON graph_edges(tenant_id);
-CREATE INDEX idx_graph_edges_workflow_id ON graph_edges(workflow_id);
-CREATE INDEX idx_graph_edges_from_node ON graph_edges(from_node_id);
-CREATE INDEX idx_graph_edges_to_node ON graph_edges(to_node_id);
-CREATE INDEX idx_graph_edges_edge_type ON graph_edges(edge_type);
-CREATE INDEX idx_graph_edges_created_at ON graph_edges(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant_id ON graph_edges(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_workflow_id ON graph_edges(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from_node ON graph_edges(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to_node ON graph_edges(to_node_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_edge_type ON graph_edges(edge_type);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_created_at ON graph_edges(created_at DESC);
 
 -- Composite indexes for common filter combinations
-CREATE INDEX idx_graph_edges_tenant_workflow ON graph_edges(tenant_id, workflow_id);
-CREATE INDEX idx_graph_edges_from_tenant ON graph_edges(from_node_id, tenant_id);
-CREATE INDEX idx_graph_edges_to_tenant ON graph_edges(to_node_id, tenant_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant_workflow ON graph_edges(tenant_id, workflow_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from_tenant ON graph_edges(from_node_id, tenant_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to_tenant ON graph_edges(to_node_id, tenant_id);
+
+-- Post-migration validation notes:
+-- 1. Verify tables exist: SELECT COUNT(*) FROM graph_edges; SELECT COUNT(*) FROM meta_edge_types;
+-- 2. Verify indexes exist: SELECT indexname FROM pg_indexes WHERE tablename IN ('graph_edges', 'meta_edge_types');
+-- 3. Verify CHECK constraints: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_edges'::regclass AND contype = 'c';
+-- 4. Verify UNIQUE constraint: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_edges'::regclass AND contype = 'u';
+-- 5. Verify foreign keys: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_edges'::regclass AND contype = 'f';
+-- 6. Verify trigger exists: SELECT trgname FROM pg_trigger WHERE tgrelid = 'graph_edges'::regclass;
+
+-- Rollback:
+-- DROP TRIGGER IF EXISTS graph_edges_validate_tenant_workflow ON graph_edges;
+-- DROP FUNCTION IF EXISTS trg_validate_edge_node_tenant_workflow_match();
+-- DROP TABLE IF EXISTS graph_edges;
+-- DROP TABLE IF EXISTS meta_edge_types;
+-- (Order matters: graph_edges depends on graph_nodes via FK, and trigger depends on function)
 
 -- Comments
 COMMENT ON TABLE graph_edges IS 'Phase 1: Graph edges for dependency tracking - Postgres-backed relational storage';

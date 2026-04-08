@@ -11,30 +11,26 @@
 ## 1. Product Spec Finalized
 
 ```
-[x] Product thesis finalized
+[ ] Product thesis finalized
     Evidence:
-    - PR merged: #1 (docs: add v1 baseline with ADR, checklist, and governance packs)
-    - Doc: ../../01-product/01-product-thesis.md — exists in docs baseline
+    - PR merged: <link>
+    - Doc: ../../01-product/01-product-thesis.md
 
-[x] Goals and non-goals defined
+[ ] Goals and non-goals defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../01-product/02-goals-nongoals.md — exists in docs baseline
+    - Doc: ../../01-product/02-goals-nongoals.md
 
-[x] Core principles documented
+[ ] Core principles documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../01-product/03-core-principles.md — exists in docs baseline
+    - Doc: ../../01-product/03-core-principles.md
 
-[x] Use cases documented
+[ ] Use cases documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../01-product/04-use-cases.md — exists in docs baseline
+    - Doc: ../../01-product/04-use-cases.md
 
-[x] Glossary updated
+[ ] Glossary updated
     Evidence:
-    - PR merged: #1
-    - Doc: ../../01-product/05-glossary.md — exists in docs baseline
+    - Doc: ../../01-product/05-glossary.md
 ```
 
 ---
@@ -42,35 +38,29 @@
 ## 2. Domain Model Finalized
 
 ```
-[x] Intent model v1 defined
+[ ] Intent model v1 defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/01-intent-model.md — exists in docs baseline
+    - Doc: ../../03-spec/01-intent-model.md
 
-[x] Semantic diff approach documented
+[ ] Semantic diff approach documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/02-semantic-diff.md — exists in docs baseline
+    - Doc: ../../03-spec/02-semantic-diff.md
 
-[x] Dependency graph model documented
+[ ] Dependency graph model documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/03-dependency-graph.md — exists in docs baseline
+    - Doc: ../../03-spec/03-dependency-graph.md
 
-[x] Rebase algorithm documented
+[ ] Rebase algorithm documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/04-rebase-engine.md — exists in docs baseline
+    - Doc: ../../03-spec/04-rebase-engine.md
 
-[x] Compensation model documented
+[ ] Compensation model documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/05-compensation.md — exists in docs baseline
+    - Doc: ../../03-spec/05-compensation.md
 
-[x] Provenance model documented
+[ ] Provenance model documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../03-spec/06-provenance.md — exists in docs baseline
+    - Doc: ../../03-spec/06-provenance.md
 ```
 
 ---
@@ -78,29 +68,26 @@
 ## 3. Repository Scaffolding
 
 ```
-[x] Rust workspace created
+[ ] Rust workspace created
     Evidence:
-    - File: Cargo.toml (root workspace with members: intent-rebase-types, intent-service, rebase-engine, graph-service)
-    - Verified: cargo check --workspace passes
+    - PR merged: <link>
+    - Cargo.toml with workspace members
 
-[x] Service structure defined (intent-service, rebase-engine, graph-service)
+[ ] Service structure defined (intent-service, rebase-engine, graph-service)
     Evidence:
-    - Directory structure: crates/intent-service/, crates/rebase-engine/, crates/graph-service/
-    - Each crate has lib.rs with Phase-1 stub implementation
+    - Directory structure in repo
 
-[x] Shared crate created (intent-rebase-types)
+[ ] Shared crate created (intent-rebase-types)
     Evidence:
-    - Directory: crates/intent-rebase-types/
-    - Contains: intent.rs, artifact.rs, graph.rs, audit.rs, error.rs
+    - crate published to local registry or workspace member
 
 [ ] Database migration tool integrated (sqlx-cli or similar)
     Evidence:
-    - NOT PRESENT — deferred to Phase 1 (migrations defined in ADR-02 but tooling not bootstrapped)
+    - Migrations runnable locally
 
-[x] Docker Compose for local infra (Postgres, NATS, MinIO)
+[ ] Docker Compose for local infra (Postgres, NATS)
     Evidence:
-    - File: infrastructure/local/docker-compose.yml
-    - Services: postgres:5432, nats:4222, minio:9000/9001
+    - docker-compose.yml present and working
 ```
 
 ---
@@ -108,41 +95,40 @@
 ## 4. ADRs Accepted
 
 ```
-[x] ADR-01: Runtime Adapter Selection (Temporal)
+[ ] ADR-01: Runtime Adapter Selection (Temporal)
     Evidence:
     - Doc: ../../13-adrs/01-runtime-adapter.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 
-[x] ADR-02: Data Plane Architecture (Postgres + S3)
+[ ] ADR-02: Data Plane Architecture (Postgres + S3)
     Evidence:
     - Doc: ../../13-adrs/02-data-plane.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 
-[x] ADR-03: External API Protocol (REST + Webhooks)
+[ ] ADR-03: External API Protocol (REST + Webhooks)
     Evidence:
     - Doc: ../../13-adrs/03-external-api.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 
-[x] ADR-04: Event Broker Selection — Deferred (NATS or Kafka)
+[ ] ADR-04: Event Broker Selection (NATS or Kafka)
     Evidence:
     - Doc: ../../13-adrs/04-event-broker.md
-    - Status: Deferred (interim default: NATS JetStream; revisit gate: Phase 2 or platform mandate)
-    - Interim default documented in Defer Note section
+    - Status: Accepted
 
-[x] ADR-05: Observability Baseline (OpenTelemetry)
+[ ] ADR-05: Observability Baseline (OpenTelemetry)
     Evidence:
     - Doc: ../../13-adrs/05-observability-baseline.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 
-[x] ADR-06: Rule Pack Versioning
+[ ] ADR-06: Rule Pack Versioning
     Evidence:
     - Doc: ../../13-adrs/06-rule-pack-versioning.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 
-[x] ADR-07: Approval Scope & Policy Snapshot Canonicalization
+[ ] ADR-07: Approval Scope & Policy Snapshot Canonicalization
     Evidence:
     - Doc: ../../13-adrs/07-approval-scope-canonicalization.md
-    - Status: Accepted (updated from Proposed)
+    - Status: Accepted
 ```
 
 ---
@@ -150,30 +136,25 @@
 ## 5. Architecture Baseline
 
 ```
-[x] System overview documented
+[ ] System overview documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../02-architecture/01-system-overview.md — exists in docs baseline
+    - Doc: ../../02-architecture/01-system-overview.md
 
-[x] Component boundaries defined
+[ ] Component boundaries defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../02-architecture/02-components.md — exists in docs baseline
+    - Doc: ../../02-architecture/02-components.md
 
-[x] Trust boundaries identified
+[ ] Trust boundaries identified
     Evidence:
-    - PR merged: #1
-    - Doc: ../../02-architecture/03-trust-boundaries.md — exists in docs baseline
+    - Doc: ../../02-architecture/03-trust-boundaries.md
 
-[x] Scaling topology defined
+[ ] Scaling topology defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../02-architecture/04-scaling-topology.md — exists in docs baseline
+    - Doc: ../../02-architecture/04-scaling-topology.md
 
-[x] Deployment models documented
+[ ] Deployment models documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../02-architecture/05-deployment-models.md — exists in docs baseline
+    - Doc: ../../02-architecture/05-deployment-models.md
 ```
 
 ---
@@ -181,33 +162,29 @@
 ## 6. Local Dev Environment
 
 ```
-[x] Rust toolchain 1.75+ configured
+[ ] Rust toolchain 1.75+ configured
     Evidence:
-    - File: rust-toolchain.toml (channel = "stable"; satisfies 1.75+ requirement)
+    - rust-toolchain.toml present
 
-[x] All workspace crates compile without errors
+[ ] All workspace crates compile without errors
     Evidence:
-    - `cargo check --workspace` passes (verified)
+    - `cargo check --all` passes
 
 [ ] Postgres connection via Docker Compose working
     Evidence:
-    - docker-compose.yml present with postgres service
-    - Note: Not verified interactively — requires docker daemon
+    - `cargo test` with DB integration tests pass
 
 [ ] NATS local instance running
     Evidence:
-    - docker-compose.yml present with nats service
-    - Note: Not verified interactively — requires docker daemon
+    - `nats-server` starts and accepts connections
 
 [ ] S3 mock (LocalStack or MinIO) configured
     Evidence:
-    - docker-compose.yml present with minio service
-    - Note: Not verified interactively — requires docker daemon
+    - S3 operations work locally
 
-[x] Environment variables documented in .env.example
+[ ] Environment variables documented in .env.example
     Evidence:
-    - File: .env.example
-    - Variables: DATABASE_URL, NATS_URL, AWS_*, S3_*, OTEL_*, RUST_LOG
+    - .env.example present with all required vars
 ```
 
 ---
@@ -215,22 +192,21 @@
 ## 7. CI Baseline
 
 ```
-[x] GitHub Actions (or equivalent) pipeline configured
+[ ] GitHub Actions (or equivalent) pipeline configured
     Evidence:
-    - File: .github/workflows/ci.yml
-    - Jobs: fmt, clippy, check, test, build
+    - .github/workflows/ci.yml present
 
-[x] CI runs: lint, check, test, build
+[ ] CI runs: lint, check, test, build
     Evidence:
-    - CI workflow defined with all four job types
+    - CI green on main branch
 
 [ ] Docker image build step present
     Evidence:
-    - NOT PRESENT — docker build deferred to Phase 1 (no Dockerfile yet)
+    - Docker build succeeds in CI
 
 [ ] PR gate: all checks must pass before merge
     Evidence:
-    - Branch protection not configured (infrastructure concern, not code)
+    - Branch protection rules configured
 ```
 
 ---
@@ -238,25 +214,21 @@
 ## 8. Security Baseline
 
 ```
-[x] Threat model v1 documented
+[ ] Threat model v1 documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../08-security/01-threat-model.md — exists in docs baseline
+    - Doc: ../../08-security/01-threat-model.md
 
-[x] Authn/authz approach defined
+[ ] Authn/authz approach defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../08-security/02-authn-authz.md — exists in docs baseline
+    - Doc: ../../08-security/02-authn-authz.md
 
-[x] Privacy and data handling policy defined
+[ ] Privacy and data handling policy defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../08-security/03-privacy-and-data-handling.md — exists in docs baseline
+    - Doc: ../../08-security/03-privacy-and-data-handling.md
 
-[x] Audit requirements defined
+[ ] Audit requirements defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../08-security/04-audit-and-compliance.md — exists in docs baseline
+    - Doc: ../../08-security/04-audit-and-compliance.md
 ```
 
 ---
@@ -264,30 +236,25 @@
 ## 9. Operations Baseline
 
 ```
-[x] Environments defined (dev, staging, prod)
+[ ] Environments defined (dev, staging, prod)
     Evidence:
-    - PR merged: #1
-    - Doc: ../../09-operations/01-environments.md — exists in docs baseline
+    - Doc: ../../09-operations/01-environments.md
 
-[x] CI/CD pipeline documented
+[ ] CI/CD pipeline documented
     Evidence:
-    - PR merged: #1
-    - Doc: ../../09-operations/02-ci-cd.md — exists in docs baseline
+    - Doc: ../../09-operations/02-ci-cd.md
 
-[x] Observability plan defined
+[ ] Observability plan defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../09-operations/03-observability.md — exists in docs baseline
+    - Doc: ../../09-operations/03-observability.md
 
-[x] SLOs defined
+[ ] SLOs defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../09-operations/04-sre-and-slos.md — exists in docs baseline
+    - Doc: ../../09-operations/04-sre-and-slos.md
 
-[x] Runbooks skeleton created
+[ ] Runbooks skeleton created
     Evidence:
-    - PR merged: #1
-    - Doc: ../../09-operations/05-runbooks.md — exists in docs baseline
+    - Doc: ../../09-operations/05-runbooks.md
 ```
 
 ---
@@ -295,20 +262,17 @@
 ## 10. Agent Implementation Guide
 
 ```
-[x] Agent implementation guide finalized
+[ ] Agent implementation guide finalized
     Evidence:
-    - PR merged: #1
-    - Doc: ../../12-agents/01-agent-implementation-guide.md — exists in docs baseline
+    - Doc: ../../12-agents/01-agent-implementation-guide.md
 
-[x] Task breakdown defined
+[ ] Task breakdown defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../12-agents/02-task-breakdown.md — exists in docs baseline
+    - Doc: ../../12-agents/02-task-breakdown.md
 
-[x] Prompts and contracts defined
+[ ] Prompts and contracts defined
     Evidence:
-    - PR merged: #1
-    - Doc: ../../12-agents/03-prompts-contracts.md — exists in docs baseline
+    - Doc: ../../12-agents/03-prompts-contracts.md
 ```
 
 ---
@@ -322,10 +286,9 @@ Exit Gate Review Date: ___________
 Reviewed By: ___________
 
 Blocking Issues (if any):
-1. DB migration tooling (Section 3) — deferred to Phase 1
-2. Docker image build (Section 7) — deferred to Phase 1
-3. Branch protection rules (Section 7) — infrastructure concern
-4. Postgres/NATS/S3 local verification — requires docker daemon (Sections 6–7)
+1.
+2.
+3.
 ```
 
 **Next Phase:** [Phase 1 — Core Control Plane MVP](./checklist-phase-1.md)

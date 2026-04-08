@@ -58,18 +58,13 @@ pub enum NodeType {
 }
 
 /// State of a graph node
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum NodeState {
+    #[default]
     Active,
     Stale,
     Invalid,
     Archived,
-}
-
-impl Default for NodeState {
-    fn default() -> Self {
-        NodeState::Active
-    }
 }
 
 /// An edge in the dependency graph
@@ -305,19 +300,15 @@ pub struct IngestorResult {
 /// Direction for edge traversal during impact propagation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum EdgeDirection {
     /// Traverse incoming edges (from dependent to dependency)
     Incoming,
     /// Traverse outgoing edges (from dependency to dependent)
     Outgoing,
     /// Traverse both directions
+    #[default]
     Both,
-}
-
-impl Default for EdgeDirection {
-    fn default() -> Self {
-        EdgeDirection::Both
-    }
 }
 
 /// Configuration for impact propagation through the dependency graph.
@@ -364,7 +355,7 @@ impl Default for PropagationConfig {
 /// - Edge types: DependsOn (incoming), Triggers (outgoing), GeneratedFrom (outgoing), ValidatedBy (incoming)
 /// - Target node types: Artifact, Approval, SideEffect, Generic
 pub static DEFAULT_PROPAGATION_CONFIG: once_cell::sync::Lazy<PropagationConfig> =
-    once_cell::sync::Lazy::new(|| PropagationConfig::default());
+    once_cell::sync::Lazy::new(PropagationConfig::default);
 
 // ============================================================================
 // Rebase Preview Integration Types
@@ -376,18 +367,14 @@ pub static DEFAULT_PROPAGATION_CONFIG: once_cell::sync::Lazy<PropagationConfig> 
 /// without failing the endpoint when graph coverage is incomplete.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AffectedItemsStatus {
     /// Graph data was available and affected items were successfully classified
     Available,
     /// Graph data was unavailable or the IntentVersion node was not found in the graph.
     /// The affected items arrays may be incomplete or empty.
+    #[default]
     Unavailable,
-}
-
-impl Default for AffectedItemsStatus {
-    fn default() -> Self {
-        AffectedItemsStatus::Unavailable
-    }
 }
 
 /// Preview of affected items for rebase planning (Phase 1 PR #16).

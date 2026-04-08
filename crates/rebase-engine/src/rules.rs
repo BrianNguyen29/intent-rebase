@@ -147,10 +147,8 @@ fn analyze_constraint_category(
     }
 
     // Policy changes elevate to at least High
-    if category_name == "policy" && !diffs.is_empty() {
-        if severity < Severity::High {
-            severity = Severity::High;
-        }
+    if category_name == "policy" && !diffs.is_empty() && severity < Severity::High {
+        severity = Severity::High;
     }
 
     // Critical: policy changes with Must priority
@@ -437,7 +435,7 @@ pub fn compute_confidence(stats: &MatchingStats) -> f64 {
     let confidence = unique_ratio * 1.0 + ambiguous_ratio * 0.5 + no_match_ratio * 0.8;
 
     // Clamp to [0.0, 1.0]
-    confidence.max(0.0).min(1.0)
+    confidence.clamp(0.0, 1.0)
 }
 
 /// Compute overall severity from section severities

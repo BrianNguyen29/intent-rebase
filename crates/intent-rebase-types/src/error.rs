@@ -52,4 +52,10 @@ pub enum IntentRebaseError {
 
     #[error("artifact must have at least one IntentVersion dependency")]
     ArtifactTraceabilityEmpty,
+
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("invalid API key: {0}")]
+    InvalidApiKey(String),
 }

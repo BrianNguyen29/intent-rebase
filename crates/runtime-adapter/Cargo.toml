@@ -1,5 +1,5 @@
 [package]
-name = "intent-rebase-types"
+name = "runtime-adapter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,12 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
-once_cell = { workspace = true }
-schemars = { workspace = true }
-validator = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

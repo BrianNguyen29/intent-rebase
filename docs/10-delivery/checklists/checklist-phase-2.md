@@ -12,11 +12,9 @@
 ## 1. Runtime Adapter v1 (Temporal)
 
 ```
-[ ] RuntimeAdapter trait defined and implemented
+[x] RuntimeAdapter trait defined and implemented
     Evidence:
-    - PR merged: <link>
-    - Code: runtime-adapter/src/trait.rs
-    - Tests: runtime-adapter/tests/trait_tests.rs
+    - Code: crates/runtime-adapter/src/lib.rs (RuntimeAdapter trait with 5 methods)
 
 [ ] TemporalAdapter: get_checkpoints(intent_id) implemented
     Evidence:
@@ -39,10 +37,9 @@
     - PR merged: <link>
     - Tests: replay test passes
 
-[ ] Fallback adapter (mock/no-op) for non-Temporal runtimes
+[x] Fallback adapter (mock/no-op) for non-Temporal runtimes
     Evidence:
-    - Code: runtime-adapter/src/mock_adapter.rs
-    - Tests: mock tests pass
+    - Code: crates/runtime-adapter/src/lib.rs (MockAdapter, 13 passing tests)
 ```
 
 ---
@@ -50,32 +47,40 @@
 ## 2. Checkpoint Mapping
 
 ```
-[ ] Checkpoint data model (checkpoint_id, intent_version, timestamp, workflow_state)
+[x] Checkpoint data model (checkpoint_id, intent_version, timestamp, workflow_state)
     Evidence:
-    - PR merged: <link>
-    - Code: intent-service/checkpoint.rs
-    - Schema: 007_checkpoints.sql
+    - Code: crates/intent-rebase-types/src/checkpoint.rs (Checkpoint domain type)
+    - Schema: infrastructure/migrations/007_create_checkpoints.sql
 
-[ ] Checkpoint storage (PostgreSQL)
+[x] Checkpoint storage (PostgreSQL) - PARTIAL
     Evidence:
-    - Migration: 007_checkpoints.sql
-    - Tests: checkpoint CRUD tests pass
+    - Migration: infrastructure/migrations/007_create_checkpoints.sql
+    - Code: crates/intent-service/src/checkpoint_repo.rs (SqlxCheckpointRepository)
+    - Tests: checkpoint enum conversion tests pass (4 tests in sqlx_checkpoint_tests)
+
+[x] Checkpoint service/query layer - PARTIAL GROUNDWORK
+    Evidence:
+    - Code: crates/intent-service/src/lib.rs (CheckpointService with 12 methods)
+    - Internal API: create_checkpoint, get_checkpoint, list_by_workflow, list_by_intent,
+      get_latest_checkpoint, get_checkpoint_for_version, activate/supersede/invalidate_checkpoint,
+      run_expiration, list_checkpoints_by_type
+    - Tests: 15 checkpoint service tests pass
+
+[x] Tenant resolution seam - PARTIAL GROUNDWORK
+    Evidence:
+    - Code: crates/intent-service/src/sqlx_repository.rs (TenantResolver trait, DefaultTenantResolver, StaticTenantResolver)
+    - SqlxIntentRepository updated to use tenant_resolver instead of Uuid::new_v4() placeholder
+    - Exported for internal use: pub use sqlx_repository::TenantResolver
 
 [ ] Checkpoint-to-intent-version alignment logic
     Evidence:
-    - PR merged: <link>
     - Code: rebase-engine/checkpoint_mapping.rs
     - Tests: alignment tests pass
 
 [ ] Checkpoint lifecycle (create on intent update, expire old checkpoints)
     Evidence:
-    - Code: checkpoint service with TTL
+    - CheckpointService::run_expiration implemented
     - Tests: lifecycle tests pass
-
-[ ] Checkpoint query API for runtime adapter
-    Evidence:
-    - Internal API: get_checkpoints(intent_id)
-    - Tests: query tests pass
 ```
 
 ---

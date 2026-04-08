@@ -672,7 +672,7 @@ impl GraphService {
         // Build adjacency list
         let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for node in &nodes {
-            adj.entry(node.id).or_insert_with(Vec::new);
+            adj.entry(node.id).or_default();
         }
 
         let edges = self
@@ -685,7 +685,7 @@ impl GraphService {
 
         for edge in &edges {
             adj.entry(edge.from_node_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(edge.to_node_id);
         }
 
@@ -731,10 +731,10 @@ impl GraphService {
                 }
 
                 for &neighbor in neighbors {
-                    if color.get(&neighbor) == Some(&Color::White) {
-                        if dfs(neighbor, adj, color, path, cycle_result) {
-                            return true;
-                        }
+                    if color.get(&neighbor) == Some(&Color::White)
+                        && dfs(neighbor, adj, color, path, cycle_result)
+                    {
+                        return true;
                     }
                 }
             }
@@ -1386,7 +1386,7 @@ impl GraphService {
                     .or(Some(&config.target_node_types))
             };
 
-            if let Some(ref allowed_types) = target_types {
+            if let Some(allowed_types) = target_types {
                 if !allowed_types.contains(&node.node_type) {
                     // Skip this node but still explore its outgoing edges for propagation
                     if depth < max_depth {

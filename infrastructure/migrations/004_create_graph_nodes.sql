@@ -63,16 +63,28 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
 );
 
 -- Indexes for common query patterns
-CREATE INDEX idx_graph_nodes_tenant_id ON graph_nodes(tenant_id);
-CREATE INDEX idx_graph_nodes_workflow_id ON graph_nodes(workflow_id);
-CREATE INDEX idx_graph_nodes_node_type ON graph_nodes(node_type);
-CREATE INDEX idx_graph_nodes_state ON graph_nodes(state);
-CREATE INDEX idx_graph_nodes_external_ref ON graph_nodes(external_ref_type, external_ref_id);
-CREATE INDEX idx_graph_nodes_created_at ON graph_nodes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant_id ON graph_nodes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_workflow_id ON graph_nodes(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_node_type ON graph_nodes(node_type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_state ON graph_nodes(state);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_external_ref ON graph_nodes(external_ref_type, external_ref_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_created_at ON graph_nodes(created_at DESC);
 
 -- Composite index for common filter combinations
-CREATE INDEX idx_graph_nodes_tenant_workflow ON graph_nodes(tenant_id, workflow_id);
-CREATE INDEX idx_graph_nodes_tenant_type ON graph_nodes(tenant_id, node_type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant_workflow ON graph_nodes(tenant_id, workflow_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant_type ON graph_nodes(tenant_id, node_type);
+
+-- Post-migration validation notes:
+-- 1. Verify tables exist: SELECT COUNT(*) FROM graph_nodes; SELECT COUNT(*) FROM meta_ref_types;
+-- 2. Verify indexes exist: SELECT indexname FROM pg_indexes WHERE tablename IN ('graph_nodes', 'meta_ref_types');
+-- 3. Verify CHECK constraints: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_nodes'::regclass AND contype = 'c';
+-- 4. Verify UNIQUE constraints: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_nodes'::regclass AND contype = 'u';
+-- 5. Verify foreign key: SELECT conname FROM pg_constraint WHERE conrelid = 'graph_nodes'::regclass AND contype = 'f';
+
+-- Rollback:
+-- DROP TABLE IF EXISTS graph_nodes;
+-- DROP TABLE IF EXISTS meta_ref_types;
+-- (Order matters: graph_nodes depends on meta_ref_types via FK)
 
 -- Comments
 COMMENT ON TABLE graph_nodes IS 'Phase 1: Graph nodes for dependency tracking - Postgres-backed relational storage';
