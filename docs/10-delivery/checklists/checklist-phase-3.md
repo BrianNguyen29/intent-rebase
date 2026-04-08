@@ -1,9 +1,9 @@
 # Phase 3 — Compensation + Production Hardening Checklist
 
 **Exit Gate:** Phase 3 complete khi tất cả items checked và có evidence.  
-**Prerequisite:** Phase 2 exit gate passed.
+**Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `NOT STARTED`  
+**Trạng thái:** `BATCH 0 PLANNING` — Full Phase 3 execution gated on Phase 2b completion. Batch 0 items (scaffold, design stubs, dependency audit) may run in parallel with Phase 2b.  
 **Phase:** Phase 3  
 **Target Duration:** 6–10 tuần
 

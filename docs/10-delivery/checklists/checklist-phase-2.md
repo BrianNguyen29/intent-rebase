@@ -3,8 +3,8 @@
 **Exit Gate:** Phase 2 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `IN PROGRESS` — internal groundwork delivered for checkpoint alignment, bounded apply orchestration, and mock-backed runtime wiring; external/runtime-integrated Phase 2 scope remains incomplete.  
-**Phase:** Phase 2  
+**Trạng thái:** `PHASE 2a COMPLETE` — Internal groundwork delivered (checkpoint alignment, bounded apply orchestration, mock-backed runtime wiring). Phase 2b external/runtime-integrated scope remains incomplete and is prerequisite-gated.
+**Phase:** Phase 2 (split: 2a internal groundwork ✓ | 2b external/integrated pending)  
 **Target Duration:** 6–10 tuần
 
 ---

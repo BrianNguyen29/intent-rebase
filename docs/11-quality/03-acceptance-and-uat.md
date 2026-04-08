@@ -6,10 +6,21 @@
 - rebase preview cho 3 use cases chính
 - audit trail đầy đủ cho các hành động cốt lõi
 
-## Phase 2 acceptance
-- low/medium risk apply path hoạt động
-- approvals stale bị phát hiện
-- workflow resume từ checkpoint hợp lệ
+## Phase 2a acceptance (internal groundwork)
+- internal apply pipeline wired end-to-end with mock adapter
+- checkpoint alignment logic passes alignment tests
+- graph state updater transitions validated
+- runtime readiness gating functional
+
+## Phase 2b acceptance (external/integrated — prerequisite to Phase 3 full execution)
+- low/medium risk apply endpoint operational
+- TemporalAdapter external implementation delivered and integrated
+- risk classification applied to all intent classes
+- approvals revalidation triggered on intent change
+- artifact invalidation + quarantine path functional
+- graph nodes and edges updated on rebase
+- replay API functional with checkpoint support
+- event streaming operational (NATS/Kafka)
 
 ## Phase 3 acceptance
 - compensation flows usable
