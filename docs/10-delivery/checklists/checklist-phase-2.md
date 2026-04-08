@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 2 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `NOT STARTED`  
+**Trạng thái:** `IN PROGRESS` — internal groundwork delivered for checkpoint alignment, bounded apply orchestration, and mock-backed runtime wiring; external/runtime-integrated Phase 2 scope remains incomplete.  
 **Phase:** Phase 2  
 **Target Duration:** 6–10 tuần
 
@@ -15,8 +15,39 @@
 [x] RuntimeAdapter trait defined and implemented
     Evidence:
     - Code: crates/runtime-adapter/src/lib.rs (RuntimeAdapter trait with 5 methods)
+      - get_checkpoints(), send_rebase_signal(), map_intent_to_checkpoint(),
+        replay_from_checkpoint(), is_adapter_ready()
 
-[ ] TemporalAdapter: get_checkpoints(intent_id) implemented
+[x] RuntimeAdapter trait injection into RebaseOrchestrator - INTERNAL WIRING DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs
+    - Field: runtime_adapter: Arc<dyn RuntimeAdapter> in RebaseOrchestrator struct
+    - Constructor: RebaseOrchestrator::new() takes Arc<dyn RuntimeAdapter>
+    - Test constructor: RebaseOrchestrator::with_mock_adapter() for testing
+    - Tests: 5 new tests covering success, signal failure, replay failure, and readiness checks
+
+[x] Internal execution loop: send_rebase_signal wired into proceed path - INTERNAL WIRING DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs
+    - Method: send_runtime_rebase_signal()
+    - Integration point: proceed path after checkpoint alignment and graph updates
+    - Graceful degradation: runtime failures don't block apply outcome
+    - Tests: test_runtime_execution_success, test_runtime_signal_failure_graceful_continuation
+
+[x] Internal execution loop: replay_from_checkpoint wired for aligned checkpoints - INTERNAL WIRING DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs
+    - Method: send_runtime_rebase_signal() calls replay_from_checkpoint
+    - Only attempted when aligned.checkpoint_id is Some
+    - Graceful degradation: replay failure doesn't block apply outcome
+    - Tests: test_runtime_replay_failure_graceful_continuation
+
+[x] Runtime readiness check: is_runtime_ready() method - INTERNAL WIRING DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs (is_runtime_ready)
+    - Tests: test_runtime_ready_check, test_runtime_not_ready_check
+
+[ ] TemporalAdapter: get_checkpoints() implemented
     Evidence:
     - PR merged: <link>
     - Code: runtime-adapter/src/temporal_adapter.rs
@@ -27,10 +58,11 @@
     - PR merged: <link>
     - Integration test: signal sent and received
 
-[ ] TemporalAdapter: map_intent_version_to_checkpoint(intent_version) implemented
+[ ] TemporalAdapter: map_intent_to_checkpoint(intent: IntentRef) implemented
     Evidence:
     - PR merged: <link>
-    - Tests: version-to-checkpoint mapping tests pass
+    - Code: runtime-adapter/src/temporal_adapter.rs
+    - Tests: intent-to-checkpoint mapping tests pass
 
 [ ] TemporalAdapter: replay_from_checkpoint(workflow_id, checkpoint) implemented
     Evidence:

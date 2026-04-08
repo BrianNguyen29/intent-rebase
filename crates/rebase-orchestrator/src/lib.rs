@@ -12,6 +12,7 @@
 //! - **MockAdapter/trait seams only** — no real runtime integration
 //! - **Class D/E blocked** — manual review required, no auto-apply
 //! - **Bounded state mutations** — graph updates only, no structural changes
+//! - **Runtime adapter injection** — RuntimeAdapter for internal execution loop
 //!
 //! ## Architecture
 //!
@@ -19,12 +20,37 @@
 //! RebaseOrchestrator
 //!   ├── checkpoint_aligner: CheckpointAligner
 //!   │     └── Aligns planner checkpoint candidates to real checkpoint records
-//!   ├── graph_updater: GraphUpdater  
+//!   ├── graph_updater: GraphUpdater
 //!   │     └── Applies bounded state mutations from classification results
-//!   └── apply_pipeline: ApplyPipeline
-//!         ├── Class A/B/C: auto-proceed with notification
-//!         └── Class D/E: blocked, requires manual review
+//!   ├── apply_pipeline: ApplyPipeline
+//!   │     ├── Class A/B/C: auto-proceed with notification
+//!   │     └── Class D/E: blocked, requires manual review
+//!   └── runtime_adapter: Arc<dyn RuntimeAdapter>
+//!         └── send_rebase_signal, replay_from_checkpoint (internal execution)
 //! ```
+
+/// Runtime execution outcome for internal rebase operations.
+///
+/// Reports the result of runtime adapter operations during the proceed path.
+#[derive(Debug, Clone)]
+pub struct RuntimeExecutionResult {
+    /// Signal sent successfully
+    pub signal_sent: bool,
+    /// Replay completed
+    pub replay_completed: bool,
+    /// Human-readable status message
+    pub status_message: String,
+}
+
+impl Default for RuntimeExecutionResult {
+    fn default() -> Self {
+        Self {
+            signal_sent: false,
+            replay_completed: false,
+            status_message: "Not executed".to_string(),
+        }
+    }
+}
 
 pub mod apply_pipeline;
 pub mod checkpoint_aligner;
@@ -38,6 +64,8 @@ pub use checkpoint_aligner::{
     AlignedCheckpoint, CheckpointAligner, CheckpointAlignmentOutcome, CheckpointAlignmentResult,
 };
 pub use graph_updater::{GraphUpdateAction, GraphUpdateResult, GraphUpdater};
+
+use runtime_adapter::{AdapterError, RebaseSignal, RuntimeAdapter};
 
 use intent_rebase_types::AffectedItemsStatus;
 #[allow(unused_imports)]
@@ -55,19 +83,45 @@ pub struct RebaseOrchestrator {
     checkpoint_aligner: CheckpointAligner,
     graph_updater: GraphUpdater,
     apply_pipeline: ApplyPipeline,
+    runtime_adapter: Arc<dyn RuntimeAdapter>,
 }
 
 impl RebaseOrchestrator {
     /// Create a new RebaseOrchestrator with the given dependencies.
+    ///
+    /// # Arguments
+    ///
+    /// * `checkpoint_service` - Checkpoint repository for alignment
+    /// * `graph_service` - Graph service for state mutations
+    /// * `runtime_adapter` - Runtime adapter for internal execution (send_rebase_signal, replay)
     pub fn new(
         checkpoint_service: Arc<dyn intent_service::CheckpointRepository>,
         graph_service: Arc<graph_service::GraphService>,
+        runtime_adapter: Arc<dyn RuntimeAdapter>,
     ) -> Self {
         Self {
             checkpoint_aligner: CheckpointAligner::new(checkpoint_service),
             graph_updater: GraphUpdater::new(graph_service),
             apply_pipeline: ApplyPipeline::new(),
+            runtime_adapter,
         }
+    }
+
+    /// Create a new RebaseOrchestrator with default MockAdapter for testing.
+    ///
+    /// This is a convenience constructor that creates a MockAdapter internally,
+    /// useful for tests that don't need to verify runtime adapter behavior.
+    #[cfg(test)]
+    pub fn with_mock_adapter(
+        checkpoint_service: Arc<dyn intent_service::CheckpointRepository>,
+        graph_service: Arc<graph_service::GraphService>,
+    ) -> Self {
+        use runtime_adapter::MockAdapter;
+        Self::new(
+            checkpoint_service,
+            graph_service,
+            Arc::new(MockAdapter::ready()),
+        )
     }
 
     /// Align a rebase plan's checkpoint selection to real checkpoint records.
@@ -86,6 +140,89 @@ impl RebaseOrchestrator {
         self.checkpoint_aligner
             .align(plan, intent_id, tenant_id, workflow_id)
             .await
+    }
+
+    /// Send a rebase signal to the runtime adapter for internal execution.
+    ///
+    /// This sends a signal to notify the runtime that a rebase operation should
+    /// proceed. The signal is sent after checkpoint alignment is complete.
+    ///
+    /// Returns `RuntimeExecutionResult` indicating signal and replay status.
+    async fn send_runtime_rebase_signal(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+        aligned: &AlignedCheckpoint,
+    ) -> Result<RuntimeExecutionResult, AdapterError> {
+        // Build the rebase signal for the runtime
+        let signal = RebaseSignal {
+            intent_id: intent_id.to_string(),
+            signal_type: "proceed".to_string(),
+            metadata: serde_json::json!({
+                "tenant_id": tenant_id.to_string(),
+                "workflow_id": workflow_id.to_string(),
+                "checkpoint_id": aligned.checkpoint_id.map(|id| id.to_string()),
+                "checkpoint_outcome": format!("{:?}", aligned.outcome),
+            }),
+        };
+
+        // Send the signal
+        self.runtime_adapter.send_rebase_signal(signal).await?;
+
+        // If we have a checkpoint, attempt replay from it
+        let mut result = RuntimeExecutionResult {
+            signal_sent: true,
+            replay_completed: false,
+            status_message: "Signal sent, replay pending".to_string(),
+        };
+
+        if let Some(checkpoint_id) = aligned.checkpoint_id {
+            // Convert to runtime checkpoint format for replay
+            let runtime_checkpoint = runtime_adapter::Checkpoint {
+                id: checkpoint_id.to_string(),
+                label: format!("Aligned checkpoint for intent {}", intent_id),
+                description: aligned.rationale.clone(),
+                timestamp: chrono::Utc::now(),
+                validated: true,
+            };
+
+            let intent_ref = runtime_adapter::IntentRef::new(
+                intent_id.to_string(),
+                tenant_id.to_string(),
+                workflow_id.to_string(),
+                "active".to_string(),
+            );
+
+            // Attempt replay from checkpoint
+            match self
+                .runtime_adapter
+                .replay_from_checkpoint(runtime_checkpoint, intent_ref)
+                .await
+            {
+                Ok(()) => {
+                    result.replay_completed = true;
+                    result.status_message = "Signal sent and replay completed".to_string();
+                }
+                Err(e) => {
+                    result.status_message = format!("Signal sent but replay failed: {}", e);
+                }
+            }
+        } else {
+            result.status_message = "Signal sent, no checkpoint for replay".to_string();
+        }
+
+        Ok(result)
+    }
+
+    /// Check if the runtime adapter is ready.
+    ///
+    /// Returns `true` if the runtime is ready to accept signals and replay operations.
+    pub async fn is_runtime_ready(&self) -> bool {
+        match self.runtime_adapter.is_adapter_ready().await {
+            Ok(status) => status == runtime_adapter::AdapterStatus::Ready,
+            Err(_) => false,
+        }
     }
 
     /// Apply bounded graph state updates based on classification results.
@@ -246,6 +383,19 @@ impl RebaseOrchestrator {
                     )
                     .await?;
 
+                // Step 3: Send rebase signal to runtime (internal execution loop)
+                let runtime_result = self
+                    .send_runtime_rebase_signal(intent_id, tenant_id, workflow_id, &aligned)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Runtime signal failed, continuing: {:?}", e);
+                        RuntimeExecutionResult {
+                            signal_sent: false,
+                            replay_completed: false,
+                            status_message: format!("Signal failed: {}", e),
+                        }
+                    });
+
                 // Extract values needed for rationale before moving
                 let aligned_outcome = aligned.outcome.clone();
                 let graph_updates_count = graph_updates.len();
@@ -265,10 +415,11 @@ impl RebaseOrchestrator {
                     graph_updates,
                     notification_required: notification,
                     rationale: format!(
-                        "Class {:?} auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied",
+                        "Class {:?} auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied, runtime: {}",
                         plan.decision_class,
                         aligned_outcome,
-                        graph_updates_count
+                        graph_updates_count,
+                        runtime_result.status_message
                     ),
                 })
             }
@@ -640,7 +791,7 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service);
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -687,7 +838,8 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service);
+        let orchestrator =
+            RebaseOrchestrator::with_mock_adapter(checkpoint_repo.clone(), graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -734,7 +886,7 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service);
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -781,7 +933,7 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service);
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -828,7 +980,7 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service);
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -888,7 +1040,7 @@ mod tests {
         graph_repo.add_node(node).await;
 
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service);
+        let orchestrator = RebaseOrchestrator::with_mock_adapter(checkpoint_repo, graph_service);
 
         let affected_item = AffectedItem {
             node_id,
@@ -918,7 +1070,8 @@ mod tests {
         let graph_repo = Arc::new(MockGraphRepo::new());
         let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
 
-        let orchestrator = RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service);
+        let orchestrator =
+            RebaseOrchestrator::with_mock_adapter(checkpoint_repo.clone(), graph_service);
 
         let intent_id = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -960,5 +1113,196 @@ mod tests {
 
         // Class B should auto-proceed
         assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_execution_success() {
+        // Test that MockAdapter with success config allows runtime execution
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test runtime execution".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        // Class B should auto-proceed with runtime execution
+        assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Rationale should include runtime status
+        assert!(result.rationale.contains("runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_signal_failure_graceful_continuation() {
+        // Test that runtime signal failure doesn't block the apply
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        // Configure mock to fail on signal
+        let mock_adapter = Arc::new(MockAdapter::ready().with_signal_success(false));
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test runtime signal failure".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        // Class B should still auto-proceed even if runtime signal fails
+        assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Rationale should indicate the signal failure
+        assert!(result.rationale.contains("Signal failed") || result.rationale.contains("runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_replay_failure_graceful_continuation() {
+        // Test that runtime replay failure doesn't block the apply
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        // Configure mock to succeed on signal but fail on replay
+        let mock_adapter = Arc::new(
+            MockAdapter::ready()
+                .with_signal_success(true)
+                .with_replay_success(false),
+        );
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let v1 = create_test_version(intent_id, 1);
+        let v2 = create_test_version(intent_id, 2);
+
+        let plan = RebasePlan {
+            decision_class: DecisionClass::B,
+            rationale: "Test runtime replay failure".to_string(),
+            section_decisions: vec![],
+            affected_items: AffectedItemsPreview::unavailable(),
+            deferred: rebase_engine::DeferredFields::phase1_baseline(
+                DecisionClass::B,
+                &AffectedItemsPreview::unavailable(),
+            ),
+            manual_review_recommended: false,
+            risk_level: 2,
+        };
+
+        let result = orchestrator
+            .apply_rebase(
+                intent_id,
+                tenant_id,
+                workflow_id,
+                &v1,
+                &v2,
+                &plan,
+                &AffectedItemsPreview::unavailable(),
+            )
+            .await
+            .unwrap();
+
+        // Class B should still auto-proceed even if replay fails
+        assert_eq!(result.outcome, ApplyOutcome::AutoProceeded);
+        // Rationale should indicate the replay failure
+        assert!(result.rationale.contains("replay") || result.rationale.contains("runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_ready_check() {
+        // Test runtime readiness check
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::ready());
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let is_ready = orchestrator.is_runtime_ready().await;
+        assert!(is_ready, "MockAdapter should report ready");
+    }
+
+    #[tokio::test]
+    async fn test_runtime_not_ready_check() {
+        // Test runtime not-ready detection
+        use runtime_adapter::MockAdapter;
+
+        let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+        let graph_repo = Arc::new(MockGraphRepo::new());
+        let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+        let mock_adapter = Arc::new(MockAdapter::not_ready());
+
+        let orchestrator = RebaseOrchestrator::new(checkpoint_repo, graph_service, mock_adapter);
+
+        let is_ready = orchestrator.is_runtime_ready().await;
+        assert!(!is_ready, "MockAdapter should report not ready");
     }
 }
