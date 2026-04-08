@@ -72,10 +72,13 @@
     - SqlxIntentRepository updated to use tenant_resolver instead of Uuid::new_v4() placeholder
     - Exported for internal use: pub use sqlx_repository::TenantResolver
 
-[ ] Checkpoint-to-intent-version alignment logic
+[x] Checkpoint-to-intent-version alignment logic - INTERNAL GROUNDWORK DELIVERED
     Evidence:
-    - Code: rebase-engine/checkpoint_mapping.rs
-    - Tests: alignment tests pass
+    - Code: crates/rebase-orchestrator/src/checkpoint_aligner.rs (CheckpointAligner, AlignedCheckpoint)
+    - Internal-only: no HTTP endpoint, aligns planner checkpoint candidates to real checkpoint records
+    - Outcomes: Aligned, ClosestMatch, NoCheckpointRequired, NoCheckpointFound, MultipleCandidates
+    - Tests: 4 alignment tests pass (test_align_class_a_no_checkpoint_needed, test_align_no_checkpoint_found,
+      test_align_with_checkpoints, test_alignment_report)
 
 [ ] Checkpoint lifecycle (create on intent update, expire old checkpoints)
     Evidence:
@@ -88,6 +91,22 @@
 ## 3. Apply Rebase — Low/Medium Risk
 
 ```
+[x] Internal low/medium apply pipeline - INTERNAL GROUNDWORK DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/apply_pipeline.rs (ApplyPipeline, ApplyGuard trait)
+    - Class A: No-op, return immediately
+    - Class B/C: Auto-proceed with optional notification
+    - Class D/E: Blocked, requires manual review
+    - Guards: LowMediumGuard (default), HighCriticalGuard (strict mode), StandardGuard
+    - Tests: 12 apply pipeline tests pass (guard evaluations, factory methods, custom guard)
+
+[x] RebaseOrchestrator entry point for internal apply - INTERNAL GROUNDWORK DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/lib.rs (RebaseOrchestrator struct)
+    - Coordinates: checkpoint alignment, graph state updates, apply pipeline
+    - Methods: align_checkpoint, update_graph_state, apply_rebase, plan_and_apply
+    - Tests: 7 orchestrator tests pass (Class A/B/D/E, graph state update, plan_and_apply)
+
 [ ] Rebase apply endpoint: POST /api/v1/intents/{id}/rebase-apply
     Evidence:
     - OpenAPI spec updated
@@ -202,6 +221,15 @@
 ## 6. Graph Update on Rebase
 
 ```
+[x] Graph state update orchestration - INTERNAL GROUNDWORK DELIVERED
+    Evidence:
+    - Code: crates/rebase-orchestrator/src/graph_updater.rs (GraphUpdater)
+    - State-only mutations: Active→Stale/Invalid, Stale→Active/Archived/Invalid
+    - No structural mutations: no create/delete nodes or edges (deferred to Phase 3)
+    - Methods: update_node_state_if_affected, mark_artifacts_stale, mark_approvals_stale,
+      revalidate_nodes, archive_nodes, get_state_summary
+    - Tests: 4 graph updater tests pass (valid/invalid transitions, terminal state, not found)
+
 [ ] Graph nodes updated when intent changes
     Evidence:
     - PR merged: <link>

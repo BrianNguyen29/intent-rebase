@@ -7,6 +7,7 @@ members = [
     "crates/rebase-engine",
     "crates/graph-service",
     "crates/runtime-adapter",
+    "crates/rebase-orchestrator",
 ]
 
 [workspace.package]
