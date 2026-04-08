@@ -32,6 +32,7 @@ pub enum AuditEventType {
     ApprovalRequired,
     ApprovalGranted,
     ApprovalRevoked,
+    ApprovalCancelled,
     ArtifactProduced,
     ArtifactInvalidated,
 }
@@ -93,4 +94,17 @@ pub struct ApprovalRevokedAuditPayload {
     pub decision_class: String,
     pub resolved_by: String,
     pub resolution_notes: Option<String>,
+}
+
+/// Payload for ApprovalCancelled audit events (Phase 2b bounded slice)
+/// This is emitted when pending approval requests are cancelled due to intent version change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalCancelledAuditPayload {
+    pub intent_id: Uuid,
+    pub cancelled_version_from: i32,
+    pub cancelled_version_to: i32,
+    pub decision_class: String,
+    pub cancelled_by: String,
+    pub cancellation_reason: String,
+    pub cancelled_count: usize,
 }

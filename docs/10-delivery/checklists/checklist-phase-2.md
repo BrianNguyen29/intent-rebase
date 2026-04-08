@@ -119,10 +119,14 @@
     - Tests: 4 alignment tests pass (test_align_class_a_no_checkpoint_needed, test_align_no_checkpoint_found,
       test_align_with_checkpoints, test_alignment_report)
 
-[ ] Checkpoint lifecycle (create on intent update, expire old checkpoints)
+[x] Checkpoint expiration (expire old checkpoints) - PARTIAL
     Evidence:
-    - CheckpointService::run_expiration implemented
-    - Tests: lifecycle tests pass
+    - CheckpointService::run_expiration implemented (crates/intent-service/src/lib.rs, lines 769-771)
+    - Tests: checkpoint_service_tests::test_run_expiration passes
+
+[ ] Checkpoint creation on intent update (automatic)
+    Evidence:
+    - Not implemented - deferred to Phase 3 event-driven architecture
 ```
 
 ---
@@ -261,6 +265,17 @@
 Current bounded approval queue/read/status-only workflow is delivered in Section 3. This section tracks the broader revalidation and policy-snapshot lifecycle that is still open.
 
 ```
+[x] Approval invalidation on intent change - PHASE 2b BOUNDED SLICE DELIVERED
+    Evidence:
+    - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository::cancel_pending_by_intent)
+    - Code: crates/intent-service/src/lib.rs (IntentService::create_version wires cancellation, with_approval_and_audit constructor)
+    - Code: crates/intent-rebase-types/src/audit.rs (ApprovalCancelledAuditPayload, AuditEventType::ApprovalCancelled)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository::record_approval_cancelled helper)
+    - Tenant-safe: cancellation filters by intent_id AND tenant_id
+    - Audit event: ApprovalCancelled emitted on cancellation (bounded taxonomy extension)
+    - Tests: 6 new tests for cancel_pending_by_intent pass
+    - Note: Minimal coherent extension to existing repository (not a new service)
+
 [ ] Approval scope canonicalization implemented
     Evidence:
     - PR merged: <link>
@@ -272,12 +287,6 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - PR merged: <link>
     - Code: approval-service/snapshot.rs
     - Schema: approval_scope, policy_snapshot tables
-
-[ ] Approval invalidation on intent change
-    Evidence:
-    - PR merged: <link>
-    - Code: approval-service/invalidation.rs
-    - Tests: invalidation tests pass
 
 [ ] Re-approval workflow: queue and notify approvers
     Evidence:

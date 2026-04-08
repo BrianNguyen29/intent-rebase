@@ -5,8 +5,9 @@
 //! In-memory implementation for tests, SQL-backed for production.
 
 use super::{
-    ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload, AuditEvent, AuditEventType,
-    IntentRebaseError, RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload,
+    ApprovalCancelledAuditPayload, ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload,
+    AuditEvent, AuditEventType, IntentRebaseError, RebaseApplyAuditPayload,
+    RebaseApplyBlockedAuditPayload,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -123,6 +124,32 @@ pub trait AuditRepository: Send + Sync {
             id: Uuid::new_v4(),
             tenant_id,
             event_type: AuditEventType::ApprovalRevoked,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record an ApprovalCancelled audit event (Phase 2b bounded slice)
+    /// This is emitted when pending approval requests are cancelled due to intent version change
+    async fn record_approval_cancelled(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalCancelledAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ApprovalCancelled,
             actor_id: actor_id.to_string(),
             intent_id: Some(intent_id),
             artifact_id: None,
@@ -376,6 +403,7 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
         AuditEventType::ApprovalRequired => "ApprovalRequired",
         AuditEventType::ApprovalGranted => "ApprovalGranted",
         AuditEventType::ApprovalRevoked => "ApprovalRevoked",
+        AuditEventType::ApprovalCancelled => "ApprovalCancelled",
         AuditEventType::ArtifactProduced => "ArtifactProduced",
         AuditEventType::ArtifactInvalidated => "ArtifactInvalidated",
     }
@@ -399,6 +427,7 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "ApprovalRequired" => AuditEventType::ApprovalRequired,
         "ApprovalGranted" => AuditEventType::ApprovalGranted,
         "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
+        "ApprovalCancelled" => AuditEventType::ApprovalCancelled,
         "ArtifactProduced" => AuditEventType::ArtifactProduced,
         "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
         _ => AuditEventType::RebaseApplied,

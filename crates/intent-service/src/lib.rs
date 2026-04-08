@@ -10,9 +10,10 @@ pub mod sqlx_repository;
 use async_trait::async_trait;
 use chrono::Utc;
 use intent_rebase_types::{
-    AffectedItem, AffectedItemsPreview, ChangeChannel, Checkpoint, CreateIntentRequest,
-    CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, Intent, IntentHeadResponse,
-    IntentRebaseError, IntentStatus, IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
+    AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload, AuditRepository,
+    ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
+    CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
+    IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
 };
 use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
@@ -283,6 +284,12 @@ pub struct IntentService {
     repo: Arc<dyn IntentRepository>,
     /// Optional graph service for impact classification
     graph_service: Option<Arc<graph_service::GraphService>>,
+    /// Optional approval request repository for cancelling pending approvals on version change
+    approval_repo: Option<Arc<dyn ApprovalRequestRepository>>,
+    /// Optional audit repository for recording cancellation events
+    audit_repo: Option<Arc<dyn AuditRepository>>,
+    /// System actor ID used for system-initiated cancellations
+    system_actor_id: String,
 }
 
 impl IntentService {
@@ -290,6 +297,9 @@ impl IntentService {
         Self {
             repo,
             graph_service: None,
+            approval_repo: None,
+            audit_repo: None,
+            system_actor_id: "intent-service/system".to_string(),
         }
     }
 
@@ -301,6 +311,42 @@ impl IntentService {
         Self {
             repo,
             graph_service: Some(graph_service),
+            approval_repo: None,
+            audit_repo: None,
+            system_actor_id: "intent-service/system".to_string(),
+        }
+    }
+
+    /// Create a new IntentService with approval and audit repositories for Phase 2b bounded slice.
+    /// When approval_repo is provided, creating a new intent version will automatically cancel
+    /// any pending approval requests for that intent.
+    pub fn with_approval_and_audit(
+        repo: Arc<dyn IntentRepository>,
+        approval_repo: Arc<dyn ApprovalRequestRepository>,
+        audit_repo: Arc<dyn AuditRepository>,
+    ) -> Self {
+        Self {
+            repo,
+            graph_service: None,
+            approval_repo: Some(approval_repo),
+            audit_repo: Some(audit_repo),
+            system_actor_id: "intent-service/system".to_string(),
+        }
+    }
+
+    /// Create a new IntentService with all optional services for Phase 2b bounded slice.
+    pub fn with_all_services(
+        repo: Arc<dyn IntentRepository>,
+        graph_service: Arc<graph_service::GraphService>,
+        approval_repo: Arc<dyn ApprovalRequestRepository>,
+        audit_repo: Arc<dyn AuditRepository>,
+    ) -> Self {
+        Self {
+            repo,
+            graph_service: Some(graph_service),
+            approval_repo: Some(approval_repo),
+            audit_repo: Some(audit_repo),
+            system_actor_id: "intent-service/system".to_string(),
         }
     }
 
@@ -317,6 +363,9 @@ impl IntentService {
     /// If `expected_version` and `expected_row_version` are provided (non-zero), performs OCC check:
     /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
     ///   This allows clients to detect concurrent modifications and retry.
+    ///
+    /// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
+    /// cancel any pending approval requests for the intent when a new version is created.
     pub async fn create_version(
         &self,
         intent_id: Uuid,
@@ -327,9 +376,59 @@ impl IntentService {
         let (intent, row_version) = self.repo.get_intent_for_update(intent_id).await?;
         let exp_ver = expected_version.unwrap_or(intent.current_version);
         let exp_row_ver = expected_row_version.unwrap_or(row_version);
-        self.repo
+
+        // Capture old version number before creating new version for cancellation
+        let old_version = intent.current_version;
+
+        let result = self
+            .repo
             .create_version_with_occ(intent_id, request, exp_ver, exp_row_ver)
-            .await
+            .await?;
+
+        // Phase 2b bounded slice: Cancel pending approval requests if approval_repo is configured
+        if let Some(approval_repo) = &self.approval_repo {
+            let tenant_id = intent.tenant_id;
+            let cancellation_reason = format!(
+                "Intent version changed from v{} to v{}",
+                old_version, result.version_number
+            );
+
+            // Cancel all pending approval requests for this intent
+            let cancelled_count = approval_repo
+                .cancel_pending_by_intent(
+                    intent_id,
+                    tenant_id,
+                    &self.system_actor_id,
+                    &cancellation_reason,
+                )
+                .await
+                .unwrap_or(0);
+
+            // Emit audit event if audit_repo is configured and we cancelled any requests
+            if cancelled_count > 0 {
+                if let Some(audit_repo) = &self.audit_repo {
+                    let audit_payload = ApprovalCancelledAuditPayload {
+                        intent_id,
+                        cancelled_version_from: old_version,
+                        cancelled_version_to: result.version_number,
+                        decision_class: "D/E".to_string(), // High risk decisions require approval
+                        cancelled_by: self.system_actor_id.clone(),
+                        cancellation_reason,
+                        cancelled_count,
+                    };
+                    let _ = audit_repo
+                        .record_approval_cancelled(
+                            tenant_id,
+                            &self.system_actor_id,
+                            intent_id,
+                            audit_payload,
+                        )
+                        .await;
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Get the current (head) version of an intent

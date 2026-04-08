@@ -118,6 +118,17 @@ pub trait ApprovalRequestRepository: Send + Sync {
         resolved_by: &str,
         resolution_notes: Option<&str>,
     ) -> Result<ApprovalRequest, IntentRebaseError>;
+
+    /// Cancel all pending approval requests for an intent (Phase 2b bounded slice)
+    /// Called when a new intent version is created to invalidate stale approval requests.
+    /// Returns the number of cancelled requests.
+    async fn cancel_pending_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError>;
 }
 
 /// In-memory approval request repository for Phase 2b bounded slice testing
@@ -251,6 +262,34 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
         request.resolution_notes = resolution_notes.map(|s| s.to_string());
 
         Ok(request.clone())
+    }
+
+    async fn cancel_pending_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        let mut requests = self.requests.write().await;
+        let now = Utc::now();
+        let mut count = 0;
+
+        for request in requests.values_mut() {
+            if request.intent_id == intent_id
+                && request.tenant_id == tenant_id
+                && request.status == ApprovalRequestStatus::Pending
+            {
+                request.status = ApprovalRequestStatus::Cancelled;
+                request.updated_at = now;
+                request.resolved_at = Some(now);
+                request.resolved_by = Some(cancelled_by.to_string());
+                request.resolution_notes = Some(reason.to_string());
+                count += 1;
+            }
+        }
+
+        Ok(count)
     }
 }
 
@@ -498,6 +537,44 @@ impl ApprovalRequestRepository for SqlxApprovalRequestRepository {
         self.update_status_in_db(id, status, resolved_by, resolution_notes)
             .await
     }
+
+    async fn cancel_pending_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        let now = Utc::now();
+
+        // Bulk update: cancel all pending approval requests for this intent+tenant
+        let result = sqlx::query(
+            r#"
+            UPDATE approval_requests
+            SET status = 'cancelled',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE intent_id = $4 AND tenant_id = $5 AND status = 'pending'
+            "#,
+        )
+        .bind(now)
+        .bind(cancelled_by)
+        .bind(reason)
+        .bind(intent_id)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "cancel pending approval requests by intent: {}",
+                e
+            ))
+        })?;
+
+        Ok(result.rows_affected() as usize)
+    }
 }
 
 // =============================================================================
@@ -696,6 +773,232 @@ mod tests {
             result.unwrap_err(),
             IntentRebaseError::ApprovalRequestNotPending(found_id, status) if found_id == id && status == "Rejected"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_cancel_pending_by_intent_cancels_pending_requests() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create multiple pending requests for same intent
+        for i in 0..3 {
+            let request = ApprovalRequest::new_pending(
+                intent_id,
+                i as i32 + 1,
+                i as i32 + 2,
+                workflow_id,
+                tenant_id,
+                "external-api/unknown",
+                "external-api",
+                "D",
+                "Blocked",
+            );
+            repo.create_approval_request(request).await.unwrap();
+        }
+
+        // Verify 3 pending requests exist
+        let pending_before = repo
+            .list_pending_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(pending_before.len(), 3);
+
+        // Cancel all pending requests
+        let count = repo
+            .cancel_pending_by_intent(intent_id, tenant_id, "system", "New version created")
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+
+        // Verify no pending requests remain
+        let pending_after = repo
+            .list_pending_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(pending_after.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_pending_by_intent_respects_tenant_isolation() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+
+        let intent_id = Uuid::new_v4();
+        let tenant_1 = Uuid::new_v4();
+        let tenant_2 = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create pending request for tenant 1
+        let request1 = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_1,
+            "external-api/unknown",
+            "external-api",
+            "D",
+            "Blocked",
+        );
+        repo.create_approval_request(request1).await.unwrap();
+
+        // Create pending request for tenant 2
+        let request2 = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_2,
+            "external-api/unknown",
+            "external-api",
+            "D",
+            "Blocked",
+        );
+        repo.create_approval_request(request2).await.unwrap();
+
+        // Cancel for tenant 1 only
+        let count = repo
+            .cancel_pending_by_intent(intent_id, tenant_1, "system", "New version created")
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Tenant 1 should have no pending, tenant 2 should still have 1
+        let pending_1 = repo
+            .list_pending_by_intent(intent_id, tenant_1)
+            .await
+            .unwrap();
+        assert_eq!(pending_1.len(), 0);
+
+        let pending_2 = repo
+            .list_pending_by_intent(intent_id, tenant_2)
+            .await
+            .unwrap();
+        assert_eq!(pending_2.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_pending_by_intent_returns_zero_when_none_pending() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // No requests exist - cancellation should return 0
+        let count = repo
+            .cancel_pending_by_intent(intent_id, tenant_id, "system", "New version created")
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_pending_by_intent_only_cancels_pending_status() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create a pending request
+        let pending_request = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/unknown",
+            "external-api",
+            "D",
+            "Blocked",
+        );
+        let pending_id = pending_request.id;
+        repo.create_approval_request(pending_request).await.unwrap();
+
+        // Create and then approve another request
+        let approved_request = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/unknown",
+            "external-api",
+            "D",
+            "Blocked",
+        );
+        let approved_id = approved_request.id;
+        repo.create_approval_request(approved_request)
+            .await
+            .unwrap();
+        repo.update_approval_request_status(
+            approved_id,
+            ApprovalRequestStatus::Approved,
+            "approver",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Cancel pending - should only cancel the pending one
+        let count = repo
+            .cancel_pending_by_intent(intent_id, tenant_id, "system", "New version created")
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Pending request should now be cancelled
+        let pending = repo.get_approval_request(pending_id).await.unwrap();
+        assert_eq!(pending.status, ApprovalRequestStatus::Cancelled);
+
+        // Approved request should still be approved (not affected)
+        let approved = repo.get_approval_request(approved_id).await.unwrap();
+        assert_eq!(approved.status, ApprovalRequestStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_pending_by_intent_sets_resolution_fields() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        let request = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/unknown",
+            "external-api",
+            "D",
+            "Blocked",
+        );
+        let request_id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        // Cancel with specific reason
+        repo.cancel_pending_by_intent(
+            intent_id,
+            tenant_id,
+            "system",
+            "Intent version changed to v3",
+        )
+        .await
+        .unwrap();
+
+        // Verify resolution fields are set
+        let cancelled = repo.get_approval_request(request_id).await.unwrap();
+        assert_eq!(cancelled.status, ApprovalRequestStatus::Cancelled);
+        assert_eq!(cancelled.resolved_by, Some("system".to_string()));
+        assert_eq!(
+            cancelled.resolution_notes,
+            Some("Intent version changed to v3".to_string())
+        );
+        assert!(cancelled.resolved_at.is_some());
     }
 }
 
