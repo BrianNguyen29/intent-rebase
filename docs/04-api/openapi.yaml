@@ -394,6 +394,70 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /intents/{intent_id}/rebase-apply:
+    post:
+      tags:
+        - rebase
+      summary: Apply a rebase directive
+      description: |
+        Executes the current bounded rebase-apply path for an intent version transition.
+
+        The endpoint reuses the preview planner, then runs the Phase 2 internal apply pipeline:
+        - Class A: no-op
+        - Class B/C: auto-proceed
+        - Class D/E: return accepted/manual-review-required without auto-apply
+
+        **Runtime execution semantics:**
+        - Runtime signal delivery is best-effort and does not block the API response.
+        - Temporal replay is currently implemented as cooperative signal-based replay with
+          checkpoint context, not native Temporal reset.
+      operationId: applyRebase
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Rebase applied or determined to be a no-op
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebaseApplyResponse'
+        '202':
+          description: Rebase requires manual review and was not auto-applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebaseApplyResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /health:
     get:
       tags:
@@ -1200,6 +1264,90 @@ components:
           minimum: 1
           maximum: 5
           description: Risk level (1=lowest, 5=highest)
+
+    RebaseApplyResponse:
+      type: object
+      description: |
+        Response for the bounded external rebase-apply path.
+
+        D/E outcomes are surfaced as `blocked_manual_review` with HTTP 202.
+        Runtime replay status reflects cooperative runtime signaling, not native Temporal reset.
+      required:
+        - intent_id
+        - from_version
+        - to_version
+        - decision_class
+        - risk_level
+        - outcome
+        - manual_review_required
+        - notification_required
+        - rationale
+        - runtime_execution_status
+        - signal_sent
+        - replay_attempted
+        - replay_completed
+        - graph_updates_applied
+        - graph_updates_failed
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        decision_class:
+          $ref: '#/components/schemas/DecisionClass'
+        risk_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+        outcome:
+          type: string
+          enum:
+            - no_op
+            - auto_proceeded
+            - auto_proceeded_with_notification
+            - blocked_manual_review
+        manual_review_required:
+          type: boolean
+        notification_required:
+          type: boolean
+        rationale:
+          type: string
+        aligned_checkpoint_id:
+          type: string
+          format: uuid
+          nullable: true
+        checkpoint_alignment_outcome:
+          type: string
+          nullable: true
+          enum:
+            - aligned
+            - closest_match
+            - no_checkpoint_required
+            - no_checkpoint_found
+            - multiple_candidates
+        runtime_execution_status:
+          type: string
+          enum:
+            - not_applicable
+            - skipped_not_ready
+            - degraded
+            - succeeded
+            - succeeded_no_replay
+        signal_sent:
+          type: boolean
+        replay_attempted:
+          type: boolean
+        replay_completed:
+          type: boolean
+        graph_updates_applied:
+          type: integer
+          minimum: 0
+        graph_updates_failed:
+          type: integer
+          minimum: 0
 
     AffectedItemsPreview:
       type: object

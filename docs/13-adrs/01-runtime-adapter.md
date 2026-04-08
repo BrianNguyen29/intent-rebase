@@ -1,6 +1,6 @@
 # ADR-01 — Runtime Adapter Selection
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 0–1  
@@ -65,9 +65,10 @@ Intent Rebase Engine
 ## Implementation Notes
 
 - Define `RuntimeAdapter` trait in `src/runtime/adapter.rs`
-- Implement `TemporalAdapter` using `temporal-rs` client
-- Adapter handles: `get_checkpoints(intent_id)`, `send_rebase_signal(workflow_id, directive)`, `map_intent_version_to_checkpoint(intent_version)`
-- Phase 0: define trait and mock; Phase 1: implement Temporal adapter
+- Implement `TemporalAdapter` using Temporal Rust client
+- Adapter handles: `get_checkpoints()`, `send_rebase_signal(...)`, `map_intent_to_checkpoint(...)`, `replay_from_checkpoint(...)`
+- Current bounded replay semantics use cooperative workflow signaling with checkpoint metadata; native Temporal reset remains deferred until checkpoints carry Temporal run/event correlation
+- Phase 0–2a: define trait and mock/internal wiring; Phase 2b: implement Temporal adapter external path in batches
 
 ---
 

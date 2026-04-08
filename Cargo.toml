@@ -66,6 +66,12 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 sha2 = "0.10"
 once_cell = "1.19"
+futures-util = "0.3"
+
+# Temporal
+temporalio-client = "0.2.0"
+temporalio-common = "0.2.0"
+temporalio-sdk-core = "0.2.0"
 
 [profile.release]
 lto = "fat"

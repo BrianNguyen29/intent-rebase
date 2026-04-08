@@ -6,6 +6,15 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+temporal = [
+    "dep:futures-util",
+    "dep:temporalio-client",
+    "dep:temporalio-common",
+    "dep:temporalio-sdk-core",
+]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -15,6 +24,10 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+futures-util = { workspace = true, optional = true }
+temporalio-client = { workspace = true, optional = true }
+temporalio-common = { workspace = true, optional = true }
+temporalio-sdk-core = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

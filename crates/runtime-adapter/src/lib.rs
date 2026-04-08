@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[cfg(feature = "temporal")]
+pub mod temporal_adapter;
+
+#[cfg(feature = "temporal")]
+pub use temporal_adapter::{TemporalAdapter, TemporalAdapterConfig};
+
 /// Errors that can occur during runtime adapter operations.
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]
 pub enum AdapterError {

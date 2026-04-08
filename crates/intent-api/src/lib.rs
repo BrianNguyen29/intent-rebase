@@ -20,6 +20,10 @@ use intent_rebase_types::{
 use intent_service::IntentService;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use rebase_engine::{DecisionClass, DiffRiskAnalysis, IntentVersionDiff, SectionDecision};
+use rebase_orchestrator::{
+    apply_pipeline::ApplyOutcome, checkpoint_aligner::CheckpointAlignmentOutcome,
+    RebaseOrchestrator, RuntimeExecutionStatus,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -61,11 +65,34 @@ pub struct RebasePreviewResponse {
     pub risk_level: u8,
 }
 
+/// Response for rebase apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebaseApplyResponse {
+    pub intent_id: Uuid,
+    pub from_version: IntentVersion,
+    pub to_version: IntentVersion,
+    pub decision_class: DecisionClass,
+    pub risk_level: u8,
+    pub outcome: String,
+    pub manual_review_required: bool,
+    pub notification_required: bool,
+    pub rationale: String,
+    pub aligned_checkpoint_id: Option<Uuid>,
+    pub checkpoint_alignment_outcome: Option<String>,
+    pub runtime_execution_status: String,
+    pub signal_sent: bool,
+    pub replay_attempted: bool,
+    pub replay_completed: bool,
+    pub graph_updates_applied: usize,
+    pub graph_updates_failed: usize,
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub service: Arc<IntentService>,
     pub graph_service: Arc<GraphService>,
+    pub orchestrator: Arc<RebaseOrchestrator>,
     pub start_time: Instant,
 }
 
@@ -707,6 +734,123 @@ async fn rebase_preview(
     }))
 }
 
+async fn rebase_apply(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    Json(request): Json<DiffRequest>,
+) -> Result<(StatusCode, Json<RebaseApplyResponse>), ApiErrorResponse> {
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+    let from_version = state
+        .service
+        .get_version(intent_id, request.from_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+    let to_version = state
+        .service
+        .get_version(intent_id, request.to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+    let plan = state
+        .service
+        .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+    let apply_result = state
+        .orchestrator
+        .apply_rebase(
+            intent_id,
+            intent_head.intent.tenant_id,
+            intent_head.intent.workflow_id,
+            &from_version,
+            &to_version,
+            &plan,
+            &plan.affected_items,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let response = RebaseApplyResponse {
+        intent_id,
+        from_version,
+        to_version,
+        decision_class: plan.decision_class,
+        risk_level: plan.risk_level,
+        outcome: apply_outcome_label(&apply_result.outcome).to_string(),
+        manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),
+        notification_required: apply_result.notification_required,
+        rationale: apply_result.rationale.clone(),
+        aligned_checkpoint_id: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.checkpoint_id),
+        checkpoint_alignment_outcome: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint_alignment_label(&checkpoint.outcome).to_string()),
+        runtime_execution_status: runtime_execution_status_label(
+            &apply_result.runtime_execution_result.status,
+        )
+        .to_string(),
+        signal_sent: apply_result.runtime_execution_result.signal_sent,
+        replay_attempted: apply_result.runtime_execution_result.replay_attempted,
+        replay_completed: apply_result.runtime_execution_result.replay_completed,
+        graph_updates_applied: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| update.success)
+            .count(),
+        graph_updates_failed: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| !update.success)
+            .count(),
+    };
+
+    Ok((apply_status_code(&apply_result.outcome), Json(response)))
+}
+
+fn apply_status_code(outcome: &ApplyOutcome) -> StatusCode {
+    match outcome {
+        ApplyOutcome::BlockedManualReview => StatusCode::ACCEPTED,
+        ApplyOutcome::NoOp
+        | ApplyOutcome::AutoProceeded
+        | ApplyOutcome::AutoProceededWithNotification => StatusCode::OK,
+    }
+}
+
+fn apply_outcome_label(outcome: &ApplyOutcome) -> &'static str {
+    match outcome {
+        ApplyOutcome::NoOp => "no_op",
+        ApplyOutcome::AutoProceeded => "auto_proceeded",
+        ApplyOutcome::AutoProceededWithNotification => "auto_proceeded_with_notification",
+        ApplyOutcome::BlockedManualReview => "blocked_manual_review",
+    }
+}
+
+fn checkpoint_alignment_label(outcome: &CheckpointAlignmentOutcome) -> &'static str {
+    match outcome {
+        CheckpointAlignmentOutcome::Aligned => "aligned",
+        CheckpointAlignmentOutcome::ClosestMatch => "closest_match",
+        CheckpointAlignmentOutcome::NoCheckpointRequired => "no_checkpoint_required",
+        CheckpointAlignmentOutcome::NoCheckpointFound => "no_checkpoint_found",
+        CheckpointAlignmentOutcome::MultipleCandidates => "multiple_candidates",
+    }
+}
+
+fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static str {
+    match status {
+        RuntimeExecutionStatus::NotApplicable => "not_applicable",
+        RuntimeExecutionStatus::SkippedNotReady => "skipped_not_ready",
+        RuntimeExecutionStatus::Degraded => "degraded",
+        RuntimeExecutionStatus::Succeeded => "succeeded",
+        RuntimeExecutionStatus::SucceededNoReplay => "succeeded_no_replay",
+    }
+}
+
 /// Initialize tracing with JSON formatting using RUST_LOG env var
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -761,10 +905,15 @@ async fn metrics_handler() -> impl IntoResponse {
 }
 
 /// Build the Phase 1 router with CORS enabled
-pub fn build_router(service: Arc<IntentService>, graph_service: Arc<GraphService>) -> Router {
+pub fn build_router(
+    service: Arc<IntentService>,
+    graph_service: Arc<GraphService>,
+    orchestrator: Arc<RebaseOrchestrator>,
+) -> Router {
     let state = AppState {
         service,
         graph_service,
+        orchestrator,
         start_time: Instant::now(),
     };
 
@@ -783,6 +932,7 @@ pub fn build_router(service: Arc<IntentService>, graph_service: Arc<GraphService
         )
         .route("/intents/{intent_id}/diff", post(compute_diff))
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+        .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))
@@ -800,17 +950,25 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
     use graph_service::{GraphService, InMemoryGraphRepository};
-    use intent_service::{InMemoryIntentRepository, IntentService};
+    use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
+    use runtime_adapter::MockAdapter;
     use std::sync::Arc;
 
     fn create_test_service() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
         let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
         let graph_svc = Arc::new(GraphService::new(graph_repo));
         let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
         AppState {
             service,
             graph_service: graph_svc,
+            orchestrator,
             start_time: Instant::now(),
         }
     }
@@ -829,8 +987,26 @@ mod tests {
             )
             .route("/intents/{intent_id}/diff", post(compute_diff))
             .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+            .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
             .with_state(state);
         // Router builds successfully - this is a compile-time check essentially
+    }
+
+    #[test]
+    fn test_apply_status_code_blocked_returns_accepted() {
+        assert_eq!(
+            apply_status_code(&ApplyOutcome::BlockedManualReview),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[test]
+    fn test_apply_outcome_label_serialization_values() {
+        assert_eq!(apply_outcome_label(&ApplyOutcome::NoOp), "no_op");
+        assert_eq!(
+            apply_outcome_label(&ApplyOutcome::AutoProceededWithNotification),
+            "auto_proceeded_with_notification"
+        );
     }
 
     #[test]
@@ -1344,13 +1520,20 @@ mod tests {
         // Create service with graph service available
         let repo = Arc::new(InMemoryIntentRepository::new());
         let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
         let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
 
         // Create service with graph integration
         let service = Arc::new(IntentService::with_graph_service(repo, graph_svc.clone()));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
+            orchestrator,
             start_time: Instant::now(),
         };
 
@@ -1519,11 +1702,18 @@ mod tests {
         // Create service with graph service but NO graph data
         let repo = Arc::new(InMemoryIntentRepository::new());
         let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
         let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
         let service = Arc::new(IntentService::with_graph_service(repo, graph_svc.clone()));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
+            orchestrator,
             start_time: Instant::now(),
         };
 
