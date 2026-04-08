@@ -19,6 +19,7 @@ pub struct AuditEvent {
     pub occurred_at: DateTime<Utc>,
 }
 
+/// Audit event type taxonomy for Phase 2b bounded slice
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuditEventType {
     IntentCreated,
@@ -27,9 +28,43 @@ pub enum AuditEventType {
     RebaseDetected,
     RebasePreviewGenerated,
     RebaseApplied,
+    RebaseApplyBlocked,
     ApprovalRequired,
     ApprovalGranted,
     ApprovalRevoked,
     ArtifactProduced,
     ArtifactInvalidated,
+}
+
+/// Payload for RebaseApplied audit events (Phase 2b bounded slice)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebaseApplyAuditPayload {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub decision_class: String,
+    pub risk_level: u8,
+    pub outcome: String,
+    pub manual_review_required: bool,
+    pub rationale: String,
+    pub aligned_checkpoint_id: Option<Uuid>,
+    pub checkpoint_alignment_outcome: Option<String>,
+    pub runtime_execution_status: String,
+    pub signal_sent: bool,
+    pub replay_attempted: bool,
+    pub replay_completed: bool,
+    pub graph_updates_applied: usize,
+    pub graph_updates_failed: usize,
+}
+
+/// Payload for RebaseApplyBlocked audit events (Phase 2b bounded slice)
+/// This is emitted when external apply hits blocked D/E path
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebaseApplyBlockedAuditPayload {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub decision_class: String,
+    pub risk_level: u8,
+    pub rationale: String,
+    pub requestor_id: String,
+    pub requestor_type: String,
 }

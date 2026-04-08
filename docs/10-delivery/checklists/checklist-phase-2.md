@@ -187,6 +187,22 @@
     - OpenAPI: docs/04-api/openapi.yaml (/intents/{intent_id}/rebase-apply)
     - Behavior: Class A/B/C wired to existing bounded apply path; Class D/E return 202/manual review required
 
+[x] Rebase apply audit trail for external apply - PHASE 2b BOUNDED SLICE DELIVERED
+    Evidence:
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (AuditRepository trait, InMemoryAuditRepository, AuditService)
+    - Code: crates/intent-rebase-types/src/audit.rs (RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, AuditEventType::RebaseApplyBlocked)
+    - Audit events: RebaseApplied (all outcomes), RebaseApplyBlocked (D/E blocked only)
+    - Best-effort actor attribution: fallback external-api/unknown
+    - Tests: 5 audit_repo tests pass, 2 blocked audit tests pass
+
+[x] DB-backed pending approval_requests for blocked D/E external apply - PHASE 2b BOUNDED SLICE DELIVERED
+    Evidence:
+    - Code: crates/intent-service/src/approval_request_repo.rs (ApprovalRequestRepository trait, InMemoryApprovalRequestRepository, ApprovalRequest)
+    - Code: infrastructure/migrations/008_create_approval_requests.sql
+    - Schema: approval_requests table with pending status stub
+    - Only pending status in scope for Phase 2b bounded slice
+    - Tests: 4 approval_request_repo tests pass
+
 [ ] Risk classification: low/medium/high/critical
     Evidence:
     - PR merged: <link>

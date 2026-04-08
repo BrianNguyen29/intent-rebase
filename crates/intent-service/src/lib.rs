@@ -3,6 +3,7 @@
 //! Phase 1: First slice implementation with in-memory repository.
 //! Repository trait allows swapping to SQL-backed implementation.
 
+pub mod approval_request_repo;
 pub mod checkpoint_repo;
 pub mod sqlx_repository;
 
@@ -19,6 +20,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub use approval_request_repo::{
+    ApprovalRequest, ApprovalRequestRepository, ApprovalRequestStatus,
+    InMemoryApprovalRequestRepository,
+};
 pub use checkpoint_repo::{
     CheckpointRepository, InMemoryCheckpointRepository, SqlxCheckpointRepository,
 };

@@ -93,6 +93,8 @@ pub struct AppState {
     pub service: Arc<IntentService>,
     pub graph_service: Arc<GraphService>,
     pub orchestrator: Arc<RebaseOrchestrator>,
+    pub audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
+    pub approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     pub start_time: Instant,
 }
 
@@ -773,6 +775,106 @@ async fn rebase_apply(
         .await
         .map_err(ApiErrorResponse)?;
 
+    // Phase 2b bounded slice: Record audit event for all external apply outcomes
+    // Best-effort actor attribution: fallback external-api/unknown
+    let actor_id = "external-api/unknown";
+    let audit_payload = intent_rebase_types::RebaseApplyAuditPayload {
+        from_version: request.from_version,
+        to_version: request.to_version,
+        decision_class: format!("{:?}", plan.decision_class),
+        risk_level: plan.risk_level,
+        outcome: apply_outcome_label(&apply_result.outcome).to_string(),
+        manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),
+        rationale: apply_result.rationale.clone(),
+        aligned_checkpoint_id: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.checkpoint_id),
+        checkpoint_alignment_outcome: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint_alignment_label(&checkpoint.outcome).to_string()),
+        runtime_execution_status: runtime_execution_status_label(
+            &apply_result.runtime_execution_result.status,
+        )
+        .to_string(),
+        signal_sent: apply_result.runtime_execution_result.signal_sent,
+        replay_attempted: apply_result.runtime_execution_result.replay_attempted,
+        replay_completed: apply_result.runtime_execution_result.replay_completed,
+        graph_updates_applied: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| update.success)
+            .count(),
+        graph_updates_failed: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| !update.success)
+            .count(),
+    };
+
+    // Record audit event (best-effort, don't fail the response)
+    if let Err(e) = state
+        .audit_service
+        .record_rebase_applied(
+            intent_head.intent.tenant_id,
+            actor_id,
+            intent_id,
+            audit_payload,
+        )
+        .await
+    {
+        tracing::warn!("Failed to record RebaseApplied audit event: {:?}", e);
+    }
+
+    // Phase 2b bounded slice: Create pending approval_request when blocked D/E
+    if matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview) {
+        let blocked_payload = intent_rebase_types::RebaseApplyBlockedAuditPayload {
+            from_version: request.from_version,
+            to_version: request.to_version,
+            decision_class: format!("{:?}", plan.decision_class),
+            risk_level: plan.risk_level,
+            rationale: apply_result.rationale.clone(),
+            requestor_id: actor_id.to_string(),
+            requestor_type: "external-api".to_string(),
+        };
+
+        // Record blocked audit event (best-effort)
+        if let Err(e) = state
+            .audit_service
+            .record_rebase_apply_blocked(
+                intent_head.intent.tenant_id,
+                actor_id,
+                intent_id,
+                blocked_payload,
+            )
+            .await
+        {
+            tracing::warn!("Failed to record RebaseApplyBlocked audit event: {:?}", e);
+        }
+
+        // Create pending approval_request record
+        let approval_request = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            request.from_version,
+            request.to_version,
+            intent_head.intent.workflow_id,
+            intent_head.intent.tenant_id,
+            actor_id,
+            "external-api",
+            &format!("{:?}", plan.decision_class),
+            &apply_result.rationale,
+        );
+
+        if let Err(e) = state
+            .approval_request_repo
+            .create_approval_request(approval_request)
+            .await
+        {
+            tracing::warn!("Failed to create approval_request record: {:?}", e);
+        }
+    }
+
     let response = RebaseApplyResponse {
         intent_id,
         from_version,
@@ -909,11 +1011,15 @@ pub fn build_router(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
     orchestrator: Arc<RebaseOrchestrator>,
+    audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
+    approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
 ) -> Router {
     let state = AppState {
         service,
         graph_service,
         orchestrator,
+        audit_service,
+        approval_request_repo,
         start_time: Instant::now(),
     };
 
@@ -965,10 +1071,16 @@ mod tests {
             graph_svc.clone(),
             Arc::new(MockAdapter::ready()),
         ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
         AppState {
             service,
             graph_service: graph_svc,
             orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
             start_time: Instant::now(),
         }
     }
@@ -1534,6 +1646,10 @@ mod tests {
             service,
             graph_service: graph_svc.clone(),
             orchestrator,
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+                as Arc<dyn intent_service::ApprovalRequestRepository>,
             start_time: Instant::now(),
         };
 
@@ -1714,6 +1830,10 @@ mod tests {
             service,
             graph_service: graph_svc.clone(),
             orchestrator,
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+                as Arc<dyn intent_service::ApprovalRequestRepository>,
             start_time: Instant::now(),
         };
 
