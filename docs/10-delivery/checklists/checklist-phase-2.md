@@ -282,11 +282,12 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - Doc: ../../13-adrs/07-approval-scope-canonicalization.md
     - Code: approval-service/canonicalization.rs
 
-[ ] Policy snapshot creation (S3-backed immutable record)
+[~] Policy snapshot creation groundwork (bounded slice - schema, types, repo only; S3 upload/canonicalization/revalidation out of scope)
     Evidence:
     - PR merged: <link>
-    - Code: approval-service/snapshot.rs
-    - Schema: approval_scope, policy_snapshot tables
+    - Code: intent-service/policy_snapshot_repo.rs
+    - Types: intent-rebase-types/src/policy_snapshot.rs
+    - Schema: infrastructure/migrations/009_create_policy_snapshot.sql
 
 [ ] Re-approval workflow: queue and notify approvers
     Evidence:

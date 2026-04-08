@@ -245,6 +245,9 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::CheckpointNotFound(_) => {
                 (StatusCode::BAD_REQUEST, "CHECKPOINT_NOT_FOUND", false)
             }
+            IntentRebaseError::PolicySnapshotNotFound(_) => {
+                (StatusCode::NOT_FOUND, "POLICY_SNAPSHOT_NOT_FOUND", false)
+            }
         };
 
         let body = ApiError {

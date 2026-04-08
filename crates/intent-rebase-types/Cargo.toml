@@ -20,3 +20,4 @@ once_cell = { workspace = true }
 schemars = { workspace = true }
 validator = { workspace = true }
 sqlx = { workspace = true }
+sha2 = { workspace = true }

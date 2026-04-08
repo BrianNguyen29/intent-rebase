@@ -10,6 +10,7 @@ pub mod checkpoint;
 pub mod error;
 pub mod graph;
 pub mod intent;
+pub mod policy_snapshot;
 
 pub use artifact::*;
 pub use audit::*;
@@ -18,3 +19,4 @@ pub use checkpoint::*;
 pub use error::*;
 pub use graph::*;
 pub use intent::*;
+pub use policy_snapshot::*;

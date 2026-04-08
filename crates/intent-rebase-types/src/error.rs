@@ -68,4 +68,8 @@ pub enum IntentRebaseError {
     /// Phase 2b: Checkpoint not found during replay
     #[error("checkpoint not found: {0}")]
     CheckpointNotFound(Uuid),
+
+    /// Phase 2 governance: Policy snapshot not found
+    #[error("policy snapshot not found: {0}")]
+    PolicySnapshotNotFound(Uuid),
 }

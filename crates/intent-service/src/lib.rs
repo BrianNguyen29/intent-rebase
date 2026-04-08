@@ -5,6 +5,7 @@
 
 pub mod approval_request_repo;
 pub mod checkpoint_repo;
+pub mod policy_snapshot_repo;
 pub mod sqlx_repository;
 
 use async_trait::async_trait;
@@ -27,6 +28,9 @@ pub use approval_request_repo::{
 };
 pub use checkpoint_repo::{
     CheckpointRepository, InMemoryCheckpointRepository, SqlxCheckpointRepository,
+};
+pub use policy_snapshot_repo::{
+    InMemoryPolicySnapshotRepository, PolicySnapshotRepository, SqlxPolicySnapshotRepository,
 };
 pub use sqlx_repository::SqlxIntentRepository;
 
