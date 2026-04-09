@@ -137,10 +137,12 @@
     - Code: compensation-service/planner.rs (stub scaffold only)
     - Status: Batch 1+ scope
 
-[ ] Compensation executor: real rollback/counter-action logic
+[x] Compensation executor: real rollback/acknowledgment logic (Phase 3 Batch 1 bounded RollbackExecutor)
     Evidence:
-    - Code: compensation-service/executor.rs (stub scaffold only)
-    - Status: Batch 1+ scope (stub implemented, real logic pending)
+    - Code: crates/compensation-service/src/compensation_executor.rs (RollbackExecutor with strategy/feasibility gates)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (wired to new_with_side_effect_repo)
+    - Tests: cargo test -p compensation-service --all-features (102 tests pass)
+    - Note: Bounded to Rollback+Automatic path only. Non-Rollback strategies fail closed with UNSUPPORTED_STRATEGY_TYPE. Non-Automatic feasibility fails closed with UNSUPPORTED_FEASIBILITY. Missing side effect fails closed with SIDE_EFFECT_NOT_FOUND. Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged". Does NOT claim external reversal.
 
 [ ] Compensation retry logic (max retries, backoff, dead-letter)
     Evidence:

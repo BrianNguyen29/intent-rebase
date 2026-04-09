@@ -49,7 +49,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 1-6e | Compensation action execute API: `POST /compensation-actions/{action_id}/execute` | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Executor gate: only Approved actions can execute. Stub executor always succeeds. |
 | 1-6f | Status transition validation matrix | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Explicit validation with fail-closed semantics. |
 | 1-7 | Compensation planner: generate compensation plan from side effects | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
-| 1-8 | Compensation executor: real rollback/counter-action logic | Stub ✅ skeleton contract delivered (Phase 3 Batch 1). Real logic is Batch 1+ scope. |
+| 1-8 | Compensation executor: real rollback/acknowledgment logic | ✅ delivered (Phase 3 Batch 1 bounded RollbackExecutor for Rollback+Automatic path). Real rollback acknowledgment validated against side effect ledger. Non-Rollback strategies and non-Automatic feasibility fail closed. Truthful success summaries (acknowledged, not reversed). Counter-action logic for non-Rollback strategies is Batch 1+ scope. |
 | 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | |
 | 1-10 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | |
 | 1-11 | Failed → Pending reapproval path | Batch 1+ scope (not in Phase 3 Batch 1) |

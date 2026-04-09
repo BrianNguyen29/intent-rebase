@@ -5,7 +5,7 @@
 //! compensation actions with proper status transition validation and tenant isolation.
 //!
 //! **Bounded executor slice scope:**
-//! - Executor is stub-only (StubCompensationExecutor); real rollback/counter-action logic is Batch 1+
+//! - Executor is RollbackExecutor for Rollback+Automatic path; StubCompensationExecutor for tests
 //! - Only Approved actions can execute; illegal transitions fail closed
 //! - No retry/DLQ systems; Failed actions remain Failed (retry/reapproval is Batch 1+ scope)
 //! - No background workers; all operations are explicit API calls
@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use crate::compensation_action::{CompensationAction, CompensationStatus, ExecutionResult};
 use crate::compensation_action_repo::CompensationActionRepository;
-use crate::compensation_executor::{CompensationExecutor, StubCompensationExecutor};
+use crate::compensation_executor::CompensationExecutor;
+use crate::side_effect_repo::SideEffectRepository;
 use intent_rebase_types::IntentRebaseError;
 
 /// Service facade for compensation action operations.
@@ -25,20 +26,35 @@ use intent_rebase_types::IntentRebaseError;
 #[derive(Clone)]
 pub struct CompensationActionService {
     repo: Arc<dyn CompensationActionRepository>,
-    /// Executor for running compensation actions.
-    /// Phase 3 Batch 1: This is StubCompensationExecutor (always succeeds).
-    /// Real executor logic is Batch 1+ scope.
-    executor: StubCompensationExecutor,
+    /// Side effect repository for RollbackExecutor validation.
+    /// Phase 3 Batch 1: Used by execute_action to validate side effect context
+    /// before running the bounded RollbackExecutor.
+    side_effect_repo: Option<Arc<dyn SideEffectRepository>>,
 }
 
 impl CompensationActionService {
-    /// Create a new CompensationActionService with the given repository and default stub executor.
+    /// Create a new CompensationActionService with the given repository.
     ///
-    /// Uses StubCompensationExecutor which always returns success.
+    /// Uses a stub executor that always returns success (backward compatibility).
+    /// **Note:** For production use with real execution, use `new_with_side_effect_repo`.
     pub fn new(repo: Arc<dyn CompensationActionRepository>) -> Self {
         Self {
             repo,
-            executor: StubCompensationExecutor::new(),
+            side_effect_repo: None,
+        }
+    }
+
+    /// Create a new CompensationActionService with side effect repository for
+    /// real RollbackExecutor execution.
+    ///
+    /// This is the production constructor that enables real Rollback+Automatic execution.
+    pub fn new_with_side_effect_repo(
+        repo: Arc<dyn CompensationActionRepository>,
+        side_effect_repo: Arc<dyn SideEffectRepository>,
+    ) -> Self {
+        Self {
+            repo,
+            side_effect_repo: Some(side_effect_repo),
         }
     }
 
@@ -226,15 +242,22 @@ impl CompensationActionService {
     /// 2. Validates execution policy: only `Automatic` feasibility can execute in this slice
     ///    (SemiAutomatic/ManualOnly require human intervention not in this slice;
     ///     NotPossible cannot be executed at all)
-    /// 3. Runs the stub executor (always succeeds in this slice)
+    /// 3. Runs the RollbackExecutor (for Rollback+Automatic path) or returns failure
+    ///    (for all other strategy/feasibility combos)
     /// 4. Records the result via record_result, which transitions to Executed or Failed
     ///
     /// **Executor gate (status):** Only Approved actions can execute.
     /// **Execution policy gate (feasibility):** Only `Automatic` feasibility can execute.
     /// This prevents accidental execution of actions requiring manual intervention.
     ///
-    /// **This slice:** The executor is StubCompensationExecutor that always returns success.
-    /// Real rollback/counter-action logic is Batch 1+ scope.
+    /// **Bounded RollbackExecutor semantics:**
+    /// - Rollback + Automatic: validates side effect context, returns acknowledgment
+    /// - All other strategy types: fail closed with UNSUPPORTED_STRATEGY_TYPE
+    /// - All other feasibility levels: fail closed with UNSUPPORTED_FEASIBILITY
+    /// - Missing side effect: fail closed with SIDE_EFFECT_NOT_FOUND
+    ///
+    /// **This slice:** No retry/DLQ/orchestration. Real rollback/counter-action logic for
+    /// non-Rollback strategies is Batch 1+ scope.
     ///
     /// **Fails closed on policy violations:**
     /// - If action is not Approved, returns CompensationActionNotExecutable error
@@ -267,8 +290,37 @@ impl CompensationActionService {
         // Capture lock_version before executor runs for optimistic locking
         let lock_version = action.lock_version;
 
-        // Run the executor (stub in this slice, always succeeds)
-        let executor_result = self.executor.execute(&action).await?;
+        // Run the bounded RollbackExecutor (inlined here to avoid dyn trait issues)
+        // Fall back to StubCompensationExecutor behavior if no side_effect_repo is configured
+        let executor_result = if let Some(ref side_effect_repo) = self.side_effect_repo {
+            use crate::compensation_executor::RollbackExecutor;
+            let executor = RollbackExecutor::new(side_effect_repo.clone());
+            executor.execute(&action).await?
+        } else {
+            // Fallback to stub behavior for backward compatibility
+            use crate::compensation_action::{CompensationFeasibility, StrategyType};
+            // For non-Rollback strategy types, return failure (stub behavior)
+            if action.strategy_type != StrategyType::Rollback {
+                ExecutionResult::failure(
+                    &format!("Unsupported strategy type: {:?}", action.strategy_type),
+                    "UNSUPPORTED_STRATEGY_TYPE",
+                    None,
+                )
+            } else if action.feasibility != CompensationFeasibility::Automatic {
+                // This case is already caught above, but included for completeness
+                ExecutionResult::failure(
+                    &format!("Unsupported feasibility: {:?}", action.feasibility),
+                    "UNSUPPORTED_FEASIBILITY",
+                    None,
+                )
+            } else {
+                // Stub success for backward compatibility (should not reach here with proper config)
+                ExecutionResult::success(&format!(
+                    "Stub: executed {:?} for action {}",
+                    action.strategy_type, action.id
+                ))
+            }
+        };
 
         // Record the result which will transition to Executed or Failed
         let updated = self
@@ -306,7 +358,6 @@ mod tests {
     use super::*;
     use crate::compensation_action::{CompensationFeasibility, RebaseContext, StrategyType};
     use crate::compensation_action_repo::InMemoryCompensationActionRepository;
-    use crate::compensation_executor::StubCompensationExecutor;
     use std::sync::Arc;
 
     fn create_test_service() -> CompensationActionService {
@@ -314,10 +365,12 @@ mod tests {
         CompensationActionService::new(repo)
     }
 
-    fn create_test_service_with_executor() -> CompensationActionService {
-        // This is the same as create_test_service since we use concrete StubCompensationExecutor
+    fn create_test_service_with_side_effect_repo() -> CompensationActionService {
+        // Service configured with side effect repo for real RollbackExecutor path
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
-        CompensationActionService::new(repo)
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo)
     }
 
     fn create_test_action(
@@ -672,10 +725,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_success_on_approved() {
-        let service = create_test_service_with_executor();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
+
+        // Create service with side effect repo
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+
+        // Create the side effect first so executor can find it
+        let side_effect = crate::side_effect::SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: crate::side_effect::SideEffectClass::S1InternalReversible,
+            effect_type: "metadata_write".to_string(),
+            target: "db-record-123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        side_effect_repo.create(side_effect).await.unwrap();
+
+        let service = CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo);
+
         let action = create_test_action(tenant_id, side_effect_id, intent_id);
 
         let created = service.create_action(action).await.unwrap();
@@ -687,7 +761,7 @@ mod tests {
             .unwrap();
         assert_eq!(approved.status, CompensationStatus::Approved);
 
-        // Execute - should succeed
+        // Execute - should succeed with real RollbackExecutor
         let executed = service
             .execute_action(approved.id, Some("test-executor"))
             .await
@@ -701,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_fails_on_pending() {
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -724,7 +798,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_fails_on_executed() {
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -758,7 +832,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_fails_on_waived() {
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -787,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_fails_on_failed() {
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -822,7 +896,7 @@ mod tests {
         // Phase 3 Batch 1 bounded slice: only Automatic feasibility can execute.
         // SemiAutomatic/ManualOnly require human intervention not in this slice.
         // NotPossible cannot be executed at all.
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -864,7 +938,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_action_fails_on_manual_only_feasibility() {
         // Phase 3 Batch 1 bounded slice: ManualOnly feasibility requires human intervention
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
@@ -902,7 +976,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_action_fails_on_not_possible_feasibility() {
         // Phase 3 Batch 1 bounded slice: NotPossible feasibility cannot be executed at all
-        let service = create_test_service_with_executor();
+        let service = create_test_service();
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let side_effect_id = Uuid::new_v4();
