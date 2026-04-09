@@ -243,6 +243,10 @@ pub struct CompensationAction {
     pub approved_at: Option<DateTime<Utc>>,
     /// Who approved this compensation action
     pub approved_by: Option<String>,
+    /// When compensation was waived
+    pub waived_at: Option<DateTime<Utc>>,
+    /// Who waived this compensation action
+    pub waived_by: Option<String>,
     /// When compensation was executed
     pub executed_at: Option<DateTime<Utc>>,
     /// Who executed this compensation action
@@ -278,6 +282,8 @@ impl CompensationAction {
             generated_at: Utc::now(),
             approved_at: None,
             approved_by: None,
+            waived_at: None,
+            waived_by: None,
             executed_at: None,
             executed_by: None,
             failed_at: None,
@@ -318,6 +324,8 @@ impl CompensationAction {
             generated_at: Utc::now(),
             approved_at: None,
             approved_by: None,
+            waived_at: None,
+            waived_by: None,
             executed_at: None,
             executed_by: None,
             failed_at: None,

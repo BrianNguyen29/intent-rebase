@@ -56,18 +56,24 @@ pub trait CompensationActionRepository: Send + Sync {
     ) -> Result<Vec<CompensationAction>, IntentRebaseError>;
 
     /// Update the status of a compensation action (with optimistic locking).
+    /// Optionally sets actor fields associated with the status transition.
     async fn update_status(
         &self,
         action_id: Uuid,
         new_status: CompensationStatus,
         lock_version: i32,
+        approved_by: Option<&str>,
+        waived_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError>;
 
     /// Record execution result (success or failure) for a compensation action.
+    /// Uses optimistic locking via lock_version.
     async fn record_result(
         &self,
         action_id: Uuid,
         result: &ExecutionResult,
+        lock_version: i32,
+        executed_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError>;
 }
 
@@ -237,6 +243,8 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
         action_id: Uuid,
         new_status: CompensationStatus,
         lock_version: i32,
+        approved_by: Option<&str>,
+        waived_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError> {
         let mut actions = self.actions.write().await;
         let mut by_status = self.by_status.write().await;
@@ -257,11 +265,20 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
         action.lock_version += 1;
         action.status = new_status;
 
-        // Update timestamp based on status
+        // Update timestamp and actor based on status
         let now = chrono::Utc::now();
         match new_status {
             CompensationStatus::Approved => {
                 action.approved_at = Some(now);
+                if let Some(approver) = approved_by {
+                    action.approved_by = Some(approver.to_string());
+                }
+            }
+            CompensationStatus::Waived => {
+                action.waived_at = Some(now);
+                if let Some(waiver) = waived_by {
+                    action.waived_by = Some(waiver.to_string());
+                }
             }
             CompensationStatus::Executed => {
                 action.executed_at = Some(now);
@@ -288,6 +305,8 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
         &self,
         action_id: Uuid,
         result: &ExecutionResult,
+        lock_version: i32,
+        executed_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError> {
         let mut actions = self.actions.write().await;
         let mut by_status = self.by_status.write().await;
@@ -296,8 +315,16 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
             .get_mut(&action_id)
             .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))?;
 
+        // Optimistic locking check
+        if action.lock_version != lock_version {
+            return Err(IntentRebaseError::ConcurrencyConflict(action_id));
+        }
+
         let old_status = action.status;
         let tenant_id = action.tenant_id;
+
+        // Update lock version
+        action.lock_version += 1;
 
         // Update attempt count
         action.attempt_count += 1;
@@ -309,6 +336,9 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
         if result.success {
             action.status = CompensationStatus::Executed;
             action.executed_at = Some(result.completed_at);
+            if let Some(executor) = executed_by {
+                action.executed_by = Some(executor.to_string());
+            }
         } else {
             action.status = CompensationStatus::Failed;
             action.failed_at = Some(result.completed_at);
@@ -387,6 +417,8 @@ impl SqlxCompensationActionRepository {
             generated_at: row.get("generated_at"),
             approved_at: row.get("approved_at"),
             approved_by: row.get("approved_by"),
+            waived_at: row.get("waived_at"),
+            waived_by: row.get("waived_by"),
             executed_at: row.get("executed_at"),
             executed_by: row.get("executed_by"),
             failed_at: row.get("failed_at"),
@@ -421,9 +453,9 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
                 id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
             "#,
         )
         .bind(action.id)
@@ -441,6 +473,8 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         .bind(action.generated_at)
         .bind(action.approved_at)
         .bind(&action.approved_by)
+        .bind(action.waived_at)
+        .bind(&action.waived_by)
         .bind(action.executed_at)
         .bind(&action.executed_by)
         .bind(action.failed_at)
@@ -459,7 +493,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE id = $1
             "#,
@@ -488,7 +522,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE tenant_id = $1
             ORDER BY generated_at DESC
@@ -516,7 +550,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE side_effect_id = $1 AND tenant_id = $2
             ORDER BY generated_at DESC
@@ -546,7 +580,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE intent_id = $1 AND tenant_id = $2
             ORDER BY generated_at DESC
@@ -574,7 +608,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE tenant_id = $1 AND status = $2
             ORDER BY generated_at DESC
@@ -596,16 +630,19 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         action_id: Uuid,
         new_status: CompensationStatus,
         lock_version: i32,
+        approved_by: Option<&str>,
+        waived_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError> {
         let status_str = compensation_status_to_string(new_status);
         let now = chrono::Utc::now();
 
         // Compute updated_at based on new_status
-        let (approved_at, executed_at, failed_at) = match new_status {
-            CompensationStatus::Approved => (Some(now), None, None),
-            CompensationStatus::Executed => (None, Some(now), None),
-            CompensationStatus::Failed => (None, None, Some(now)),
-            _ => (None, None, None),
+        let (approved_at, waived_at, executed_at, failed_at) = match new_status {
+            CompensationStatus::Approved => (Some(now), None, None, None),
+            CompensationStatus::Waived => (None, Some(now), None, None),
+            CompensationStatus::Executed => (None, None, Some(now), None),
+            CompensationStatus::Failed => (None, None, None, Some(now)),
+            _ => (None, None, None, None),
         };
 
         let row = sqlx::query(
@@ -614,20 +651,26 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             SET status = $2,
                 lock_version = lock_version + 1,
                 approved_at = COALESCE($3, approved_at),
-                executed_at = COALESCE($4, executed_at),
-                failed_at = COALESCE($5, failed_at)
-            WHERE id = $1 AND lock_version = $6
+                waived_at = COALESCE($4, waived_at),
+                executed_at = COALESCE($5, executed_at),
+                failed_at = COALESCE($6, failed_at),
+                approved_by = COALESCE($7, approved_by),
+                waived_by = COALESCE($8, waived_by)
+            WHERE id = $1 AND lock_version = $9
             RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             "#,
         )
         .bind(action_id)
         .bind(status_str)
         .bind(approved_at)
+        .bind(waived_at)
         .bind(executed_at)
         .bind(failed_at)
+        .bind(approved_by)
+        .bind(waived_by)
         .bind(lock_version)
         .fetch_optional(&self.pool)
         .await
@@ -645,6 +688,8 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         &self,
         action_id: Uuid,
         result: &ExecutionResult,
+        lock_version: i32,
+        executed_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError> {
         let status_str = if result.success {
             compensation_status_to_string(CompensationStatus::Executed)
@@ -660,9 +705,6 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             "completed_at": result.completed_at,
         });
 
-        // Note: We use the action's current lock_version for optimistic locking.
-        // The caller should fetch the action first to get the current lock_version.
-        // For new executions, lock_version starts at 0.
         let row = sqlx::query(
             r#"
             UPDATE compensation_actions
@@ -671,18 +713,21 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
                 lock_version = lock_version + 1,
                 executed_at = CASE WHEN $3 THEN NOW() ELSE executed_at END,
                 failed_at = CASE WHEN NOT $3 THEN NOW() ELSE failed_at END,
-                execution_result_payload = $4
-            WHERE id = $1
+                execution_result_payload = $4,
+                executed_by = COALESCE($6, executed_by)
+            WHERE id = $1 AND lock_version = $5
             RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
                 rationale, status, attempt_count, lock_version, generated_at,
-                approved_at, approved_by, executed_at, executed_by, failed_at
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             "#,
         )
         .bind(action_id)
         .bind(status_str)
         .bind(result.success)
         .bind(&execution_result_payload)
+        .bind(lock_version)
+        .bind(executed_by)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| {
@@ -691,7 +736,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
 
         match row {
             Some(r) => self.row_to_action(r),
-            None => Err(IntentRebaseError::CompensationActionNotFound(action_id)),
+            None => Err(IntentRebaseError::ConcurrencyConflict(action_id)),
         }
     }
 }
@@ -905,7 +950,7 @@ mod tests {
         repo.create(action).await.unwrap();
 
         let result = repo
-            .update_status(id, CompensationStatus::Approved, 0)
+            .update_status(id, CompensationStatus::Approved, 0, None, None)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().status, CompensationStatus::Approved);
@@ -923,13 +968,13 @@ mod tests {
         repo.create(action).await.unwrap();
 
         // First update succeeds
-        repo.update_status(id, CompensationStatus::Approved, 0)
+        repo.update_status(id, CompensationStatus::Approved, 0, None, None)
             .await
             .unwrap();
 
         // Second update with wrong lock_version fails
         let result = repo
-            .update_status(id, CompensationStatus::Executed, 0)
+            .update_status(id, CompensationStatus::Executed, 0, None, None)
             .await;
         assert!(result.is_err());
         assert!(matches!(
@@ -950,7 +995,7 @@ mod tests {
         repo.create(action).await.unwrap();
 
         let exec_result = ExecutionResult::success("Rollback completed");
-        let result = repo.record_result(id, &exec_result).await;
+        let result = repo.record_result(id, &exec_result, 0, None).await;
         assert!(result.is_ok());
         let updated = result.unwrap();
         assert_eq!(updated.status, CompensationStatus::Executed);
@@ -973,7 +1018,7 @@ mod tests {
             "ROLLBACK_ERR_001",
             Some("Database connection timeout".to_string()),
         );
-        let result = repo.record_result(id, &exec_result).await;
+        let result = repo.record_result(id, &exec_result, 0, None).await;
         assert!(result.is_ok());
         let updated = result.unwrap();
         assert_eq!(updated.status, CompensationStatus::Failed);
@@ -993,11 +1038,16 @@ mod tests {
 
         // First attempt
         let exec_result1 = ExecutionResult::failure("Failed first time", "ERR_001", None);
-        repo.record_result(id, &exec_result1).await.unwrap();
+        repo.record_result(id, &exec_result1, 0, None)
+            .await
+            .unwrap();
 
-        // Second attempt
+        // Second attempt - lock_version is now 1 after first call
         let exec_result2 = ExecutionResult::success("Succeeded second time");
-        let updated = repo.record_result(id, &exec_result2).await.unwrap();
+        let updated = repo
+            .record_result(id, &exec_result2, 1, None)
+            .await
+            .unwrap();
 
         assert_eq!(updated.attempt_count, 2);
         assert_eq!(updated.status, CompensationStatus::Executed);

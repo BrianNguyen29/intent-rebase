@@ -86,13 +86,15 @@ CREATE TABLE IF NOT EXISTS compensation_actions (
     -- Status tracking
     status compensation_status NOT NULL DEFAULT 'pending',
     
-    -- Who approved / executed (populated when status changes)
+    -- Who approved / executed / waived (populated when status changes)
     approved_by VARCHAR(255),
+    waived_by VARCHAR(255),
     executed_by VARCHAR(255),
     
     -- Timestamps
     generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     approved_at TIMESTAMPTZ,
+    waived_at TIMESTAMPTZ,
     executed_at TIMESTAMPTZ,
     failed_at TIMESTAMPTZ,
     
@@ -136,11 +138,13 @@ COMMENT ON COLUMN compensation_actions.strategy_type IS 'Chosen compensation str
 COMMENT ON COLUMN compensation_actions.rationale IS 'Human-readable rationale for the chosen strategy';
 COMMENT ON COLUMN compensation_actions.status IS 'Current status of the compensation action';
 COMMENT ON COLUMN compensation_actions.approved_by IS 'Who approved this compensation action';
+COMMENT ON COLUMN compensation_actions.waived_by IS 'Who waived this compensation action';
 COMMENT ON COLUMN compensation_actions.executed_by IS 'Who executed this compensation action';
 COMMENT ON COLUMN compensation_actions.generated_at IS 'Timestamp when this action was generated';
 COMMENT ON COLUMN compensation_actions.approved_at IS 'Timestamp when compensation was approved';
+COMMENT ON COLUMN compensation_actions.waived_at IS 'Timestamp when compensation was waived';
 COMMENT ON COLUMN compensation_actions.executed_at IS 'Timestamp when compensation was executed';
 COMMENT ON COLUMN compensation_actions.failed_at IS 'Timestamp when compensation failed';
-COMMENT ON COLUMN compensation_actions.error_payload IS 'Error/detail payload for failed executions as JSONB';
+COMMENT ON COLUMN compensation_actions.execution_result_payload IS 'Execution outcome payload for executed or failed compensation actions as JSONB';
 COMMENT ON COLUMN compensation_actions.attempt_count IS 'Execution attempt counter for idempotency/retry tracking';
 COMMENT ON COLUMN compensation_actions.lock_version IS 'Lock version for optimistic concurrency during status transitions';

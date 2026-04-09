@@ -2135,6 +2135,8 @@ pub struct CompensationActionResponse {
     pub lock_version: i32,
     pub approved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub approved_by: Option<String>,
+    pub waived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub waived_by: Option<String>,
     pub executed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub executed_by: Option<String>,
     pub failed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -2143,18 +2145,30 @@ pub struct CompensationActionResponse {
 
 impl From<compensation_service::CompensationAction> for CompensationActionResponse {
     fn from(action: compensation_service::CompensationAction) -> Self {
+        // Use serde_json to serialize enum fields to snake_case strings
+        // instead of Debug formatting (which produces PascalCase).
+        // serde_json::to_string returns the JSON representation including quotes,
+        // so we trim the surrounding quotes.
+        fn to_snake_case_string<T: serde::Serialize>(val: &T) -> String {
+            serde_json::to_string(val)
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default()
+        }
+
         Self {
             id: action.id,
             tenant_id: action.tenant_id,
             intent_id: action.intent_id,
-            status: format!("{:?}", action.status),
-            strategy_type: format!("{:?}", action.strategy_type),
-            feasibility: format!("{:?}", action.feasibility),
+            status: to_snake_case_string(&action.status),
+            strategy_type: to_snake_case_string(&action.strategy_type),
+            feasibility: to_snake_case_string(&action.feasibility),
             rationale: action.rationale,
             attempt_count: action.attempt_count,
             lock_version: action.lock_version,
             approved_at: action.approved_at,
             approved_by: action.approved_by,
+            waived_at: action.waived_at,
+            waived_by: action.waived_by,
             executed_at: action.executed_at,
             executed_by: action.executed_by,
             failed_at: action.failed_at,
@@ -5649,7 +5663,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.status, "Approved");
+        assert_eq!(result.status, "approved");
         assert_eq!(result.approved_by, Some("test-approver".to_string()));
     }
 
@@ -5700,7 +5714,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.status, "Waived");
+        assert_eq!(result.status, "waived");
     }
 
     #[tokio::test]
@@ -5718,7 +5732,7 @@ mod tests {
             side_effect_id,
             intent_id,
             rebase_context,
-            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::CompensationFeasibility::Automatic,
             compensation_service::StrategyType::Rollback,
             "Test rollback",
         );
@@ -5743,7 +5757,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.status, "Executed");
+        assert_eq!(result.status, "executed");
         assert_eq!(result.executed_by, Some("test-executor".to_string()));
     }
 
@@ -5804,9 +5818,9 @@ mod tests {
 
         let response = CompensationActionResponse::from(action);
 
-        assert_eq!(response.status, "Pending");
-        assert_eq!(response.strategy_type, "Rollback");
-        assert_eq!(response.feasibility, "ManualOnly");
+        assert_eq!(response.status, "pending");
+        assert_eq!(response.strategy_type, "rollback");
+        assert_eq!(response.feasibility, "manual_only");
         assert_eq!(response.tenant_id, tenant_id);
         assert_eq!(response.intent_id, intent_id);
     }

@@ -112,7 +112,7 @@ impl CompensationActionService {
         lock_version: i32,
     ) -> Result<CompensationAction, IntentRebaseError> {
         self.repo
-            .update_status(action_id, new_status, lock_version)
+            .update_status(action_id, new_status, lock_version, None, None)
             .await
     }
 
@@ -129,8 +129,12 @@ impl CompensationActionService {
         &self,
         action_id: Uuid,
         result: &ExecutionResult,
+        lock_version: i32,
+        executed_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError> {
-        self.repo.record_result(action_id, result).await
+        self.repo
+            .record_result(action_id, result, lock_version, executed_by)
+            .await
     }
 
     /// Approve a pending compensation action.
@@ -162,18 +166,16 @@ impl CompensationActionService {
             });
         }
 
-        // Update status with optimistic locking
-        let mut updated = self
-            .repo
-            .update_status(action_id, CompensationStatus::Approved, lock_version)
-            .await?;
-
-        // Record approver if provided
-        if let Some(approver) = approved_by {
-            updated.approved_by = Some(approver.to_string());
-        }
-
-        Ok(updated)
+        // Update status with optimistic locking and persist actor info
+        self.repo
+            .update_status(
+                action_id,
+                CompensationStatus::Approved,
+                lock_version,
+                approved_by,
+                None,
+            )
+            .await
     }
 
     /// Waive a pending compensation action.
@@ -205,35 +207,38 @@ impl CompensationActionService {
             });
         }
 
-        // Update status with optimistic locking
-        let mut updated = self
-            .repo
-            .update_status(action_id, CompensationStatus::Waived, lock_version)
-            .await?;
-
-        // Record waver if provided (reuse approved_by field with different semantics)
-        if let Some(waver) = waived_by {
-            updated.approved_by = Some(waver.to_string());
-        }
-
-        Ok(updated)
+        // Update status with optimistic locking and persist actor info
+        self.repo
+            .update_status(
+                action_id,
+                CompensationStatus::Waived,
+                lock_version,
+                None,
+                waived_by,
+            )
+            .await
     }
 
     /// Execute an approved compensation action.
     ///
     /// **Phase 3 Batch 1 bounded slice:** This method:
     /// 1. Validates the action is in Approved status (fails closed otherwise)
-    /// 2. Runs the stub executor (always succeeds in this slice)
-    /// 3. Records the result via record_result, which transitions to Executed or Failed
+    /// 2. Validates execution policy: only `Automatic` feasibility can execute in this slice
+    ///    (SemiAutomatic/ManualOnly require human intervention not in this slice;
+    ///     NotPossible cannot be executed at all)
+    /// 3. Runs the stub executor (always succeeds in this slice)
+    /// 4. Records the result via record_result, which transitions to Executed or Failed
     ///
-    /// **Executor gate:** Only Approved actions can execute. This prevents
-    /// accidental execution of pending or already-processed actions.
+    /// **Executor gate (status):** Only Approved actions can execute.
+    /// **Execution policy gate (feasibility):** Only `Automatic` feasibility can execute.
+    /// This prevents accidental execution of actions requiring manual intervention.
     ///
     /// **This slice:** The executor is StubCompensationExecutor that always returns success.
     /// Real rollback/counter-action logic is Batch 1+ scope.
     ///
-    /// **Fails closed on illegal transitions:**
+    /// **Fails closed on policy violations:**
     /// - If action is not Approved, returns CompensationActionNotExecutable error
+    /// - If feasibility is not Automatic, returns CompensationActionNotExecutable error
     pub async fn execute_action(
         &self,
         action_id: Uuid,
@@ -249,16 +254,26 @@ impl CompensationActionService {
             ));
         }
 
+        // Execution policy gate: only Automatic feasibility can execute in this slice.
+        // SemiAutomatic/ManualOnly require human intervention workflows (not in this slice).
+        // NotPossible cannot be executed at all.
+        use crate::compensation_action::CompensationFeasibility;
+        if action.feasibility != CompensationFeasibility::Automatic {
+            return Err(IntentRebaseError::CompensationActionNotExecutable(
+                action_id,
+            ));
+        }
+
+        // Capture lock_version before executor runs for optimistic locking
+        let lock_version = action.lock_version;
+
         // Run the executor (stub in this slice, always succeeds)
         let executor_result = self.executor.execute(&action).await?;
 
         // Record the result which will transition to Executed or Failed
-        let mut updated = self.record_result(action_id, &executor_result).await?;
-
-        // Record executor if provided (reuse executed_by field)
-        if let Some(executor) = executed_by {
-            updated.executed_by = Some(executor.to_string());
-        }
+        let updated = self
+            .record_result(action_id, &executor_result, lock_version, executed_by)
+            .await?;
 
         Ok(updated)
     }
@@ -429,7 +444,10 @@ mod tests {
 
         let created = service.create_action(action).await.unwrap();
         let result = ExecutionResult::success("Rollback completed");
-        let updated = service.record_result(created.id, &result).await.unwrap();
+        let updated = service
+            .record_result(created.id, &result, created.lock_version, None)
+            .await
+            .unwrap();
 
         assert_eq!(updated.status, CompensationStatus::Executed);
         assert_eq!(updated.attempt_count, 1);
@@ -445,7 +463,10 @@ mod tests {
 
         let created = service.create_action(action).await.unwrap();
         let result = ExecutionResult::failure("Rollback failed", "ERR_001", None);
-        let updated = service.record_result(created.id, &result).await.unwrap();
+        let updated = service
+            .record_result(created.id, &result, created.lock_version, None)
+            .await
+            .unwrap();
 
         assert_eq!(updated.status, CompensationStatus::Failed);
         assert_eq!(updated.attempt_count, 1);
@@ -615,8 +636,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(waived.status, CompensationStatus::Waived);
-        // waived_by is stored in approved_by field for simplicity
-        assert_eq!(waived.approved_by, Some("test-waiver".to_string()));
+        // waived_by is stored in dedicated waived_by field
+        assert_eq!(waived.waived_by, Some("test-waiver".to_string()));
+        assert!(waived.waived_at.is_some());
     }
 
     #[tokio::test]
@@ -776,7 +798,7 @@ mod tests {
         // First make it Failed via record_result
         let failed_result = ExecutionResult::failure("Test failure", "TEST_ERR", None);
         let failed = service
-            .record_result(created.id, &failed_result)
+            .record_result(created.id, &failed_result, created.lock_version, None)
             .await
             .unwrap();
         assert_eq!(failed.status, CompensationStatus::Failed);
@@ -784,6 +806,128 @@ mod tests {
         // Try to execute a failed action - should fail
         let result = service
             .execute_action(failed.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    // === Execution Policy Gate Tests ===
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_non_automatic_feasibility() {
+        // Phase 3 Batch 1 bounded slice: only Automatic feasibility can execute.
+        // SemiAutomatic/ManualOnly require human intervention not in this slice.
+        // NotPossible cannot be executed at all.
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action with SemiAutomatic feasibility (requires human intervention)
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::FollowupNotice,
+            "Send follow-up notice",
+        );
+
+        let created = service.create_action(action).await.unwrap();
+        assert_eq!(created.feasibility, CompensationFeasibility::SemiAutomatic);
+
+        // Approve it
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+
+        // Try to execute - should fail because SemiAutomatic requires human intervention
+        let result = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_manual_only_feasibility() {
+        // Phase 3 Batch 1 bounded slice: ManualOnly feasibility requires human intervention
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::ManualOnly,
+            StrategyType::Escalation,
+            "Manual escalation required",
+        );
+
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Try to execute - should fail because ManualOnly requires human intervention
+        let result = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_not_possible_feasibility() {
+        // Phase 3 Batch 1 bounded slice: NotPossible feasibility cannot be executed at all
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::NotPossible,
+            StrategyType::Quarantine,
+            "Cannot compensate",
+        );
+
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Try to execute - should fail because NotPossible cannot be executed
+        let result = service
+            .execute_action(approved.id, Some("test-executor"))
             .await;
 
         assert!(result.is_err());

@@ -52,6 +52,7 @@ info:
     - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
     - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
     - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
+    - **Execution policy gate:** Only `Automatic` feasibility can execute; SemiAutomatic/ManualOnly require human intervention workflows (not in this slice); NotPossible cannot be executed at all
     - **Stub executor:** POST /compensation-actions/{action_id}/execute uses StubCompensationExecutor (always succeeds); real rollback/counter-action logic is Batch 1+ scope
     - **No retry/DLQ:** Failed actions remain Failed; retry/reapproval is Batch 1+ scope
 
@@ -783,12 +784,17 @@ paths:
         **Executor gate:** Only Approved actions can execute. This prevents accidental
         execution of pending or already-processed actions.
 
+        **Execution policy gate:** Only actions with `Automatic` feasibility can execute
+        in this slice. SemiAutomatic and ManualOnly require human intervention workflows
+        that are not in this slice. NotPossible cannot be executed at all.
+
         **Bounded stub executor semantics:**
         - The executor is StubCompensationExecutor that always returns success
         - Real rollback/counter-action logic is Batch 1+ scope
 
         **Fails closed on illegal transitions:**
         - Returns 409 Conflict if action is not Approved
+        - Returns 409 Conflict if feasibility is not Automatic
 
         **This slice:** No retry logic; Failed actions remain Failed.
       operationId: executeCompensationAction
@@ -2993,6 +2999,15 @@ components:
           type: string
           nullable: true
           description: Who approved this compensation action
+        waived_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was waived
+        waived_by:
+          type: string
+          nullable: true
+          description: Who waived this compensation action
         executed_at:
           type: string
           format: date-time
@@ -3098,6 +3113,15 @@ components:
           type: string
           nullable: true
           description: Who approved this compensation action
+        waived_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was waived
+        waived_by:
+          type: string
+          nullable: true
+          description: Who waived this compensation action
         executed_at:
           type: string
           format: date-time
