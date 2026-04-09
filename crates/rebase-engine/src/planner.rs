@@ -326,6 +326,49 @@ pub struct CompensationAction {
     pub priority: u8,
 }
 
+/// Phase 3 Batch 1: Public compensation planning summary for API responses.
+///
+/// This is a read-only summary of compensation planning output from the rebase planner.
+/// It exposes the skeleton/preview compensation data without claiming execution support.
+///
+/// **Distinction from actual compensation actions:**
+/// - This summary represents planner-generated potential compensation actions
+///   derived from affected items analysis during rebase preview
+/// - Actual compensation actions (stored records) are queried via
+///   `GET /intents/{intent_id}/compensation-actions` using CompensationActionService
+///
+/// **Execution readiness:**
+/// - `ready: true` indicates full compensation planning is available
+/// - `ready: false` (Phase 3 Batch 1) indicates compensation planning is deferred;
+///   the action list will be empty and execution is not supported
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationPlanningSummary {
+    /// Whether full compensation planning is ready to execute.
+    /// When false (Phase 3 Batch 1), compensation planning is deferred and
+    /// the potential_actions list will be empty.
+    pub ready: bool,
+    /// Potential compensation actions identified by the planner.
+    /// Phase 3 Batch 1: This is a skeleton/preview list; actual execution
+    /// requires Batch 1+ planner implementation.
+    pub potential_actions: Vec<CompensationAction>,
+    /// Whether any irreversible side effects are present in the affected items.
+    /// When true, manual intervention may be required even for automatic compensation.
+    pub has_irreversible_effects: bool,
+    /// Human-readable rationale for compensation planning decisions.
+    pub rationale: Option<String>,
+}
+
+impl From<&CompensationReadiness> for CompensationPlanningSummary {
+    fn from(readiness: &CompensationReadiness) -> Self {
+        Self {
+            ready: readiness.ready,
+            potential_actions: readiness.potential_actions.clone(),
+            has_irreversible_effects: readiness.has_irreversible_effects,
+            rationale: readiness.rationale.clone(),
+        }
+    }
+}
+
 /// Phase 1 status for features not yet implemented
 ///
 /// PR #18: all three deferred fields now have internal heuristic baselines.

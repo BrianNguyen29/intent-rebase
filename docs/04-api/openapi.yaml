@@ -41,6 +41,12 @@ info:
     
     ### Phase 3 Batch 1 (groundwork)
     - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
+    - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
+    - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
+
+    ## Phase 3 Batch 1: Compensation Planning Summary
+    - Rebase preview and apply responses include `compensation_planning` field with read-only compensation planning summary
+    - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
 
     ## Phase 2b Bounded Delivery
     - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
@@ -56,6 +62,9 @@ info:
     - Full authentication/authorization
     - Replay with intent version override (Phase 3 deferral)
     - Replay audit trail and replay status tracking beyond the bounded replay slice (Phase 3 deferral)
+    - Compensation planner: full risk scoring, strategy selection (Batch 1+ scope)
+    - Compensation executor: trigger path for compensation actions (Batch 1+ scope)
+    - Compensation retry logic: max retries, backoff, dead-letter (Batch 1+ scope)
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team
@@ -535,6 +544,98 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/side-effects:
+    get:
+      tags:
+        - side-effects
+      summary: List side effects for an intent
+      description: |
+        Phase 3 Batch 1 (groundwork): Returns all side effects recorded for the given
+        intent, scoped to the specified tenant. Side effects are ordered by
+        occurred_at descending (newest first).
+
+        This endpoint provides the query API for compensation planning input.
+        The actual compensation planning/execution is not included in this slice.
+      operationId: listSideEffects
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Side effects retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSideEffectsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/compensation-actions:
+    get:
+      tags:
+        - compensation
+      summary: List compensation actions for an intent
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns all compensation actions
+        recorded for the given intent, scoped to the specified tenant. Actions are
+        ordered by generated_at descending (newest first).
+
+        **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+        approval workflows, or any mutation. It only queries existing compensation
+        action records.
+
+        **Planner vs Executor distinction:**
+        - This endpoint returns actual compensation action records stored via the
+          compensation action service/repository
+        - The `compensation_planning` field in rebase-preview/apply responses shows
+          planner-generated skeleton/preview data (not stored records)
+        - Full compensation execution (executor trigger) is Batch 1+ scope
+      operationId: listCompensationActions
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Compensation actions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCompensationActionsResponse'
         '500':
           description: Internal server error
           content:
@@ -1494,15 +1595,19 @@ components:
         - `available`: Graph data was found and affected items were classified
         - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
         
-        Phase 1 PR #17 keeps apply/checkpoint typed contracts internal to the planner.
-        They are not exposed in this preview response yet.
+        Phase 1 PR #17 kept apply/checkpoint typed contracts internal to the planner.
+        This preview response now additionally exposes the bounded read-only
+        `compensation_planning` summary, while execution contracts remain internal.
 
         When status is `unavailable`, the endpoint remains functional but the affected
         items arrays should not be considered authoritative.
 
         **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
         `risk_level` (1-5) and `decision_class` remain as supporting fields.
-      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_tier, risk_level]
+
+        **Phase 3 Batch 1: `compensation_planning` exposes read-only compensation planning summary.**
+        This is a skeleton/preview only — does not indicate execution capability or actual compensation actions.
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_tier, risk_level, compensation_planning]
       properties:
         intent_id:
           type: string
@@ -1534,6 +1639,13 @@ components:
           minimum: 1
           maximum: 5
           description: Supporting risk level (1=lowest, 5=highest)
+        compensation_planning:
+          $ref: '#/components/schemas/CompensationPlanningSummary'
+          description: |
+            Phase 3 Batch 1: Read-only compensation planning summary.
+            This is planner-generated preview data, NOT executed compensation actions.
+            The `ready` field indicates whether full compensation planning is available;
+            when `false`, the action list is empty and execution is not supported.
 
     RebaseApplyResponse:
       type: object
@@ -1545,6 +1657,9 @@ components:
 
         **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
         `risk_level` (1-5) and `decision_class` remain as supporting fields.
+
+        **Phase 3 Batch 1: `compensation_planning` exposes read-only compensation planning summary.**
+        This is a skeleton/preview only — does not indicate execution capability or actual compensation actions.
       required:
         - intent_id
         - from_version
@@ -1562,6 +1677,7 @@ components:
         - replay_completed
         - graph_updates_applied
         - graph_updates_failed
+        - compensation_planning
       properties:
         intent_id:
           type: string
@@ -1628,6 +1744,13 @@ components:
         graph_updates_failed:
           type: integer
           minimum: 0
+        compensation_planning:
+          $ref: '#/components/schemas/CompensationPlanningSummary'
+          description: |
+            Phase 3 Batch 1: Read-only compensation planning summary.
+            This is planner-generated preview data, NOT executed compensation actions.
+            The `ready` field indicates whether full compensation planning is available;
+            when `false`, the action list is empty and execution is not supported.
 
     ReplayRequest:
       type: object
@@ -1793,6 +1916,75 @@ components:
         recommended_action:
           type: string
           description: Recommended action for this section
+
+    # ----- Compensation Planning (Phase 3 Batch 1) -----
+    CompensationPlanningSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Public compensation planning summary for API responses.
+
+        This is a read-only summary of compensation planning output from the rebase planner.
+        It exposes the skeleton/preview compensation data without claiming execution support.
+
+        **Distinction from actual compensation actions:**
+        - This summary represents planner-generated potential compensation actions
+          derived from affected items analysis during rebase preview
+        - Actual compensation actions (stored records) are queried via
+          `GET /intents/{intent_id}/compensation-actions` using CompensationActionService
+
+        **Execution readiness:**
+        - `ready: true` indicates full compensation planning is available
+        - `ready: false` (Phase 3 Batch 1) indicates compensation planning is deferred;
+          the action list will be empty and execution is not supported
+      required: [ready, potential_actions, has_irreversible_effects]
+      properties:
+        ready:
+          type: boolean
+          description: |
+            Whether full compensation planning is ready to execute.
+            When false (Phase 3 Batch 1), compensation planning is deferred and
+            the potential_actions list will be empty.
+        potential_actions:
+          type: array
+          description: |
+            Phase 3 Batch 1: This is a skeleton/preview list; actual execution
+            requires Batch 1+ planner implementation.
+          items:
+            $ref: '#/components/schemas/CompensationAction'
+        has_irreversible_effects:
+          type: boolean
+          description: |
+            Whether any irreversible side effects are present in the affected items.
+            When true, manual intervention may be required even for automatic compensation.
+        rationale:
+          type: string
+          nullable: true
+          description: Human-readable rationale for compensation planning decisions.
+
+    CompensationAction:
+      type: object
+      description: |
+        A potential compensation action to mitigate side effects.
+        This is the lightweight planning summary version used in compensation_planning.
+      required: [id, label, description, reversible, priority]
+      properties:
+        id:
+          type: string
+          description: Action identifier
+        label:
+          type: string
+          description: Human-readable label
+        description:
+          type: string
+          description: Description of the action
+        reversible:
+          type: boolean
+          description: Whether this action is reversible
+        priority:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Priority (lower = higher priority)
 
     IntentVersionDiff:
       type: object
@@ -2439,6 +2631,204 @@ components:
         resolution_notes:
           type: string
           nullable: true
+
+    # ----- Side Effect and Compensation Action Query (Phase 3 Batch 1) -----
+    SideEffect:
+      type: object
+      description: |
+        Phase 3 Batch 1: A side effect recorded from an artifact-producing operation.
+        Used as input to compensation planning.
+      required: [id, tenant_id, intent_id, intent_version, effect_class, effect_type, target, occurred_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this side effect
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this side effect belongs to
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID that produced this side effect
+        intent_version:
+          type: integer
+          description: Intent version at time of side effect
+        effect_class:
+          $ref: '#/components/schemas/SideEffectClass'
+          description: Severity class of the side effect
+        effect_type:
+          type: string
+          description: The effect type (e.g., "artifact_created", "deployment_triggered")
+        target:
+          type: string
+          description: The effect target (e.g., artifact URL, deployment ID)
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the side effect occurred
+        idempotency_key:
+          type: string
+          nullable: true
+          description: Optional idempotency key to prevent duplicate records
+
+    ListSideEffectsResponse:
+      type: object
+      required: [side_effects, total]
+      properties:
+        side_effects:
+          type: array
+          items:
+            $ref: '#/components/schemas/SideEffect'
+        total:
+          type: integer
+
+    CompensationStatus:
+      type: string
+      enum: [pending, approved, executed, failed, waived]
+      description: Status of a compensation action
+
+    CompensationFeasibility:
+      type: string
+      enum: [automatic, semi_automatic, manual_only, not_possible]
+      description: Feasibility level for compensation
+
+    StrategyType:
+      type: string
+      enum: [rollback, counter_action, followup_notice, quarantine, escalation]
+      description: Compensation strategy type
+
+    RebaseContext:
+      type: object
+      description: Minimal rebase context that triggered compensation planning
+      required: [intent_id, from_version, to_version, workflow_id]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID that was rebased
+        from_version:
+          type: integer
+          description: Source intent version before rebase
+        to_version:
+          type: integer
+          description: Target intent version after rebase
+        workflow_id:
+          type: string
+          format: uuid
+          description: Workflow that initiated the rebase
+
+    ExecutionResult:
+      type: object
+      description: Execution result payload for a compensation action
+      required: [success, summary, completed_at]
+      properties:
+        success:
+          type: boolean
+          description: Whether execution succeeded
+        summary:
+          type: string
+          description: Human-readable summary of what happened
+        error_code:
+          type: string
+          nullable: true
+          description: Error code if execution failed
+        error_detail:
+          type: string
+          nullable: true
+          description: Error detail if execution failed
+        completed_at:
+          type: string
+          format: date-time
+          description: Timestamp when execution completed
+
+    FullCompensationAction:
+      type: object
+      description: |
+        Full compensation action record from the compensation action repository.
+        This is the stored record returned by GET /intents/{intent_id}/compensation-actions.
+      required: [id, tenant_id, side_effect_id, intent_id, trigger_context, feasibility, strategy_type, rationale, status, attempt_count, lock_version, generated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this compensation action
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this compensation action belongs to
+        side_effect_id:
+          type: string
+          format: uuid
+          description: Reference to the side effect this action compensates
+        intent_id:
+          type: string
+          format: uuid
+          description: Reference to the intent this compensation action is scoped to
+        trigger_context:
+          $ref: '#/components/schemas/RebaseContext'
+          description: Minimal rebase context that triggered compensation planning
+        execution_result_payload:
+          $ref: '#/components/schemas/ExecutionResult'
+          nullable: true
+          description: Execution result context captured after executor runs
+        feasibility:
+          $ref: '#/components/schemas/CompensationFeasibility'
+          description: Feasibility of compensating this effect
+        strategy_type:
+          $ref: '#/components/schemas/StrategyType'
+          description: Chosen compensation strategy
+        rationale:
+          type: string
+          description: Human-readable rationale for the chosen strategy
+        status:
+          $ref: '#/components/schemas/CompensationStatus'
+          description: Current status of the compensation action
+        attempt_count:
+          type: integer
+          description: Execution attempt counter for idempotency/retry tracking
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency during status transitions
+        generated_at:
+          type: string
+          format: date-time
+          description: When this action was generated
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was approved
+        approved_by:
+          type: string
+          nullable: true
+          description: Who approved this compensation action
+        executed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was executed
+        executed_by:
+          type: string
+          nullable: true
+          description: Who executed this compensation action
+        failed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation failed
+
+    ListCompensationActionsResponse:
+      type: object
+      required: [compensation_actions, total]
+      properties:
+        compensation_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FullCompensationAction'
+        total:
+          type: integer
 
     Error:
       type: object

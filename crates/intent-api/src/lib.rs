@@ -20,6 +20,7 @@ use intent_rebase_types::{
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{
     DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier, SectionDecision,
 };
@@ -58,6 +59,10 @@ pub struct DiffResponse {
 ///
 /// Phase 2b: `risk_tier` is the canonical public risk enum field (Low/Medium/High/Critical).
 /// `risk_level` (u8 1-5) and `decision_class` remain as supporting fields.
+///
+/// Phase 3 Batch 1 (bounded slice): `compensation_planning` exposes read-only
+/// compensation planning summary from the rebase planner. This is a skeleton/preview
+/// only — does not indicate execution capability or actual compensation actions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebasePreviewResponse {
     pub intent_id: Uuid,
@@ -72,12 +77,21 @@ pub struct RebasePreviewResponse {
     pub risk_tier: RiskTier,
     /// Supporting risk level (1=lowest, 5=highest)
     pub risk_level: u8,
+    /// Phase 3 Batch 1: Read-only compensation planning summary.
+    /// This is planner-generated preview data, NOT executed compensation actions.
+    /// The `ready` field indicates whether full compensation planning is available;
+    /// when `false`, the action list is empty and execution is not supported.
+    pub compensation_planning: CompensationPlanningSummary,
 }
 
 /// Response for rebase apply.
 ///
 /// Phase 2b: `risk_tier` is the canonical public risk enum field (Low/Medium/High/Critical).
 /// `risk_level` (u8 1-5) and `decision_class` remain as supporting fields.
+///
+/// Phase 3 Batch 1 (bounded slice): `compensation_planning` exposes read-only
+/// compensation planning summary from the rebase planner. This is a skeleton/preview
+/// only — does not indicate execution capability or actual compensation actions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebaseApplyResponse {
     pub intent_id: Uuid,
@@ -100,6 +114,11 @@ pub struct RebaseApplyResponse {
     pub replay_completed: bool,
     pub graph_updates_applied: usize,
     pub graph_updates_failed: usize,
+    /// Phase 3 Batch 1: Read-only compensation planning summary.
+    /// This is planner-generated preview data, NOT executed compensation actions.
+    /// The `ready` field indicates whether full compensation planning is available;
+    /// when `false`, the action list is empty and execution is not supported.
+    pub compensation_planning: CompensationPlanningSummary,
 }
 
 /// Request body for replay endpoint (Phase 2b bounded replay slice).
@@ -155,6 +174,9 @@ pub struct AppState {
     /// Phase 3 Batch 1 (groundwork): Side effect service for recording and querying
     /// side effects from artifact-producing operations.
     pub side_effect_service: Arc<compensation_service::SideEffectService>,
+    /// Phase 3 Batch 1: Compensation action service for querying compensation actions.
+    /// This is a read-only query facade; mutation/execution is Batch 1+ scope.
+    pub compensation_action_service: Arc<compensation_service::CompensationActionService>,
     pub start_time: Instant,
 }
 
@@ -900,6 +922,7 @@ async fn rebase_preview(
         manual_review_recommended: plan.manual_review_recommended,
         risk_tier: plan.risk_tier,
         risk_level: plan.risk_level,
+        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     }))
 }
 
@@ -1096,6 +1119,7 @@ async fn rebase_apply(
             .iter()
             .filter(|update| !update.success)
             .count(),
+        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     };
 
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
@@ -2002,6 +2026,58 @@ async fn list_side_effects(
     }))
 }
 
+// ============================================================================
+// Compensation Action Handlers (Phase 3 Batch 1 bounded read-only slice)
+// ============================================================================
+
+/// Query parameters for listing compensation actions
+#[derive(Debug, Deserialize)]
+pub struct ListCompensationActionsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for listing compensation actions
+#[derive(Debug, Serialize)]
+pub struct ListCompensationActionsResponse {
+    pub compensation_actions: Vec<compensation_service::CompensationAction>,
+    pub total: usize,
+}
+
+/// GET /intents/{intent_id}/compensation-actions - List compensation actions for an intent
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Returns all compensation actions
+/// recorded for the given intent, scoped to the specified tenant. Actions are
+/// ordered by generated_at descending (newest first).
+///
+/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+/// approval workflows, or any mutation. It only queries existing compensation
+/// action records.
+///
+/// **Planner vs Executor distinction:**
+/// - This endpoint returns actual compensation action records stored via the
+///   compensation action service/repository
+/// - The `compensation_planning` field in rebase-preview/apply responses shows
+///   planner-generated skeleton/preview data (not stored records)
+/// - Full compensation execution (executor trigger) is Batch 1+ scope
+async fn list_compensation_actions(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListCompensationActionsQuery>,
+) -> Result<Json<ListCompensationActionsResponse>, ApiErrorResponse> {
+    let actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = actions.len();
+
+    Ok(Json(ListCompensationActionsResponse {
+        compensation_actions: actions,
+        total,
+    }))
+}
+
 /// Request body for artifact ingest with optional side effect capture
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactIngestRequest {
@@ -2167,6 +2243,7 @@ pub fn build_router(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
     side_effect_service: Arc<compensation_service::SideEffectService>,
+    compensation_action_service: Arc<compensation_service::CompensationActionService>,
     orchestrator: Arc<RebaseOrchestrator>,
     audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
@@ -2177,6 +2254,7 @@ pub fn build_router(
         service,
         graph_service,
         side_effect_service,
+        compensation_action_service,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -2205,6 +2283,11 @@ pub fn build_router(
         .route("/intents/{intent_id}/replay", post(replay_intent))
         // Side effect query endpoint (Phase 3 Batch 1 groundwork)
         .route("/intents/{intent_id}/side-effects", get(list_side_effects))
+        // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
+        .route(
+            "/intents/{intent_id}/compensation-actions",
+            get(list_compensation_actions),
+        )
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))
@@ -2304,6 +2387,7 @@ pub fn build_router_with_sql_audit_and_approval(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
     side_effect_service: Arc<compensation_service::SideEffectService>,
+    compensation_action_service: Arc<compensation_service::CompensationActionService>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
@@ -2320,6 +2404,7 @@ pub fn build_router_with_sql_audit_and_approval(
         service,
         graph_service,
         side_effect_service,
+        compensation_action_service,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -2359,10 +2444,17 @@ mod tests {
         let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
             side_effect_repo,
         ));
+        // Phase 3 Batch 1: In-memory compensation action repository for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo),
+        );
         AppState {
             service,
             graph_service: graph_svc,
             side_effect_service: side_effect_svc,
+            compensation_action_service: compensation_action_svc,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -2935,6 +3027,11 @@ mod tests {
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
+            ),
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -3125,6 +3222,11 @@ mod tests {
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
+            ),
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -4263,6 +4365,11 @@ mod tests {
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
+            ),
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -4389,11 +4496,16 @@ mod tests {
         let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(Arc::new(
             compensation_service::InMemorySideEffectRepository::new(),
         )));
+        let compensation_action_svc =
+            Arc::new(compensation_service::CompensationActionService::new(
+                Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+            ));
 
         let _router: axum::Router = build_router(
             service,
             graph_svc,
             side_effect_svc,
+            compensation_action_svc,
             orchestrator,
             audit_repo,
             approval_repo,
@@ -4458,6 +4570,11 @@ mod tests {
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
+            ),
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,

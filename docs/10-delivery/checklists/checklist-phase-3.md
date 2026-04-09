@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 3 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 IN PROGRESS` — Batch 0 code scaffolds delivered; Batch 0 planning/admin items remain open. Batch 1 side effect ledger groundwork delivered (model, query API, idempotency, capture-on-write for ingest_artifact). Formal Batch 1 completion (planner, executor, retry, rollback record) remains gated on Phase 2b exit and remaining Batch 0 prep. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) and [06-phase-3-batch-0-execution.md](../06-phase-3-batch-0-execution.md) for the current execution split.  
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 IN PROGRESS` — Batch 0 code scaffolds delivered; Batch 0 planning/admin items remain open. Batch 1 side effect ledger groundwork delivered (model, query API, idempotency, capture-on-write for ingest_artifact). Compensation actions query API delivered (read-only). Formal Batch 1 completion (full planner, executor, retry, rollback record) remains gated on Phase 2b exit and remaining Batch 0 prep. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) and [06-phase-3-batch-0-execution.md](../06-phase-3-batch-0-execution.md) for the current execution split.  
 **Phase:** Phase 3  
 **Target Duration:** 6–10 tuần
 
@@ -97,6 +97,13 @@
     - Schema: infrastructure/migrations/011_create_compensation_actions.sql
     - Tests: cargo test -p compensation-service --all-features
     - Note: Planner and executor remain as stubs (Batch 1+ scope)
+
+[x] Compensation actions query API (Phase 3 Batch 1 bounded read-only slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/compensation-actions endpoint)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_by_intent method)
+    - Tests: cargo test -p intent-api --all-features (67 tests pass)
+    - Note: This endpoint is READ-ONLY - does not trigger compensation execution. Planner/executor remain Batch 1+ scope.
 
 [ ] Compensation planner: generate compensation plan from side effects
     Evidence:

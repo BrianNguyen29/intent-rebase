@@ -33,7 +33,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Phase 2b exit gate confirmed. All Phase 2 acceptance criteria met.*
 
-**Status:** `Batch 1 IN PROGRESS — side effect ledger and query API groundwork delivered`
+**Status:** `Batch 1 IN PROGRESS — side effect ledger, side-effects query API, and compensation-actions query API delivered`
 
 | Item | Description | Notes |
 |------|-------------|-------|
@@ -43,6 +43,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 1-4 | Side effect idempotency keys | Tenant-scoped atomic idempotency ✅ delivered in service/repository path. Broader artifact-service coverage remains open. |
 | 1-5 | Side effect rollback record (compensation applied, compensation result) | Schema migration TBD |
 | 1-6 | Compensation action model (`action_type`, `target`, `parameters`, `status`) | Scaffold ✅ delivered (Phase 3 Batch 0). Now includes `intent_id`, `trigger_context`, and `execution_result_payload` fields for bounded Phase 3 design. |
+| 1-6b | Compensation actions query API: `GET /intents/{intent_id}/compensation-actions` | ✅ delivered (Phase 3 Batch 1). READ-ONLY endpoint - does not trigger execution. Planner/executor remain Batch 1+ scope. |
 | 1-7 | Compensation planner: generate compensation plan from side effects | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
 | 1-8 | Compensation executor: execute compensation actions | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
 | 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | |
