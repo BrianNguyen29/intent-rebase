@@ -7,33 +7,53 @@
 
 ---
 
+## Current Implementation Status
+
+> **⚠️ Bounded Phase 2b Implementation**
+>
+> This ADR describes the **target design** for approval scope canonicalization.
+> The current Phase 2b implementation is **bounded** and includes only:
+> - PostgreSQL `policy_snapshot` table with scope fields
+> - Repository layer (in-memory + SQLx) for basic CRUD
+> - `scope_hash` computation for future change detection
+>
+> **NOT YET IMPLEMENTED:**
+> - S3-backed immutable snapshot blobs (current `snapshot_uri` is `memory://` placeholder)
+> - Revalidation API and approval invalidation
+> - Re-approval workflow and queueing
+> - Risk-based invalidation rules (critical/high/medium/low)
+>
+> See: [03-policy-snapshot-spec.md](../14-governance/03-policy-snapshot-spec.md) for current implementation boundaries.
+
+---
+
 ## Context
 
 When an intent changes, IRE must determine:
-1. **Which approvals are invalidated** — approvals granted under the old intent
-2. **Which scope is affected** — the boundary of what must be re-approved
-3. **How to canonicalize the approval state** — creating a point-in-time snapshot of the approval policy
+1. **Which approvals are invalidated** — approvals granted under the old intent *(future)*
+2. **Which scope is affected** — the boundary of what must be re-approved *(future)*
+3. **How to canonicalize the approval state** — creating a point-in-time snapshot of the approval policy *(partial — DB persistence implemented; S3 canonicalization future)*
 
 This is critical for:
-- **Compliance** — ensuring that changes to intent cannot bypass approval requirements
-- **Audit** — showing that approval was based on a specific policy version
-- **Rebase correctness** — knowing exactly what must be re-approved after an intent change
+- **Compliance** — ensuring that changes to intent cannot bypass approval requirements *(future)*
+- **Audit** — showing that approval was based on a specific policy version *(partial — DB record; S3 tamper-evidence future)*
+- **Rebase correctness** — knowing exactly what must be re-approved after an intent change *(future)*
 
 Key concepts:
 - **Approval scope** — the set of resources/actions that require approval (defined by rule pack)
 - **Approval policy** — the rules governing approval (who can approve, what conditions apply)
-- **Policy snapshot** — an immutable record of the approval policy at a specific point in time
+- **Policy snapshot** — an immutable record of the approval policy at a specific point in time *(partial — DB persistence only; S3 immutable blob future)*
 
 ---
 
 ## Decision
 
-**Store approval scope definitions in PostgreSQL with policy snapshots as immutable S3-backed records.**
+**Store approval scope definitions in PostgreSQL with policy snapshots as immutable S3-backed records.** *(Target design — current implementation is PostgreSQL-only; S3 is future)*
 
-### Approval Scope Model
+### Approval Scope Model — Current + Future Target
 
 ```
-approval_scope:
+approval_scope: (future — not yet modeled as separate table)
   - id: UUID
   - intent_id: FK
   - intent_version: int
@@ -43,32 +63,39 @@ approval_scope:
   - min_approvals: int
   - created_at: timestamp
 
-policy_snapshot:
+policy_snapshot: (current — PostgreSQL with memory:// URI placeholder)
   - id: UUID
   - intent_id: FK
   - intent_version: int
   - rule_pack_version: string
   - scope_hash: SHA256(scope definition)
-  - snapshot_uri: S3 URI (immutable JSON blob)
+  - snapshot_uri: URI (currently memory:// placeholder; S3 URI future)
   - created_at: timestamp
+  - canonicalized_at: timestamp (placeholder — true canonicalization future)
 ```
+
+> **Note**: The `approval_scope` table described above is the target design. In the current Phase 2b implementation, scope data is embedded within the `policy_snapshot.scope_definition` JSONB column.
 
 ### Snapshot Canonicalization Process
 
 ```
-1. Intent update received
-2. Compute new diff (vs previous version)
-3. Evaluate rule pack → determine affected approval scope
+1. Intent update received                                                    ❌ Future
+2. Compute new diff (vs previous version)                                  ❌ Future
+3. Evaluate rule pack → determine affected approval scope                   ❌ Future
 4. Create policy_snapshot:
-   - Hash current scope definition → scope_hash
-   - Serialize scope + rule_pack version → JSON
-   - Upload to S3 → snapshot_uri
-   - Insert record into policy_snapshot table
-5. Invalidate existing approvals whose snapshot_hash != new scope_hash
-6. Queue re-approval workflow for invalidated scopes
+   4a. Hash current scope definition → scope_hash                           ✅ Implemented (canonical JSON SHA256)
+   4b. Serialize scope + rule_pack version → JSON                         ❌ Future (S3 not implemented)
+   4c. Upload to S3 → snapshot_uri                                          ❌ Future (S3 not implemented)
+   4d. Insert record into policy_snapshot table                            ✅ Implemented (CRUD only)
+5. Invalidate existing approvals whose snapshot_hash != new scope_hash    ❌ Future
+6. Queue re-approval workflow for invalidated scopes                      ❌ Future
 ```
 
-### Approval Revalidation Rules
+> **Current State (Phase 2b)**: Only the repository layer (CRUD) and `scope_hash` helper are implemented. Steps 1–3 (triggering, diff computation, rule pack evaluation) and steps 4b–4c (S3 serialization/upload) are not yet implemented. Snapshot creation must be triggered explicitly by the caller.
+
+### Approval Revalidation Rules — Future Target
+
+> **NOT YET IMPLEMENTED**: The following risk-based invalidation rules are planned for future implementation. Current Phase 2b does not include approval invalidation or re-approval workflow.
 
 | Change Type | Invalidation Behavior |
 |-------------|----------------------|
@@ -90,17 +117,18 @@ Approval scope is computed from the dependency graph:
 ## Consequences
 
 ### Positive
-- Immutable policy snapshots provide strong audit trail
-- Scope hash enables efficient comparison: two versions have identical scope iff `scope_hash` matches
-- S3-backed snapshots are independently verifiable and tamper-evident
+- Immutable policy snapshots provide strong audit trail *(future — S3 tamper-evidence not yet implemented)*
+- Scope hash enables efficient comparison: two versions have identical scope iff `scope_hash` matches ✅
+- S3-backed snapshots are independently verifiable and tamper-evident *(future)*
 
 ### Negative
-- S3 snapshot creation adds latency to intent update path (mitigate with async background job)
-- Hash collisions theoretically possible (mitigate by storing full scope alongside hash)
+- S3 snapshot creation adds latency to intent update path *(future — not yet applicable)*
+- Hash collisions theoretically possible *(mitigated by storing full scope alongside hash)* ✅
 
 ### Neutral
-- Phase 1: synchronous snapshot creation; async in Phase 2
-- Phase 1: single approver required; multi-approver threshold in Phase 2
+- Phase 1: synchronous snapshot creation; async in Phase 2 *(future)*
+- Phase 1: single approver required; multi-approver threshold in Phase 2 *(future)*
+- **Phase 2b**: PostgreSQL persistence only; S3, canonicalization, revalidation, re-approval workflow are future phases
 
 ---
 
@@ -108,33 +136,35 @@ Approval scope is computed from the dependency graph:
 
 ### Data Model (PostgreSQL)
 
-```sql
-CREATE TABLE approval_scope (
-  id UUID PRIMARY KEY,
-  intent_id UUID NOT NULL REFERENCES intents(id),
-  intent_version INT NOT NULL,
-  scope_type TEXT NOT NULL CHECK (scope_type IN ('full', 'partial', 'none')),
-  affected_resources JSONB NOT NULL,
-  required_approvers JSONB NOT NULL,
-  min_approvals INT NOT NULL DEFAULT 1,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+> **Current Phase 2b Schema**: Only `policy_snapshot` table exists. `approval_scope` table is future. Scope data is embedded in `scope_definition` JSONB column.
 
+```sql
 CREATE TABLE policy_snapshot (
   id UUID PRIMARY KEY,
   intent_id UUID NOT NULL REFERENCES intents(id),
   intent_version INT NOT NULL,
   rule_pack_version TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('full', 'partial', 'none')),
+  affected_resources JSONB NOT NULL DEFAULT '[]',
+  required_approvers JSONB NOT NULL DEFAULT '[]',
+  min_approvals INT NOT NULL DEFAULT 1,
   scope_hash TEXT NOT NULL,
-  snapshot_uri TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  snapshot_uri TEXT NOT NULL,  -- Currently memory:// placeholder; S3 URI future
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  canonicalized_at TIMESTAMPTZ NOT NULL DEFAULT NOW()  -- Placeholder; true canonicalization future
+
+  UNIQUE(intent_id, intent_version)
 );
 
-CREATE INDEX idx_policy_snapshot_intent_version ON policy_snapshot(intent_id, intent_version);
-CREATE INDEX idx_approval_scope_intent ON approval_scope(intent_id, intent_version);
+CREATE INDEX idx_policy_snapshot_intent_version ON policy_snapshot(tenant_id, intent_id, intent_version DESC);
+CREATE INDEX idx_policy_snapshot_hash ON policy_snapshot(tenant_id, scope_hash);  -- For future revalidation
 ```
 
-### S3 Snapshot Format
+> **Future**: `approval_scope` table (separate from `policy_snapshot`) is planned but not yet implemented.
+
+### S3 Snapshot Format — Future Target
+
+> **NOT YET IMPLEMENTED**: The following describes the target S3 blob format. Current Phase 2b does not include S3 storage; scope data is stored in PostgreSQL only.
 
 ```json
 {

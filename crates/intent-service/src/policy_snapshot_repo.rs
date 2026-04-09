@@ -23,8 +23,12 @@ pub trait PolicySnapshotRepository: Send + Sync {
         snapshot: PolicySnapshot,
     ) -> Result<PolicySnapshot, IntentRebaseError>;
 
-    /// Get a policy snapshot by ID
-    async fn get_snapshot(&self, id: Uuid) -> Result<PolicySnapshot, IntentRebaseError>;
+    /// Get a policy snapshot by ID (tenant-scoped)
+    async fn get_snapshot(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PolicySnapshot, IntentRebaseError>;
 
     /// Get the latest policy snapshot for an intent (by version, descending)
     async fn get_latest_by_intent(
@@ -91,11 +95,16 @@ impl PolicySnapshotRepository for InMemoryPolicySnapshotRepository {
         Ok(snapshot)
     }
 
-    async fn get_snapshot(&self, id: Uuid) -> Result<PolicySnapshot, IntentRebaseError> {
+    async fn get_snapshot(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PolicySnapshot, IntentRebaseError> {
         let snapshots = self.snapshots.read().await;
         snapshots
             .get(&id)
             .cloned()
+            .filter(|s| s.tenant_id == tenant_id)
             .ok_or(IntentRebaseError::PolicySnapshotNotFound(id))
     }
 
@@ -272,7 +281,11 @@ impl PolicySnapshotRepository for SqlxPolicySnapshotRepository {
         self.insert_snapshot(&snapshot).await
     }
 
-    async fn get_snapshot(&self, id: Uuid) -> Result<PolicySnapshot, IntentRebaseError> {
+    async fn get_snapshot(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PolicySnapshot, IntentRebaseError> {
         let row = sqlx::query(
             r#"
             SELECT id, tenant_id, intent_id, intent_version,
@@ -280,10 +293,11 @@ impl PolicySnapshotRepository for SqlxPolicySnapshotRepository {
                 required_approvers, min_approvals, scope_hash, snapshot_uri,
                 created_at, canonicalized_at
             FROM policy_snapshot
-            WHERE id = $1
+            WHERE id = $1 AND tenant_id = $2
             "#,
         )
         .bind(id)
+        .bind(tenant_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| IntentRebaseError::StorageError(format!("fetch policy snapshot: {}", e)))?;
@@ -420,14 +434,7 @@ mod tests {
             min_approvals: 1,
         };
 
-        PolicySnapshot::new(
-            tenant_id,
-            intent_id,
-            1,
-            "v1.0.0".to_string(),
-            scope,
-            "abc123".to_string(),
-        )
+        PolicySnapshot::new(tenant_id, intent_id, 1, "v1.0.0".to_string(), scope)
     }
 
     #[tokio::test]
@@ -435,12 +442,13 @@ mod tests {
         let repo = Arc::new(InMemoryPolicySnapshotRepository::new());
         let snapshot = create_test_snapshot();
         let id = snapshot.id;
+        let tenant_id = snapshot.tenant_id;
 
         let result = repo.create_snapshot(snapshot).await;
         assert!(result.is_ok());
 
         // Verify stored
-        let stored = repo.get_snapshot(id).await.unwrap();
+        let stored = repo.get_snapshot(id, tenant_id).await.unwrap();
         assert_eq!(stored.id, id);
         assert_eq!(stored.intent_version, 1);
     }
@@ -455,14 +463,8 @@ mod tests {
         // Create snapshots for versions 1, 2, 3
         for version in 1..=3 {
             let scope = ScopeDefinition::default();
-            let snapshot = PolicySnapshot::new(
-                tenant_id,
-                intent_id,
-                version,
-                "v1.0.0".to_string(),
-                scope,
-                format!("hash{}", version),
-            );
+            let snapshot =
+                PolicySnapshot::new(tenant_id, intent_id, version, "v1.0.0".to_string(), scope);
             repo.create_snapshot(snapshot).await.unwrap();
         }
 
@@ -482,14 +484,7 @@ mod tests {
         let intent_id = Uuid::new_v4();
 
         let scope = ScopeDefinition::default();
-        let snapshot = PolicySnapshot::new(
-            tenant_id,
-            intent_id,
-            5,
-            "v2.0.0".to_string(),
-            scope,
-            "xyz789".to_string(),
-        );
+        let snapshot = PolicySnapshot::new(tenant_id, intent_id, 5, "v2.0.0".to_string(), scope);
         repo.create_snapshot(snapshot).await.unwrap();
 
         let found = repo
@@ -524,14 +519,8 @@ mod tests {
         // Create snapshots for versions 1, 2, 3
         for version in 1..=3 {
             let scope = ScopeDefinition::default();
-            let snapshot = PolicySnapshot::new(
-                tenant_id,
-                intent_id,
-                version,
-                "v1.0.0".to_string(),
-                scope,
-                format!("hash{}", version),
-            );
+            let snapshot =
+                PolicySnapshot::new(tenant_id, intent_id, version, "v1.0.0".to_string(), scope);
             repo.create_snapshot(snapshot).await.unwrap();
         }
 
@@ -553,25 +542,12 @@ mod tests {
 
         // Create snapshot for tenant 1
         let scope = ScopeDefinition::default();
-        let snapshot1 = PolicySnapshot::new(
-            tenant_1,
-            intent_id,
-            1,
-            "v1.0.0".to_string(),
-            scope.clone(),
-            "hash1".to_string(),
-        );
+        let snapshot1 =
+            PolicySnapshot::new(tenant_1, intent_id, 1, "v1.0.0".to_string(), scope.clone());
         repo.create_snapshot(snapshot1).await.unwrap();
 
         // Create snapshot for tenant 2
-        let snapshot2 = PolicySnapshot::new(
-            tenant_2,
-            intent_id,
-            1,
-            "v1.0.0".to_string(),
-            scope,
-            "hash2".to_string(),
-        );
+        let snapshot2 = PolicySnapshot::new(tenant_2, intent_id, 1, "v1.0.0".to_string(), scope);
         repo.create_snapshot(snapshot2).await.unwrap();
 
         // List for tenant 1 should only return tenant 1's snapshot
@@ -588,8 +564,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_snapshot_not_found() {
         let repo = Arc::new(InMemoryPolicySnapshotRepository::new());
+        let tenant_id = Uuid::new_v4();
         let id = Uuid::new_v4();
-        let result = repo.get_snapshot(id).await;
+        let result = repo.get_snapshot(id, tenant_id).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

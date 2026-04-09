@@ -276,18 +276,21 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - Tests: 6 new tests for cancel_pending_by_intent pass
     - Note: Minimal coherent extension to existing repository (not a new service)
 
-[ ] Approval scope canonicalization implemented
+[x] Approval scope canonicalization (deterministic JSON hashing groundwork) - BOUNDED SLICE DELIVERED
+    Note: Canonical JSON serialization for scope_hash computation is implemented. Full approval scope computation, dependency-graph traversal, and revalidation remain future.
     Evidence:
-    - PR merged: <link>
-    - Doc: ../../13-adrs/07-approval-scope-canonicalization.md
-    - Code: approval-service/canonicalization.rs
+    - Code: crates/intent-rebase-types/src/policy_snapshot.rs (compute_scope_hash, canonicalize_scope_definition, canonicalize_array_sorted, canonicalize_json_value)
+    - Tests: 7 canonicalization tests pass (deterministic hashing for key ordering, array ordering, different content)
+    - Doc: ../../13-adrs/07-approval-scope-canonicalization.md (updated)
 
-[~] Policy snapshot creation groundwork (bounded slice - schema, types, repo only; S3 upload/canonicalization/revalidation out of scope)
+[x] Policy snapshot read-only REST API surface (Phase 2b bounded slice - schema, types, repo, canonical hashing, and GET endpoints; S3 upload/write/revalidation out of scope)
+    Note: Four read-only GET endpoints are implemented: GET /policy-snapshots/{id}, GET /policy-snapshots/intent/{intent_id}/latest, GET /policy-snapshots/intent/{intent_id}/versions/{version}, GET /policy-snapshots/intent/{intent_id}. S3 blob storage, write endpoints, and revalidation API remain future.
     Evidence:
-    - PR merged: <link>
+    - Code: crates/intent-api/src/lib.rs:1252-1388 (handlers), 1604-1617 (routes)
     - Code: intent-service/policy_snapshot_repo.rs
     - Types: intent-rebase-types/src/policy_snapshot.rs
     - Schema: infrastructure/migrations/009_create_policy_snapshot.sql
+    - Note: scope_hash uses canonical JSON serialization for deterministic hashing
 
 [ ] Re-approval workflow: queue and notify approvers
     Evidence:

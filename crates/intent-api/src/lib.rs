@@ -16,7 +16,7 @@ use intent_rebase_types::{
     AffectedItemsPreview, CreateGraphEdgeRequest, CreateGraphNodeRequest, CreateIntentRequest,
     CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, DiffRequest, EdgeType,
     GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
-    ListVersionsResponse, NodeType, ValidateIntentResponse,
+    ListVersionsResponse, NodeType, PolicySnapshot, ValidateIntentResponse,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -146,6 +146,7 @@ pub struct AppState {
     pub orchestrator: Arc<RebaseOrchestrator>,
     pub audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     pub approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
+    pub policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     pub start_time: Instant,
 }
 
@@ -1249,6 +1250,151 @@ async fn reject_approval_request(
 }
 
 // ============================================================================
+// Policy Snapshot Handlers (Phase 2 bounded read-only slice)
+// ============================================================================
+
+/// Query parameters for getting policy snapshot by ID
+#[derive(Debug, Deserialize)]
+pub struct GetPolicySnapshotQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Query parameters for getting latest policy snapshot by intent
+#[derive(Debug, Deserialize)]
+pub struct GetLatestPolicySnapshotQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Query parameters for getting policy snapshot by intent version
+#[derive(Debug, Deserialize)]
+pub struct GetPolicySnapshotByVersionQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Query parameters for listing policy snapshots by intent
+#[derive(Debug, Deserialize)]
+pub struct ListPolicySnapshotsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response type for a single policy snapshot
+#[derive(Debug, Serialize)]
+pub struct PolicySnapshotResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version: i32,
+    pub rule_pack_version: String,
+    pub scope_definition: intent_rebase_types::ScopeDefinition,
+    pub scope_hash: String,
+    pub snapshot_uri: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub canonicalized_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<PolicySnapshot> for PolicySnapshotResponse {
+    fn from(s: PolicySnapshot) -> Self {
+        Self {
+            id: s.id,
+            tenant_id: s.tenant_id,
+            intent_id: s.intent_id,
+            intent_version: s.intent_version,
+            rule_pack_version: s.rule_pack_version,
+            scope_definition: s.scope_definition,
+            scope_hash: s.scope_hash,
+            snapshot_uri: s.snapshot_uri,
+            created_at: s.created_at,
+            canonicalized_at: s.canonicalized_at,
+        }
+    }
+}
+
+/// Response for listing policy snapshots
+#[derive(Debug, Serialize)]
+pub struct ListPolicySnapshotsResponse {
+    pub policy_snapshots: Vec<PolicySnapshotResponse>,
+    pub total: usize,
+}
+
+/// GET /policy-snapshots/{id} - Get a policy snapshot by ID
+async fn get_policy_snapshot(
+    State(state): State<AppState>,
+    Path(snapshot_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<GetPolicySnapshotQuery>,
+) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
+    let snapshot = state
+        .policy_snapshot_repo
+        .get_snapshot(snapshot_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(PolicySnapshotResponse::from(snapshot)))
+}
+
+/// GET /policy-snapshots/intent/{intent_id}/latest - Get latest policy snapshot for an intent
+async fn get_latest_policy_snapshot(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<GetLatestPolicySnapshotQuery>,
+) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
+    let snapshot = state
+        .policy_snapshot_repo
+        .get_latest_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    match snapshot {
+        Some(s) => Ok(Json(PolicySnapshotResponse::from(s))),
+        None => Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
+            intent_id,
+        ))),
+    }
+}
+
+/// GET /policy-snapshots/intent/{intent_id}/versions/{version} - Get policy snapshot by intent version
+async fn get_policy_snapshot_by_version(
+    State(state): State<AppState>,
+    Path((intent_id, version)): Path<(Uuid, i32)>,
+    axum::extract::Query(query): axum::extract::Query<GetPolicySnapshotByVersionQuery>,
+) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
+    let snapshot = state
+        .policy_snapshot_repo
+        .get_by_intent_version(intent_id, version, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    match snapshot {
+        Some(s) => Ok(Json(PolicySnapshotResponse::from(s))),
+        None => Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
+            intent_id,
+        ))),
+    }
+}
+
+/// GET /policy-snapshots/intent/{intent_id} - List all policy snapshots for an intent
+async fn list_policy_snapshots(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListPolicySnapshotsQuery>,
+) -> Result<Json<ListPolicySnapshotsResponse>, ApiErrorResponse> {
+    let snapshots = state
+        .policy_snapshot_repo
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let responses: Vec<PolicySnapshotResponse> = snapshots
+        .into_iter()
+        .map(PolicySnapshotResponse::from)
+        .collect();
+
+    Ok(Json(ListPolicySnapshotsResponse {
+        total: responses.len(),
+        policy_snapshots: responses,
+    }))
+}
+
+// ============================================================================
 // Replay Handler (Phase 2b bounded replay slice)
 // ============================================================================
 
@@ -1412,6 +1558,7 @@ pub fn build_router(
     orchestrator: Arc<RebaseOrchestrator>,
     audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
+    policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
 ) -> Router {
     let state = AppState {
         service,
@@ -1419,6 +1566,7 @@ pub fn build_router(
         orchestrator,
         audit_service,
         approval_request_repo,
+        policy_snapshot_repo,
         start_time: Instant::now(),
     };
 
@@ -1459,6 +1607,20 @@ pub fn build_router(
         .route(
             "/approval-requests/{approval_request_id}/reject",
             post(reject_approval_request),
+        )
+        // Policy snapshot endpoints (Phase 2 bounded read-only slice)
+        .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
+        .route(
+            "/policy-snapshots/intent/{intent_id}/latest",
+            get(get_latest_policy_snapshot),
+        )
+        .route(
+            "/policy-snapshots/intent/{intent_id}/versions/{version}",
+            get(get_policy_snapshot_by_version),
+        )
+        .route(
+            "/policy-snapshots/intent/{intent_id}",
+            get(list_policy_snapshots),
         )
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -1507,11 +1669,14 @@ pub fn build_router_with_sql_audit_and_approval(
     graph_service: Arc<GraphService>,
     orchestrator: Arc<RebaseOrchestrator>,
 ) -> Router {
-    // Construct SQL-backed audit and approval repositories from the pool
+    // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
         Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
-    let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> =
-        Arc::new(intent_service::SqlxApprovalRequestRepository::new(pool));
+    let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> = Arc::new(
+        intent_service::SqlxApprovalRequestRepository::new(pool.clone()),
+    );
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> =
+        Arc::new(intent_service::SqlxPolicySnapshotRepository::new(pool));
 
     build_router(
         service,
@@ -1519,6 +1684,7 @@ pub fn build_router_with_sql_audit_and_approval(
         orchestrator,
         audit_service,
         approval_request_repo,
+        policy_snapshot_repo,
     )
 }
 
@@ -1546,12 +1712,15 @@ mod tests {
             as Arc<dyn intent_rebase_types::AuditRepository>;
         let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
             as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
         AppState {
             service,
             graph_service: graph_svc,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
+            policy_snapshot_repo,
             start_time: Instant::now(),
         }
     }
@@ -2121,6 +2290,8 @@ mod tests {
                 as Arc<dyn intent_rebase_types::AuditRepository>,
             approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
                 as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+                as Arc<dyn intent_service::PolicySnapshotRepository>,
             start_time: Instant::now(),
         };
 
@@ -2305,6 +2476,8 @@ mod tests {
                 as Arc<dyn intent_rebase_types::AuditRepository>,
             approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
                 as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+                as Arc<dyn intent_service::PolicySnapshotRepository>,
             start_time: Instant::now(),
         };
 
