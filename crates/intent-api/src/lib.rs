@@ -152,6 +152,9 @@ pub struct AppState {
     /// When Some, events are also published to the event stream (best-effort, fail-open).
     /// Consumers, DLQ, and real NATS integration are Phase 3 items.
     pub event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    /// Phase 3 Batch 1 (groundwork): Side effect service for recording and querying
+    /// side effects from artifact-producing operations.
+    pub side_effect_service: Arc<compensation_service::SideEffectService>,
     pub start_time: Instant,
 }
 
@@ -253,6 +256,17 @@ impl IntoResponse for ApiErrorResponse {
             }
             IntentRebaseError::PolicySnapshotNotFound(_) => {
                 (StatusCode::NOT_FOUND, "POLICY_SNAPSHOT_NOT_FOUND", false)
+            }
+            IntentRebaseError::CompensationActionNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "COMPENSATION_ACTION_NOT_FOUND",
+                false,
+            ),
+            IntentRebaseError::SideEffectNotFound(_) => {
+                (StatusCode::NOT_FOUND, "SIDE_EFFECT_NOT_FOUND", false)
+            }
+            IntentRebaseError::UnknownEffectClass(_) => {
+                (StatusCode::BAD_REQUEST, "UNKNOWN_EFFECT_CLASS", false)
             }
         };
 
@@ -438,6 +452,89 @@ pub fn validate_create_version_request(
         return Err(IntentRebaseError::InvalidIngestRequest(
             "payload.objective.domain cannot be empty".into(),
         ));
+    }
+
+    Ok(())
+}
+
+/// Validates required fields in ArtifactIngestRequest.
+/// Returns Err with specific validation error if any field is invalid.
+///
+/// Phase 3 Batch 1 (groundwork): When side_effect_context is provided, validates:
+/// - source_intent_id cannot be nil
+/// - source_intent_version must be > 0
+/// - effect_type cannot be empty or whitespace-only
+/// - target cannot be empty or whitespace-only
+pub fn validate_artifact_ingest_request(
+    request: &ArtifactIngestRequest,
+) -> Result<(), IntentRebaseError> {
+    // Validate tenant_id is not nil/zero UUID
+    if request.tenant_id == Uuid::nil() {
+        return Err(IntentRebaseError::InvalidIngestRequest(
+            "tenant_id cannot be nil".into(),
+        ));
+    }
+
+    // Validate workflow_id is not nil/zero UUID
+    if request.workflow_id == Uuid::nil() {
+        return Err(IntentRebaseError::InvalidIngestRequest(
+            "workflow_id cannot be nil".into(),
+        ));
+    }
+
+    // Validate label is not empty
+    if request.label.trim().is_empty() {
+        return Err(IntentRebaseError::InvalidIngestRequest(
+            "label cannot be empty".into(),
+        ));
+    }
+
+    // Validate external_ref.ref_id is not nil UUID
+    if request.external_ref.ref_id == Uuid::nil() {
+        return Err(IntentRebaseError::InvalidIngestRequest(
+            "external_ref.ref_id cannot be nil".into(),
+        ));
+    }
+
+    // Phase 3 Batch 1: Validate side_effect_context if provided
+    if let Some(ref context) = request.side_effect_context {
+        // source_intent_id cannot be nil
+        if context.source_intent_id == Uuid::nil() {
+            return Err(IntentRebaseError::InvalidIngestRequest(
+                "side_effect_context.source_intent_id cannot be nil".into(),
+            ));
+        }
+
+        // source_intent_version must be > 0
+        if context.source_intent_version <= 0 {
+            return Err(IntentRebaseError::InvalidIngestRequest(format!(
+                "side_effect_context.source_intent_version must be > 0, got {}",
+                context.source_intent_version
+            )));
+        }
+
+        // effect_type cannot be empty or whitespace-only
+        if context.effect_type.trim().is_empty() {
+            return Err(IntentRebaseError::InvalidIngestRequest(
+                "side_effect_context.effect_type cannot be empty".into(),
+            ));
+        }
+
+        // target cannot be empty or whitespace-only
+        if context.target.trim().is_empty() {
+            return Err(IntentRebaseError::InvalidIngestRequest(
+                "side_effect_context.target cannot be empty".into(),
+            ));
+        }
+
+        // idempotency_key, if provided, cannot be empty or whitespace-only
+        if let Some(ref key) = context.idempotency_key {
+            if key.trim().is_empty() {
+                return Err(IntentRebaseError::InvalidIngestRequest(
+                    "side_effect_context.idempotency_key cannot be empty".into(),
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -1861,6 +1958,206 @@ async fn metrics_handler() -> impl IntoResponse {
         .expect("Failed to build metrics response")
 }
 
+// ============================================================================
+// Side Effect Handlers (Phase 3 Batch 1 groundwork)
+// ============================================================================
+
+/// Query parameters for listing side effects
+#[derive(Debug, Deserialize)]
+pub struct ListSideEffectsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for listing side effects
+#[derive(Debug, Serialize)]
+pub struct ListSideEffectsResponse {
+    pub side_effects: Vec<compensation_service::SideEffect>,
+    pub total: usize,
+}
+
+/// GET /intents/{intent_id}/side-effects - List side effects for an intent
+///
+/// Phase 3 Batch 1 (groundwork): Returns all side effects recorded for the given
+/// intent, scoped to the specified tenant. Side effects are ordered by
+/// occurred_at descending (newest first).
+///
+/// This endpoint provides the query API for compensation planning input.
+/// The actual compensation planning/execution is not included in this slice.
+async fn list_side_effects(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListSideEffectsQuery>,
+) -> Result<Json<ListSideEffectsResponse>, ApiErrorResponse> {
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = side_effects.len();
+
+    Ok(Json(ListSideEffectsResponse {
+        side_effects,
+        total,
+    }))
+}
+
+/// Request body for artifact ingest with optional side effect capture
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactIngestRequest {
+    /// Tenant scope
+    pub tenant_id: Uuid,
+    /// Workflow scope
+    pub workflow_id: Uuid,
+    /// External reference to the artifact (e.g., from artifact service)
+    pub external_ref: intent_rebase_types::ExternalRef,
+    /// Human-readable label for the artifact
+    pub label: String,
+    /// IntentVersion node IDs this artifact depends on
+    pub depends_on_intent_versions: Vec<Uuid>,
+    /// Optional properties to attach to the artifact node
+    #[serde(default)]
+    pub properties: Option<serde_json::Value>,
+    /// Phase 3 Batch 1 (groundwork): Optional context for side effect capture.
+    /// When provided with sufficient fields, enables capture-on-write to the
+    /// compensation ledger after successful artifact ingest.
+    #[serde(default)]
+    pub side_effect_context: Option<intent_rebase_types::SideEffectCaptureContext>,
+}
+
+/// Response for artifact ingest with side effect capture result
+#[derive(Debug, Serialize)]
+pub struct ArtifactIngestResponse {
+    pub node: intent_rebase_types::GraphNode,
+    pub edges: Vec<intent_rebase_types::GraphEdge>,
+    /// Phase 3 Batch 1 (groundwork): Indicates whether a side effect was recorded
+    pub side_effect_recorded: bool,
+    pub side_effect_id: Option<Uuid>,
+}
+
+/// POST /v1/graph/artifacts - Ingest an artifact with optional side effect capture
+///
+/// Phase 3 Batch 1 (groundwork): Creates an Artifact node in the graph and wires
+/// DependsOn edges to the specified IntentVersion nodes. When `side_effect_context`
+/// is provided with sufficient fields, also records a side effect to the compensation
+/// ledger (capture-on-write groundwork).
+///
+/// This is the primary path for artifact-producing operations to record side effects.
+async fn ingest_artifact(
+    State(state): State<AppState>,
+    Json(request): Json<ArtifactIngestRequest>,
+) -> Result<(StatusCode, Json<ArtifactIngestResponse>), ApiErrorResponse> {
+    // Phase 1: Input validation - validate request before processing
+    validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
+
+    // Extract side effect context before consuming request for side effect recording
+    // after successful graph ingest. This preserves the context for the compensation
+    // ledger write even though graph_service.ingest_artifact consumes the request.
+    let side_effect_context = request.side_effect_context.clone();
+
+    // Delegate artifact ingest to graph_service - this handles prevalidation of
+    // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
+    // This avoids duplicating the core artifact ingest logic in intent-api.
+    let graph_request = intent_rebase_types::ArtifactIngestRequest {
+        tenant_id: request.tenant_id,
+        workflow_id: request.workflow_id,
+        external_ref: request.external_ref,
+        label: request.label,
+        depends_on_intent_versions: request.depends_on_intent_versions,
+        properties: request.properties,
+        side_effect_context: None, // Consumed above for post-ingest recording
+    };
+
+    let ingest_result = state
+        .graph_service
+        .ingest_artifact(graph_request)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 3 Batch 1 (groundwork): Optionally record side effect if context provided
+    let mut side_effect_recorded = false;
+    let mut side_effect_id = None;
+
+    if let Some(ref context) = side_effect_context {
+        let effect_class = match context.effect_class {
+            Some(intent_rebase_types::SideEffectClass::S0PureRead) => {
+                compensation_service::SideEffectClass::S0PureRead
+            }
+            Some(intent_rebase_types::SideEffectClass::S1InternalReversible) => {
+                compensation_service::SideEffectClass::S1InternalReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S2ExternalReversible) | None => {
+                compensation_service::SideEffectClass::S2ExternalReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S3ExternalPartiallyReversible) => {
+                compensation_service::SideEffectClass::S3ExternalPartiallyReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S4Irreversible) => {
+                compensation_service::SideEffectClass::S4Irreversible
+            }
+        };
+
+        let recorded = if let Some(ref idempotency_key) = context.idempotency_key {
+            state
+                .side_effect_service
+                .record_side_effect_with_idempotency(
+                    request.tenant_id,
+                    context.source_intent_id,
+                    context.source_intent_version,
+                    effect_class,
+                    &context.effect_type,
+                    &context.target,
+                    idempotency_key,
+                )
+                .await
+        } else {
+            state
+                .side_effect_service
+                .record_side_effect(
+                    request.tenant_id,
+                    context.source_intent_id,
+                    context.source_intent_version,
+                    effect_class,
+                    &context.effect_type,
+                    &context.target,
+                )
+                .await
+        };
+
+        match recorded {
+            Ok(effect) => {
+                side_effect_recorded = true;
+                side_effect_id = Some(effect.id);
+                tracing::debug!(
+                    "Recorded side effect {} for artifact {} (intent_id={}, version={})",
+                    effect.id,
+                    ingest_result.node.id,
+                    context.source_intent_id,
+                    context.source_intent_version
+                );
+            }
+            Err(e) => {
+                // Log but don't fail the artifact ingest if side effect recording fails
+                tracing::warn!(
+                    "Failed to record side effect for artifact {}: {:?}",
+                    ingest_result.node.id,
+                    e
+                );
+            }
+        }
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ArtifactIngestResponse {
+            node: ingest_result.node,
+            edges: ingest_result.edges,
+            side_effect_recorded,
+            side_effect_id,
+        }),
+    ))
+}
+
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -1869,6 +2166,7 @@ async fn metrics_handler() -> impl IntoResponse {
 pub fn build_router(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
+    side_effect_service: Arc<compensation_service::SideEffectService>,
     orchestrator: Arc<RebaseOrchestrator>,
     audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
@@ -1878,6 +2176,7 @@ pub fn build_router(
     let state = AppState {
         service,
         graph_service,
+        side_effect_service,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -1904,6 +2203,8 @@ pub fn build_router(
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
         .route("/intents/{intent_id}/replay", post(replay_intent))
+        // Side effect query endpoint (Phase 3 Batch 1 groundwork)
+        .route("/intents/{intent_id}/side-effects", get(list_side_effects))
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))
@@ -1911,6 +2212,8 @@ pub fn build_router(
         .route("/v1/graph/edges", post(create_graph_edge))
         .route("/v1/graph/edges", get(list_graph_edges))
         .route("/v1/graph/nodes/{node_id}/edges", get(list_edges_from_node))
+        // Artifact ingest with optional side effect capture (Phase 3 Batch 1 groundwork)
+        .route("/v1/graph/artifacts", post(ingest_artifact))
         // Approval request endpoints (Phase 2b bounded slice)
         .route(
             "/approval-requests/pending",
@@ -2000,6 +2303,7 @@ pub fn build_router_with_sql_audit_and_approval(
     pool: sqlx::PgPool,
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
+    side_effect_service: Arc<compensation_service::SideEffectService>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
@@ -2015,6 +2319,7 @@ pub fn build_router_with_sql_audit_and_approval(
     build_router(
         service,
         graph_service,
+        side_effect_service,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -2049,9 +2354,15 @@ mod tests {
             as Arc<dyn intent_service::ApprovalRequestRepository>;
         let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
             as Arc<dyn intent_service::PolicySnapshotRepository>;
+        // Phase 3 Batch 1: In-memory side effect repository for tests
+        let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+            side_effect_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
+            side_effect_service: side_effect_svc,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -2621,6 +2932,9 @@ mod tests {
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -2808,6 +3122,9 @@ mod tests {
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -3943,6 +4260,9 @@ mod tests {
         AppState {
             service,
             graph_service: graph_svc,
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -4066,10 +4386,14 @@ mod tests {
             as Arc<dyn intent_service::PolicySnapshotRepository>;
         let event_publisher = Some(Arc::new(intent_rebase_types::InMemoryEventPublisher::new())
             as Arc<dyn intent_rebase_types::EventPublisher>);
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(Arc::new(
+            compensation_service::InMemorySideEffectRepository::new(),
+        )));
 
         let _router: axum::Router = build_router(
             service,
             graph_svc,
+            side_effect_svc,
             orchestrator,
             audit_repo,
             approval_repo,
@@ -4077,5 +4401,870 @@ mod tests {
             event_publisher,
         );
         // Router builds successfully - this verifies the signature change works
+    }
+
+    // =========================================================================
+    // Artifact Ingest Handler Tests (Phase 3 Batch 1 groundwork)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_ingest_artifact_success() {
+        use graph_service::{GraphRepository, GraphService, InMemoryGraphRepository};
+        use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType};
+
+        // Create a graph repo with an IntentVersion node that the artifact can depend on
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
+
+        // Use the same tenant_id and workflow_id for both the IntentVersion and the artifact
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create an IntentVersion node in the graph first
+        let intent_version_ref_id = Uuid::new_v4();
+        let _iv_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: intent_version_ref_id,
+                }),
+                label: "IntentVersion v1".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Build state with the graph service that has the IntentVersion node
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        let state = AppState {
+            service,
+            graph_service: graph_svc.clone(),
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: None,
+            start_time: Instant::now(),
+        };
+
+        // Create artifact request with the IntentVersion dependency and matching tenant/workflow IDs
+        let request = ArtifactIngestRequest {
+            tenant_id,
+            workflow_id,
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![_iv_node.id],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request))
+            .await
+            .expect("Artifact ingest should succeed");
+
+        assert_eq!(result.0, StatusCode::CREATED);
+        assert_eq!(result.1.node.label, "Test Artifact");
+        assert!(!result.1.side_effect_recorded);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_nil_tenant_id_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::nil(), // Invalid: nil UUID
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_nil_workflow_id_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::nil(), // Invalid: nil UUID
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_empty_label_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "".to_string(), // Invalid: empty label
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_whitespace_label_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "   ".to_string(), // Invalid: whitespace-only label
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_nil_external_ref_id_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::nil(), // Invalid: nil UUID
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // =========================================================================
+    // Artifact Ingest Validation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_validate_artifact_ingest_request_valid() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_tenant_id() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::nil(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("tenant_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_workflow_id() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::nil(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("workflow_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_empty_label() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("label"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_whitespace_label() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "   ".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("label"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_external_ref_id() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::nil(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("external_ref.ref_id"));
+    }
+
+    // =========================================================================
+    // Side Effect Context Validation Tests (Phase 3 Batch 1)
+    // =========================================================================
+
+    #[test]
+    fn test_validate_artifact_ingest_request_valid_side_effect_context() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_nil_source_intent_id() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::nil(), // Invalid: nil UUID
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.source_intent_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_zero_version() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 0, // Invalid: must be > 0
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("source_intent_version"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_negative_version() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: -1, // Invalid: must be > 0
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("source_intent_version"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_effect_type() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "".to_string(), // Invalid: empty
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.effect_type"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_effect_type() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "   ".to_string(), // Invalid: whitespace-only
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.effect_type"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_target() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "".to_string(), // Invalid: empty
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.target"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_target() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "   ".to_string(), // Invalid: whitespace-only
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.target"));
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_invalid_source_intent_id_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::nil(), // Invalid: nil UUID
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_invalid_version_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 0, // Invalid: must be > 0
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_empty_effect_type_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "".to_string(), // Invalid: empty
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_empty_target_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "".to_string(), // Invalid: empty
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_idempotency_key() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("".to_string()), // Invalid: empty
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.idempotency_key"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_idempotency_key() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("   ".to_string()), // Invalid: whitespace-only
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.idempotency_key"));
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_empty_idempotency_key_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("".to_string()), // Invalid: empty
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_context_whitespace_idempotency_key_rejected() {
+        use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+        let state = create_test_service();
+
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Test Artifact".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("   ".to_string()), // Invalid: whitespace-only
+            }),
+        };
+
+        let result = ingest_artifact(State(state), Json(request)).await;
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

@@ -72,4 +72,16 @@ pub enum IntentRebaseError {
     /// Phase 2 governance: Policy snapshot not found
     #[error("policy snapshot not found: {0}")]
     PolicySnapshotNotFound(Uuid),
+
+    /// Phase 3 Batch 1: Compensation action not found
+    #[error("compensation action not found: {0}")]
+    CompensationActionNotFound(Uuid),
+
+    /// Phase 3 Batch 1: Side effect not found
+    #[error("side effect not found: {0}")]
+    SideEffectNotFound(Uuid),
+
+    /// Phase 3 Batch 1: Unknown effect class string during decoding
+    #[error("unknown effect class: {0}")]
+    UnknownEffectClass(String),
 }

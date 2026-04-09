@@ -39,6 +39,9 @@ info:
     - GET /v1/graph/edges — List graph edges (with optional filters)
     - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
     
+    ### Phase 3 Batch 1 (groundwork)
+    - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
+
     ## Phase 2b Bounded Delivery
     - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
     - Bounded runtime adapter integration for Temporal-backed signal/replay execution
@@ -946,6 +949,49 @@ paths:
                 $ref: '#/components/schemas/ListEdgesFromNodeResponse'
         '404':
           description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/artifacts:
+    post:
+      tags:
+        - graph
+      summary: Ingest an artifact with optional side effect capture
+      description: |
+        Phase 3 Batch 1 (groundwork): Creates an Artifact node in the graph and wires
+        DependsOn edges to the specified IntentVersion nodes. When `side_effect_context`
+        is provided with sufficient fields, also records a side effect to the compensation
+        ledger (capture-on-write groundwork).
+
+        **Validation:**
+        - `tenant_id` cannot be nil UUID
+        - `workflow_id` cannot be nil UUID
+        - `label` cannot be empty or whitespace-only
+        - `external_ref.ref_id` cannot be nil UUID
+      operationId: ingestArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactIngestRequest'
+      responses:
+        '201':
+          description: Artifact created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactIngestResponse'
+        '400':
+          description: Invalid request body (nil UUID or empty label)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Referenced IntentVersion node not found
           content:
             application/json:
               schema:
@@ -2202,6 +2248,116 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GraphEdge'
+
+    # ----- Artifact Ingest (Phase 3 Batch 1 groundwork) -----
+    SideEffectClass:
+      type: string
+      enum: [s0_pure_read, s1_internal_reversible, s2_external_reversible, s3_external_partially_reversible, s4_irreversible]
+      description: |
+        Side effect severity class for capture context.
+        - s0_pure_read: Pure read, no side effect
+        - s1_internal_reversible: Internal reversible
+        - s2_external_reversible: External reversible (default)
+        - s3_external_partially_reversible: External partially reversible
+        - s4_irreversible: Irreversible
+
+    SideEffectCaptureContext:
+      type: object
+      description: |
+        Phase 3 Batch 1 (groundwork): Context for optional side effect capture.
+        When an artifact-producing operation has proper intent/version context,
+        this struct carries the information needed to record a side effect.
+
+        **Validation rules** (when side_effect_context is provided):
+        - source_intent_id: required, cannot be nil UUID
+        - source_intent_version: required, must be > 0
+        - effect_type: required, cannot be empty or whitespace-only
+        - target: required, cannot be empty or whitespace-only
+        - effect_class: optional, defaults to s2_external_reversible
+        - idempotency_key: optional, but if provided cannot be empty or whitespace-only
+      properties:
+        source_intent_id:
+          type: string
+          format: uuid
+          description: The intent ID that produced this artifact (cannot be nil)
+        source_intent_version:
+          type: integer
+          description: The intent version at time of artifact production (must be > 0)
+        effect_type:
+          type: string
+          description: The effect type (e.g., "artifact_created", "deployment_triggered"). Cannot be empty or whitespace-only.
+        target:
+          type: string
+          description: The effect target (e.g., artifact URL, deployment ID). Cannot be empty or whitespace-only.
+        effect_class:
+          $ref: '#/components/schemas/SideEffectClass'
+          description: The side effect severity class. Defaults to s2_external_reversible if not specified.
+        idempotency_key:
+          type: string
+          nullable: true
+          description: Optional idempotency key to prevent duplicate side effect records
+
+    ArtifactIngestRequest:
+      type: object
+      required: [tenant_id, workflow_id, external_ref, label]
+      description: |
+        Phase 3 Batch 1 (groundwork): Request to ingest an artifact with optional side effect capture.
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant scope (cannot be nil UUID)
+        workflow_id:
+          type: string
+          format: uuid
+          description: Workflow scope (cannot be nil UUID)
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          description: External reference to the artifact (ref_id cannot be nil UUID)
+        label:
+          type: string
+          description: Human-readable label for the artifact (cannot be empty or whitespace-only)
+        depends_on_intent_versions:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IntentVersion node IDs this artifact depends on
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Optional properties to attach to the artifact node
+        side_effect_context:
+          $ref: '#/components/schemas/SideEffectCaptureContext'
+          nullable: true
+          description: |
+            Phase 3 Batch 1 (groundwork): Optional context for side effect capture.
+            When provided with sufficient fields, enables capture-on-write to the
+            compensation ledger after successful artifact ingest.
+
+    ArtifactIngestResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (groundwork): Response for artifact ingest with side effect capture result.
+      required: [node, edges, side_effect_recorded]
+      properties:
+        node:
+          $ref: '#/components/schemas/GraphNode'
+          description: The created Artifact graph node
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+          description: The created DependsOn edges to IntentVersion nodes
+        side_effect_recorded:
+          type: boolean
+          description: Phase 3 Batch 1 (groundwork): Indicates whether a side effect was recorded
+        side_effect_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The ID of the recorded side effect (if side_effect_recorded is true)
 
     ListPendingApprovalRequestsResponse:
       type: object

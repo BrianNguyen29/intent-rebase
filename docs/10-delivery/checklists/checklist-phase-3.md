@@ -3,42 +3,86 @@
 **Exit Gate:** Phase 3 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `BATCH 0 PLANNING` — Full Phase 3 execution gated on Phase 2b completion. Batch 0 items (scaffold, design stubs, dependency audit) may run in parallel with Phase 2b.  
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 IN PROGRESS` — Batch 0 code scaffolds delivered; Batch 0 planning/admin items remain open. Batch 1 side effect ledger groundwork delivered (model, query API, idempotency, capture-on-write for ingest_artifact). Formal Batch 1 completion (planner, executor, retry, rollback record) remains gated on Phase 2b exit and remaining Batch 0 prep. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) and [06-phase-3-batch-0-execution.md](../06-phase-3-batch-0-execution.md) for the current execution split.  
 **Phase:** Phase 3  
 **Target Duration:** 6–10 tuần
+
+---
+
+## Batch 0 Progress Snapshot
+
+```
+[x] Batch 0 scaffold: compensation service package structure created
+    Evidence:
+    - Code: crates/compensation-service/Cargo.toml
+    - Code: crates/compensation-service/src/lib.rs
+    - Code: crates/compensation-service/src/side_effect.rs
+    - Code: crates/compensation-service/src/compensation_action.rs
+    - Tests: cargo test -p compensation-service --all-features
+
+[x] Batch 0 scaffold: forensic service package structure created
+    Evidence:
+    - Code: crates/forensic-service/Cargo.toml
+    - Code: crates/forensic-service/src/lib.rs
+    - Code: crates/forensic-service/src/bundle.rs
+    - Code: crates/forensic-service/src/bundle_contents.rs
+    - Tests: cargo test -p forensic-service --all-features
+
+[x] Batch 0 groundwork: Phase 3 audit taxonomy extended for compensation/forensic flows
+    Evidence:
+    - Code: crates/intent-rebase-types/src/audit.rs
+    - Code: crates/intent-rebase-types/src/audit_repo.rs
+    - Scope: additive event taxonomy only; no producer/consumer wiring yet
+
+[~] Batch 0 planning/admin items partially prepared
+    Evidence:
+    - Dependency audit artifact: ../07-phase-3-dependency-audit.md
+    - Phase 2b security input artifact: ../08-phase-2b-security-findings-input.md
+    - Provisional SLO prep: ../../09-operations/04-sre-and-slos.md
+    - Ownership/sign-off still awaits named assignees and external confirmation
+    - Final SRE/security/compliance sign-off remains open
+    - Tracking plan: ../06-phase-3-batch-0-execution.md
+```
 
 ---
 
 ## 1. Side Effect Ledger
 
 ```
-[ ] Side effect model (effect_id, intent_id, intent_version, effect_type, target, timestamp)
+[x] Side effect model (effect_id, intent_id, intent_version, effect_type, target, timestamp, tenant_id)
     Evidence:
     - PR merged: <link>
-    - Code: compensation-service/side_effect.rs
-    - Schema: 008_side_effects_ledger.sql
+    - Code: crates/compensation-service/src/side_effect.rs (tenant_id added)
+    - Code: crates/compensation-service/src/side_effect_repo.rs (persist/query groundwork only)
+    - Schema: infrastructure/migrations/010_create_side_effects_ledger.sql
+    - Note: This slice delivers persistence + repository groundwork only. Capture-on-write, API, idempotency enforcement, and rollback records remain open below.
 
-[ ] Side effect capture on all artifact-producing operations
+[~] Side effect capture on artifact-producing operations (Phase 3 Batch 1 groundwork)
+    Evidence:
+    - Code: crates/intent-rebase-types/src/graph.rs (SideEffectCaptureContext added)
+    - Code: crates/graph-service/src/lib.rs (side_effect_context field on ArtifactIngestRequest, documentation updated)
+    - Code: crates/intent-api/src/lib.rs (ingest_artifact endpoint with optional side effect capture, 16 validation tests for side_effect_context)
+    - Tests: cargo test -p graph-service --all-features (78 tests pass), cargo test -p intent-api --all-features (67 tests pass)
+    - Note: Delivered capture path is artifact-ingest only (via POST /v1/graph/artifacts with side_effect_context). Broader capture across other artifact-producing operations remains open and requires artifact-service integration.
+
+[x] Side effect query API for compensation planning (Phase 3 Batch 1 groundwork)
     Evidence:
     - PR merged: <link>
-    - Code: artifact-service/effect_capture.rs
-    - Tests: effect capture tests pass
+    - Code: crates/compensation-service/src/side_effect_service.rs (service facade with list_side_effects_by_intent)
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/side-effects endpoint)
+    - Tests: cargo test -p compensation-service --all-features (30 tests pass), cargo test -p intent-api --all-features (67 tests pass)
 
-[ ] Side effect query API for compensation planning
+[x] Side effect idempotency keys (Phase 3 Batch 1 groundwork - via service facade)
     Evidence:
-    - PR merged: <link>
-    - API: GET /api/v1/intents/{id}/side-effects
-    - Tests: query tests pass
-
-[ ] Side effect idempotency keys (prevent duplicate compensation)
-    Evidence:
-    - Code: compensation-service/idempotency.rs
-    - Tests: idempotency tests pass
+    - Code: crates/compensation-service/src/side_effect_service.rs (atomic record_side_effect_with_idempotency)
+    - Code: crates/compensation-service/src/side_effect_repo.rs (tenant-scoped get_or_create_idempotent)
+    - Tests: cargo test -p compensation-service --all-features (idempotency tests pass, including concurrent duplicate protection)
+    - Note: Atomic tenant-scoped idempotency is now implemented in the service/repository path. Broader artifact-service coverage remains open.
 
 [ ] Side effect rollback record (compensation applied, compensation result)
     Evidence:
     - Code: compensation-service/rollback.rs
-    - Schema: 009_side_effect_rollbacks.sql
+    - Schema: side-effect rollback migration TBD
 ```
 
 ---
@@ -46,32 +90,34 @@
 ## 2. Compensation Engine
 
 ```
-[ ] Compensation action model (action_type, target, parameters, status)
+[~] Compensation action model and repository (Batch 1 scaffold)
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/action.rs
+    - Code: crates/compensation-service/src/compensation_action.rs (model)
+    - Code: crates/compensation-service/src/compensation_action_repo.rs (trait + InMemory/SQL implementations)
+    - Schema: infrastructure/migrations/011_create_compensation_actions.sql
+    - Tests: cargo test -p compensation-service --all-features
+    - Note: Planner and executor remain as stubs (Batch 1+ scope)
 
 [ ] Compensation planner: generate compensation plan from side effects
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/planner.rs
-    - Tests: planner tests pass
+    - Code: compensation-service/planner.rs (stub scaffold only)
+    - Status: Batch 1+ scope
 
 [ ] Compensation executor: execute compensation actions
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/executor.rs
-    - Integration test: compensation executed end-to-end
+    - Code: compensation-service/executor.rs (stub scaffold only)
+    - Status: Batch 1+ scope
 
 [ ] Compensation retry logic (max retries, backoff, dead-letter)
     Evidence:
-    - Code: compensation-service/retry.rs
-    - Tests: retry tests pass
+    - Code: compensation-service/retry.rs (stub scaffold only)
+    - Status: Batch 1+ scope
 
 [ ] Compensation audit trail
     Evidence:
     - Audit events: compensation.planned, compensation.started, compensation.completed, compensation.failed
     - Doc: ../../14-governance/01-audit-event-spec.md (updated)
+    - Status: Batch 1+ scope
 ```
 
 ---
@@ -214,7 +260,7 @@
     Evidence:
     - PR merged: <link>
     - EXPLAIN ANALYZE on critical queries
-    - New indexes: 010_optimization_indexes.sql
+    - New indexes: optimization index migration TBD
 
 [ ] Connection pooling (Postgres, NATS)
     Evidence:

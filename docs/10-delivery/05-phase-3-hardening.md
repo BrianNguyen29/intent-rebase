@@ -13,15 +13,19 @@ Phase 3 builds on Phase 2b completion. Full execution is dependency-gated; howev
 
 *Gate: None — may start immediately. Must complete before Batch 1 starts.*
 
+**Status:** `IN PROGRESS — scaffold slice delivered, planning/admin items remain` ⚠️
+
 | Item | Description | Notes |
 |------|-------------|-------|
-| B0-1 | Finalize section ownership and review sign-offs | Section 1–7 owners assigned |
-| B0-2 | Review Phase 2b artifact model for compensation coverage gaps | Cross-ref side effect ledger scope |
-| B0-3 | Stub compensation service package structure | `compensation-service/` scaffold |
-| B0-4 | Stub forensic bundle service package structure | `forensic-service/` scaffold |
-| B0-5 | Dependency audit: identify cross-service assumptions introduced in Phase 2b | NATS schema, S3 paths, DB schema assumptions |
-| B0-6 | Confirm SLO targets with SRE team | intent processing latency, rebase latency, approval wait time |
-| B0-7 | Threat model update v2 — gather Phase 2b findings | Cross-ref Phase 2b security notes |
+| B0-1 | Finalize section ownership and review sign-offs | Placeholder owners can be recorded now; final named sign-offs remain open |
+| B0-2 | Review Phase 2b artifact model for compensation coverage gaps | Captured as dependency/security-prep input; implementation follow-up remains |
+| B0-3 | Stub compensation service package structure | `compensation-service/` scaffold ✅ delivered |
+| B0-4 | Stub forensic bundle service package structure | `forensic-service/` scaffold ✅ delivered |
+| B0-5 | Dependency audit: identify cross-service assumptions introduced in Phase 2b | Recorded in `07-phase-3-dependency-audit.md` ✅ |
+| B0-6 | Confirm SLO targets with SRE team | Provisional targets documented; external confirmation still open ⚠️ |
+| B0-7 | Threat model update v2 — gather Phase 2b findings | Input captured in `08-phase-2b-security-findings-input.md` ✅ |
+
+Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-batch-0-execution.md).
 
 ---
 
@@ -29,16 +33,18 @@ Phase 3 builds on Phase 2b completion. Full execution is dependency-gated; howev
 
 *Gate: Phase 2b exit gate confirmed. All Phase 2 acceptance criteria met.*
 
+**Status:** `Batch 1 IN PROGRESS — side effect ledger and query API groundwork delivered`
+
 | Item | Description | Notes |
 |------|-------------|-------|
-| 1-1 | Side effect model (`effect_id`, `intent_id`, `intent_version`, `effect_type`, `target`, `timestamp`) | Schema: `008_side_effects_ledger.sql` |
-| 1-2 | Side effect capture on all artifact-producing operations | Every path that writes an artifact must emit a side effect |
-| 1-3 | Side effect query API: `GET /api/v1/intents/{id}/side-effects` | Compensation planning input |
-| 1-4 | Side effect idempotency keys | Prevent duplicate compensation |
-| 1-5 | Side effect rollback record (compensation applied, compensation result) | Schema: `009_side_effect_rollbacks.sql` |
-| 1-6 | Compensation action model (`action_type`, `target`, `parameters`, `status`) | |
-| 1-7 | Compensation planner: generate compensation plan from side effects | |
-| 1-8 | Compensation executor: execute compensation actions | End-to-end integration test required |
+| 1-1 | Side effect model (`effect_id`, `intent_id`, `intent_version`, `effect_type`, `target`, `timestamp`, `tenant_id`) | Schema + repository groundwork ✅ delivered (Phase 2) |
+| 1-2 | Side effect capture on all artifact-producing operations | Delivered: artifact-ingest only via POST /v1/graph/artifacts with optional `side_effect_context`. Other artifact-producing operations remain open for future coverage. |
+| 1-3 | Side effect query API: `GET /intents/{intent_id}/side-effects` | ✅ delivered (Phase 3 Batch 1) |
+| 1-4 | Side effect idempotency keys | Tenant-scoped atomic idempotency ✅ delivered in service/repository path. Broader artifact-service coverage remains open. |
+| 1-5 | Side effect rollback record (compensation applied, compensation result) | Schema migration TBD |
+| 1-6 | Compensation action model (`action_type`, `target`, `parameters`, `status`) | Scaffold ✅ delivered (Phase 3 Batch 0). Now includes `intent_id`, `trigger_context`, and `execution_result_payload` fields for bounded Phase 3 design. |
+| 1-7 | Compensation planner: generate compensation plan from side effects | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
+| 1-8 | Compensation executor: execute compensation actions | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
 | 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | |
 | 1-10 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | |
 
@@ -89,7 +95,7 @@ Phase 3 builds on Phase 2b completion. Full execution is dependency-gated; howev
 |------|-------------|-------|
 | 4-1 | Intent diff optimization (caching, parallel computation) | Benchmark: diff < 100ms for typical intent |
 | 4-2 | Graph traversal optimization (indexing, query optimization) | Benchmark: traversal < 50ms for 10k node graph |
-| 4-3 | Database query optimization (indexes, query plans) | `EXPLAIN ANALYZE` on critical queries; `010_optimization_indexes.sql` |
+| 4-3 | Database query optimization (indexes, query plans) | `EXPLAIN ANALYZE` on critical queries; optimization migration number TBD |
 | 4-4 | Connection pooling (Postgres, NATS) | No connection exhaustion under load |
 | 4-5 | Load testing: simulate Phase 3 production load (10x normal, no SLO violations) | Report: `load-test-results.md` |
 | 4-6 | Threat model v2 | Doc: `../../14-governance/06-threat-model-v2.md` |

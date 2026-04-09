@@ -39,6 +39,22 @@ pub enum AuditEventType {
     ReplayInitiated,
     ArtifactProduced,
     ArtifactInvalidated,
+
+    // Phase 3 Batch 0 — Compensation events (scaffold only; full implementation is Batch 1)
+    /// Compensation plan generated for a set of side effects
+    CompensationPlanned,
+    /// Compensation execution started
+    CompensationStarted,
+    /// Compensation execution completed successfully
+    CompensationCompleted,
+    /// Compensation execution failed
+    CompensationFailed,
+
+    // Phase 3 Batch 0 — Forensic events (scaffold only; full implementation is Batch 3)
+    /// Forensic bundle generation requested
+    ForensicBundleRequested,
+    /// Forensic bundle generated and verified
+    ForensicBundleGenerated,
 }
 
 /// Payload for RebaseApplied audit events (Phase 2b bounded slice)
@@ -155,6 +171,76 @@ pub struct ArtifactInvalidatedAuditPayload {
     pub initiated_by: String,
     /// Quarantine status at time of audit
     pub quarantine_status: String,
+}
+
+// Phase 3 Batch 0 — Compensation audit payloads (scaffold only)
+
+/// Payload for CompensationPlanned audit events (Phase 3 Batch 0 scaffold)
+///
+/// Emitted when a compensation plan is generated from side effects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationPlannedAuditPayload {
+    pub compensation_plan_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub side_effect_count: usize,
+    pub auto_compensatable_count: usize,
+    pub manual_required_count: usize,
+    pub not_possible_count: usize,
+}
+
+/// Payload for CompensationStarted audit events (Phase 3 Batch 0 scaffold)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationStartedAuditPayload {
+    pub compensation_plan_id: Uuid,
+    pub intent_id: Uuid,
+    pub actions_initiated: usize,
+}
+
+/// Payload for CompensationCompleted audit events (Phase 3 Batch 0 scaffold)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationCompletedAuditPayload {
+    pub compensation_plan_id: Uuid,
+    pub intent_id: Uuid,
+    pub actions_succeeded: usize,
+    pub actions_failed: usize,
+}
+
+/// Payload for CompensationFailed audit events (Phase 3 Batch 0 scaffold)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationFailedAuditPayload {
+    pub compensation_plan_id: Uuid,
+    pub intent_id: Uuid,
+    pub failed_action_id: Uuid,
+    pub error_summary: String,
+}
+
+// Phase 3 Batch 0 — Forensic audit payloads (scaffold only)
+
+/// Payload for ForensicBundleRequested audit events (Phase 3 Batch 0 scaffold)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleRequestedAuditPayload {
+    pub bundle_id: Uuid,
+    pub tenant_id: Uuid,
+    pub time_range_start: DateTime<Utc>,
+    pub time_range_end: DateTime<Utc>,
+    pub purpose: String,
+    pub requested_by: String,
+}
+
+/// Payload for ForensicBundleGenerated audit events (Phase 3 Batch 0 scaffold)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleGeneratedAuditPayload {
+    pub bundle_id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_versions: usize,
+    pub artifacts: usize,
+    pub approvals: usize,
+    pub audit_events: usize,
+    pub policy_snapshots: usize,
+    pub bundle_size_bytes: u64,
+    pub integrity_verified: bool,
 }
 
 // =============================================================================

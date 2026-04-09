@@ -1,12 +1,35 @@
 //! Dependency graph domain types
 //!
 //! Phase 1 baseline: storage-first graph with Postgres-backed relational edge tables.
-//! Provides graph traversal primitives (BFS reachability, path-finding, cycle detection)
-//! for impact classification work.
-
+/// Provides graph traversal primitives (BFS reachability, path-finding, cycle detection)
+/// for impact classification work.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Side effect severity class for capture context.
+///
+/// This is a simplified representation used in cross-service communication
+/// (intent-rebase-types -> compensation-service). The actual SideEffectClass
+/// with full compensation semantics is defined in compensation-service.
+///
+/// | Class | Description |
+/// |-------|-------------|
+/// | s0_pure_read | Pure read, no side effect |
+/// | s1_internal_reversible | Internal reversible |
+/// | s2_external_reversible | External reversible (default) |
+/// | s3_external_partially_reversible | External partially reversible |
+/// | s4_irreversible | Irreversible |
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SideEffectClass {
+    #[default]
+    S2ExternalReversible,
+    S0PureRead,
+    S1InternalReversible,
+    S3ExternalPartiallyReversible,
+    S4Irreversible,
+}
 
 /// A node in the dependency graph
 ///
@@ -217,6 +240,13 @@ impl Default for TraversalOptions {
 /// The `depends_on_intent_versions` field MUST contain at least one IntentVersion node ID.
 /// An artifact without any IntentVersion dependency violates the traceability invariant:
 /// every artifact must trace upstream to at least one IntentVersion.
+///
+/// # Phase 3 Batch 1 (groundwork): Optional Side Effect Capture
+/// When `side_effect_context` is provided with sufficient fields, the artifact ingest
+/// path can optionally record a side effect to the compensation ledger. This enables
+/// capture-on-write for artifact-producing operations that have proper intent/version context.
+/// Not all artifact-producing operations will have this context available — this is
+/// acceptable as partial capture groundwork.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactIngestRequest {
     /// Tenant scope
@@ -230,7 +260,83 @@ pub struct ArtifactIngestRequest {
     /// IntentVersion node IDs this artifact depends on
     pub depends_on_intent_versions: Vec<Uuid>,
     /// Optional properties to attach to the artifact node
+    #[serde(default)]
     pub properties: Option<serde_json::Value>,
+    /// Phase 3 Batch 1 (groundwork): Optional context for side effect capture.
+    /// When provided with sufficient fields, enables capture-on-write to the
+    /// compensation ledger. This is optional and may not be available for all
+    /// artifact-producing operations.
+    #[serde(default)]
+    pub side_effect_context: Option<SideEffectCaptureContext>,
+}
+
+impl Default for ArtifactIngestRequest {
+    fn default() -> Self {
+        Self {
+            // Note: tenant_id, workflow_id, external_ref, label, and depends_on_intent_versions
+            // have no sensible defaults and must be provided by callers.
+            // This Default impl exists primarily to allow struct update syntax
+            // (e.g., `reqeust.with_side_effect_context()` pattern) in the future.
+            tenant_id: Uuid::nil(),
+            workflow_id: Uuid::nil(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::nil(),
+            },
+            label: String::new(),
+            depends_on_intent_versions: Vec::new(),
+            properties: None,
+            side_effect_context: None,
+        }
+    }
+}
+
+impl ArtifactIngestRequest {
+    /// Create an ArtifactIngestRequest with only the required fields.
+    /// Useful for tests that don't care about side effect capture.
+    pub fn new_minimal(
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+        external_ref: ExternalRef,
+        label: String,
+        depends_on_intent_versions: Vec<Uuid>,
+    ) -> Self {
+        Self {
+            tenant_id,
+            workflow_id,
+            external_ref,
+            label,
+            depends_on_intent_versions,
+            properties: None,
+            side_effect_context: None,
+        }
+    }
+}
+
+/// Phase 3 Batch 1 (groundwork): Context for optional side effect capture.
+///
+/// When an artifact-producing operation has proper intent/version context,
+/// this struct carries the information needed to record a side effect.
+/// All fields are optional to maintain backward compatibility with callers
+/// that don't have this context available.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SideEffectCaptureContext {
+    /// The intent ID that produced this artifact
+    pub source_intent_id: Uuid,
+    /// The intent version at time of artifact production
+    pub source_intent_version: i32,
+    /// The effect type (e.g., "artifact_created", "deployment_triggered")
+    pub effect_type: String,
+    /// The effect target (e.g., artifact URL, deployment ID)
+    pub target: String,
+    /// The side effect severity class (S0-S4)
+    /// Defaults to S2ExternalReversible if not specified
+    #[serde(default)]
+    pub effect_class: Option<SideEffectClass>,
+    /// Optional idempotency key to prevent duplicate side effect records
+    /// If not provided, a new side effect will be created for each ingest
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// Request to ingest an approval into the graph.

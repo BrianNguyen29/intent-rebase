@@ -8,6 +8,8 @@ members = [
     "crates/graph-service",
     "crates/runtime-adapter",
     "crates/rebase-orchestrator",
+    "crates/compensation-service",
+    "crates/forensic-service",
 ]
 
 [workspace.package]

@@ -489,6 +489,12 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
         AuditEventType::ReplayInitiated => "ReplayInitiated",
         AuditEventType::ArtifactProduced => "ArtifactProduced",
         AuditEventType::ArtifactInvalidated => "ArtifactInvalidated",
+        AuditEventType::CompensationPlanned => "CompensationPlanned",
+        AuditEventType::CompensationStarted => "CompensationStarted",
+        AuditEventType::CompensationCompleted => "CompensationCompleted",
+        AuditEventType::CompensationFailed => "CompensationFailed",
+        AuditEventType::ForensicBundleRequested => "ForensicBundleRequested",
+        AuditEventType::ForensicBundleGenerated => "ForensicBundleGenerated",
     }
 }
 
@@ -515,6 +521,12 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "ReplayInitiated" => AuditEventType::ReplayInitiated,
         "ArtifactProduced" => AuditEventType::ArtifactProduced,
         "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
+        "CompensationPlanned" => AuditEventType::CompensationPlanned,
+        "CompensationStarted" => AuditEventType::CompensationStarted,
+        "CompensationCompleted" => AuditEventType::CompensationCompleted,
+        "CompensationFailed" => AuditEventType::CompensationFailed,
+        "ForensicBundleRequested" => AuditEventType::ForensicBundleRequested,
+        "ForensicBundleGenerated" => AuditEventType::ForensicBundleGenerated,
         _ => AuditEventType::RebaseApplied,
     }
 }
