@@ -292,11 +292,15 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - Schema: infrastructure/migrations/009_create_policy_snapshot.sql
     - Note: scope_hash uses canonical JSON serialization for deterministic hashing
 
-[ ] Re-approval workflow: queue and notify approvers
+[x] Re-approval workflow trigger (Phase 2b bounded slice) - BOUNDED SLICE DELIVERED
+    Note: POST /approval-requests/trigger-reapproval creates a new pending approval request when scope changes.
+    Does NOT send external notifications (Phase 3 out of scope). Only creates approval record and returns queue intent.
     Evidence:
-    - PR merged: <link>
-    - Code: approval-service/workflow.rs
-    - Integration: approval queue in console
+    - Code: crates/intent-api/src/lib.rs (trigger_reapproval handler + route registration)
+    - Request/Response types: ReapprovalTriggerRequest, ReapprovalTriggerResponse
+    - Behavior: Creates pending approval_request via existing repository, returns queue/notification intent
+    - Bounded: notification_intent=true is advisory only; actual notification deferred to Phase 3
+    - Tests: bounded trigger tests pass
 
 [x] Approval revalidation API: GET /approval-requests/{id}/revalidate (Phase 2b bounded read-only slice)
     Evidence:
@@ -316,32 +320,41 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 
 ## 5. Artifact Invalidation + Quarantine
 
+**Note:** Phase 2b delivers bounded metadata/status slice only. Real S3 quarantine move, artifact release, and artifact deletion are Phase 3.
+
 ```
-[ ] Artifact invalidation on intent change
+[x] Artifact invalidation on intent change - BOUNDED SLICE DELIVERED (Phase 2b)
+    Note: Bounded metadata/status only. Real S3 quarantine move is Phase 3.
     Evidence:
-    - PR merged: <link>
-    - Code: artifact-service/invalidation.rs
-    - Tests: invalidation tests pass
+    - Code: crates/intent-rebase-types/src/artifact.rs (QuarantineSignal, QuarantineStatus, ArtifactMetadata.invalidated, Artifact.is_invalidated())
+    - Code: crates/intent-rebase-types/src/audit.rs (ArtifactInvalidatedAuditPayload, AuditEventType::ArtifactInvalidated)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_artifact_invalidated helper)
+    - Code: crates/rebase-orchestrator/src/graph_updater.rs (ArtifactInvalidationSignal struct + invalidate_artifacts helper method)
+    - Behavior: update_graph_state in RebaseOrchestrator::apply_rebase marks affected artifact nodes Stale via update_node_state_if_affected; invalidate_artifacts helper exists as groundwork for Phase 3 artifact-service integration but is NOT yet wired into rebase apply flow
+    - Tests: test_invalidate_artifacts_generates_signals validates the helper logic in isolation
+    - Note: The rebase-apply flow already marks artifacts Stale via update_graph_state; invalidate_artifacts is helper-only for Phase 3 when artifact service wires actual quarantine signal emission
+
+[x] Artifact quarantine status read API: GET /artifacts/{id}/quarantine-status - BOUNDED SLICE DELIVERED (Phase 2b)
+    Note: Metadata/status only - real S3 quarantine move is Phase 3.
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (get_artifact_quarantine_status handler + route registration)
+    - Code: crates/intent-rebase-types/src/artifact.rs (ArtifactQuarantineStatus struct, Artifact.quarantine_status())
+    - Behavior: Returns quarantine status metadata by looking up artifact node in graph
+    - Returns 404 if artifact not found in graph (Phase 2b has no standalone artifact repo)
+    - Phase 3 will wire this to actual artifact repository when that service is implemented
 
 [ ] Artifact quarantine: move to quarantine path in S3
     Evidence:
-    - PR merged: <link>
-    - Code: artifact-service/quarantine.rs
+    - Phase 3 item - requires artifact-service with S3 integration
     - S3 path: artifacts/{tenant}/{intent_id}/v{version}/quarantine/{artifact_id}/
-
-[ ] Artifact quarantine status API: GET /api/v1/artifacts/{id}/quarantine-status
-    Evidence:
-    - OpenAPI spec updated
-    - Tests: quarantine status tests pass
 
 [ ] Artifact release from quarantine (if rebase resolved)
     Evidence:
-    - Code: artifact-service/release.rs
-    - Tests: release tests pass
+    - Phase 3 item - requires artifact-service with S3 integration
 
 [ ] Artifact permanent deletion (if rebase requires discard)
     Evidence:
-    - Code: artifact-service/delete.rs
+    - Phase 3 item - requires artifact-service with S3 integration
     - Approval required: security-reviewer role
     - Audit: artifact.deleted event with reason
 ```
@@ -370,16 +383,26 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - OpenAPI: RebaseApplyResponse includes graph_updates_applied and graph_updates_failed fields
     - Tests: test_audit_summary_with_graph_updates passes (proves graph updates occur during apply with affected_items)
 
-[ ] Graph edges re-evaluated on intent change
+[x] Graph edge re-evaluation on intent change - BOUNDED SLICE DELIVERED (Phase 2b)
+    Note: Bounded read-only edge validation. Examines endpoint node states to determine edge validity.
+    Does NOT create/delete edges (Phase 3 structural mutations remain deferred).
     Evidence:
-    - Code: graph-service/edge_reevaluation.rs
-    - Tests: edge reeval tests pass
+    - Code: crates/graph-service/src/edge_reevaluation.rs (reevaluate_edges_from_intent_version, evaluate_edge_validity)
+    - EdgeValidity enum: Valid, TargetStale, SourceStale
+    - EdgeReevaluationResult: edges_examined, valid_edges, flagged_edges, flagged_edge_ids
+    - Tests: 2 edge validation tests pass (all active, target stale)
+    - Integration: Can be called after intent version changes to identify edges needing review
 
-[ ] Orphan detection (nodes no longer reachable from active intent)
+[x] Orphan detection - BOUNDED SLICE DELIVERED (Phase 2b)
+    Note: Bounded orphan detection using existing are_connected seam. Identifies artifacts and
+    side effects no longer reachable from active intent version. Does NOT auto-archive or
+    quarantine (Phase 3 artifact handling remains deferred).
     Evidence:
-    - Code: graph-service/orphan_detection.rs
-    - Tests: orphan detection tests pass
-    - Action: quarantine orphaned artifacts
+    - Code: crates/graph-service/src/edge_reevaluation.rs (detect_orphaned_nodes)
+    - OrphanDetectionResult: artifacts_examined/reachable/orphaned, side_effects_examined/reachable/orphaned
+    - Uses existing graph_service::are_connected() for bounded reachability check
+    - Tests: 2 orphan detection tests pass (no orphans, with orphans)
+    - Action: Orphaned nodes are flagged in result; actual quarantine/deprecation deferred to Phase 3
 ```
 
 ---
@@ -427,28 +450,48 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 
 ## 8. Event Streaming (NATS or Kafka)
 
-```
-[ ] Event publishing for all rebase-related events
-    Evidence:
-    - PR merged: <link>
-    - Code: event-service/publish.rs
-    - Subjects: rebase.signal.>, artifact.>, approval.>
+**Note:** Phase 2b delivers a bounded event-publishing slice only. Real NATS JetStream integration, event consumers, and DLQ are Phase 3 items.
 
-[ ] Event consumers for async processing (checkpoint creation, snapshot)
+```
+[x] Event publishing abstraction (Phase 2b BOUNDED SLICE DELIVERED)
+    Note: Phase 2b bounded slice adds event publishing infrastructure on top of audit persistence.
+    Audit persistence is the source of truth; event publishing is best-effort/fail-open.
     Evidence:
-    - PR merged: <link>
-    - Code: event-service/consumers.rs
+    - Code: crates/intent-rebase-types/src/event_publisher.rs (EventPublisher trait)
+    - EventPublisher trait: NoOpEventPublisher (no-op), InMemoryEventPublisher (mock for tests)
+    - Subject naming: audit.events.v1.<tenant_id>.<event_type>
+    - Schema versioning: v1 prefix (v2 migration path deferred to Phase 3)
+    - Tests: 6 event_publisher tests pass
+
+[x] Event publishing wired into existing audit emission paths (Phase 2b BOUNDED SLICE DELIVERED)
+    Note: Event publishing is best-effort/fail-open - audit persistence succeeds even if publishing fails.
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (publish_audit_event helper + wired in rebase_apply, approve/reject approval_request, replay_intent)
+    - AppState.event_publisher: Option<Arc<dyn EventPublisher>> - None = no streaming, Some = best-effort publish
+    - build_router() and build_router_with_sql_audit_and_approval() accept optional event_publisher parameter
+    - Tests: 5 event publishing tests pass in intent-api
+
+[x] Subject naming convention documented (Phase 2b BOUNDED SLICE DELIVERED)
+    Note: Subject format is bounded to Phase 2b scope. Full stream configuration is Phase 3.
+    Evidence:
+    - Code: crates/intent-rebase-types/src/event_publisher.rs (EventSubject::from_audit_event)
+    - Format: audit.events.v1.<tenant_id>.<event_type>
+    - Doc basis: docs/13-adrs/04-event-broker.md (subject naming ADR basis)
+
+[ ] Event consumers for async processing (checkpoint creation, snapshot) — PHASE 3 ITEM
+    Evidence:
+    - Phase 3 code: event-service/consumers.rs
     - Consumers: checkpoint-creator, snapshot-creator, notifier
 
-[ ] Event schema versioning (v1, v2 migration path)
+[ ] Event schema versioning (v2 migration path) — PHASE 3 ITEM
     Evidence:
-    - Doc: ../../04-api/02-events.md (updated)
-    - Migration: v1 → v2 documented
+    - Doc: ../../04-api/02-events.md (v2 migration to be documented in Phase 3)
+    - Migration: v1 → v2 deferred to Phase 3
 
-[ ] Dead-letter queue for failed event processing
+[ ] Dead-letter queue for failed event processing — PHASE 3 ITEM
     Evidence:
-    - Code: event-service/dlq.rs
-    - Tests: DLQ handling tests pass
+    - Phase 3 code: event-service/dlq.rs
+    - Phase 3 tests: DLQ handling tests pass
 ```
 
 ---

@@ -73,6 +73,29 @@ impl GraphUpdateResult {
     }
 }
 
+/// Phase 2b: Signal generated when an artifact is invalidated due to intent change.
+///
+/// This is metadata only - real S3 quarantine move is Phase 3.
+/// The signal can be used to emit ArtifactInvalidated audit events.
+#[derive(Debug, Clone)]
+pub struct ArtifactInvalidationSignal {
+    /// Graph node ID of the invalidated artifact
+    pub node_id: Uuid,
+    /// Intent ID that caused the invalidation
+    pub intent_id: Uuid,
+    /// Version range of the intent change
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    /// Reason for invalidation
+    pub reason: String,
+    /// Who initiated the invalidation
+    pub initiated_by: String,
+    /// When the invalidation was signaled
+    pub signaled_at: chrono::DateTime<chrono::Utc>,
+    /// Current quarantine status
+    pub quarantine_status: intent_rebase_types::QuarantineStatus,
+}
+
 /// Graph updater for bounded state mutations
 ///
 /// This service applies state transitions to graph nodes based on
@@ -280,6 +303,60 @@ impl GraphUpdater {
         }
 
         results
+    }
+
+    /// Phase 2b: Generate artifact invalidation signals for affected artifacts.
+    ///
+    /// This is a bounded slice - it only marks artifacts as Stale in the graph
+    /// and generates metadata for audit. Real S3 quarantine move is Phase 3.
+    ///
+    /// Returns a list of ArtifactInvalidationSignal for each artifact that was invalidated.
+    /// The signal can be used to emit ArtifactInvalidated audit events and to prepare
+    /// for Phase 3 S3 quarantine move (when artifact service is implemented).
+    pub async fn invalidate_artifacts(
+        &self,
+        node_ids: &[Uuid],
+        intent_id: Uuid,
+        from_version: i32,
+        to_version: i32,
+        initiated_by: &str,
+    ) -> Vec<ArtifactInvalidationSignal> {
+        use chrono::Utc;
+        use intent_rebase_types::QuarantineStatus;
+
+        let reason = format!(
+            "Artifact invalidated due to intent {} change from v{} to v{}",
+            intent_id, from_version, to_version
+        );
+        let signaled_at = Utc::now();
+
+        let mut signals = Vec::new();
+
+        for node_id in node_ids {
+            // Update the graph node state to Stale
+            let result = self
+                .update_node_state_if_affected(*node_id, NodeState::Stale, reason.clone())
+                .await;
+
+            if let Ok(ok_result) = result {
+                if ok_result.success {
+                    // Create the invalidation signal
+                    let signal = ArtifactInvalidationSignal {
+                        node_id: *node_id,
+                        intent_id,
+                        intent_version_from: from_version,
+                        intent_version_to: to_version,
+                        reason: reason.clone(),
+                        initiated_by: initiated_by.to_string(),
+                        signaled_at,
+                        quarantine_status: QuarantineStatus::Signaled,
+                    };
+                    signals.push(signal);
+                }
+            }
+        }
+
+        signals
     }
 
     /// Get a summary of graph state for an intent.
@@ -592,5 +669,47 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_artifacts_generates_signals() {
+        // Test Phase 2b bounded artifact invalidation signal generation
+        let repo = Arc::new(MockGraphRepo::new());
+
+        let node_id = Uuid::new_v4();
+        let node = GraphNode {
+            id: node_id,
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            node_type: NodeType::Artifact,
+            external_ref: None,
+            label: "Test Artifact".to_string(),
+            state: NodeState::Active,
+            properties: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
+        };
+        repo.add_node(node).await;
+
+        let graph_service = Arc::new(graph_service::GraphService::new(repo.clone()));
+        let updater = GraphUpdater::new(graph_service);
+
+        let intent_id = Uuid::new_v4();
+        let signals = updater
+            .invalidate_artifacts(&[node_id], intent_id, 1, 2, "test-actor")
+            .await;
+
+        // Phase 2b: Should generate exactly one invalidation signal
+        assert_eq!(signals.len(), 1);
+        let signal = &signals[0];
+        assert_eq!(signal.node_id, node_id);
+        assert_eq!(signal.intent_id, intent_id);
+        assert_eq!(signal.intent_version_from, 1);
+        assert_eq!(signal.intent_version_to, 2);
+        assert_eq!(signal.initiated_by, "test-actor");
+
+        // Verify the graph node was also marked Stale
+        let nodes = repo.nodes.read().await;
+        let node_after = nodes.get(&node_id).unwrap();
+        assert_eq!(node_after.state, NodeState::Stale);
     }
 }

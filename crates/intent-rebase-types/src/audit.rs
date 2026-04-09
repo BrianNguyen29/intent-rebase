@@ -123,3 +123,21 @@ pub struct ReplayAuditPayload {
     pub replay_initiated_via: String,
     pub rationale: String,
 }
+
+/// Phase 2b: Payload for ArtifactInvalidated audit events.
+///
+/// Bounded artifact invalidation: only metadata/status is updated.
+/// Real S3 quarantine move is Phase 3.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactInvalidatedAuditPayload {
+    pub artifact_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    /// Reason for invalidation
+    pub reason: String,
+    /// Actor who triggered the invalidation
+    pub initiated_by: String,
+    /// Quarantine status at time of audit
+    pub quarantine_status: String,
+}

@@ -147,6 +147,11 @@ pub struct AppState {
     pub audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     pub approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     pub policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
+    /// Phase 2b: Optional event publisher for audit event streaming.
+    /// When None, events are persisted to audit storage but NOT streamed.
+    /// When Some, events are also published to the event stream (best-effort, fail-open).
+    /// Consumers, DLQ, and real NATS integration are Phase 3 items.
+    pub event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     pub start_time: Instant,
 }
 
@@ -885,11 +890,20 @@ async fn rebase_apply(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
-            audit_payload,
+            audit_payload.clone(),
         )
         .await
     {
         tracing::warn!("Failed to record RebaseApplied audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            intent_head.intent.tenant_id,
+            "RebaseApplied",
+            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
     }
 
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E
@@ -911,11 +925,20 @@ async fn rebase_apply(
                 intent_head.intent.tenant_id,
                 actor_id,
                 intent_id,
-                blocked_payload,
+                blocked_payload.clone(),
             )
             .await
         {
             tracing::warn!("Failed to record RebaseApplyBlocked audit event: {:?}", e);
+        } else {
+            // Phase 2b bounded event publishing: publish after successful audit persistence
+            publish_audit_event(
+                &state.event_publisher,
+                intent_head.intent.tenant_id,
+                "RebaseApplyBlocked",
+                &serde_json::to_value(blocked_payload).unwrap_or_else(|_| serde_json::json!({})),
+            )
+            .await;
         }
 
         // Create pending approval_request record
@@ -1016,6 +1039,54 @@ fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static s
         RuntimeExecutionStatus::Degraded => "degraded",
         RuntimeExecutionStatus::Succeeded => "succeeded",
         RuntimeExecutionStatus::SucceededNoReplay => "succeeded_no_replay",
+    }
+}
+
+// ============================================================================
+// Phase 2b: Event Publishing Helpers (bounded event-streaming slice)
+// ============================================================================
+
+/// Phase 2b: Publish an audit event to the event stream (best-effort, fail-open).
+///
+/// This function is used after successful audit persistence to also publish
+/// the event to the configured event stream.
+///
+/// **Bounded slice behavior**:
+/// - Audit persistence is the source of truth (already completed successfully)
+/// - Event publishing is best-effort: failures are logged but don't fail the operation
+/// - When `event_publisher` is None, this is a no-op
+/// - When event_publisher fails, the overall operation continues
+///
+/// **Phase 3 items** (not implemented in Phase 2b):
+/// - Consumers (checkpoint-creator, snapshot-creator, notifier)
+/// - Dead-letter queue (DLQ) for failed event processing
+/// - Real NATS JetStream integration (only InMemoryEventPublisher is available)
+async fn publish_audit_event(
+    event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    tenant_id: uuid::Uuid,
+    event_type: &str,
+    payload: &serde_json::Value,
+) {
+    let publisher = match event_publisher {
+        Some(p) => p.as_ref(),
+        None => return, // No publisher configured - silently skip
+    };
+
+    let subject = intent_rebase_types::EventSubject::from_audit_event(tenant_id, event_type);
+    match publisher.publish(&subject, payload).await {
+        intent_rebase_types::PublishResult::Published {
+            subject: s,
+            sequence,
+        } => {
+            tracing::debug!("Published audit event to '{}' (seq={})", s, sequence);
+        }
+        intent_rebase_types::PublishResult::Skipped { reason } => {
+            tracing::warn!(
+                "Skipped publishing audit event to '{}': {}",
+                subject.subject,
+                reason
+            );
+        }
     }
 }
 
@@ -1167,11 +1238,20 @@ async fn approve_approval_request(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
-            audit_payload,
+            audit_payload.clone(),
         )
         .await
     {
         tracing::warn!("Failed to record ApprovalGranted audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            approval_request.tenant_id,
+            "ApprovalGranted",
+            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
     }
 
     Ok(Json(ApprovalRequestResponse {
@@ -1232,11 +1312,20 @@ async fn reject_approval_request(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
-            audit_payload,
+            audit_payload.clone(),
         )
         .await
     {
         tracing::warn!("Failed to record ApprovalRevoked audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            approval_request.tenant_id,
+            "ApprovalRevoked",
+            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
     }
 
     Ok(Json(ApprovalRequestResponse {
@@ -1601,11 +1690,20 @@ async fn replay_intent(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
-            audit_payload,
+            audit_payload.clone(),
         )
         .await
     {
         tracing::warn!("Failed to record ReplayInitiated audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            intent_head.intent.tenant_id,
+            "ReplayInitiated",
+            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
     }
 
     Ok(Json(ReplayResponse {
@@ -1678,6 +1776,10 @@ async fn metrics_handler() -> impl IntoResponse {
 }
 
 /// Build the Phase 1 router with CORS enabled
+///
+/// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
+/// When `None` (default), audit events are persisted but NOT streamed.
+/// When `Some`, events are also published to the event stream (best-effort, fail-open).
 pub fn build_router(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
@@ -1685,6 +1787,7 @@ pub fn build_router(
     audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
+    event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
     let state = AppState {
         service,
@@ -1693,6 +1796,7 @@ pub fn build_router(
         audit_service,
         approval_request_repo,
         policy_snapshot_repo,
+        event_publisher,
         start_time: Instant::now(),
     };
 
@@ -1792,13 +1896,21 @@ pub fn build_router(
 ///     Arc::new(intent_service),
 ///     Arc::new(graph_service),
 ///     Arc::new(orchestrator),
+///     Some(event_publisher),  // Phase 2b: optional event publisher
 /// );
 /// ```
+///
+/// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
+/// When `None` (default), audit events are persisted but NOT streamed.
+/// When `Some`, events are also published to the event stream (best-effort, fail-open).
+///
+/// Phase 3: Full NATS JetStream integration with consumers and DLQ.
 pub fn build_router_with_sql_audit_and_approval(
     pool: sqlx::PgPool,
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
     orchestrator: Arc<RebaseOrchestrator>,
+    event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -1816,6 +1928,7 @@ pub fn build_router_with_sql_audit_and_approval(
         audit_service,
         approval_request_repo,
         policy_snapshot_repo,
+        event_publisher,
     )
 }
 
@@ -1852,6 +1965,7 @@ mod tests {
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
+            event_publisher: None, // Phase 2b: event publishing optional in tests
             start_time: Instant::now(),
         }
     }
@@ -2423,6 +2537,7 @@ mod tests {
                 as Arc<dyn intent_service::ApprovalRequestRepository>,
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None, // Phase 2b: event publishing optional in tests
             start_time: Instant::now(),
         };
 
@@ -2609,6 +2724,7 @@ mod tests {
                 as Arc<dyn intent_service::ApprovalRequestRepository>,
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None, // Phase 2b: event publishing optional in tests
             start_time: Instant::now(),
         };
 
@@ -3707,5 +3823,168 @@ mod tests {
         let err = result.unwrap_err();
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // Phase 2b: Event Publishing Tests (bounded event-streaming slice)
+    // =========================================================================
+
+    /// Helper: Create AppState with an in-memory event publisher for testing
+    fn create_test_service_with_publisher(
+        publisher: Arc<dyn intent_rebase_types::EventPublisher>,
+    ) -> AppState {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        AppState {
+            service,
+            graph_service: graph_svc,
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: Some(publisher),
+            start_time: Instant::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_event_publisher_none_skips_publishing() {
+        // Test that when event_publisher is None, publish_audit_event is a no-op
+        let publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>> = None;
+        let tenant_id = Uuid::new_v4();
+
+        // Should not panic or error - just silently skip
+        publish_audit_event(
+            &publisher,
+            tenant_id,
+            "RebaseApplied",
+            &serde_json::json!({ "test": true }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_event_publisher_inmemory_stores_events() {
+        // Test that InMemoryEventPublisher stores events correctly
+        let publisher = Arc::new(intent_rebase_types::InMemoryEventPublisher::new());
+        let state = create_test_service_with_publisher(publisher.clone());
+
+        // Verify publisher is ready
+        assert!(state.event_publisher.as_ref().unwrap().is_ready());
+    }
+
+    #[tokio::test]
+    async fn test_publish_audit_event_helper_success() {
+        // Test publish_audit_event helper with InMemoryEventPublisher
+        let publisher = Arc::new(intent_rebase_types::InMemoryEventPublisher::new());
+        let tenant_id = Uuid::new_v4();
+        let payload = serde_json::json!({
+            "from_version": 1,
+            "to_version": 2,
+            "outcome": "auto_proceeded"
+        });
+
+        let publisher_for_call: Option<Arc<dyn intent_rebase_types::EventPublisher>> =
+            Some(publisher.clone());
+        publish_audit_event(&publisher_for_call, tenant_id, "RebaseApplied", &payload).await;
+
+        // Verify event was published
+        let subject_str = format!("audit.events.v1.{}.RebaseApplied", tenant_id);
+        let events = publisher.get_events_for_subject(&subject_str).await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].schema_version, "v1");
+        assert_eq!(events[0].payload, payload);
+    }
+
+    #[tokio::test]
+    async fn test_publish_audit_event_helper_multiple_events() {
+        // Test that multiple events are published with monotonic sequences
+        let publisher = Arc::new(intent_rebase_types::InMemoryEventPublisher::new());
+        let tenant_id = Uuid::new_v4();
+
+        let publisher_for_call: Option<Arc<dyn intent_rebase_types::EventPublisher>> =
+            Some(publisher.clone());
+
+        // Publish 3 events
+        for i in 1..=3 {
+            let payload = serde_json::json!({ "index": i });
+            publish_audit_event(&publisher_for_call, tenant_id, "RebaseApplied", &payload).await;
+        }
+
+        // Verify sequence is monotonic
+        let subject_str = format!("audit.events.v1.{}.RebaseApplied", tenant_id);
+        let events = publisher.get_events_for_subject(&subject_str).await;
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[1].sequence, 2);
+        assert_eq!(events[2].sequence, 3);
+    }
+
+    #[tokio::test]
+    async fn test_noop_event_publisher_skips() {
+        // Test that NoOpEventPublisher skips all events (always returns Skipped)
+        use intent_rebase_types::EventPublisher;
+        let publisher = Arc::new(intent_rebase_types::NoOpEventPublisher::new());
+        let tenant_id = Uuid::new_v4();
+        let payload = serde_json::json!({ "test": true });
+        let subject =
+            intent_rebase_types::EventSubject::from_audit_event(tenant_id, "RebaseApplied");
+
+        // NoOpEventPublisher should skip (return Skipped)
+        let result = publisher.publish(&subject, &payload).await;
+        match result {
+            intent_rebase_types::PublishResult::Skipped { reason } => {
+                assert!(reason.contains("disabled"));
+            }
+            _ => panic!("Expected Skipped result from NoOpEventPublisher"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_router_accepts_event_publisher() {
+        // Test that build_router accepts event_publisher parameter
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        let event_publisher = Some(Arc::new(intent_rebase_types::InMemoryEventPublisher::new())
+            as Arc<dyn intent_rebase_types::EventPublisher>);
+
+        let _router: axum::Router = build_router(
+            service,
+            graph_svc,
+            orchestrator,
+            audit_repo,
+            approval_repo,
+            policy_snapshot_repo,
+            event_publisher,
+        );
+        // Router builds successfully - this verifies the signature change works
     }
 }

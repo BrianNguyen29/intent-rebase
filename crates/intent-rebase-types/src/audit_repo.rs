@@ -189,6 +189,34 @@ pub trait AuditRepository: Send + Sync {
         };
         self.create_audit_event(event).await
     }
+
+    /// Record an ArtifactInvalidated audit event (Phase 2b bounded slice)
+    /// This is emitted when artifacts are invalidated due to intent change.
+    /// Note: This is bounded metadata/status only. Real S3 quarantine move is Phase 3.
+    async fn record_artifact_invalidated(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        artifact_id: Uuid,
+        payload: super::ArtifactInvalidatedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ArtifactInvalidated,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: Some(artifact_id),
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
 }
 
 /// In-memory audit repository for testing and Phase 2b bounded slice

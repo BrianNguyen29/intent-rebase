@@ -98,7 +98,7 @@ Defines how approval scope is computed, how approvals are invalidated on intent 
 
 ### Revalidation API
 
-**IMPLEMENTED (Phase 2b bounded read-only):**
+**IMPLEMENTED (Phase 2b bounded):**
 ```yaml
 GET /approval-requests/{id}/revalidate:
   description: Check if approval is still valid (read-only scope comparison)
@@ -113,27 +113,51 @@ GET /approval-requests/{id}/revalidate:
       "intent_id": "uuid",
       "approval_basis_version": 1
     }
-```
 
-**NOT YET IMPLEMENTED (Future):**
-```yaml
-POST /api/v1/approvals/{id}/revalidate:
-  description: Trigger revalidation workflow
-  body: { intent_id: uuid, new_intent_version: int }
+POST /approval-requests/trigger-reapproval:
+  description: Trigger re-approval workflow (bounded - creates approval record, returns queue intent)
+  body:
+    {
+      "intent_id": "uuid",
+      "original_version_from": 1,
+      "current_version_to": 2,
+      "original_scope_hash": "sha256...",
+      "current_scope_hash": "sha256...",
+      "reapproval_reason": "Scope has changed since approval was granted"
+    }
   response:
     {
-      "approval_id": "uuid",
-      "revalidation_id": "uuid",
+      "approval_request_id": "uuid",
+      "intent_id": "uuid",
+      "intent_version_from": 1,
+      "intent_version_to": 2,
+      "notification_intent": true,
       "status": "pending",
-      "required_approvers": [...]
+      "reason": "Scope has changed since approval was granted"
     }
+  Note: notification_intent=true is advisory only. Does NOT send actual notifications.
+        External notification systems integration is Phase 3 deferred work.
+```
+
+**NOT YET IMPLEMENTED (Future Phase 3):**
+```yaml
+POST /api/v1/approvals/{id}/revalidate:
+  description: Full revalidation workflow with external notification delivery
+  ...
 ```
 
 **Bounded read-only behavior:**
-- Compares approval-basis snapshot scope_hash with latest snapshot scope_hash
+- GET /approval-requests/{id}/revalidate: Compares approval-basis snapshot scope_hash with latest snapshot scope_hash
 - Returns validity status without triggering workflow or modifying approval state
 - If latest snapshot missing, returns valid=false (cannot determine current policy)
 - Does NOT auto-invalidate approvals, queue notifications, or start re-approval workflows
+
+**Bounded trigger behavior (Phase 2b):**
+- POST /approval-requests/trigger-reapproval: Creates new pending approval request record
+- Returns approval_request_id for queue/notification tracking
+- Sets notification_intent=true to indicate notification SHOULD happen
+- Does NOT send actual notifications (Phase 3 external notification system out of scope)
+- Caller is responsible for actual notification delivery or Phase 3 integration
 
 ---
 

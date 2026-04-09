@@ -2,10 +2,13 @@
 //!
 //! Phase 1 PR #10: Graph traversal baseline (BFS, path-finding, cycle detection) with in-memory repository.
 //! Phase 1 PR #11: Graph ingestors baseline for artifact, approval, and side-effect nodes.
+//! Phase 2b: Edge re-evaluation and orphan detection bounded slices.
 //! Provides persisted graph nodes/edges CRUD for future traversal/classification work.
 //!
 //! Architecture: Repository trait allows swapping to SQL-backed implementation.
 //! See: docs/03-spec/03-dependency-graph.md (storage strategy)
+
+pub mod edge_reevaluation;
 
 use async_trait::async_trait;
 use chrono::Utc;
