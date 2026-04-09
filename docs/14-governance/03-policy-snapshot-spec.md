@@ -112,18 +112,25 @@ PolicySnapshot
 | Re-approval | New snapshot for revalidated approval | ❌ Future (re-approval workflow not implemented) |
 | Rule pack update | Existing intent snapshots remain valid (time-bound) | ❌ Future |
 
-### Snapshot Selection for Revalidation — Future
+### Snapshot Selection for Revalidation
 
-> **NOT YET IMPLEMENTED**: The following describes the target revalidation logic. The current Phase 2b implementation does not include approval invalidation or re-approval workflow.
+> **PARTIALLY IMPLEMENTED (Phase 2b bounded read-only slice)**: The GET /approval-requests/{id}/revalidate endpoint compares approval-basis snapshot scope_hash with latest snapshot scope_hash for the same intent. Returns validity status based on scope_hash comparison. Does NOT trigger re-approval workflow.
 
+**Read-only comparison logic:**
 ```
-On intent change:
-1. Compute new scope
-2. Compute scope_hash(new_scope)
-3. Compare with scope_hash from approval snapshot
-4. If different → approval invalidated, re-approval required
-5. If same → approval remains valid (policy unchanged)
+1. Fetch approval request to get intent_id, tenant_id, and intent_version_from (approval basis)
+2. Fetch policy snapshot for intent_version_from (approval basis snapshot)
+3. Fetch latest policy snapshot for same intent
+4. Compare scope_hash values:
+   - If latest scope_hash == approval_basis scope_hash → valid=true (scope unchanged)
+   - If latest scope_hash != approval_basis scope_hash → valid=false (scope changed)
+   - If no latest snapshot exists → valid=false (cannot determine current policy)
 ```
+
+**NOT YET IMPLEMENTED (Future):**
+- POST /approvals/{id}/revalidate to trigger re-approval workflow
+- Automatic approval invalidation when intent changes
+- Notification queue to approvers when revalidation fails
 
 ---
 

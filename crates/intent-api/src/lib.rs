@@ -1249,6 +1249,104 @@ async fn reject_approval_request(
     }))
 }
 
+/// GET /approval-requests/{approval_request_id}/revalidate - Check if approval remains valid
+///
+/// Phase 2b bounded read-only slice: Compares approval-basis snapshot scope_hash
+/// with latest snapshot scope_hash for the same intent.
+///
+/// Comparison strategy:
+/// - Get the policy snapshot for the approval's `intent_version_from` (the approval basis)
+/// - Get the latest policy snapshot for the same intent
+/// - Compare scope_hash values: if different, approval is no longer valid
+///
+/// Returns 404 if:
+/// - Approval request not found
+/// - Approval basis snapshot not found (should exist if approval exists)
+///
+/// Returns 200 with valid=false if latest snapshot is missing (policy not yet computed
+/// for current intent version) - this is NOT a 404, as the approval still exists
+/// but we cannot determine current validity without a latest snapshot.
+async fn revalidate_approval_request(
+    State(state): State<AppState>,
+    Path(approval_request_id): Path<Uuid>,
+) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
+    // Step 1: Fetch the approval request
+    let approval_request = state
+        .approval_request_repo
+        .get_approval_request(approval_request_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 2: Fetch the approval-basis policy snapshot (snapshot for intent_version_from)
+    let approval_basis_snapshot = state
+        .policy_snapshot_repo
+        .get_by_intent_version(
+            approval_request.intent_id,
+            approval_request.intent_version_from,
+            approval_request.tenant_id,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let approval_basis_scope_hash = match approval_basis_snapshot {
+        Some(snapshot) => snapshot.scope_hash,
+        None => {
+            // Approval basis snapshot missing - this is unexpected but return 404
+            return Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
+                approval_request.intent_id,
+            )));
+        }
+    };
+
+    // Step 3: Fetch the latest policy snapshot for this intent
+    let latest_snapshot = state
+        .policy_snapshot_repo
+        .get_latest_by_intent(approval_request.intent_id, approval_request.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 4: Compare scope_hash values
+    let (valid, reason) = match &latest_snapshot {
+        Some(latest) if latest.scope_hash == approval_basis_scope_hash => {
+            // Scope unchanged - approval remains valid
+            (
+                true,
+                "Scope unchanged since approval was granted".to_string(),
+            )
+        }
+        Some(latest) if latest.scope_hash != approval_basis_scope_hash => {
+            // Scope changed - approval no longer valid
+            (
+                false,
+                "Scope has changed since approval was granted".to_string(),
+            )
+        }
+        None => {
+            // No latest snapshot available - cannot determine validity
+            // Return valid=false but with a clear reason (not a 404)
+            (
+                false,
+                "No latest policy snapshot available for comparison".to_string(),
+            )
+        }
+        // Should not reach here, but handle defensively
+        _ => (false, "Unable to determine approval validity".to_string()),
+    };
+
+    let current_scope_hash = latest_snapshot.map(|s| s.scope_hash);
+
+    Ok(Json(ApprovalRevalidationResponse {
+        approval_id: approval_request_id,
+        valid,
+        reason,
+        approval_basis_scope_hash,
+        current_scope_hash,
+        revalidation_required: !valid,
+        intent_id: approval_request.intent_id,
+        approval_basis_version: approval_request.intent_version_from,
+    }))
+}
+
 // ============================================================================
 // Policy Snapshot Handlers (Phase 2 bounded read-only slice)
 // ============================================================================
@@ -1314,6 +1412,34 @@ impl From<PolicySnapshot> for PolicySnapshotResponse {
 pub struct ListPolicySnapshotsResponse {
     pub policy_snapshots: Vec<PolicySnapshotResponse>,
     pub total: usize,
+}
+
+/// Response for approval revalidation (GET /approval-requests/{id}/revalidate)
+///
+/// Bounded read-only scope comparison: compares approval-basis snapshot scope_hash
+/// with latest snapshot scope_hash for the same intent to determine if approval
+/// remains valid. This is a Point-in-Time snapshot comparison, not a live policy evaluation.
+///
+/// Phase 2b bounded slice: Does NOT trigger re-approval workflow, queue notifications,
+/// or modify approval status. Returns 404 if approval or snapshots are not found.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRevalidationResponse {
+    /// ID of the approval request being revalidated
+    pub approval_id: Uuid,
+    /// Whether the approval scope remains valid (scope_hash unchanged)
+    pub valid: bool,
+    /// Human-readable reason for invalidation status
+    pub reason: String,
+    /// The scope_hash at the time of original approval
+    pub approval_basis_scope_hash: String,
+    /// The current latest scope_hash for this intent (None if no latest snapshot exists)
+    pub current_scope_hash: Option<String>,
+    /// Whether re-approval would be required (always true when valid=false)
+    pub revalidation_required: bool,
+    /// Intent ID this approval is for
+    pub intent_id: Uuid,
+    /// Intent version when approval was originally granted
+    pub approval_basis_version: i32,
 }
 
 /// GET /policy-snapshots/{id} - Get a policy snapshot by ID
@@ -1607,6 +1733,11 @@ pub fn build_router(
         .route(
             "/approval-requests/{approval_request_id}/reject",
             post(reject_approval_request),
+        )
+        // GET revalidate - bounded read-only scope comparison (Phase 2b)
+        .route(
+            "/approval-requests/{approval_request_id}/revalidate",
+            get(revalidate_approval_request),
         )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
         .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
@@ -3288,5 +3419,293 @@ mod tests {
         assert_eq!(result.checkpoint_selection_outcome, "NoCheckpointFound");
         // Skipped because no checkpoint and adapter not used for no-checkpoint path
         assert_eq!(result.runtime_execution_status, "skipped_not_ready");
+    }
+
+    // === Approval Revalidation Handler Tests ===
+
+    #[tokio::test]
+    async fn test_revalidate_approval_request_valid_when_scope_unchanged() {
+        use intent_rebase_types::{PolicySnapshot, ScopeDefinition, ScopeType};
+        use intent_service::{ApprovalRequest, ApprovalRequestStatus};
+
+        let state = create_test_service();
+
+        // Create an approval request
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let approval_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        let approval_request = ApprovalRequest {
+            id: approval_id,
+            intent_id,
+            intent_version_from: 1,
+            intent_version_to: 2,
+            workflow_id,
+            tenant_id,
+            requestor_id: "test".to_string(),
+            requestor_type: "test".to_string(),
+            decision_class: "D".to_string(),
+            reason: "Test".to_string(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: ApprovalRequestStatus::Pending,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            expires_at: None,
+            resolved_at: None,
+            resolved_by: None,
+            resolution_notes: None,
+        };
+        state
+            .approval_request_repo
+            .create_approval_request(approval_request.clone())
+            .await
+            .unwrap();
+
+        // Create a policy snapshot for version 1 (same as approval basis)
+        let scope = ScopeDefinition {
+            scope_type: ScopeType::Partial,
+            affected_resources: vec![],
+            required_approvers: vec![],
+            min_approvals: 1,
+        };
+        let snapshot =
+            PolicySnapshot::new(tenant_id, intent_id, 1, "v1.0.0".to_string(), scope.clone());
+        state
+            .policy_snapshot_repo
+            .create_snapshot(snapshot.clone())
+            .await
+            .unwrap();
+
+        // Create latest snapshot with SAME scope_hash (same scope)
+        let latest_snapshot =
+            PolicySnapshot::new(tenant_id, intent_id, 2, "v1.0.0".to_string(), scope);
+        state
+            .policy_snapshot_repo
+            .create_snapshot(latest_snapshot.clone())
+            .await
+            .unwrap();
+
+        // Test revalidate - should be valid since scope_hash matches
+        let result = revalidate_approval_request(State(state), Path(approval_id))
+            .await
+            .expect("Revalidate should succeed");
+
+        assert_eq!(result.approval_id, approval_id);
+        assert!(result.valid);
+        assert_eq!(result.approval_basis_scope_hash, snapshot.scope_hash);
+        assert_eq!(result.current_scope_hash, Some(latest_snapshot.scope_hash));
+        assert!(!result.revalidation_required);
+    }
+
+    #[tokio::test]
+    async fn test_revalidate_approval_request_invalid_when_scope_changed() {
+        use intent_rebase_types::{PolicySnapshot, ScopeDefinition, ScopeType};
+        use intent_service::{ApprovalRequest, ApprovalRequestStatus};
+
+        let state = create_test_service();
+
+        // Create an approval request
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let approval_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        let approval_request = ApprovalRequest {
+            id: approval_id,
+            intent_id,
+            intent_version_from: 1,
+            intent_version_to: 2,
+            workflow_id,
+            tenant_id,
+            requestor_id: "test".to_string(),
+            requestor_type: "test".to_string(),
+            decision_class: "D".to_string(),
+            reason: "Test".to_string(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: ApprovalRequestStatus::Pending,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            expires_at: None,
+            resolved_at: None,
+            resolved_by: None,
+            resolution_notes: None,
+        };
+        state
+            .approval_request_repo
+            .create_approval_request(approval_request.clone())
+            .await
+            .unwrap();
+
+        // Create a policy snapshot for version 1 with Partial scope
+        let scope_v1 = ScopeDefinition {
+            scope_type: ScopeType::Partial,
+            affected_resources: vec![],
+            required_approvers: vec![],
+            min_approvals: 1,
+        };
+        let snapshot_v1 =
+            PolicySnapshot::new(tenant_id, intent_id, 1, "v1.0.0".to_string(), scope_v1);
+        state
+            .policy_snapshot_repo
+            .create_snapshot(snapshot_v1.clone())
+            .await
+            .unwrap();
+
+        // Create latest snapshot with DIFFERENT scope (Full instead of Partial)
+        let scope_v2 = ScopeDefinition {
+            scope_type: ScopeType::Full,
+            affected_resources: vec![],
+            required_approvers: vec![],
+            min_approvals: 2,
+        };
+        let snapshot_v2 =
+            PolicySnapshot::new(tenant_id, intent_id, 2, "v1.0.0".to_string(), scope_v2);
+        state
+            .policy_snapshot_repo
+            .create_snapshot(snapshot_v2.clone())
+            .await
+            .unwrap();
+
+        // Test revalidate - should be invalid since scope_hash differs
+        let result = revalidate_approval_request(State(state), Path(approval_id))
+            .await
+            .expect("Revalidate should succeed");
+
+        assert_eq!(result.approval_id, approval_id);
+        assert!(!result.valid);
+        assert_eq!(result.approval_basis_scope_hash, snapshot_v1.scope_hash);
+        assert_eq!(result.current_scope_hash, Some(snapshot_v2.scope_hash));
+        assert!(result.revalidation_required);
+    }
+
+    #[tokio::test]
+    async fn test_revalidate_approval_request_valid_when_only_basis_snapshot_exists() {
+        use intent_rebase_types::{PolicySnapshot, ScopeDefinition, ScopeType};
+        use intent_service::{ApprovalRequest, ApprovalRequestStatus};
+
+        let state = create_test_service();
+
+        // Create an approval request
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let approval_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        let approval_request = ApprovalRequest {
+            id: approval_id,
+            intent_id,
+            intent_version_from: 1,
+            intent_version_to: 2,
+            workflow_id,
+            tenant_id,
+            requestor_id: "test".to_string(),
+            requestor_type: "test".to_string(),
+            decision_class: "D".to_string(),
+            reason: "Test".to_string(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: ApprovalRequestStatus::Pending,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            expires_at: None,
+            resolved_at: None,
+            resolved_by: None,
+            resolution_notes: None,
+        };
+        state
+            .approval_request_repo
+            .create_approval_request(approval_request.clone())
+            .await
+            .unwrap();
+
+        // Create only the approval-basis snapshot (no newer snapshots exist)
+        // When no newer policy snapshots exist, the approval basis is the latest,
+        // so scope_hash matches and the approval is still valid
+        let scope = ScopeDefinition {
+            scope_type: ScopeType::Partial,
+            affected_resources: vec![],
+            required_approvers: vec![],
+            min_approvals: 1,
+        };
+        let snapshot =
+            PolicySnapshot::new(tenant_id, intent_id, 1, "v1.0.0".to_string(), scope.clone());
+        state
+            .policy_snapshot_repo
+            .create_snapshot(snapshot.clone())
+            .await
+            .unwrap();
+
+        // Test revalidate - should return valid=true because latest (only) snapshot
+        // matches approval basis, meaning no newer policy exists to invalidate the approval
+        let result = revalidate_approval_request(State(state), Path(approval_id))
+            .await
+            .expect("Revalidate should succeed when only basis snapshot exists");
+
+        assert_eq!(result.approval_id, approval_id);
+        assert!(result.valid);
+        assert!(!result.revalidation_required);
+        assert_eq!(result.current_scope_hash, Some(snapshot.scope_hash));
+        assert!(result.reason.contains("Scope unchanged"));
+    }
+
+    #[tokio::test]
+    async fn test_revalidate_approval_request_not_found() {
+        let state = create_test_service();
+        let non_existent_id = Uuid::new_v4();
+
+        // Test revalidate - should return 404
+        let result = revalidate_approval_request(State(state), Path(non_existent_id)).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_revalidate_approval_request_basis_snapshot_not_found() {
+        use intent_service::{ApprovalRequest, ApprovalRequestStatus};
+
+        let state = create_test_service();
+
+        // Create an approval request but NO policy snapshots at all
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let approval_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        let approval_request = ApprovalRequest {
+            id: approval_id,
+            intent_id,
+            intent_version_from: 1,
+            intent_version_to: 2,
+            workflow_id,
+            tenant_id,
+            requestor_id: "test".to_string(),
+            requestor_type: "test".to_string(),
+            decision_class: "D".to_string(),
+            reason: "Test".to_string(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            status: ApprovalRequestStatus::Pending,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            expires_at: None,
+            resolved_at: None,
+            resolved_by: None,
+            resolution_notes: None,
+        };
+        state
+            .approval_request_repo
+            .create_approval_request(approval_request.clone())
+            .await
+            .unwrap();
+
+        // Test revalidate - should return 404 because approval basis snapshot doesn't exist
+        let result = revalidate_approval_request(State(state), Path(approval_id)).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

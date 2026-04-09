@@ -98,18 +98,25 @@ Defines how approval scope is computed, how approvals are invalidated on intent 
 
 ### Revalidation API
 
+**IMPLEMENTED (Phase 2b bounded read-only):**
 ```yaml
-GET /api/v1/approvals/{id}/revalidate:
-  description: Check if approval is still valid
+GET /approval-requests/{id}/revalidate:
+  description: Check if approval is still valid (read-only scope comparison)
   response:
     {
       "approval_id": "uuid",
-      "valid": false,
-      "reason": "scope_changed",
-      "new_scope": {...},
-      "revalidation_required": true
+      "valid": true|false,
+      "reason": "Scope unchanged since approval was granted" | "Scope has changed since approval was granted",
+      "approval_basis_scope_hash": "sha256...",
+      "current_scope_hash": "sha256..." | null,
+      "revalidation_required": true|false,
+      "intent_id": "uuid",
+      "approval_basis_version": 1
     }
+```
 
+**NOT YET IMPLEMENTED (Future):**
+```yaml
 POST /api/v1/approvals/{id}/revalidate:
   description: Trigger revalidation workflow
   body: { intent_id: uuid, new_intent_version: int }
@@ -121,6 +128,12 @@ POST /api/v1/approvals/{id}/revalidate:
       "required_approvers": [...]
     }
 ```
+
+**Bounded read-only behavior:**
+- Compares approval-basis snapshot scope_hash with latest snapshot scope_hash
+- Returns validity status without triggering workflow or modifying approval state
+- If latest snapshot missing, returns valid=false (cannot determine current policy)
+- Does NOT auto-invalidate approvals, queue notifications, or start re-approval workflows
 
 ---
 

@@ -298,10 +298,13 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
     - Code: approval-service/workflow.rs
     - Integration: approval queue in console
 
-[ ] Approval revalidation API: GET /api/v1/approvals/{id}/revalidate
+[x] Approval revalidation API: GET /approval-requests/{id}/revalidate (Phase 2b bounded read-only slice)
     Evidence:
-    - OpenAPI spec updated
-    - Tests: revalidation tests pass
+    - PR merged: this PR
+    - Code: crates/intent-api/src/lib.rs (revalidate_approval_request handler)
+    - Tests: revalidation tests pass (crates/intent-api/src/lib.rs tests module)
+    - Note: Bounded read-only scope comparison using approval-basis vs latest snapshot scope_hash
+    - Note: Does NOT trigger re-approval workflow, queue/notify, or modify approval status
 
 [ ] Full approval status lifecycle tracking (including expired/revalidated flows)
     Evidence:
