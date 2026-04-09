@@ -290,6 +290,21 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::UnknownEffectClass(_) => {
                 (StatusCode::BAD_REQUEST, "UNKNOWN_EFFECT_CLASS", false)
             }
+            IntentRebaseError::InvalidCompensationActionTransition { .. } => (
+                StatusCode::CONFLICT,
+                "INVALID_COMPENSATION_ACTION_TRANSITION",
+                false,
+            ),
+            IntentRebaseError::CompensationActionNotExecutable(_) => (
+                StatusCode::CONFLICT,
+                "COMPENSATION_ACTION_NOT_EXECUTABLE",
+                false,
+            ),
+            IntentRebaseError::CompensationActionConcurrencyConflict(_) => (
+                StatusCode::CONFLICT,
+                "COMPENSATION_ACTION_CONCURRENCY_CONFLICT",
+                true,
+            ),
         };
 
         let body = ApiError {
@@ -2027,7 +2042,7 @@ async fn list_side_effects(
 }
 
 // ============================================================================
-// Compensation Action Handlers (Phase 3 Batch 1 bounded read-only slice)
+// Compensation Action Handlers (Phase 3 Batch 1 bounded execution slice)
 // ============================================================================
 
 /// Query parameters for listing compensation actions
@@ -2076,6 +2091,164 @@ async fn list_compensation_actions(
         compensation_actions: actions,
         total,
     }))
+}
+
+/// Request body for approve compensation action
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApproveCompensationActionBody {
+    /// Lock version for optimistic concurrency control
+    pub lock_version: i32,
+    /// Optional actor who approved (for audit purposes)
+    #[serde(default)]
+    pub approved_by: Option<String>,
+}
+
+/// Request body for waive compensation action
+#[derive(Debug, Clone, Deserialize)]
+pub struct WaiveCompensationActionBody {
+    /// Lock version for optimistic concurrency control
+    pub lock_version: i32,
+    /// Optional actor who waived (for audit purposes)
+    #[serde(default)]
+    pub waived_by: Option<String>,
+}
+
+/// Request body for execute compensation action
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExecuteCompensationActionBody {
+    /// Optional actor who executed (for audit purposes)
+    #[serde(default)]
+    pub executed_by: Option<String>,
+}
+
+/// Response for compensation action mutation (approve/waive/execute)
+#[derive(Debug, Clone, Serialize)]
+pub struct CompensationActionResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+    pub status: String,
+    pub strategy_type: String,
+    pub feasibility: String,
+    pub rationale: String,
+    pub attempt_count: i32,
+    pub lock_version: i32,
+    pub approved_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub approved_by: Option<String>,
+    pub executed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub executed_by: Option<String>,
+    pub failed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub execution_result_payload: Option<serde_json::Value>,
+}
+
+impl From<compensation_service::CompensationAction> for CompensationActionResponse {
+    fn from(action: compensation_service::CompensationAction) -> Self {
+        Self {
+            id: action.id,
+            tenant_id: action.tenant_id,
+            intent_id: action.intent_id,
+            status: format!("{:?}", action.status),
+            strategy_type: format!("{:?}", action.strategy_type),
+            feasibility: format!("{:?}", action.feasibility),
+            rationale: action.rationale,
+            attempt_count: action.attempt_count,
+            lock_version: action.lock_version,
+            approved_at: action.approved_at,
+            approved_by: action.approved_by,
+            executed_at: action.executed_at,
+            executed_by: action.executed_by,
+            failed_at: action.failed_at,
+            execution_result_payload: action
+                .execution_result_payload
+                .map(|r| serde_json::to_value(&r).unwrap_or_else(|_| serde_json::json!({}))),
+        }
+    }
+}
+
+/// POST /compensation-actions/{action_id}/approve - Approve a pending compensation action
+///
+/// Phase 3 Batch 1 (bounded execution slice): Transitions a Pending compensation action
+/// to Approved status, enabling it to be executed.
+///
+/// **Transition rules:**
+/// - Only Pending actions can be approved
+/// - Uses optimistic locking via lock_version to prevent concurrent updates
+///
+/// **Fails closed on illegal transitions:**
+/// - Returns 409 Conflict if action is not Pending
+/// - Returns 409 Conflict if lock_version doesn't match
+///
+/// **Executor gate:** Approved actions can be executed via POST /compensation-actions/{action_id}/execute
+async fn approve_compensation_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<ApproveCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    let updated = state
+        .compensation_action_service
+        .approve_action(action_id, body.lock_version, body.approved_by.as_deref())
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
+}
+
+/// POST /compensation-actions/{action_id}/waive - Waive a pending compensation action
+///
+/// Phase 3 Batch 1 (bounded execution slice): Transitions a Pending compensation action
+/// to Waived status, marking it as intentionally skipped.
+///
+/// **Transition rules:**
+/// - Only Pending actions can be waived
+/// - Uses optimistic locking via lock_version to prevent concurrent updates
+///
+/// **Fails closed on illegal transitions:**
+/// - Returns 409 Conflict if action is not Pending
+/// - Returns 409 Conflict if lock_version doesn't match
+///
+/// **This slice:** Waived actions are terminal. No reactivation path exists.
+async fn waive_compensation_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<WaiveCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    let updated = state
+        .compensation_action_service
+        .waive_action(action_id, body.lock_version, body.waived_by.as_deref())
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
+}
+
+/// POST /compensation-actions/{action_id}/execute - Execute an approved compensation action
+///
+/// Phase 3 Batch 1 (bounded execution slice): Executes an Approved compensation action
+/// using the compensation executor.
+///
+/// **Executor gate:** Only Approved actions can execute. This prevents accidental
+/// execution of pending or already-processed actions.
+///
+/// **Bounded stub executor semantics:**
+/// - The executor is StubCompensationExecutor that always returns success
+/// - Real rollback/counter-action logic is Batch 1+ scope
+///
+/// **Fails closed on illegal transitions:**
+/// - Returns 409 Conflict if action is not Approved
+///
+/// **This slice:** No retry logic; Failed actions remain Failed.
+async fn execute_compensation_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<ExecuteCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    let updated = state
+        .compensation_action_service
+        .execute_action(action_id, body.executed_by.as_deref())
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
 }
 
 /// Request body for artifact ingest with optional side effect capture
@@ -2287,6 +2460,20 @@ pub fn build_router(
         .route(
             "/intents/{intent_id}/compensation-actions",
             get(list_compensation_actions),
+        )
+        // Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
+        // NOTE: These routes are placed before graph routes to avoid path conflict
+        .route(
+            "/compensation-actions/{action_id}/approve",
+            post(approve_compensation_action),
+        )
+        .route(
+            "/compensation-actions/{action_id}/waive",
+            post(waive_compensation_action),
+        )
+        .route(
+            "/compensation-actions/{action_id}/execute",
+            post(execute_compensation_action),
         )
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
@@ -5383,5 +5570,244 @@ mod tests {
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // === Compensation Action API Tests ===
+
+    fn create_test_service_with_executor() -> AppState {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+            side_effect_repo,
+        ));
+        // Use in-memory compensation action repo with stub executor
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo),
+        );
+        AppState {
+            service,
+            graph_service: graph_svc,
+            side_effect_service: side_effect_svc,
+            compensation_action_service: compensation_action_svc,
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: None,
+            start_time: Instant::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approve_compensation_action_success() {
+        let state = create_test_service_with_executor();
+
+        // Create a compensation action directly via the service
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Approve the action via the API
+        let request = ApproveCompensationActionBody {
+            lock_version: created.lock_version,
+            approved_by: Some("test-approver".to_string()),
+        };
+        let result = approve_compensation_action(State(state), Path(created.id), Json(request))
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, "Approved");
+        assert_eq!(result.approved_by, Some("test-approver".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_approve_compensation_action_not_found() {
+        let state = create_test_service_with_executor();
+
+        let request = ApproveCompensationActionBody {
+            lock_version: 0,
+            approved_by: None,
+        };
+        let result =
+            approve_compensation_action(State(state), Path(Uuid::new_v4()), Json(request)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_waive_compensation_action_success() {
+        let state = create_test_service_with_executor();
+
+        // Create a compensation action
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Waive the action via the API
+        let request = WaiveCompensationActionBody {
+            lock_version: created.lock_version,
+            waived_by: Some("test-waiver".to_string()),
+        };
+        let result = waive_compensation_action(State(state), Path(created.id), Json(request))
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, "Waived");
+    }
+
+    #[tokio::test]
+    async fn test_execute_compensation_action_success() {
+        let state = create_test_service_with_executor();
+
+        // Create a compensation action
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // First approve it
+        let approved = state
+            .compensation_action_service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute the action via the API
+        let request = ExecuteCompensationActionBody {
+            executed_by: Some("test-executor".to_string()),
+        };
+        let result = execute_compensation_action(State(state), Path(approved.id), Json(request))
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, "Executed");
+        assert_eq!(result.executed_by, Some("test-executor".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_compensation_action_fails_on_pending() {
+        let state = create_test_service_with_executor();
+
+        // Create a compensation action (starts in Pending status)
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to execute without approval - should fail
+        let request = ExecuteCompensationActionBody {
+            executed_by: Some("test-executor".to_string()),
+        };
+        let result =
+            execute_compensation_action(State(state), Path(created.id), Json(request)).await;
+
+        assert!(result.is_err());
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_action_response_serialization() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+
+        let response = CompensationActionResponse::from(action);
+
+        assert_eq!(response.status, "Pending");
+        assert_eq!(response.strategy_type, "Rollback");
+        assert_eq!(response.feasibility, "ManualOnly");
+        assert_eq!(response.tenant_id, tenant_id);
+        assert_eq!(response.intent_id, intent_id);
     }
 }

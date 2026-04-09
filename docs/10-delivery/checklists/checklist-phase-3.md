@@ -96,24 +96,51 @@
     - Code: crates/compensation-service/src/compensation_action_repo.rs (trait + InMemory/SQL implementations)
     - Schema: infrastructure/migrations/011_create_compensation_actions.sql
     - Tests: cargo test -p compensation-service --all-features
-    - Note: Planner and executor remain as stubs (Batch 1+ scope)
+    - Note: Planner remains as stub (Batch 1+ scope)
 
 [x] Compensation actions query API (Phase 3 Batch 1 bounded read-only slice)
     Evidence:
     - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/compensation-actions endpoint)
     - Code: crates/compensation-service/src/compensation_action_service.rs (list_by_intent method)
-    - Tests: cargo test -p intent-api --all-features (67 tests pass)
-    - Note: This endpoint is READ-ONLY - does not trigger compensation execution. Planner/executor remain Batch 1+ scope.
+    - Tests: cargo test -p intent-api --all-features (73 tests pass)
+    - Note: This endpoint is READ-ONLY - does not trigger compensation execution.
+
+[x] Compensation action approve API (Phase 3 Batch 1 bounded execution slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/approve)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (approve_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Transitions Pending → Approved with optimistic locking; fails closed on illegal transitions.
+
+[x] Compensation action waive API (Phase 3 Batch 1 bounded execution slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/waive)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (waive_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Transitions Pending → Waived with optimistic locking; fails closed on illegal transitions.
+
+[x] Compensation action execute API (Phase 3 Batch 1 bounded execution slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/execute)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (execute_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Executor gate: Only Approved actions can execute. Stub executor returns success. Real rollback/counter-action logic is Batch 1+ scope.
+
+[x] Status transition validation (Phase 3 Batch 1 bounded execution slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action.rs (can_transition_to method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass)
+    - Note: Explicit transition validation matrix; illegal transitions fail closed.
 
 [ ] Compensation planner: generate compensation plan from side effects
     Evidence:
     - Code: compensation-service/planner.rs (stub scaffold only)
     - Status: Batch 1+ scope
 
-[ ] Compensation executor: execute compensation actions
+[ ] Compensation executor: real rollback/counter-action logic
     Evidence:
     - Code: compensation-service/executor.rs (stub scaffold only)
-    - Status: Batch 1+ scope
+    - Status: Batch 1+ scope (stub implemented, real logic pending)
 
 [ ] Compensation retry logic (max retries, backoff, dead-letter)
     Evidence:
@@ -125,6 +152,10 @@
     - Audit events: compensation.planned, compensation.started, compensation.completed, compensation.failed
     - Doc: ../../14-governance/01-audit-event-spec.md (updated)
     - Status: Batch 1+ scope
+
+[ ] Failed → Pending reapproval path
+    Evidence:
+    - Status: Batch 1+ scope (not implemented in Phase 3 Batch 1)
 ```
 
 ---

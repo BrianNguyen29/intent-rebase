@@ -1,29 +1,45 @@
-//! Compensation action service facade for creating and querying compensation actions.
+//! Compensation action service facade for creating, querying, and executing compensation actions.
 //!
-//! Phase 3 Batch 1: Compensation action persistence service.
-//! Provides a convenient API for recording and querying compensation actions
-//! with proper tenant isolation.
+//! Phase 3 Batch 1: Compensation action persistence and execution service.
+//! Provides APIs for creating, querying, approving, waiving, and executing
+//! compensation actions with proper status transition validation and tenant isolation.
+//!
+//! **Bounded executor slice scope:**
+//! - Executor is stub-only (StubCompensationExecutor); real rollback/counter-action logic is Batch 1+
+//! - Only Approved actions can execute; illegal transitions fail closed
+//! - No retry/DLQ systems; Failed actions remain Failed (retry/reapproval is Batch 1+ scope)
+//! - No background workers; all operations are explicit API calls
 
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::compensation_action::{CompensationAction, CompensationStatus, ExecutionResult};
 use crate::compensation_action_repo::CompensationActionRepository;
+use crate::compensation_executor::{CompensationExecutor, StubCompensationExecutor};
 use intent_rebase_types::IntentRebaseError;
 
 /// Service facade for compensation action operations.
 ///
-/// Provides a convenient API for creating and querying compensation actions
-/// with proper tenant isolation.
+/// Provides a convenient API for creating, querying, approving, waiving, and executing
+/// compensation actions with proper tenant isolation and status transition validation.
 #[derive(Clone)]
 pub struct CompensationActionService {
     repo: Arc<dyn CompensationActionRepository>,
+    /// Executor for running compensation actions.
+    /// Phase 3 Batch 1: This is StubCompensationExecutor (always succeeds).
+    /// Real executor logic is Batch 1+ scope.
+    executor: StubCompensationExecutor,
 }
 
 impl CompensationActionService {
-    /// Create a new CompensationActionService with the given repository.
+    /// Create a new CompensationActionService with the given repository and default stub executor.
+    ///
+    /// Uses StubCompensationExecutor which always returns success.
     pub fn new(repo: Arc<dyn CompensationActionRepository>) -> Self {
-        Self { repo }
+        Self {
+            repo,
+            executor: StubCompensationExecutor::new(),
+        }
     }
 
     /// Create a new compensation action.
@@ -104,12 +120,147 @@ impl CompensationActionService {
     ///
     /// Updates status to Executed or Failed based on the result,
     /// and increments the attempt counter.
+    ///
+    /// **Note:** This method does NOT validate status transitions before calling
+    /// the repository. The repository's `record_result` implementation handles
+    /// the status update directly. Status transition validation is done in
+    /// `execute_action` which calls this method after executor completion.
     pub async fn record_result(
         &self,
         action_id: Uuid,
         result: &ExecutionResult,
     ) -> Result<CompensationAction, IntentRebaseError> {
         self.repo.record_result(action_id, result).await
+    }
+
+    /// Approve a pending compensation action.
+    ///
+    /// Transitions the action from Pending → Approved.
+    /// Uses optimistic locking via lock_version to prevent concurrent updates.
+    ///
+    /// **Fails closed on illegal transitions:**
+    /// - If action is not Pending, returns InvalidCompensationActionTransition error
+    /// - If lock_version doesn't match, returns ConcurrencyConflict error
+    pub async fn approve_action(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+        approved_by: Option<&str>,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        // Fetch current action to validate transition
+        let action = self.repo.get(action_id).await?;
+
+        // Validate transition: must be Pending to approve
+        let validation = action
+            .status
+            .can_transition_to(CompensationStatus::Approved);
+        if !validation.allowed {
+            return Err(IntentRebaseError::InvalidCompensationActionTransition {
+                from_status: format!("{:?}", action.status),
+                to_status: "Approved".into(),
+                reason: validation.reason.unwrap_or_default(),
+            });
+        }
+
+        // Update status with optimistic locking
+        let mut updated = self
+            .repo
+            .update_status(action_id, CompensationStatus::Approved, lock_version)
+            .await?;
+
+        // Record approver if provided
+        if let Some(approver) = approved_by {
+            updated.approved_by = Some(approver.to_string());
+        }
+
+        Ok(updated)
+    }
+
+    /// Waive a pending compensation action.
+    ///
+    /// Transitions the action from Pending → Waived.
+    /// Uses optimistic locking via lock_version to prevent concurrent updates.
+    ///
+    /// **Fails closed on illegal transitions:**
+    /// - If action is not Pending, returns InvalidCompensationActionTransition error
+    /// - If lock_version doesn't match, returns ConcurrencyConflict error
+    ///
+    /// **This slice:** Waived actions are terminal. No reactivation path exists.
+    pub async fn waive_action(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+        waived_by: Option<&str>,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        // Fetch current action to validate transition
+        let action = self.repo.get(action_id).await?;
+
+        // Validate transition: must be Pending to waive
+        let validation = action.status.can_transition_to(CompensationStatus::Waived);
+        if !validation.allowed {
+            return Err(IntentRebaseError::InvalidCompensationActionTransition {
+                from_status: format!("{:?}", action.status),
+                to_status: "Waived".into(),
+                reason: validation.reason.unwrap_or_default(),
+            });
+        }
+
+        // Update status with optimistic locking
+        let mut updated = self
+            .repo
+            .update_status(action_id, CompensationStatus::Waived, lock_version)
+            .await?;
+
+        // Record waver if provided (reuse approved_by field with different semantics)
+        if let Some(waver) = waived_by {
+            updated.approved_by = Some(waver.to_string());
+        }
+
+        Ok(updated)
+    }
+
+    /// Execute an approved compensation action.
+    ///
+    /// **Phase 3 Batch 1 bounded slice:** This method:
+    /// 1. Validates the action is in Approved status (fails closed otherwise)
+    /// 2. Runs the stub executor (always succeeds in this slice)
+    /// 3. Records the result via record_result, which transitions to Executed or Failed
+    ///
+    /// **Executor gate:** Only Approved actions can execute. This prevents
+    /// accidental execution of pending or already-processed actions.
+    ///
+    /// **This slice:** The executor is StubCompensationExecutor that always returns success.
+    /// Real rollback/counter-action logic is Batch 1+ scope.
+    ///
+    /// **Fails closed on illegal transitions:**
+    /// - If action is not Approved, returns CompensationActionNotExecutable error
+    pub async fn execute_action(
+        &self,
+        action_id: Uuid,
+        executed_by: Option<&str>,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        // Fetch current action to validate transition
+        let action = self.repo.get(action_id).await?;
+
+        // Executor gate: only Approved actions can execute
+        if action.status != CompensationStatus::Approved {
+            return Err(IntentRebaseError::CompensationActionNotExecutable(
+                action_id,
+            ));
+        }
+
+        // Run the executor (stub in this slice, always succeeds)
+        let executor_result = self.executor.execute(&action).await?;
+
+        // Record the result which will transition to Executed or Failed
+        let mut updated = self.record_result(action_id, &executor_result).await?;
+
+        // Record executor if provided (reuse executed_by field)
+        if let Some(executor) = executed_by {
+            updated.executed_by = Some(executor.to_string());
+        }
+
+        Ok(updated)
     }
 
     /// Get all pending compensation actions for a tenant.
@@ -140,9 +291,16 @@ mod tests {
     use super::*;
     use crate::compensation_action::{CompensationFeasibility, RebaseContext, StrategyType};
     use crate::compensation_action_repo::InMemoryCompensationActionRepository;
+    use crate::compensation_executor::StubCompensationExecutor;
     use std::sync::Arc;
 
     fn create_test_service() -> CompensationActionService {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        CompensationActionService::new(repo)
+    }
+
+    fn create_test_service_with_executor() -> CompensationActionService {
+        // This is the same as create_test_service since we use concrete StubCompensationExecutor
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
         CompensationActionService::new(repo)
     }
@@ -326,5 +484,382 @@ mod tests {
 
         let failed = service.get_failed_actions(tenant_id).await.unwrap();
         assert_eq!(failed.len(), 1);
+    }
+
+    // === Status Transition Tests ===
+
+    #[tokio::test]
+    async fn test_approve_pending_action_success() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        assert_eq!(created.status, CompensationStatus::Pending);
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, Some("test-approver"))
+            .await
+            .unwrap();
+
+        assert_eq!(approved.status, CompensationStatus::Approved);
+        assert!(approved.approved_at.is_some());
+        assert_eq!(approved.approved_by, Some("test-approver".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_approve_action_fails_on_non_pending() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First approve it
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+
+        // Try to approve again - should fail
+        let result = service
+            .approve_action(approved.id, approved.lock_version, None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::InvalidCompensationActionTransition { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_approve_action_fails_on_executed() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Execute directly (bypass approval) by setting status to Approved first
+        let approved = service
+            .update_status(
+                created.id,
+                CompensationStatus::Approved,
+                created.lock_version,
+            )
+            .await
+            .unwrap();
+
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+        assert_eq!(executed.status, CompensationStatus::Executed);
+
+        // Try to approve an executed action - should fail
+        let result = service
+            .approve_action(executed.id, executed.lock_version, None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::InvalidCompensationActionTransition { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_approve_action_fails_on_concurrency_conflict() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Try to approve with wrong lock_version - should fail with ConcurrencyConflict
+        let result = service
+            .approve_action(created.id, created.lock_version + 1, None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ConcurrencyConflict(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_waive_pending_action_success() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        assert_eq!(created.status, CompensationStatus::Pending);
+
+        let waived = service
+            .waive_action(created.id, created.lock_version, Some("test-waiver"))
+            .await
+            .unwrap();
+
+        assert_eq!(waived.status, CompensationStatus::Waived);
+        // waived_by is stored in approved_by field for simplicity
+        assert_eq!(waived.approved_by, Some("test-waiver".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_waive_action_fails_on_non_pending() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First approve it
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+
+        // Try to waive an approved action - should fail
+        let result = service
+            .waive_action(approved.id, approved.lock_version, None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::InvalidCompensationActionTransition { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_success_on_approved() {
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First approve it
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+
+        // Execute - should succeed
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        assert_eq!(executed.status, CompensationStatus::Executed);
+        assert!(executed.executed_at.is_some());
+        assert_eq!(executed.executed_by, Some("test-executor".to_string()));
+        assert!(executed.execution_result_payload.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_pending() {
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        assert_eq!(created.status, CompensationStatus::Pending);
+
+        // Try to execute without approval - should fail
+        let result = service
+            .execute_action(created.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_executed() {
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Approve and execute
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+        assert_eq!(executed.status, CompensationStatus::Executed);
+
+        // Try to execute again - should fail
+        let result = service
+            .execute_action(executed.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_waived() {
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Waive it
+        let waived = service
+            .waive_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(waived.status, CompensationStatus::Waived);
+
+        // Try to execute a waived action - should fail
+        let result = service
+            .execute_action(waived.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_fails_on_failed() {
+        let service = create_test_service_with_executor();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First make it Failed via record_result
+        let failed_result = ExecutionResult::failure("Test failure", "TEST_ERR", None);
+        let failed = service
+            .record_result(created.id, &failed_result)
+            .await
+            .unwrap();
+        assert_eq!(failed.status, CompensationStatus::Failed);
+
+        // Try to execute a failed action - should fail
+        let result = service
+            .execute_action(failed.id, Some("test-executor"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
+    }
+
+    // === Transition Matrix Tests ===
+
+    #[test]
+    fn test_status_transition_pending_to_approved() {
+        let validation =
+            CompensationStatus::Pending.can_transition_to(CompensationStatus::Approved);
+        assert!(validation.allowed);
+    }
+
+    #[test]
+    fn test_status_transition_pending_to_waived() {
+        let validation = CompensationStatus::Pending.can_transition_to(CompensationStatus::Waived);
+        assert!(validation.allowed);
+    }
+
+    #[test]
+    fn test_status_transition_approved_to_executed() {
+        let validation =
+            CompensationStatus::Approved.can_transition_to(CompensationStatus::Executed);
+        assert!(validation.allowed);
+    }
+
+    #[test]
+    fn test_status_transition_executed_is_terminal() {
+        assert!(CompensationStatus::Executed.is_terminal());
+        let validation =
+            CompensationStatus::Executed.can_transition_to(CompensationStatus::Pending);
+        assert!(!validation.allowed);
+        assert!(validation.reason.is_some());
+    }
+
+    #[test]
+    fn test_status_transition_failed_is_terminal() {
+        assert!(CompensationStatus::Failed.is_terminal());
+        let validation = CompensationStatus::Failed.can_transition_to(CompensationStatus::Pending);
+        assert!(!validation.allowed);
+        assert!(validation.reason.is_some());
+    }
+
+    #[test]
+    fn test_status_transition_waived_is_terminal() {
+        assert!(CompensationStatus::Waived.is_terminal());
+        let validation = CompensationStatus::Waived.can_transition_to(CompensationStatus::Pending);
+        assert!(!validation.allowed);
+        assert!(validation.reason.is_some());
+    }
+
+    #[test]
+    fn test_status_transition_pending_to_executed_not_allowed() {
+        // Must be approved first
+        let validation =
+            CompensationStatus::Pending.can_transition_to(CompensationStatus::Executed);
+        assert!(!validation.allowed);
+    }
+
+    #[test]
+    fn test_status_transition_approved_to_pending_not_allowed() {
+        // No undo of approval
+        let validation =
+            CompensationStatus::Approved.can_transition_to(CompensationStatus::Pending);
+        assert!(!validation.allowed);
+    }
+
+    #[test]
+    fn test_status_transition_to_same_status_not_allowed() {
+        let validation = CompensationStatus::Pending.can_transition_to(CompensationStatus::Pending);
+        assert!(!validation.allowed);
+        assert!(validation.reason.is_some());
     }
 }

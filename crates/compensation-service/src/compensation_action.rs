@@ -110,6 +110,100 @@ pub enum CompensationStatus {
     Waived,
 }
 
+/// Transition validation result with context for error reporting.
+#[derive(Debug, Clone)]
+pub struct TransitionValidation {
+    /// Whether the transition is allowed
+    pub allowed: bool,
+    /// Human-readable reason if denied
+    pub reason: Option<String>,
+}
+
+impl CompensationStatus {
+    /// Valid status transitions for compensation actions (bounded Phase 3 Batch 1 slice).
+    ///
+    /// Transition matrix:
+    /// - Pending → Approved (via approve_action)
+    /// - Pending → Waived (via waive_action)
+    /// - Pending → Failed (via record_result with failure result)
+    /// - Approved → Executed (via execute_action, after executor runs)
+    /// - Approved → Failed (via record_result with failure result)
+    ///
+    /// Illegal transitions that fail closed:
+    /// - Executed → * (immutable, no retries in this slice)
+    /// - Failed → * (retry/reapproval not in this slice)
+    /// - Waived → * (immutable, no reactivation)
+    /// - Approved → Pending (no undo of approval)
+    /// - Pending → Executed (must be approved first)
+    ///
+    /// **Batch 1+ scope (not implemented):**
+    /// - Failed → Pending (reapproval path)
+    /// - Automatic status transitions based on feasibility
+    pub fn can_transition_to(&self, target: CompensationStatus) -> TransitionValidation {
+        match (self, target) {
+            // Pending can transition to Approved or Waived
+            (CompensationStatus::Pending, CompensationStatus::Approved) => TransitionValidation {
+                allowed: true,
+                reason: None,
+            },
+            (CompensationStatus::Pending, CompensationStatus::Waived) => TransitionValidation {
+                allowed: true,
+                reason: None,
+            },
+            // Note: Pending -> Failed happens via record_result, not a direct status update
+            // The service layer routes to record_result which handles this transition
+
+            // Approved can transition to Executed (via executor) or Failed (via record_result)
+            (CompensationStatus::Approved, CompensationStatus::Executed) => TransitionValidation {
+                allowed: true,
+                reason: None,
+            },
+            // Note: Approved -> Failed happens via record_result
+
+            // All terminal states cannot transition to any other state
+            (CompensationStatus::Executed, _) => TransitionValidation {
+                allowed: false,
+                reason: Some("Executed is a terminal state; no transitions allowed".into()),
+            },
+            (CompensationStatus::Failed, _) => TransitionValidation {
+                allowed: false,
+                reason: Some(
+                    "Failed is a terminal state in this slice; retry/reapproval not implemented"
+                        .into(),
+                ),
+            },
+            (CompensationStatus::Waived, _) => TransitionValidation {
+                allowed: false,
+                reason: Some("Waived is a terminal state; no transitions allowed".into()),
+            },
+
+            // General cases
+            (_, CompensationStatus::Pending) => TransitionValidation {
+                allowed: false,
+                reason: Some("Cannot transition back to Pending".into()),
+            },
+            // Same status transition not allowed
+            _ if *self == target => TransitionValidation {
+                allowed: false,
+                reason: Some("Action is already in target status".into()),
+            },
+            // Catch-all invalid transition
+            (from, to) => TransitionValidation {
+                allowed: false,
+                reason: Some(format!("Invalid transition from {:?} to {:?}", from, to)),
+            },
+        }
+    }
+
+    /// Returns true if this status is a terminal state (no transitions allowed).
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            CompensationStatus::Executed | CompensationStatus::Failed | CompensationStatus::Waived
+        )
+    }
+}
+
 /// A compensation action generated from a side effect.
 ///
 /// **Batch 1 scope (this slice):** type scaffold with minimal persistent fields

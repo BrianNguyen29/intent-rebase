@@ -34,6 +34,7 @@ pub trait CompensationExecutor: Send + Sync {
 /// Stub executor for testing and Phase 3 Batch 1.
 ///
 /// Always returns success — actual execution logic is Batch 1+ scope.
+#[derive(Clone)]
 pub struct StubCompensationExecutor;
 
 impl StubCompensationExecutor {

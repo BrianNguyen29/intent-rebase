@@ -33,7 +33,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Phase 2b exit gate confirmed. All Phase 2 acceptance criteria met.*
 
-**Status:** `Batch 1 IN PROGRESS — side effect ledger, side-effects query API, and compensation-actions query API delivered`
+**Status:** `Batch 1 IN PROGRESS — side effect ledger, side-effects query API, compensation-actions query API, and bounded execution slice delivered`
 
 | Item | Description | Notes |
 |------|-------------|-------|
@@ -43,11 +43,16 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 1-4 | Side effect idempotency keys | Tenant-scoped atomic idempotency ✅ delivered in service/repository path. Broader artifact-service coverage remains open. |
 | 1-5 | Side effect rollback record (compensation applied, compensation result) | Schema migration TBD |
 | 1-6 | Compensation action model (`action_type`, `target`, `parameters`, `status`) | Scaffold ✅ delivered (Phase 3 Batch 0). Now includes `intent_id`, `trigger_context`, and `execution_result_payload` fields for bounded Phase 3 design. |
-| 1-6b | Compensation actions query API: `GET /intents/{intent_id}/compensation-actions` | ✅ delivered (Phase 3 Batch 1). READ-ONLY endpoint - does not trigger execution. Planner/executor remain Batch 1+ scope. |
+| 1-6b | Compensation actions query API: `GET /intents/{intent_id}/compensation-actions` | ✅ delivered (Phase 3 Batch 1). READ-ONLY endpoint. |
+| 1-6c | Compensation action approve API: `POST /compensation-actions/{action_id}/approve` | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Transitions Pending → Approved. Executor gate ensures only Approved actions can execute. |
+| 1-6d | Compensation action waive API: `POST /compensation-actions/{action_id}/waive` | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Transitions Pending → Waived. |
+| 1-6e | Compensation action execute API: `POST /compensation-actions/{action_id}/execute` | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Executor gate: only Approved actions can execute. Stub executor always succeeds. |
+| 1-6f | Status transition validation matrix | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Explicit validation with fail-closed semantics. |
 | 1-7 | Compensation planner: generate compensation plan from side effects | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
-| 1-8 | Compensation executor: execute compensation actions | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
+| 1-8 | Compensation executor: real rollback/counter-action logic | Stub ✅ skeleton contract delivered (Phase 3 Batch 1). Real logic is Batch 1+ scope. |
 | 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | |
 | 1-10 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | |
+| 1-11 | Failed → Pending reapproval path | Batch 1+ scope (not in Phase 3 Batch 1) |
 
 ---
 

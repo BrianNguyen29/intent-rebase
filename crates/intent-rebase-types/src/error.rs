@@ -84,4 +84,20 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Unknown effect class string during decoding
     #[error("unknown effect class: {0}")]
     UnknownEffectClass(String),
+
+    /// Phase 3 Batch 1: Invalid status transition for compensation action
+    #[error("invalid compensation action transition from {from_status} to {to_status}: {reason}")]
+    InvalidCompensationActionTransition {
+        from_status: String,
+        to_status: String,
+        reason: String,
+    },
+
+    /// Phase 3 Batch 1: Compensation action not in executable state
+    #[error("compensation action {0} is not in Approved state for execution")]
+    CompensationActionNotExecutable(Uuid),
+
+    /// Phase 3 Batch 1: Concurrency conflict updating compensation action
+    #[error("concurrency conflict updating compensation action {0}")]
+    CompensationActionConcurrencyConflict(Uuid),
 }
