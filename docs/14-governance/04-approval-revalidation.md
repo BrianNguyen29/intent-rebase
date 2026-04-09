@@ -47,13 +47,15 @@ Defines how approval scope is computed, how approvals are invalidated on intent 
 [Approval Requested]
     ↓
 [Pending Approval] ← → [Approval Granted] ← → [Approval Revoked]
-                        ↓                       ↓
-                 [Intent Executed]       [Compensation Triggered]
-                        ↓
-                 [Approval Valid] ← → [Approval Expired]
-                        ↓
-                 [Intent Changed] → [Scope Changed] → [Revalidation Required]
+                         ↓                       ↓
+                  [Intent Executed]       [Compensation Triggered]
+                         ↓
+                  [Approval Valid] ← → [Approval Expired (manual)]
+                         ↓
+                  [Intent Changed] → [Scope Changed] → [Revalidation Required]
 ```
+
+**Note:** `Approval Expired` is a manual transition via `POST /approval-requests/{id}/expire`. No background worker or automatic expiry machinery exists in Phase 2b.
 
 ---
 
@@ -113,6 +115,24 @@ GET /approval-requests/{id}/revalidate:
       "intent_id": "uuid",
       "approval_basis_version": 1
     }
+  Note: Read-only scope_hash comparison. Does NOT modify approval state or trigger re-approval.
+
+POST /approval-requests/{id}/expire:
+  description: Manually mark a pending approval request as expired
+  body:
+    {
+      "reason": "Approval time limit exceeded"  # optional, defaults to "Approval time limit exceeded"
+    }
+  response:
+    {
+      "id": "uuid",
+      "intent_id": "uuid",
+      "status": "Expired",
+      "resolved_by": "system/expire",
+      "resolved_at": "2025-04-09T00:00:00Z",
+      "resolution_notes": "Approval time limit exceeded"
+    }
+  Note: Manual expiry only — no background worker or automatic expiry in Phase 2b.
 
 POST /approval-requests/trigger-reapproval:
   description: Trigger re-approval workflow (bounded - creates approval record, returns queue intent)
@@ -152,6 +172,12 @@ POST /api/v1/approvals/{id}/revalidate:
 - If latest snapshot missing, returns valid=false (cannot determine current policy)
 - Does NOT auto-invalidate approvals, queue notifications, or start re-approval workflows
 
+**Bounded expire behavior (Phase 2b):**
+- POST /approval-requests/{id}/expire: Manually transitions Pending → Expired
+- No background worker or automatic expiry machinery
+- Emits ApprovalExpired audit event
+- Does NOT trigger re-approval workflow or resume/re-trigger apply
+
 **Bounded trigger behavior (Phase 2b):**
 - POST /approval-requests/trigger-reapproval: Creates new pending approval request record
 - Returns approval_request_id for queue/notification tracking
@@ -184,6 +210,8 @@ POST /api/v1/approvals/{id}/revalidate:
          └─→│         Invalidated        │
             └─────────────────────────────┘
 ```
+
+**Note:** `Approval Expired` is a manual transition (POST /approval-requests/{id}/expire). No automatic expiry or background worker exists in Phase 2b.
 
 ---
 

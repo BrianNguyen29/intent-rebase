@@ -5,6 +5,7 @@
 
 pub mod approval_request_repo;
 pub mod checkpoint_repo;
+pub mod event_consumer;
 pub mod policy_snapshot_repo;
 pub mod sqlx_repository;
 

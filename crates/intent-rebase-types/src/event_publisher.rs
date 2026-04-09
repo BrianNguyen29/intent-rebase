@@ -6,7 +6,9 @@
 //!   Audit persistence is the source of truth; publishing is best-effort notification.
 //! - **Fail-open**: Publishing errors are logged but don't fail the operation.
 //! - **Testable**: In-memory mock publisher allows verification without external NATS.
-//! - **Deferred consumers**: Consumer systems and DLQ are Phase 3 items.
+//! - **Bounded consumers**: Phase 2b adds a minimal in-memory consumer abstraction for testing
+//!   the event→checkpoint path. Full consumer infrastructure (NATS subscription, DLQ, startup wiring)
+//!   is Phase 3.
 //!
 //! ## Subject Naming Convention (Phase 2b bounded slice)
 //!
@@ -15,11 +17,22 @@
 //!
 //! Versioning: v1 prefix in subject; full v2 migration path documented in Phase 3.
 //!
-//! ## Implementation Notes
+//! ## Event Consumer Notes (Phase 2b bounded slice)
 //!
-//! - Phase 2b: Only `InMemoryEventPublisher` (mock) and `NoOpEventPublisher` (no-op) are available.
-//!   `NatsEventPublisher` (real NATS JetStream) is Phase 3 item.
-//! - Consumers, DLQ, and schema migration are Phase 3 items.
+//! Phase 2b adds a minimal in-memory consumer abstraction to demonstrate the event→checkpoint
+//! path. This is bounded to in-memory consumers for testing only. The abstraction defines the
+//! consumer contract, and an in-memory implementation proves the path works.
+//!
+//! **What is bounded (Phase 2b)**:
+//! - `EventConsumer` trait: async consumer contract
+//! - `InMemoryEventConsumer`: in-memory consumer buffer for testing
+//! - `CheckpointCreatorConsumer` in intent-service: concrete consumer that creates checkpoints
+//!
+//! **What is NOT implemented (Phase 3)**:
+//! - NATS-based consumers with real subscription management
+//! - Dead-letter queue (DLQ) for failed event processing
+//! - Full consumer startup wiring and lifecycle management
+//! - Consumer groups and parallel processing
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -337,6 +350,181 @@ impl EventPublisher for InMemoryEventPublisher {
     }
 }
 
+// =============================================================================
+// Event Consumer Abstraction (Phase 2b bounded slice)
+// =============================================================================
+
+/// Result of a consume operation.
+///
+/// Phase 2b: Consuming is best-effort. Errors are logged but don't fail the operation.
+#[derive(Debug)]
+pub enum ConsumeResult {
+    /// Event was consumed successfully
+    Consumed { subject: String, sequence: u64 },
+    /// Consumer failed to process the event but will retry
+    Retryable { reason: String },
+    /// Consumer failed and will not retry (no DLQ in Phase 2b)
+    Failed { reason: String },
+}
+
+/// Phase 2b: Event consumer trait for in-memory consumers.
+///
+/// This trait defines the contract for consuming events from the in-memory event buffer.
+/// It is used to test the event→action path (e.g., event→checkpoint creation).
+///
+/// **Bounded to in-memory consumers for testing only (Phase 2b)**:
+/// - Full NATS-based consumer infrastructure is Phase 3
+/// - DLQ and retry logic are Phase 3
+/// - Consumer startup wiring is Phase 3
+///
+/// Implementations:
+/// - `InMemoryEventConsumer` — mock consumer for tests
+/// - `CheckpointCreatorConsumer` — concrete consumer in intent-service (creates checkpoints)
+#[async_trait]
+pub trait EventConsumer: Send + Sync {
+    /// Consume a published event.
+    ///
+    /// Phase 2b: This is best-effort. Errors are logged and `ConsumeResult::Failed`
+    /// is returned. No DLQ in Phase 2b.
+    ///
+    /// Returns `ConsumeResult` indicating success, retry, or failure.
+    async fn consume(&self, event: &PublishedEvent) -> ConsumeResult;
+}
+
+// =============================================================================
+// In-Memory Event Consumer (for testing without external infrastructure)
+// =============================================================================
+
+/// Phase 2b: In-memory event consumer for testing.
+///
+/// This consumer stores consumed events in memory, allowing tests to verify:
+/// - Events were consumed from correct subjects
+/// - Payload structure is correct
+/// - Sequence numbers are monotonic
+///
+/// Does NOT require external NATS server.
+///
+/// **This is bounded to in-memory consumers for testing only.**
+/// Full NATS-based consumers are Phase 3.
+///
+/// Usage in tests:
+/// ```ignore
+/// let publisher = Arc::new(InMemoryEventPublisher::new());
+/// let consumer = Arc::new(InMemoryEventConsumer::new());
+/// // ... publish events, then consume them ...
+/// consumer.consume(&event).await;
+/// let consumed = consumer.get_consumed();
+/// assert_eq!(consumed.len(), 1);
+/// ```
+#[derive(Debug)]
+pub struct InMemoryEventConsumer {
+    /// Stored consumed events keyed by subject pattern (supports wildcards in lookup)
+    consumed: tokio::sync::RwLock<Vec<ConsumedEvent>>,
+    /// Whether consume calls should fail (for testing error handling)
+    fail_consume: std::sync::atomic::AtomicBool,
+}
+
+/// A consumed event record for test verification
+#[derive(Debug, Clone)]
+pub struct ConsumedEvent {
+    pub subject: String,
+    pub schema_version: String,
+    pub sequence: u64,
+    pub payload: serde_json::Value,
+    pub consumed_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl InMemoryEventConsumer {
+    /// Create a new in-memory consumer
+    pub fn new() -> Self {
+        Self {
+            consumed: tokio::sync::RwLock::new(Vec::new()),
+            fail_consume: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Set whether consume calls should fail (for testing error handling)
+    #[cfg(test)]
+    pub fn set_fail_consume(&self, fail: bool) {
+        self.fail_consume
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Get all consumed events
+    pub async fn get_consumed(&self) -> Vec<ConsumedEvent> {
+        let consumed = self.consumed.read().await;
+        consumed.clone()
+    }
+
+    /// Get consumed events for a specific subject
+    pub async fn get_consumed_for_subject(&self, subject: &str) -> Vec<ConsumedEvent> {
+        let consumed = self.consumed.read().await;
+        consumed
+            .iter()
+            .filter(|e| e.subject == subject)
+            .cloned()
+            .collect()
+    }
+
+    /// Get the count of consumed events
+    pub async fn consumed_count(&self) -> usize {
+        let consumed = self.consumed.read().await;
+        consumed.len()
+    }
+
+    /// Clear all consumed events (for test isolation)
+    pub async fn clear(&self) {
+        let mut consumed = self.consumed.write().await;
+        consumed.clear();
+    }
+
+    /// Check if any events have been consumed
+    pub async fn has_consumed(&self) -> bool {
+        let consumed = self.consumed.read().await;
+        !consumed.is_empty()
+    }
+}
+
+impl Default for InMemoryEventConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl EventConsumer for InMemoryEventConsumer {
+    async fn consume(&self, event: &PublishedEvent) -> ConsumeResult {
+        // Check fail flag (for testing error handling)
+        if self.fail_consume.load(std::sync::atomic::Ordering::SeqCst) {
+            return ConsumeResult::Failed {
+                reason: "simulated consume failure".to_string(),
+            };
+        }
+
+        let consumed_event = ConsumedEvent {
+            subject: event.subject.clone(),
+            schema_version: event.schema_version.clone(),
+            sequence: event.sequence,
+            payload: event.payload.clone(),
+            consumed_at: chrono::Utc::now(),
+        };
+
+        let mut consumed = self.consumed.write().await;
+        consumed.push(consumed_event);
+
+        tracing::debug!(
+            "InMemoryEventConsumer: consumed event from '{}' (seq={})",
+            event.subject,
+            event.sequence
+        );
+
+        ConsumeResult::Consumed {
+            subject: event.subject.clone(),
+            sequence: event.sequence,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +643,160 @@ mod tests {
             subject.subject,
             "audit.events.v1.550e8400-e29b-41d4-a716-446655440000.RebaseApplied"
         );
+    }
+
+    // =====================================================================
+    // EventConsumer tests (Phase 2b bounded slice)
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_inmemory_consumer_consumes_and_stores() {
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
+        let payload = serde_json::json!({
+            "from_version": 1,
+            "to_version": 2,
+            "decision_class": "B"
+        });
+
+        // Publish event
+        publisher.publish(&subject, &payload).await;
+
+        // Get published event and consume it
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        assert_eq!(events.len(), 1);
+
+        let result = consumer.consume(&events[0]).await;
+        match result {
+            ConsumeResult::Consumed {
+                subject: s,
+                sequence,
+            } => {
+                assert_eq!(s, subject.subject);
+                assert_eq!(sequence, 1);
+            }
+            _ => panic!("Expected Consumed result"),
+        }
+
+        // Verify consumed
+        let consumed = consumer.get_consumed().await;
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn test_inmemory_consumer_multiple_events() {
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        let tenant_id = Uuid::new_v4();
+        let subject = EventSubject::from_audit_event(tenant_id, "RebaseApplied");
+
+        // Publish 3 events
+        for i in 1..=3 {
+            let payload = serde_json::json!({ "index": i });
+            publisher.publish(&subject, &payload).await;
+        }
+
+        // Get all events and consume them
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        for event in &events {
+            consumer.consume(event).await;
+        }
+
+        let consumed = consumer.get_consumed().await;
+        assert_eq!(consumed.len(), 3);
+        assert_eq!(consumed[0].sequence, 1);
+        assert_eq!(consumed[1].sequence, 2);
+        assert_eq!(consumed[2].sequence, 3);
+    }
+
+    #[tokio::test]
+    async fn test_inmemory_consumer_consumed_count() {
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
+        publisher.publish(&subject, &serde_json::json!({})).await;
+        publisher.publish(&subject, &serde_json::json!({})).await;
+
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        consumer.consume(&events[0]).await;
+        assert_eq!(consumer.consumed_count().await, 1);
+
+        consumer.consume(&events[1]).await;
+        assert_eq!(consumer.consumed_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_inmemory_consumer_clear() {
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
+        publisher.publish(&subject, &serde_json::json!({})).await;
+
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        consumer.consume(&events[0]).await;
+        assert!(consumer.has_consumed().await);
+
+        consumer.clear().await;
+        assert!(!consumer.has_consumed().await);
+    }
+
+    #[tokio::test]
+    async fn test_inmemory_consumer_fail_flag() {
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        consumer.set_fail_consume(true);
+
+        let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
+        publisher.publish(&subject, &serde_json::json!({})).await;
+
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        let result = consumer.consume(&events[0]).await;
+
+        match result {
+            ConsumeResult::Failed { reason } => {
+                assert!(reason.contains("simulated"));
+            }
+            _ => panic!("Expected Failed result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_publish_consume_cycle() {
+        // Full cycle: publish -> consume -> verify
+        let publisher = Arc::new(InMemoryEventPublisher::new());
+        let consumer = Arc::new(InMemoryEventConsumer::new());
+
+        let tenant_id = Uuid::new_v4();
+        let subject = EventSubject::from_audit_event(tenant_id, "RebaseApplied");
+        let payload = serde_json::json!({
+            "from_version": 1,
+            "to_version": 2,
+            "decision_class": "B",
+            "outcome": "auto_proceeded"
+        });
+
+        // Publish
+        let publish_result = publisher.publish(&subject, &payload).await;
+        assert!(matches!(publish_result, PublishResult::Published { .. }));
+
+        // Consume
+        let events = publisher.get_events_for_subject(&subject.subject).await;
+        let consume_result = consumer.consume(&events[0]).await;
+        assert!(matches!(consume_result, ConsumeResult::Consumed { .. }));
+
+        // Verify the full cycle worked
+        assert_eq!(publisher.total_count().await, 1);
+        assert_eq!(consumer.consumed_count().await, 1);
+
+        // Verify payload preserved through cycle
+        let consumed = consumer.get_consumed().await;
+        assert_eq!(consumed[0].payload, payload);
     }
 }

@@ -33,6 +33,8 @@ pub enum AuditEventType {
     ApprovalGranted,
     ApprovalRevoked,
     ApprovalCancelled,
+    /// Phase 2b bounded expiry slice: approval request expired manually
+    ApprovalExpired,
     /// Phase 2b bounded replay slice: replay initiated via public endpoint
     ReplayInitiated,
     ArtifactProduced,
@@ -111,6 +113,19 @@ pub struct ApprovalCancelledAuditPayload {
     pub cancelled_count: usize,
 }
 
+/// Payload for ApprovalExpired audit events (Phase 2b bounded expiry slice)
+/// This is emitted when an approval request is manually marked as expired
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalExpiredAuditPayload {
+    pub approval_request_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub expired_by: String,
+    pub expiry_reason: String,
+}
+
 /// Payload for ReplayInitiated audit events (Phase 2b bounded replay slice)
 /// This is emitted when a replay operation is initiated via the public replay endpoint.
 /// Note: This is bounded cooperative signal-based replay, NOT native Temporal reset.
@@ -140,4 +155,126 @@ pub struct ArtifactInvalidatedAuditPayload {
     pub initiated_by: String,
     /// Quarantine status at time of audit
     pub quarantine_status: String,
+}
+
+// =============================================================================
+// Notification Types (Phase 2b bounded notifier consumer slice)
+// =============================================================================
+
+/// Phase 2b: Kinds of notification intents recorded by the notifier consumer.
+///
+/// This enum represents the different types of notifications that can be
+/// recorded when consuming approval-related events.
+///
+/// **Bounded to in-memory notification recording only (Phase 2b)**:
+/// - Notifications are recorded as intents in memory
+/// - Actual external notification delivery (email, webhook, NATS) is Phase 3
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NotificationKind {
+    /// Notify that an approval request was granted
+    ApprovalGranted,
+    /// Notify that an approval request was revoked/rejected
+    ApprovalRevoked,
+    /// Notify that approval requests were cancelled due to intent version change
+    ApprovalCancelled,
+}
+
+/// Phase 2b: A recorded notification intent from the notifier consumer.
+///
+/// This represents a notification that SHOULD be sent but is currently
+/// just recorded in memory. Actual delivery is Phase 3.
+///
+/// **Bounded to in-memory recording only (Phase 2b)**:
+/// - No external email/webhook/NATS delivery
+/// - No retry logic or DLQ
+/// - Full notification delivery infrastructure is Phase 3
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationRecord {
+    /// Unique ID for this notification record
+    pub id: Uuid,
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Kind of notification
+    pub kind: NotificationKind,
+    /// Intent ID this notification is about
+    pub intent_id: Uuid,
+    /// Approval request ID (if applicable)
+    pub approval_request_id: Option<Uuid>,
+    /// Human-readable notification message
+    pub message: String,
+    /// When this notification was recorded
+    pub recorded_at: DateTime<Utc>,
+    /// Event sequence number this notification was triggered from
+    pub source_sequence: u64,
+}
+
+impl NotificationRecord {
+    /// Create a new notification record for approval granted.
+    pub fn approval_granted(
+        tenant_id: Uuid,
+        intent_id: Uuid,
+        approval_request_id: Uuid,
+        decision_class: &str,
+        source_sequence: u64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            tenant_id,
+            kind: NotificationKind::ApprovalGranted,
+            intent_id,
+            approval_request_id: Some(approval_request_id),
+            message: format!(
+                "Approval granted for intent {} (decision class: {})",
+                intent_id, decision_class
+            ),
+            recorded_at: Utc::now(),
+            source_sequence,
+        }
+    }
+
+    /// Create a new notification record for approval revoked.
+    pub fn approval_revoked(
+        tenant_id: Uuid,
+        intent_id: Uuid,
+        approval_request_id: Uuid,
+        decision_class: &str,
+        source_sequence: u64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            tenant_id,
+            kind: NotificationKind::ApprovalRevoked,
+            intent_id,
+            approval_request_id: Some(approval_request_id),
+            message: format!(
+                "Approval revoked for intent {} (decision class: {})",
+                intent_id, decision_class
+            ),
+            recorded_at: Utc::now(),
+            source_sequence,
+        }
+    }
+
+    /// Create a new notification record for approval cancelled.
+    pub fn approval_cancelled(
+        tenant_id: Uuid,
+        intent_id: Uuid,
+        cancelled_count: usize,
+        cancellation_reason: &str,
+        source_sequence: u64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            tenant_id,
+            kind: NotificationKind::ApprovalCancelled,
+            intent_id,
+            approval_request_id: None,
+            message: format!(
+                "Approval cancelled for intent {} ({} requests): {}",
+                intent_id, cancelled_count, cancellation_reason
+            ),
+            recorded_at: Utc::now(),
+            source_sequence,
+        }
+    }
 }

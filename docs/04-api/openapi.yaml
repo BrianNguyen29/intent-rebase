@@ -51,8 +51,8 @@ info:
     - Approval revalidation hooks and policy snapshot lifecycle
     - Event streaming (NATS/Kafka)
     - Full authentication/authorization
-    - Replay with intent version override
-    - Replay audit trail (event streaming, full compatibility)
+    - Replay with intent version override (Phase 3 deferral)
+    - Replay audit trail and replay status tracking beyond the bounded replay slice (Phase 3 deferral)
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team

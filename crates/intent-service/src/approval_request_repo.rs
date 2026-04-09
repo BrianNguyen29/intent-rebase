@@ -129,6 +129,19 @@ pub trait ApprovalRequestRepository: Send + Sync {
         cancelled_by: &str,
         reason: &str,
     ) -> Result<usize, IntentRebaseError>;
+
+    /// Mark a pending approval request as expired (Phase 2b bounded slice).
+    ///
+    /// Transitions Pending → Expired. Only succeeds if the request is in Pending status.
+    /// This is a manual expiry action — no background worker or automatic expiry in Phase 2b.
+    ///
+    /// Returns the updated approval request with Expired status.
+    async fn mark_expired(
+        &self,
+        id: Uuid,
+        expired_by: &str,
+        reason: &str,
+    ) -> Result<ApprovalRequest, IntentRebaseError>;
 }
 
 /// In-memory approval request repository for Phase 2b bounded slice testing
@@ -290,6 +303,39 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
         }
 
         Ok(count)
+    }
+
+    async fn mark_expired(
+        &self,
+        id: Uuid,
+        expired_by: &str,
+        reason: &str,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let mut requests = self.requests.write().await;
+
+        // Check if request exists first
+        if !requests.contains_key(&id) {
+            return Err(IntentRebaseError::ApprovalRequestNotFound(id));
+        }
+
+        let request = requests.get_mut(&id).unwrap(); // safe: we just checked
+
+        // Only pending requests can be expired
+        if request.status != ApprovalRequestStatus::Pending {
+            return Err(IntentRebaseError::ApprovalRequestNotPending(
+                id,
+                format!("{:?}", request.status),
+            ));
+        }
+
+        let now = Utc::now();
+        request.status = ApprovalRequestStatus::Expired;
+        request.updated_at = now;
+        request.resolved_at = Some(now);
+        request.resolved_by = Some(expired_by.to_string());
+        request.resolution_notes = Some(reason.to_string());
+
+        Ok(request.clone())
     }
 }
 
@@ -574,6 +620,55 @@ impl ApprovalRequestRepository for SqlxApprovalRequestRepository {
         })?;
 
         Ok(result.rows_affected() as usize)
+    }
+
+    async fn mark_expired(
+        &self,
+        id: Uuid,
+        expired_by: &str,
+        reason: &str,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let now = Utc::now();
+
+        // Atomic conditional UPDATE: only expires if current status is 'pending'
+        // This eliminates the TOCTOU race between checking status and updating it
+        let result = sqlx::query(
+            r#"
+            UPDATE approval_requests
+            SET status = 'expired',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE id = $4 AND status = 'pending'
+            "#,
+        )
+        .bind(now)
+        .bind(expired_by)
+        .bind(reason)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("expire approval request: {}", e)))?;
+
+        // If no rows were affected, the request was not in pending status
+        if result.rows_affected() == 0 {
+            // Determine the actual status for the error message
+            let current = self.get_approval_request(id).await;
+            match current {
+                Ok(req) => {
+                    return Err(IntentRebaseError::ApprovalRequestNotPending(
+                        id,
+                        format!("{:?}", req.status),
+                    ));
+                }
+                Err(_) => {
+                    return Err(IntentRebaseError::ApprovalRequestNotFound(id));
+                }
+            }
+        }
+
+        self.get_approval_request(id).await
     }
 }
 
@@ -999,6 +1094,124 @@ mod tests {
             Some("Intent version changed to v3".to_string())
         );
         assert!(cancelled.resolved_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_pending_request() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        // Expire it
+        let expired = repo
+            .mark_expired(id, "system", "Approval time limit exceeded")
+            .await
+            .unwrap();
+
+        assert_eq!(expired.status, ApprovalRequestStatus::Expired);
+        assert_eq!(expired.resolved_by, Some("system".to_string()));
+        assert_eq!(
+            expired.resolution_notes,
+            Some("Approval time limit exceeded".to_string())
+        );
+        assert!(expired.resolved_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_non_pending_request_fails() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        // First approve it
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Approved, "test", None)
+            .await
+            .unwrap();
+
+        // Now try to expire it - should fail
+        let result = repo.mark_expired(id, "system", "Too late").await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(found_id, status)
+            if found_id == id && status == "Approved"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_not_found() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let id = Uuid::new_v4();
+
+        let result = repo.mark_expired(id, "system", "Never existed").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotFound(found_id) if found_id == id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_approved_request_fails() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Approved, "test", None)
+            .await
+            .unwrap();
+
+        let result = repo.mark_expired(id, "system", "Already approved").await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(..)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_rejected_request_fails() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Rejected, "test", None)
+            .await
+            .unwrap();
+
+        let result = repo.mark_expired(id, "system", "Already rejected").await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(..)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_mark_expired_cancelled_request_fails() {
+        let repo = Arc::new(InMemoryApprovalRequestRepository::new());
+        let request = create_test_request();
+        let id = request.id;
+        repo.create_approval_request(request).await.unwrap();
+
+        repo.update_approval_request_status(id, ApprovalRequestStatus::Cancelled, "test", None)
+            .await
+            .unwrap();
+
+        let result = repo.mark_expired(id, "system", "Already cancelled").await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ApprovalRequestNotPending(..)
+        ));
     }
 }
 

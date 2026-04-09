@@ -1149,6 +1149,13 @@ pub struct RejectApprovalRequestBody {
     pub resolution_notes: Option<String>,
 }
 
+/// Request body for expiring an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpireApprovalRequestBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Response for approve/reject approval request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequestResponse {
@@ -1323,6 +1330,85 @@ async fn reject_approval_request(
             &state.event_publisher,
             approval_request.tenant_id,
             "ApprovalRevoked",
+            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
+    }
+
+    Ok(Json(ApprovalRequestResponse {
+        id: updated.id,
+        intent_id: updated.intent_id,
+        status: format!("{:?}", updated.status),
+        resolved_by: updated.resolved_by.unwrap_or_default(),
+        resolved_at: updated.resolved_at,
+        resolution_notes: updated.resolution_notes,
+    }))
+}
+
+/// POST /approval-requests/{id}/expire - Mark a pending approval request as expired
+///
+/// Phase 2b bounded slice: Manual expiry transition for pending approval requests.
+/// Only updates status to expired and emits audit event.
+///
+/// **No automatic expiry in Phase 2b** - this is a manual transition only.
+/// No background worker or automatic expiry machinery exists.
+///
+/// Does NOT trigger re-approval workflow or resume/re-trigger apply.
+async fn expire_approval_request(
+    State(state): State<AppState>,
+    Path(approval_request_id): Path<Uuid>,
+    Json(body): Json<ExpireApprovalRequestBody>,
+) -> Result<Json<ApprovalRequestResponse>, ApiErrorResponse> {
+    // Get the approval request first to access its metadata
+    let approval_request = state
+        .approval_request_repo
+        .get_approval_request(approval_request_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Best-effort actor attribution (fallback to system/expire)
+    let actor_id = "system/expire";
+
+    // Use provided reason or default
+    let reason = body
+        .reason
+        .unwrap_or_else(|| "Approval time limit exceeded".to_string());
+
+    // Use the mark_expired repository method for atomic transition
+    let updated = state
+        .approval_request_repo
+        .mark_expired(approval_request_id, actor_id, &reason)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Emit ApprovalExpired audit event (best-effort)
+    let audit_payload = intent_rebase_types::ApprovalExpiredAuditPayload {
+        approval_request_id,
+        intent_id: approval_request.intent_id,
+        intent_version_from: approval_request.intent_version_from,
+        intent_version_to: approval_request.intent_version_to,
+        decision_class: approval_request.decision_class.clone(),
+        expired_by: actor_id.to_string(),
+        expiry_reason: reason.clone(),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_approval_expired(
+            approval_request.tenant_id,
+            actor_id,
+            approval_request.intent_id,
+            audit_payload.clone(),
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ApprovalExpired audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            approval_request.tenant_id,
+            "ApprovalExpired",
             &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
         )
         .await;
@@ -1837,6 +1923,11 @@ pub fn build_router(
         .route(
             "/approval-requests/{approval_request_id}/reject",
             post(reject_approval_request),
+        )
+        // POST expire - bounded manual expiry transition (Phase 2b)
+        .route(
+            "/approval-requests/{approval_request_id}/expire",
+            post(expire_approval_request),
         )
         // GET revalidate - bounded read-only scope comparison (Phase 2b)
         .route(

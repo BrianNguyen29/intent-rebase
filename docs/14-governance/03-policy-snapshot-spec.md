@@ -108,9 +108,15 @@ PolicySnapshot
 | Trigger | When | Status |
 |---------|------|--------|
 | Intent approval | New approval granted | ❌ Future (snapshot creation must be triggered by caller) |
-| Intent update | New policy snapshot created for new version | ❌ Future (snapshot creation must be triggered by caller) |
+| Intent update | New policy snapshot created for new version | ⚠️ Phase 2b bounded (SnapshotCreatorConsumer via RebaseApplied events) |
 | Re-approval | New snapshot for revalidated approval | ❌ Future (re-approval workflow not implemented) |
 | Rule pack update | Existing intent snapshots remain valid (time-bound) | ❌ Future |
+
+**Phase 2b Bounded SnapshotCreatorConsumer Note:**
+> The SnapshotCreatorConsumer creates policy snapshots when consuming RebaseApplied events.
+> This is bounded to event payload scope data — when full scope data is not available in the event
+> payload, default/empty values are used (ScopeType::None, empty affected_resources, etc.).
+> Full scope data requires access to intent scope and is a Phase 3 consideration.
 
 ### Snapshot Selection for Revalidation
 

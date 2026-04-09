@@ -5,9 +5,9 @@
 //! In-memory implementation for tests, SQL-backed for production.
 
 use super::{
-    ApprovalCancelledAuditPayload, ApprovalGrantedAuditPayload, ApprovalRevokedAuditPayload,
-    AuditEvent, AuditEventType, IntentRebaseError, RebaseApplyAuditPayload,
-    RebaseApplyBlockedAuditPayload, ReplayAuditPayload,
+    ApprovalCancelledAuditPayload, ApprovalExpiredAuditPayload, ApprovalGrantedAuditPayload,
+    ApprovalRevokedAuditPayload, AuditEvent, AuditEventType, IntentRebaseError,
+    RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, ReplayAuditPayload,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -150,6 +150,32 @@ pub trait AuditRepository: Send + Sync {
             id: Uuid::new_v4(),
             tenant_id,
             event_type: AuditEventType::ApprovalCancelled,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record an ApprovalExpired audit event (Phase 2b bounded expiry slice)
+    /// This is emitted when a pending approval request is manually marked as expired.
+    async fn record_approval_expired(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalExpiredAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ApprovalExpired,
             actor_id: actor_id.to_string(),
             intent_id: Some(intent_id),
             artifact_id: None,
@@ -459,6 +485,7 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
         AuditEventType::ApprovalGranted => "ApprovalGranted",
         AuditEventType::ApprovalRevoked => "ApprovalRevoked",
         AuditEventType::ApprovalCancelled => "ApprovalCancelled",
+        AuditEventType::ApprovalExpired => "ApprovalExpired",
         AuditEventType::ReplayInitiated => "ReplayInitiated",
         AuditEventType::ArtifactProduced => "ArtifactProduced",
         AuditEventType::ArtifactInvalidated => "ArtifactInvalidated",
@@ -484,6 +511,7 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "ApprovalGranted" => AuditEventType::ApprovalGranted,
         "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
         "ApprovalCancelled" => AuditEventType::ApprovalCancelled,
+        "ApprovalExpired" => AuditEventType::ApprovalExpired,
         "ReplayInitiated" => AuditEventType::ReplayInitiated,
         "ArtifactProduced" => AuditEventType::ArtifactProduced,
         "ArtifactInvalidated" => AuditEventType::ArtifactInvalidated,
@@ -799,6 +827,10 @@ mod sqlx_audit_tests {
         assert_eq!(
             audit_event_type_from_string("ArtifactInvalidated"),
             AuditEventType::ArtifactInvalidated
+        );
+        assert_eq!(
+            audit_event_type_from_string("ApprovalExpired"),
+            AuditEventType::ApprovalExpired
         );
         // Unknown values default to RebaseApplied
         assert_eq!(
