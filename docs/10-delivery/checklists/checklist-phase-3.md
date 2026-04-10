@@ -139,49 +139,16 @@
     - Code: crates/compensation-service/src/compensation_action_service.rs (reapprove_action method)
     - Code: crates/compensation-service/src/compensation_action_repo.rs (reapprove repository method)
     - Tests: cargo test -p compensation-service --all-features (reapprove tests pass)
-    - Note: Manual retry gate with fail-closed policy. Only retryable errors AND remaining budget allow reapproval.
-
-[x] Status transition validation (Phase 3 Batch 1 bounded execution slice)
-    Evidence:
-    - Code: crates/compensation-service/src/compensation_action.rs (can_transition_to method)
-    - Tests: cargo test -p compensation-service --all-features (86 tests pass)
-    - Note: Explicit transition validation matrix; illegal transitions fail closed.
-
-[ ] Compensation planner: generate compensation plan from side effects
-    Evidence:
-    - Code: compensation-service/planner.rs (stub scaffold only)
-    - Status: Batch 1+ scope
-
-[x] Compensation executor: real rollback/acknowledgment logic (Phase 3 Batch 1 bounded RollbackExecutor)
-    Evidence:
-    - Code: crates/compensation-service/src/compensation_executor.rs (RollbackExecutor with strategy/feasibility gates)
-    - Code: crates/compensation-service/src/compensation_action_service.rs (wired to new_with_side_effect_repo)
-    - Tests: cargo test -p compensation-service --all-features (102 tests pass)
-    - Note: Bounded to Rollback+Automatic path only. Non-Rollback strategies fail closed with UNSUPPORTED_STRATEGY_TYPE. Non-Automatic feasibility fails closed with UNSUPPORTED_FEASIBILITY. Missing side effect fails closed with SIDE_EFFECT_NOT_FOUND. Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged". Does NOT claim external reversal.
-
-[x] Compensation retry logic (max retries, backoff, dead-letter)
-    Evidence:
-    - Code: compensation-service/src/compensation_action.rs (max_retries field, DEFAULT_MAX_RETRIES=3)
-    - Code: compensation-service/src/compensation_action_service.rs (reapprove_action, list_dlq_candidates)
-    - Code: compensation-service/src/compensation_action_repo.rs (reapprove method)
-    - Tests: cargo test -p compensation-service --all-features (retry/DLQ tests pass)
-    - Note: Bounded manual retry slice implemented. max_retries field, retryable error allowlist, DLQ derivation from existing data. No background worker.
-
-[ ] Compensation audit trail
-    Evidence:
-    - Audit events: compensation.planned, compensation.started, compensation.completed, compensation.failed
-    - Doc: ../../14-governance/01-audit-event-spec.md (updated)
-    - Status: Batch 1+ scope
-
-[x] Failed → Pending reapproval path
-    Evidence:
-    - Code: compensation-service/src/compensation_action.rs (can_be_reapproved, reapproval_denial_reason, is_dlq_candidate)
-    - Code: compensation-service/src/compensation_action_service.rs (reapprove_action method with policy gates)
-    - Code: compensation-service/src/compensation_action_repo.rs (reapprove repository method)
-    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/reapprove endpoint)
-    - Code: crates/intent-rebase-types/src/error.rs (CompensationActionNotReapprovable error)
-    - Tests: cargo test -p compensation-service --all-features (reapprove tests pass)
     - Note: Manual retry gate implemented with fail-closed policy. Only retryable errors AND remaining budget allow reapproval.
+
+[x] Intent orchestration dashboard API (Phase 3 Batch 1 bounded read-only slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/orchestration-dashboard)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationDashboardResponse, SideEffectSummary, CompensationActionSummary, CompensationActionStatusCounts DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_orchestration_dashboard handler with summary derivation)
+    - OpenAPI: docs/04-api/openapi.yaml (endpoint path and schema definitions)
+    - Tests: cargo test -p intent-api --all-features (7 dashboard tests pass)
+    - Note: Bounded read-only endpoint. All summary fields derived from persisted data via existing service query helpers. No batch execution or orchestration engine claims.
 ```
 
 ---

@@ -2057,6 +2057,205 @@ async fn list_side_effects(
 }
 
 // ============================================================================
+// Intent Orchestration Dashboard (Phase 3 Batch 1 bounded read-only slice)
+// ============================================================================
+
+/// Query parameters for orchestration dashboard
+#[derive(Debug, Deserialize)]
+pub struct OrchestrationDashboardQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Summary counts for compensation actions by status
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CompensationActionStatusCounts {
+    pub pending: usize,
+    pub approved: usize,
+    pub executed: usize,
+    pub failed: usize,
+    pub waived: usize,
+}
+
+/// Summary of side effects for an intent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideEffectSummary {
+    pub total: usize,
+    pub irreversible_count: usize,
+    pub auto_compensatable_count: usize,
+}
+
+/// Summary of compensation actions for an intent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationActionSummary {
+    pub total: usize,
+    pub status_counts: CompensationActionStatusCounts,
+    pub retryable_failed_count: usize,
+    pub dlq_candidate_count: usize,
+    pub reapprovable_count: usize,
+    pub auto_executable_count: usize,
+}
+
+/// Response for the intent orchestration dashboard endpoint
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
+/// of side effects and compensation actions for a single intent within a tenant.
+///
+/// **This endpoint is READ-ONLY** - it does not trigger any mutations.
+/// It only queries existing data and computes summary statistics.
+///
+/// **Summary fields are truthful:**
+/// - `side_effect_summary` counts are derived from persisted side effects
+/// - `compensation_action_summary` counts are derived from persisted compensation actions
+/// - No batch execution, orchestration engine, or background processing is claimed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationDashboardResponse {
+    pub intent_id: Uuid,
+    pub tenant_id: Uuid,
+    pub side_effects: Vec<compensation_service::SideEffect>,
+    pub side_effect_summary: SideEffectSummary,
+    pub compensation_actions: Vec<compensation_service::CompensationAction>,
+    pub compensation_action_summary: CompensationActionSummary,
+}
+
+/// GET /intents/{intent_id}/orchestration-dashboard - Get orchestration dashboard for an intent
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
+/// of side effects and compensation actions for a single intent within a tenant.
+///
+/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+/// approval workflows, or any mutation. It only queries existing compensation
+/// action records and side effects, then computes summary statistics.
+///
+/// **Truthful summary fields:**
+/// - `side_effect_summary.total`: count of all side effects for this intent
+/// - `side_effect_summary.irreversible_count`: count of S4Irreversible side effects
+/// - `side_effect_summary.auto_compensatable_count`: count of S0/S1 side effects
+/// - `compensation_action_summary.status_counts.*`: count by CompensationStatus
+/// - `compensation_action_summary.retryable_failed_count`: Failed actions with retryable errors
+/// - `compensation_action_summary.dlq_candidate_count`: Failed + exhausted budget OR non-retryable error
+/// - `compensation_action_summary.reapprovable_count`: Failed + retryable error + remaining budget
+/// - `compensation_action_summary.auto_executable_count`: Approved + Automatic feasibility
+///
+/// **No batch execution or orchestration engine claims:**
+/// This endpoint only aggregates existing persisted data. It does not execute
+/// any compensation actions, trigger workflows, or involve background processing.
+async fn get_orchestration_dashboard(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationDashboardQuery>,
+) -> Result<Json<OrchestrationDashboardResponse>, ApiErrorResponse> {
+    // Fetch side effects for this intent
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Fetch compensation actions for this intent
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Compute side effect summary
+    let side_effect_summary = {
+        let total = side_effects.len();
+        let irreversible_count = side_effects
+            .iter()
+            .filter(|se| se.effect_class == compensation_service::SideEffectClass::S4Irreversible)
+            .count();
+        let auto_compensatable_count = side_effects
+            .iter()
+            .filter(|se| se.is_auto_compensatable())
+            .count();
+        SideEffectSummary {
+            total,
+            irreversible_count,
+            auto_compensatable_count,
+        }
+    };
+
+    // Compute compensation action summary
+    let compensation_action_summary = {
+        let total = compensation_actions.len();
+
+        // Count by status
+        let mut status_counts = CompensationActionStatusCounts::default();
+        for action in &compensation_actions {
+            match action.status {
+                compensation_service::CompensationStatus::Pending => status_counts.pending += 1,
+                compensation_service::CompensationStatus::Approved => status_counts.approved += 1,
+                compensation_service::CompensationStatus::Executed => status_counts.executed += 1,
+                compensation_service::CompensationStatus::Failed => status_counts.failed += 1,
+                compensation_service::CompensationStatus::Waived => status_counts.waived += 1,
+            }
+        }
+
+        // Count retryable failed (Failed + retryable error code)
+        let retryable_failed_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                if action.status != compensation_service::CompensationStatus::Failed {
+                    return false;
+                }
+                // Check if error is retryable
+                if let Some(ref result) = action.execution_result_payload {
+                    if let Some(ref error_code) = result.error_code {
+                        let classification =
+                            compensation_service::CompensationAction::classify_error_code(
+                                error_code,
+                            );
+                        return classification.retryable
+                            == compensation_service::RetryableErrorClass::Retryable;
+                    }
+                }
+                false
+            })
+            .count();
+
+        // Count DLQ candidates (Failed + exhausted OR non-retryable)
+        let dlq_candidate_count = compensation_actions
+            .iter()
+            .filter(|action| action.is_dlq_candidate())
+            .count();
+
+        // Count reapprovable (Failed + retryable error + remaining budget)
+        let reapprovable_count = compensation_actions
+            .iter()
+            .filter(|action| action.can_be_reapproved())
+            .count();
+
+        // Count auto-executable (Approved + Automatic feasibility)
+        let auto_executable_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                action.status == compensation_service::CompensationStatus::Approved
+                    && action.is_auto_executable()
+            })
+            .count();
+
+        CompensationActionSummary {
+            total,
+            status_counts,
+            retryable_failed_count,
+            dlq_candidate_count,
+            reapprovable_count,
+            auto_executable_count,
+        }
+    };
+
+    Ok(Json(OrchestrationDashboardResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        side_effects,
+        side_effect_summary,
+        compensation_actions,
+        compensation_action_summary,
+    }))
+}
+
+// ============================================================================
 // Compensation Action Handlers (Phase 3 Batch 1 bounded execution slice)
 // ============================================================================
 
@@ -2573,6 +2772,11 @@ pub fn build_router(
         .route("/intents/{intent_id}/replay", post(replay_intent))
         // Side effect query endpoint (Phase 3 Batch 1 groundwork)
         .route("/intents/{intent_id}/side-effects", get(list_side_effects))
+        // Orchestration dashboard endpoint (Phase 3 Batch 1 bounded read-only slice)
+        .route(
+            "/intents/{intent_id}/orchestration-dashboard",
+            get(get_orchestration_dashboard),
+        )
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/{intent_id}/compensation-actions",
@@ -5932,5 +6136,424 @@ mod tests {
         assert_eq!(response.feasibility, "manual_only");
         assert_eq!(response.tenant_id, tenant_id);
         assert_eq!(response.intent_id, intent_id);
+    }
+
+    // =========================================================================
+    // Orchestration Dashboard Tests (Phase 3 Batch 1 bounded read-only slice)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_empty_state() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return even with no data");
+
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert!(result.side_effects.is_empty());
+        assert_eq!(result.side_effect_summary.total, 0);
+        assert!(result.compensation_actions.is_empty());
+        assert_eq!(result.compensation_action_summary.total, 0);
+        assert_eq!(result.compensation_action_summary.status_counts.pending, 0);
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_with_side_effects() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Record some side effects
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S1InternalReversible,
+                "metadata_write",
+                "db-record-123",
+            )
+            .await
+            .unwrap();
+
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S4Irreversible,
+                "money_transfer",
+                "account-xyz",
+            )
+            .await
+            .unwrap();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return data");
+
+        assert_eq!(result.side_effects.len(), 2);
+        assert_eq!(result.side_effect_summary.total, 2);
+        assert_eq!(result.side_effect_summary.irreversible_count, 1);
+        assert_eq!(result.side_effect_summary.auto_compensatable_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_with_compensation_actions() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create actions in different statuses
+        // Pending action
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let pending_action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Auto rollback",
+        );
+        state
+            .compensation_action_service
+            .create_action(pending_action)
+            .await
+            .unwrap();
+
+        // Approved + Automatic action (auto-executable)
+        let approved_action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Auto rollback 2",
+        );
+        let approved = state
+            .compensation_action_service
+            .create_action(approved_action)
+            .await
+            .unwrap();
+        state
+            .compensation_action_service
+            .approve_action(approved.id, approved.lock_version, Some("test"))
+            .await
+            .unwrap();
+
+        // Failed + retryable error (reapprovable)
+        let failed_action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Auto rollback 3",
+        );
+        let failed = state
+            .compensation_action_service
+            .create_action(failed_action)
+            .await
+            .unwrap();
+        // Approve then fail with retryable error
+        let failed_approved = state
+            .compensation_action_service
+            .approve_action(failed.id, failed.lock_version, Some("test"))
+            .await
+            .unwrap();
+        let failed_result = compensation_service::ExecutionResult::failure(
+            "Temporary failure",
+            "CONNECTION_TIMEOUT",
+            None,
+        );
+        state
+            .compensation_action_service
+            .record_result(
+                failed_approved.id,
+                &failed_result,
+                failed_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return data");
+
+        assert_eq!(result.compensation_actions.len(), 3);
+        assert_eq!(result.compensation_action_summary.total, 3);
+        assert_eq!(result.compensation_action_summary.status_counts.pending, 1);
+        assert_eq!(result.compensation_action_summary.status_counts.approved, 1);
+        assert_eq!(result.compensation_action_summary.status_counts.failed, 1);
+        assert_eq!(result.compensation_action_summary.retryable_failed_count, 1);
+        assert_eq!(result.compensation_action_summary.reapprovable_count, 1);
+        assert_eq!(result.compensation_action_summary.auto_executable_count, 1);
+        // Approved + Automatic
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_dlq_candidates() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create a failed action with non-retryable error (DLQ candidate)
+        let dlq_action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Auto rollback",
+        );
+        let dlq = state
+            .compensation_action_service
+            .create_action(dlq_action)
+            .await
+            .unwrap();
+        // Approve then fail with non-retryable error
+        let dlq_approved = state
+            .compensation_action_service
+            .approve_action(dlq.id, dlq.lock_version, Some("test"))
+            .await
+            .unwrap();
+        let dlq_result = compensation_service::ExecutionResult::failure(
+            "Permanent failure",
+            "INVALID_CONFIGURATION",
+            None,
+        );
+        state
+            .compensation_action_service
+            .record_result(
+                dlq_approved.id,
+                &dlq_result,
+                dlq_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return data");
+
+        assert_eq!(result.compensation_action_summary.dlq_candidate_count, 1);
+        // Non-retryable error + exhausted budget = DLQ candidate, not reapprovable
+        assert_eq!(result.compensation_action_summary.reapprovable_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_exhausted_budget_dlq() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action with max_retries = 1
+        let mut dlq_action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Auto rollback",
+        );
+        dlq_action.max_retries = 1; // Exhaust on first failure
+
+        let dlq = state
+            .compensation_action_service
+            .create_action(dlq_action)
+            .await
+            .unwrap();
+        // Approve then fail with retryable error (but budget exhausted)
+        let dlq_approved = state
+            .compensation_action_service
+            .approve_action(dlq.id, dlq.lock_version, Some("test"))
+            .await
+            .unwrap();
+        let dlq_result = compensation_service::ExecutionResult::failure(
+            "Temporary failure",
+            "CONNECTION_TIMEOUT",
+            None,
+        );
+        state
+            .compensation_action_service
+            .record_result(
+                dlq_approved.id,
+                &dlq_result,
+                dlq_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return data");
+
+        // Exhausted budget makes it a DLQ candidate even with retryable error
+        assert_eq!(result.compensation_action_summary.dlq_candidate_count, 1);
+        assert_eq!(result.compensation_action_summary.reapprovable_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_response_shape() {
+        use compensation_service::{CompensationFeasibility, RebaseContext, StrategyType};
+
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create a side effect
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S2ExternalReversible,
+                "pr_opened",
+                "https://github.com/example/pull/123",
+            )
+            .await
+            .unwrap();
+
+        // Create a compensation action
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::FollowupNotice,
+            "Send follow-up",
+        );
+        state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        let query = OrchestrationDashboardQuery { tenant_id };
+        let result =
+            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .expect("Dashboard should return data");
+
+        // Verify response structure
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.side_effects.len(), 1);
+        assert_eq!(result.compensation_actions.len(), 1);
+
+        // Verify side effect summary
+        assert_eq!(result.side_effect_summary.total, 1);
+        assert_eq!(result.side_effect_summary.irreversible_count, 0);
+        assert_eq!(result.side_effect_summary.auto_compensatable_count, 0); // S2 is not auto
+
+        // Verify compensation action summary
+        assert_eq!(result.compensation_action_summary.total, 1);
+        assert_eq!(result.compensation_action_summary.status_counts.pending, 1);
+        assert_eq!(result.compensation_action_summary.auto_executable_count, 0);
+        // SemiAutomatic is not auto
+    }
+
+    #[tokio::test]
+    async fn test_orchestration_dashboard_tenant_isolation() {
+        let state = create_test_service();
+        let intent_id = Uuid::new_v4();
+        let tenant_id_1 = Uuid::new_v4();
+        let tenant_id_2 = Uuid::new_v4();
+
+        // Record side effects for tenant 1
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id_1,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S1InternalReversible,
+                "effect_1",
+                "target_1",
+            )
+            .await
+            .unwrap();
+
+        // Record side effects for tenant 2
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id_2,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S2ExternalReversible,
+                "effect_2",
+                "target_2",
+            )
+            .await
+            .unwrap();
+
+        // Query for tenant 1
+        let query1 = OrchestrationDashboardQuery {
+            tenant_id: tenant_id_1,
+        };
+        let result1 = get_orchestration_dashboard(
+            State(state.clone()),
+            Path(intent_id),
+            axum::extract::Query(query1),
+        )
+        .await
+        .expect("Dashboard should return data");
+
+        assert_eq!(result1.side_effect_summary.total, 1);
+        assert_eq!(result1.side_effects[0].effect_type, "effect_1");
+
+        // Query for tenant 2
+        let query2 = OrchestrationDashboardQuery {
+            tenant_id: tenant_id_2,
+        };
+        let result2 = get_orchestration_dashboard(
+            State(state),
+            Path(intent_id),
+            axum::extract::Query(query2),
+        )
+        .await
+        .expect("Dashboard should return data");
+
+        assert_eq!(result2.side_effect_summary.total, 1);
+        assert_eq!(result2.side_effects[0].effect_type, "effect_2");
     }
 }

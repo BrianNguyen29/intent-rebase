@@ -62,6 +62,14 @@ info:
       - Does NOT claim external reversal if current data model cannot support it
     - **Stub executor path:** Non-Rollback+Automatic paths return ExecutionResult failure (not success)
 
+    ## Phase 3 Batch 1: Intent Orchestration Dashboard
+    - GET /intents/{intent_id}/orchestration-dashboard — Bounded read-only dashboard endpoint
+    - Returns raw lists of side effects and compensation actions for a single intent within a tenant
+    - Derives bounded summary fields: counts by status, retryable_failed_count, dlq_candidate_count, reapprovable_count, irreversible-effect flag/count, auto-executable candidate count
+    - **This endpoint is READ-ONLY** — does not trigger compensation execution, orchestration engine, or background processing
+    - **Truthful summaries** — all counts are derived from persisted data via existing service query helpers
+    - No batch execution, no orchestration engine, no background processing claims
+
     ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
     - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
     - **DLQ query endpoint:** GET /compensation-actions/dlq lists derived DLQ candidates
@@ -615,6 +623,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListSideEffectsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/orchestration-dashboard:
+    get:
+      tags:
+        - compensation
+      summary: Intent orchestration dashboard (read-only)
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
+        of side effects and compensation actions for a single intent within a tenant.
+
+        **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+        approval workflows, or any mutation. It only queries existing data and
+        computes summary statistics.
+
+        **Truthful summary fields:**
+        - `side_effect_summary.total`: count of all side effects for this intent
+        - `side_effect_summary.irreversible_count`: count of S4Irreversible side effects
+        - `side_effect_summary.auto_compensatable_count`: count of S0/S1 side effects
+        - `compensation_action_summary.status_counts.*`: count by CompensationStatus
+        - `compensation_action_summary.retryable_failed_count`: Failed actions with retryable errors
+        - `compensation_action_summary.dlq_candidate_count`: Failed + exhausted budget OR non-retryable error
+        - `compensation_action_summary.reapprovable_count`: Failed + retryable error + remaining budget
+        - `compensation_action_summary.auto_executable_count`: Approved + Automatic feasibility
+
+        **No batch execution or orchestration engine claims:**
+        This endpoint only aggregates existing persisted data. It does not execute
+        any compensation actions, trigger workflows, or involve background processing.
+      operationId: getOrchestrationDashboard
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration dashboard retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationDashboardResponse'
         '500':
           description: Internal server error
           content:
@@ -2953,9 +3017,103 @@ components:
           type: string
           format: date-time
           nullable: true
-        resolution_notes:
+          resolution_notes:
+            type: string
+            nullable: true
+
+    # ----- Orchestration Dashboard (Phase 3 Batch 1) -----
+    CompensationActionStatusCounts:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary counts for compensation actions by status.
+      properties:
+        pending:
+          type: integer
+          description: Count of pending compensation actions
+        approved:
+          type: integer
+          description: Count of approved compensation actions
+        executed:
+          type: integer
+          description: Count of executed compensation actions
+        failed:
+          type: integer
+          description: Count of failed compensation actions
+        waived:
+          type: integer
+          description: Count of waived compensation actions
+
+    SideEffectSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary of side effects for an intent.
+      properties:
+        total:
+          type: integer
+          description: Total count of side effects
+        irreversible_count:
+          type: integer
+          description: Count of S4Irreversible side effects
+        auto_compensatable_count:
+          type: integer
+          description: Count of S0/S1 side effects (auto-compensatable)
+
+    CompensationActionSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary of compensation actions for an intent.
+      properties:
+        total:
+          type: integer
+          description: Total count of compensation actions
+        status_counts:
+          $ref: '#/components/schemas/CompensationActionStatusCounts'
+        retryable_failed_count:
+          type: integer
+          description: Count of Failed actions with retryable errors
+        dlq_candidate_count:
+          type: integer
+          description: Count of DLQ candidates (Failed + exhausted OR non-retryable)
+        reapprovable_count:
+          type: integer
+          description: Count of Failed + retryable error + remaining budget
+        auto_executable_count:
+          type: integer
+          description: Count of Approved + Automatic feasibility
+
+    OrchestrationDashboardResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Response for the intent orchestration
+        dashboard endpoint. Returns a consolidated view of side effects and compensation
+        actions for a single intent within a tenant.
+
+        **This endpoint is READ-ONLY** - does not trigger any mutations.
+        **Truthful summaries** - all counts derived from persisted data.
+      required: [intent_id, tenant_id, side_effects, side_effect_summary, compensation_actions, compensation_action_summary]
+      properties:
+        intent_id:
           type: string
-          nullable: true
+          format: uuid
+          description: Intent ID
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        side_effects:
+          type: array
+          items:
+            $ref: '#/components/schemas/SideEffect'
+          description: Raw list of side effects for this intent
+        side_effect_summary:
+          $ref: '#/components/schemas/SideEffectSummary'
+        compensation_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FullCompensationAction'
+          description: Raw list of compensation actions for this intent
+        compensation_action_summary:
+          $ref: '#/components/schemas/CompensationActionSummary'
 
     # ----- Side Effect and Compensation Action Query (Phase 3 Batch 1) -----
     SideEffect:
