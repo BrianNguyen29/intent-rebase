@@ -43,9 +43,20 @@ info:
     - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
     - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
     - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
+    - GET /compensation-actions/policy-gate — Tenant-scoped policy gate evaluation (read-only query)
+    - GET /intents/{intent_id}/compensation-policy-gate — Intent-scoped policy gate evaluation (read-only query)
     - POST /compensation-actions/{action_id}/approve — Approve a pending compensation action (bounded slice)
     - POST /compensation-actions/{action_id}/waive — Waive a pending compensation action (bounded slice)
     - POST /compensation-actions/{action_id}/execute — Execute an approved compensation action (bounded slice, stub executor)
+
+    ## Phase 3 Batch 1: Compensation Policy Gate Evaluation
+    - **Bounded read-only slice** — no execution, no persistence writes, no policy engine
+    - **GET /compensation-actions/policy-gate?tenant_id=...** — Tenant-scoped evaluation for all tenant actions
+    - **GET /intents/{intent_id}/compensation-policy-gate?tenant_id=...** — Intent-scoped evaluation
+    - **Canonical gate statuses** — exactly: eligible | blocked | manual_review_required
+    - **Risk metadata** — derived from existing fields: strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention
+    - **No new policy engine** — all fields derive from status, attempt_count, max_retries, error_code, feasibility, strategy_type
+    - **Policy metadata** — auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, has_non_retryable_error
 
     ## Phase 3 Batch 1: Compensation Summary
     - Rebase preview and apply responses include `compensation_planning` field with read-only compensation planning summary
@@ -1070,6 +1081,107 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListBatchCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/policy-gate:
+    get:
+      tags:
+        - compensation
+      summary: Tenant-scoped policy gate evaluation for compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+        for all compensation actions belonging to the specified tenant.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical gate statuses:**
+        - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
+        - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
+
+        **Gate evaluation is derived from existing surfaces:**
+        - Status, feasibility, attempt_count, max_retries, error_code fields
+        - No new policy engine or external risk surface is queried
+
+        **Response includes:**
+        - Individual action evaluations with gate outcome and reason
+        - Summary counts by gate status
+        - Policy/risk metadata useful for UI display
+      operationId: getCompensationPolicyGate
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Policy gate evaluations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationPolicyGateResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/compensation-policy-gate:
+    get:
+      tags:
+        - compensation
+      summary: Intent-scoped policy gate evaluation for compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+        for all compensation actions belonging to the specified intent.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical gate statuses:**
+        - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
+        - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
+
+        **Gate evaluation is derived from existing surfaces:**
+        - Status, feasibility, attempt_count, max_retries, error_code fields
+        - No new policy engine or external risk surface is queried
+
+        **Response includes:**
+        - Individual action evaluations with gate outcome and reason
+        - Summary counts by gate status
+        - Policy/risk metadata useful for UI display
+      operationId: getIntentCompensationPolicyGate
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Policy gate evaluations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationPolicyGateResponse'
         '500':
           description: Internal server error
           content:
@@ -3466,6 +3578,153 @@ components:
           description: Failed actions that exhausted retry budget or have non-retryable errors
         summary:
           $ref: '#/components/schemas/BatchCandidatesSummary'
+
+    # ----- Policy Gate Evaluation (Phase 3 Batch 1) -----
+    CompensationPolicyGateResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Response for policy gate evaluation.
+        Returns gate evaluations and risk metadata for compensation actions.
+      required: [tenant_id, evaluations, summary]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Intent ID (set for intent-scoped queries)
+        evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyGateEvaluationResponse'
+          description: Individual action evaluations
+        summary:
+          $ref: '#/components/schemas/PolicyGateSummaryResponse'
+
+    PolicyGateEvaluationResponse:
+      type: object
+      description: Policy gate evaluation for a single action
+      required: [action, gate_status, gate_reason, policy_metadata, risk_metadata]
+      properties:
+        action:
+          $ref: '#/components/schemas/FullCompensationAction'
+        gate_status:
+          type: string
+          enum: [eligible, blocked, manual_review_required]
+          description: Canonical gate status
+        gate_reason:
+          type: string
+          description: Human-readable reason for gate status
+        policy_metadata:
+          $ref: '#/components/schemas/PolicyGateMetadataResponse'
+        risk_metadata:
+          $ref: '#/components/schemas/RiskMetadataResponse'
+
+    PolicyGateMetadataResponse:
+      type: object
+      description: Supporting policy metadata for gate evaluation
+      properties:
+        auto_executable:
+          type: boolean
+          description: Whether action is auto-executable
+        is_dlq_candidate:
+          type: boolean
+          description: Whether action is a DLQ candidate
+        can_reapprove:
+          type: boolean
+          description: Whether action can be reapproved
+        retry_budget_exhausted:
+          type: boolean
+          description: Whether retry budget is exhausted
+        has_non_retryable_error:
+          type: boolean
+          description: Whether action has non-retryable error
+        feasibility:
+          type: string
+          description: Feasibility level
+        strategy_type:
+          type: string
+          description: Strategy type
+        status:
+          type: string
+          description: Current status
+        attempt_count:
+          type: integer
+          description: Number of attempts made
+        max_retries:
+          type: integer
+          description: Maximum retries allowed
+
+    RiskMetadataResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Risk metadata derived from action state.
+        No new policy engine - all fields derive from existing persisted fields.
+      properties:
+        strategy_severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Severity of the compensation strategy
+        retry_exhaustion_risk:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Risk level for retry exhaustion
+        feasibility_risk:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Risk based on feasibility level
+        error_severity:
+          type: string
+          enum: [none, low, medium, high]
+          description: Error severity if failed
+        retry_budget_remaining:
+          type: integer
+          description: Number of retry attempts remaining
+        error_classification:
+          type: object
+          nullable: true
+          properties:
+            error_code:
+              type: string
+            retryable:
+              type: boolean
+            reason:
+              type: string
+        is_terminal:
+          type: boolean
+          description: Whether action is in terminal state
+        requires_manual_intervention:
+          type: boolean
+          description: Whether manual intervention is required
+
+    PolicyGateSummaryResponse:
+      type: object
+      description: Summary of policy gate evaluations
+      properties:
+        total_actions:
+          type: integer
+          description: Total number of actions evaluated
+        eligible_count:
+          type: integer
+          description: Number of eligible actions
+        blocked_count:
+          type: integer
+          description: Number of blocked actions
+        manual_review_required_count:
+          type: integer
+          description: Number of actions requiring manual review
+        dlq_candidate_count:
+          type: integer
+          description: Number of DLQ candidates
+        pending_approval_count:
+          type: integer
+          description: Number of actions pending approval
+        auto_executable_count:
+          type: integer
+          description: Number of auto-executable actions
 
     CompensationActionResponse:
       type: object

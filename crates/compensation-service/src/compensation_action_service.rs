@@ -14,11 +14,15 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::compensation_action::{CompensationAction, CompensationStatus, ExecutionResult};
+use crate::compensation_action::{
+    CompensationAction, CompensationFeasibility, CompensationStatus, ExecutionResult,
+    RetryableErrorClass, StrategyType,
+};
 use crate::compensation_action_repo::CompensationActionRepository;
 use crate::compensation_executor::CompensationExecutor;
 use crate::side_effect_repo::SideEffectRepository;
 use intent_rebase_types::IntentRebaseError;
+use serde::{Deserialize, Serialize};
 
 /// Service facade for compensation action operations.
 ///
@@ -538,6 +542,545 @@ pub struct BatchCandidates {
     pub retryable_failed_candidates: Vec<CompensationAction>,
     /// Failed actions that exhausted retry budget or have non-retryable errors
     pub dlq_candidates: Vec<CompensationAction>,
+}
+
+// ============================================================================
+// Policy Gate Evaluation (Phase 3 Batch 1 bounded read-only slice)
+// ============================================================================
+
+/// Canonical policy gate statuses for compensation action evaluation.
+///
+/// **Bounded Phase 3 Batch 1 read-only slice:** Gate evaluation derives from
+/// existing persisted fields and risk/policy surfaces. No new policy engine is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyGateStatus {
+    /// Action can proceed: Approved + Automatic feasibility + no blocking conditions
+    Eligible,
+    /// Action cannot proceed: DLQ, non-retryable error, exhausted budget, terminal status
+    Blocked,
+    /// Action requires human intervention: Pending approval, SemiAutomatic/ManualOnly feasibility
+    ManualReviewRequired,
+}
+
+/// Policy gate evaluation for a single compensation action.
+///
+/// Contains the gate outcome plus policy/risk metadata useful for UI display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyGateEvaluation {
+    /// The compensation action being evaluated
+    pub action: CompensationAction,
+    /// Canonical gate status for this action
+    pub gate_status: PolicyGateStatus,
+    /// Human-readable reason for the gate status
+    pub gate_reason: String,
+    /// Supporting policy metadata
+    pub policy_metadata: PolicyGateMetadata,
+    /// Risk metadata derived from action state, retry history, and error classification
+    pub risk_metadata: RiskMetadata,
+}
+
+/// Supporting policy metadata for gate evaluation.
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Derived from existing persisted fields.
+/// Contains action-state fields useful for understanding the action's configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyGateMetadata {
+    /// Whether this action is auto-executable (Approved + Automatic feasibility)
+    pub auto_executable: bool,
+    /// Whether this action is a DLQ candidate
+    pub is_dlq_candidate: bool,
+    /// Whether this action can be reapproved (Failed + retryable + budget remains)
+    pub can_reapprove: bool,
+    /// Whether the action has exhausted its retry budget
+    pub retry_budget_exhausted: bool,
+    /// Whether the action has a non-retryable error
+    pub has_non_retryable_error: bool,
+    /// Feasibility level of the action
+    pub feasibility: CompensationFeasibility,
+    /// Strategy type of the action
+    pub strategy_type: StrategyType,
+    /// Current status of the action
+    pub status: CompensationStatus,
+    /// Number of attempts made
+    pub attempt_count: i32,
+    /// Maximum retries allowed
+    pub max_retries: i32,
+}
+
+/// Risk metadata for gate evaluation.
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Derived query-time from existing
+/// persisted fields. Provides risk-relevant signals derived from action state,
+/// retry history, and error classification.
+///
+/// **No new policy engine** - all fields derive from: status, attempt_count,
+/// max_retries, error_code, feasibility, strategy_type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskMetadata {
+    /// Severity of the strategy type (higher = more severe on failure)
+    pub strategy_severity: StrategySeverity,
+    /// Retry exhaustion risk: how close to DLQ state
+    pub retry_exhaustion_risk: RetryExhaustionRisk,
+    /// Feasibility risk: whether action can be automatically executed
+    pub feasibility_risk: FeasibilityRisk,
+    /// Error severity if the action failed
+    pub error_severity: ErrorSeverity,
+    /// Number of retry attempts remaining before DLQ
+    pub retry_budget_remaining: i32,
+    /// Error code classification if action has failed
+    pub error_classification: Option<ErrorClassification>,
+    /// Whether the action is in a terminal state
+    pub is_terminal: bool,
+    /// Whether manual intervention is required
+    pub requires_manual_intervention: bool,
+}
+
+/// Severity tier for compensation strategy type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategySeverity {
+    /// Lowest severity - informational only
+    Low,
+    /// Medium severity - reversible with rollback
+    Medium,
+    /// High severity - external or counter-action required
+    High,
+    /// Highest severity - quarantine or escalation needed
+    Critical,
+}
+
+impl StrategySeverity {
+    /// Derive strategy severity from strategy type.
+    pub fn from_strategy_type(strategy: StrategyType) -> Self {
+        match strategy {
+            StrategyType::FollowupNotice => StrategySeverity::Low,
+            StrategyType::Rollback => StrategySeverity::Medium,
+            StrategyType::CounterAction => StrategySeverity::High,
+            StrategyType::Quarantine | StrategyType::Escalation => StrategySeverity::Critical,
+        }
+    }
+}
+
+/// Risk level for retry exhaustion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryExhaustionRisk {
+    /// No attempts yet or plenty of budget remaining
+    Low,
+    /// Some attempts made, some budget consumed
+    Medium,
+    /// Most budget consumed, high risk of DLQ on next failure
+    High,
+    /// No budget remaining or DLQ already reached
+    Critical,
+}
+
+impl RetryExhaustionRisk {
+    /// Derive retry exhaustion risk from attempt_count and max_retries.
+    pub fn from_attempts(attempt_count: i32, max_retries: i32) -> Self {
+        if attempt_count >= max_retries {
+            return RetryExhaustionRisk::Critical;
+        }
+        let ratio = attempt_count as f32 / max_retries as f32;
+        if ratio >= 0.66 {
+            RetryExhaustionRisk::High
+        } else if ratio >= 0.33 {
+            RetryExhaustionRisk::Medium
+        } else {
+            RetryExhaustionRisk::Low
+        }
+    }
+}
+
+/// Risk level based on feasibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeasibilityRisk {
+    /// Automatic - can execute without human intervention
+    Low,
+    /// SemiAutomatic - may need manual trigger
+    Medium,
+    /// ManualOnly - requires human intervention
+    High,
+    /// NotPossible - cannot be executed
+    Critical,
+}
+
+impl FeasibilityRisk {
+    /// Derive feasibility risk from feasibility level.
+    pub fn from_feasibility(feasibility: CompensationFeasibility) -> Self {
+        match feasibility {
+            CompensationFeasibility::Automatic => FeasibilityRisk::Low,
+            CompensationFeasibility::SemiAutomatic => FeasibilityRisk::Medium,
+            CompensationFeasibility::ManualOnly => FeasibilityRisk::High,
+            CompensationFeasibility::NotPossible => FeasibilityRisk::Critical,
+        }
+    }
+}
+
+/// Error severity classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorSeverity {
+    /// No error - action succeeded or not yet executed
+    None,
+    /// Transient error - retry may succeed
+    Low,
+    /// Persistent error - requires investigation
+    Medium,
+    /// Permanent error - retry will not succeed
+    High,
+}
+
+impl ErrorSeverity {
+    /// Derive from error code classification.
+    pub fn from_retryable_class(retryable: RetryableErrorClass) -> Self {
+        match retryable {
+            RetryableErrorClass::Retryable => ErrorSeverity::Low,
+            RetryableErrorClass::NonRetryable => ErrorSeverity::High,
+        }
+    }
+}
+
+/// Classification of an error code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorClassification {
+    /// The error code string
+    pub error_code: String,
+    /// Whether the error is retryable
+    pub retryable: bool,
+    /// Human-readable reason
+    pub reason: String,
+}
+
+/// Summary of policy gate evaluations for a set of compensation actions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PolicyGateSummary {
+    /// Total number of actions evaluated
+    pub total_actions: usize,
+    /// Number of eligible actions
+    pub eligible_count: usize,
+    /// Number of blocked actions
+    pub blocked_count: usize,
+    /// Number of actions requiring manual review
+    pub manual_review_required_count: usize,
+    /// Number of DLQ candidates (subset of blocked)
+    pub dlq_candidate_count: usize,
+    /// Number of actions awaiting approval (subset of manual_review_required)
+    pub pending_approval_count: usize,
+    /// Number of auto-executable actions (subset of eligible)
+    pub auto_executable_count: usize,
+}
+
+/// Result of policy gate evaluation for a set of compensation actions.
+#[derive(Debug, Clone)]
+pub struct PolicyGateEvaluationResult {
+    /// Individual action evaluations
+    pub evaluations: Vec<PolicyGateEvaluation>,
+    /// Summary counts
+    pub summary: PolicyGateSummary,
+}
+
+impl CompensationActionService {
+    /// Evaluate policy gates for all compensation actions of a tenant.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+    /// for all compensation actions belonging to the specified tenant.
+    ///
+    /// **This endpoint is READ-ONLY** - it only queries existing data.
+    ///
+    /// **Gate evaluation logic:**
+    /// - `eligible`: Approved + Automatic feasibility + not blocked + not DLQ
+    /// - `blocked`: DLQ candidate OR exhausted retry budget OR non-retryable error OR terminal status
+    /// - `manual_review_required`: Pending status OR SemiAutomatic/ManualOnly feasibility
+    ///
+    /// **Derivation from existing surfaces:**
+    /// - Gate status is derived from existing CompensationAction fields (status, feasibility,
+    ///   attempt_count, max_retries, execution_result_payload.error_code)
+    /// - No new policy engine or external risk surface is queried
+    pub async fn evaluate_policy_gates(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<PolicyGateEvaluationResult, IntentRebaseError> {
+        let actions = self.list_by_tenant(tenant_id, None).await?;
+        self.evaluate_policy_gates_from_actions(actions)
+    }
+
+    /// Evaluate policy gates for all compensation actions of an intent.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+    /// for all compensation actions belonging to the specified intent.
+    ///
+    /// **This endpoint is READ-ONLY** - it only queries existing data.
+    ///
+    /// **Gate evaluation logic:** Same as `evaluate_policy_gates`.
+    pub async fn evaluate_policy_gates_for_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PolicyGateEvaluationResult, IntentRebaseError> {
+        let actions = self.list_by_intent(intent_id, tenant_id).await?;
+        self.evaluate_policy_gates_from_actions(actions)
+    }
+
+    /// Evaluate policy gates from a collection of compensation actions.
+    ///
+    /// Internal helper that computes gate evaluations and summary.
+    fn evaluate_policy_gates_from_actions(
+        &self,
+        actions: Vec<CompensationAction>,
+    ) -> Result<PolicyGateEvaluationResult, IntentRebaseError> {
+        let total_actions = actions.len();
+        let mut evaluations = Vec::with_capacity(total_actions);
+        let mut summary = PolicyGateSummary::default();
+
+        for action in actions {
+            let evaluation = self.evaluate_single_action(&action);
+            match evaluation.gate_status {
+                PolicyGateStatus::Eligible => summary.eligible_count += 1,
+                PolicyGateStatus::Blocked => summary.blocked_count += 1,
+                PolicyGateStatus::ManualReviewRequired => summary.manual_review_required_count += 1,
+            }
+
+            if evaluation.policy_metadata.is_dlq_candidate {
+                summary.dlq_candidate_count += 1;
+            }
+            if evaluation.policy_metadata.auto_executable {
+                summary.auto_executable_count += 1;
+            }
+            if matches!(action.status, CompensationStatus::Pending) {
+                summary.pending_approval_count += 1;
+            }
+
+            evaluations.push(evaluation);
+        }
+
+        summary.total_actions = total_actions;
+
+        Ok(PolicyGateEvaluationResult {
+            evaluations,
+            summary,
+        })
+    }
+
+    /// Evaluate policy gate for a single compensation action.
+    fn evaluate_single_action(&self, action: &CompensationAction) -> PolicyGateEvaluation {
+        let gate_status = self.compute_gate_status(action);
+        let gate_reason = self.compute_gate_reason(action, &gate_status);
+        let policy_metadata = self.compute_policy_metadata(action);
+        let risk_metadata = self.compute_risk_metadata(action);
+
+        PolicyGateEvaluation {
+            action: action.clone(),
+            gate_status,
+            gate_reason,
+            policy_metadata,
+            risk_metadata,
+        }
+    }
+
+    /// Compute the gate status for a compensation action.
+    fn compute_gate_status(&self, action: &CompensationAction) -> PolicyGateStatus {
+        use CompensationStatus::*;
+
+        // Terminal statuses (Executed, Waived) are always blocked
+        if action.status.is_terminal() {
+            return PolicyGateStatus::Blocked;
+        }
+
+        // DLQ candidates are blocked
+        if action.is_dlq_candidate() {
+            return PolicyGateStatus::Blocked;
+        }
+
+        // Pending status requires manual review
+        if action.status == Pending {
+            return PolicyGateStatus::ManualReviewRequired;
+        }
+
+        // Failed status with remaining budget and retryable error - manual review
+        if action.status == Failed {
+            if action.can_be_reapproved() {
+                return PolicyGateStatus::ManualReviewRequired;
+            }
+            // Otherwise it's blocked (non-retryable or exhausted budget)
+            return PolicyGateStatus::Blocked;
+        }
+
+        // Approved status - check feasibility
+        if action.status == Approved {
+            // Automatic feasibility = eligible
+            if action.is_auto_executable() {
+                return PolicyGateStatus::Eligible;
+            }
+            // SemiAutomatic/ManualOnly = manual review required
+            return PolicyGateStatus::ManualReviewRequired;
+        }
+
+        // Default to blocked for any unexpected state
+        PolicyGateStatus::Blocked
+    }
+
+    /// Compute the human-readable reason for the gate status.
+    fn compute_gate_reason(
+        &self,
+        action: &CompensationAction,
+        gate_status: &PolicyGateStatus,
+    ) -> String {
+        use CompensationStatus::*;
+
+        match gate_status {
+            PolicyGateStatus::Eligible => {
+                format!(
+                    "Action is approved with {} feasibility and no blocking conditions",
+                    format_feasibility(action.feasibility)
+                )
+            }
+            PolicyGateStatus::Blocked => {
+                if action.status.is_terminal() {
+                    return format!("Action is in terminal status ({:?})", action.status);
+                }
+                if action.is_dlq_candidate() {
+                    if action.attempt_count >= action.max_retries {
+                        return format!(
+                            "Action is DLQ candidate: retry budget exhausted ({}/{} attempts)",
+                            action.attempt_count, action.max_retries
+                        );
+                    }
+                    if let Some(ref result) = action.execution_result_payload {
+                        if let Some(ref error_code) = result.error_code {
+                            return format!(
+                                "Action is DLQ candidate: non-retryable error ({})",
+                                error_code
+                            );
+                        }
+                    }
+                    return "Action is DLQ candidate".to_string();
+                }
+                if let Some(ref reason) = action.reapproval_denial_reason() {
+                    return reason.clone();
+                }
+                format!("Action is blocked due to {:?}", action.status)
+            }
+            PolicyGateStatus::ManualReviewRequired => match action.status {
+                Pending => {
+                    format!(
+                        "Action awaits approval ({} feasibility)",
+                        format_feasibility(action.feasibility)
+                    )
+                }
+                Failed => {
+                    if action.can_be_reapproved() {
+                        return format!(
+                                "Action failed but can be reapproved ({} retry attempts remaining, {} feasibility)",
+                                action.max_retries - action.attempt_count,
+                                format_feasibility(action.feasibility)
+                            );
+                    }
+                    if let Some(ref reason) = action.reapproval_denial_reason() {
+                        return reason.clone();
+                    }
+                    format!(
+                        "Action failed and requires manual review ({} feasibility)",
+                        format_feasibility(action.feasibility)
+                    )
+                }
+                Approved => {
+                    format!(
+                        "Action requires manual execution ({})",
+                        format_feasibility(action.feasibility)
+                    )
+                }
+                _ => format!(
+                    "Action requires manual review ({})",
+                    format_feasibility(action.feasibility)
+                ),
+            },
+        }
+    }
+
+    /// Compute policy metadata for a compensation action.
+    fn compute_policy_metadata(&self, action: &CompensationAction) -> PolicyGateMetadata {
+        let has_non_retryable_error = action
+            .execution_result_payload
+            .as_ref()
+            .and_then(|r| r.error_code.as_ref())
+            .map(|code| {
+                let classification = CompensationAction::classify_error_code(code);
+                classification.retryable == RetryableErrorClass::NonRetryable
+            })
+            .unwrap_or(false);
+
+        PolicyGateMetadata {
+            auto_executable: action.is_auto_executable(),
+            is_dlq_candidate: action.is_dlq_candidate(),
+            can_reapprove: action.can_be_reapproved(),
+            retry_budget_exhausted: action.attempt_count >= action.max_retries,
+            has_non_retryable_error,
+            feasibility: action.feasibility,
+            strategy_type: action.strategy_type,
+            status: action.status,
+            attempt_count: action.attempt_count,
+            max_retries: action.max_retries,
+        }
+    }
+
+    /// Compute risk metadata for a compensation action.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only slice): Derives risk signals from
+    /// existing action state fields. No new policy engine - all fields derive
+    /// from status, attempt_count, max_retries, error_code, feasibility, strategy_type.
+    fn compute_risk_metadata(&self, action: &CompensationAction) -> RiskMetadata {
+        let error_classification = action.execution_result_payload.as_ref().and_then(|r| {
+            r.error_code.as_ref().map(|code| {
+                let classification = CompensationAction::classify_error_code(code);
+                ErrorClassification {
+                    error_code: code.clone(),
+                    retryable: classification.retryable == RetryableErrorClass::Retryable,
+                    reason: classification.reason.to_string(),
+                }
+            })
+        });
+
+        let error_severity = action
+            .execution_result_payload
+            .as_ref()
+            .and_then(|r| {
+                r.error_code.as_ref().map(|code| {
+                    let classification = CompensationAction::classify_error_code(code);
+                    ErrorSeverity::from_retryable_class(classification.retryable)
+                })
+            })
+            .unwrap_or(ErrorSeverity::None);
+
+        RiskMetadata {
+            strategy_severity: StrategySeverity::from_strategy_type(action.strategy_type),
+            retry_exhaustion_risk: RetryExhaustionRisk::from_attempts(
+                action.attempt_count,
+                action.max_retries,
+            ),
+            feasibility_risk: FeasibilityRisk::from_feasibility(action.feasibility),
+            error_severity,
+            retry_budget_remaining: (action.max_retries - action.attempt_count).max(0),
+            error_classification,
+            is_terminal: action.status.is_terminal(),
+            requires_manual_intervention: matches!(
+                action.status,
+                CompensationStatus::Pending | CompensationStatus::Failed
+            ) || !action.is_auto_executable(),
+        }
+    }
+}
+
+/// Format feasibility for display.
+fn format_feasibility(f: CompensationFeasibility) -> &'static str {
+    match f {
+        CompensationFeasibility::Automatic => "Automatic",
+        CompensationFeasibility::SemiAutomatic => "SemiAutomatic",
+        CompensationFeasibility::ManualOnly => "ManualOnly",
+        CompensationFeasibility::NotPossible => "NotPossible",
+    }
 }
 
 #[cfg(test)]
@@ -1847,5 +2390,382 @@ mod tests {
             batch.pending_approval_candidates[0].feasibility,
             CompensationFeasibility::Automatic
         );
+    }
+
+    // === Policy Gate Evaluation Tests ===
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_empty_for_tenant() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 0);
+        assert_eq!(result.summary.total_actions, 0);
+        assert_eq!(result.summary.eligible_count, 0);
+        assert_eq!(result.summary.blocked_count, 0);
+        assert_eq!(result.summary.manual_review_required_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_eligible() {
+        // Approved + Automatic feasibility = eligible
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        assert_eq!(created.status, CompensationStatus::Pending);
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+        assert_eq!(approved.feasibility, CompensationFeasibility::Automatic);
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 1);
+        let eval = &result.evaluations[0];
+        assert_eq!(eval.gate_status, PolicyGateStatus::Eligible);
+        assert!(eval.gate_reason.contains("approved"));
+        assert!(eval.gate_reason.contains("Automatic"));
+        assert!(eval.policy_metadata.auto_executable);
+        assert!(!eval.policy_metadata.is_dlq_candidate);
+
+        assert_eq!(result.summary.total_actions, 1);
+        assert_eq!(result.summary.eligible_count, 1);
+        assert_eq!(result.summary.blocked_count, 0);
+        assert_eq!(result.summary.manual_review_required_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_blocked_executed() {
+        // Executed status = blocked
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        let executed_result = ExecutionResult::success("Completed");
+        let executed = service
+            .record_result(created.id, &executed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 1);
+        let eval = &result.evaluations[0];
+        assert_eq!(eval.gate_status, PolicyGateStatus::Blocked);
+        assert!(eval.gate_reason.contains("terminal"));
+        assert_eq!(result.summary.eligible_count, 0);
+        assert_eq!(result.summary.blocked_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_blocked_dlq() {
+        // DLQ candidate = blocked
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let mut action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+        action.max_retries = 1; // Exhausts on first failure
+
+        let created = service.create_action(action).await.unwrap();
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        let failed_result = ExecutionResult::failure("Failed", "CONNECTION_TIMEOUT", None);
+        let _failed = service
+            .record_result(approved.id, &failed_result, approved.lock_version, None)
+            .await
+            .unwrap();
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 1);
+        let eval = &result.evaluations[0];
+        assert_eq!(eval.gate_status, PolicyGateStatus::Blocked);
+        assert!(eval.gate_reason.contains("DLQ"));
+        assert!(eval.policy_metadata.is_dlq_candidate);
+        assert_eq!(result.summary.dlq_candidate_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_manual_review_pending() {
+        // Pending status = manual_review_required
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let _created = service.create_action(action).await.unwrap();
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 1);
+        let eval = &result.evaluations[0];
+        assert_eq!(eval.gate_status, PolicyGateStatus::ManualReviewRequired);
+        assert!(eval.gate_reason.contains("awaits approval"));
+        assert_eq!(result.summary.pending_approval_count, 1);
+        assert_eq!(result.summary.manual_review_required_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_manual_review_semi_automatic() {
+        // Approved + SemiAutomatic = manual_review_required
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let mut action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::FollowupNotice,
+            "Followup",
+        );
+
+        let created = service.create_action(action).await.unwrap();
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        assert_eq!(result.evaluations.len(), 1);
+        let eval = &result.evaluations[0];
+        assert_eq!(eval.gate_status, PolicyGateStatus::ManualReviewRequired);
+        assert!(eval.gate_reason.contains("SemiAutomatic"));
+        assert!(!eval.policy_metadata.auto_executable);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_mixed_actions() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Action 1: Pending (manual_review_required)
+        let pending_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Pending",
+        );
+        let pending_created = service.create_action(pending_action).await.unwrap();
+
+        // Action 2: Approved + Automatic (eligible)
+        let mut approved_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Approved",
+        );
+        approved_action.max_retries = 3;
+        let approved_created = service.create_action(approved_action).await.unwrap();
+        let approved = service
+            .approve_action(approved_created.id, approved_created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Action 3: DLQ candidate (blocked)
+        let mut dlq_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "DLQ",
+        );
+        dlq_action.max_retries = 1;
+        let dlq_created = service.create_action(dlq_action).await.unwrap();
+        let dlq_approved = service
+            .approve_action(dlq_created.id, dlq_created.lock_version, None)
+            .await
+            .unwrap();
+        let dlq_failed_result = ExecutionResult::failure("Failed", "CONNECTION_TIMEOUT", None);
+        let _dlq_failed = service
+            .record_result(
+                dlq_approved.id,
+                &dlq_failed_result,
+                dlq_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Action 4: Failed + retryable (manual_review_required)
+        let mut retryable_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Retryable",
+        );
+        retryable_action.max_retries = 3;
+        let retryable_created = service.create_action(retryable_action).await.unwrap();
+        let retryable_approved = service
+            .approve_action(retryable_created.id, retryable_created.lock_version, None)
+            .await
+            .unwrap();
+        let retryable_failed_result =
+            ExecutionResult::failure("Transient", "CONNECTION_TIMEOUT", None);
+        let _retryable_failed = service
+            .record_result(
+                retryable_approved.id,
+                &retryable_failed_result,
+                retryable_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Debug: fetch actions directly to verify states
+        let all_actions = service.list_by_tenant(tenant_id, None).await.unwrap();
+        eprintln!("\n=== All actions from list_by_tenant ===");
+        for a in &all_actions {
+            eprintln!(
+                "id={}, status={:?}, feasibility={:?}, attempt_count={}, max_retries={}",
+                a.id, a.status, a.feasibility, a.attempt_count, a.max_retries
+            );
+        }
+
+        // Call evaluate_policy_gates and debug inside the service
+        let result = service.evaluate_policy_gates(tenant_id).await.unwrap();
+
+        eprintln!("\n=== Evaluations ===");
+        for eval in &result.evaluations {
+            eprintln!(
+                "id={}, status={:?}, gate={:?}, is_dlq={}, is_auto_exec={}",
+                eval.action.id,
+                eval.action.status,
+                eval.gate_status,
+                eval.policy_metadata.is_dlq_candidate,
+                eval.policy_metadata.auto_executable
+            );
+        }
+
+        eprintln!("\n=== Summary ===");
+        eprintln!(
+            "total={}, eligible={}, blocked={}, manual_review={}, dlq={}, pending={}, auto_exec={}",
+            result.summary.total_actions,
+            result.summary.eligible_count,
+            result.summary.blocked_count,
+            result.summary.manual_review_required_count,
+            result.summary.dlq_candidate_count,
+            result.summary.pending_approval_count,
+            result.summary.auto_executable_count
+        );
+
+        // Verify gate statuses from evaluations
+        // The order in the repository is not guaranteed to be creation order.
+        // We verify by checking the action IDs.
+
+        // Find evaluations by action ID
+        let approved_action_id = approved.id;
+        let dlq_action_id = _dlq_failed.id;
+        let retryable_action_id = _retryable_failed.id;
+        let pending_action_id = pending_created.id;
+
+        let eval_by_id = |id: Uuid| -> &PolicyGateEvaluation {
+            result
+                .evaluations
+                .iter()
+                .find(|e| e.action.id == id)
+                .unwrap()
+        };
+
+        // pending_action: Pending -> ManualReviewRequired
+        let pending_eval = eval_by_id(pending_action_id);
+        assert_eq!(
+            pending_eval.gate_status,
+            PolicyGateStatus::ManualReviewRequired
+        );
+
+        // approved_action: Approved -> Eligible
+        let approved_eval = eval_by_id(approved_action_id);
+        assert_eq!(approved_eval.gate_status, PolicyGateStatus::Eligible);
+
+        // dlq_action: Failed (DLQ) -> Blocked
+        let dlq_eval = eval_by_id(dlq_action_id);
+        assert_eq!(dlq_eval.gate_status, PolicyGateStatus::Blocked);
+
+        // retryable_action: Failed (retryable) -> ManualReviewRequired
+        let retryable_eval = eval_by_id(retryable_action_id);
+        assert_eq!(
+            retryable_eval.gate_status,
+            PolicyGateStatus::ManualReviewRequired
+        );
+
+        // Verify summary counts
+        assert_eq!(result.summary.total_actions, 4);
+        assert_eq!(result.summary.eligible_count, 1); // only approved_action
+        assert_eq!(result.summary.blocked_count, 1); // only dlq_action
+        assert_eq!(result.summary.manual_review_required_count, 2); // pending + retryable
+        assert_eq!(result.summary.pending_approval_count, 1);
+        assert_eq!(result.summary.dlq_candidate_count, 1);
+        assert_eq!(result.summary.auto_executable_count, 4); // all actions have Automatic feasibility
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_policy_gates_for_intent() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let other_intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action for the target intent
+        let action1 = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "For target intent",
+        );
+        let _created1 = service.create_action(action1).await.unwrap();
+
+        // Create action for a different intent
+        let other_rebase_context = RebaseContext::new(other_intent_id, 1, 2, Uuid::new_v4());
+        let action2 = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            other_intent_id,
+            other_rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "For other intent",
+        );
+        let _created2 = service.create_action(action2).await.unwrap();
+
+        // Evaluate for target intent only
+        let result = service
+            .evaluate_policy_gates_for_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary.total_actions, 1);
     }
 }

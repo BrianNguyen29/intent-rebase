@@ -161,6 +161,20 @@
     - OpenAPI: docs/04-api/openapi.yaml (endpoint path and schema definitions)
     - Tests: cargo test -p intent-api --all-features (7 dashboard tests pass)
     - Note: Bounded read-only endpoint. All summary fields derived from persisted data via existing service query helpers. No batch execution or orchestration engine claims.
+
+[x] Compensation action policy gate evaluation API (Phase 3 Batch 1 bounded read-only slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/policy-gate and GET /intents/{intent_id}/compensation-policy-gate)
+    - Code: crates/intent-api/src/lib.rs (CompensationPolicyGateQuery, IntentCompensationPolicyGateQuery, CompensationPolicyGateResponse, PolicyGateEvaluationResponse, PolicyGateMetadataResponse, RiskMetadataResponse, ErrorClassificationResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_compensation_policy_gate and get_intent_compensation_policy_gate handlers)
+    - Code: crates/intent-api/src/lib.rs (format_strategy_severity, format_retry_exhaustion_risk, format_feasibility_risk, format_error_severity formatters)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (PolicyGateStatus enum, PolicyGateEvaluation struct, PolicyGateMetadata struct, RiskMetadata struct, StrategySeverity enum, RetryExhaustionRisk enum, FeasibilityRisk enum, ErrorSeverity enum, ErrorClassification struct)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (evaluate_policy_gates, evaluate_policy_gates_for_intent, evaluate_single_action, compute_gate_status, compute_gate_reason, compute_policy_metadata, compute_risk_metadata methods)
+    - Code: crates/compensation-service/src/lib.rs (RiskMetadata, ErrorClassification, ErrorSeverity, FeasibilityRisk, RetryExhaustionRisk, StrategySeverity re-exports)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/policy-gate and /intents/{intent_id}/compensation-policy-gate endpoint definitions with request/response schemas)
+    - OpenAPI: docs/04-api/openapi.yaml (CompensationPolicyGateResponse, PolicyGateEvaluationResponse, PolicyGateMetadataResponse, RiskMetadataResponse, PolicyGateSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (141 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded read-only endpoint. Gate status derived from existing fields (status, feasibility, attempt_count, max_retries, error_code). No new policy engine. Canonical statuses: eligible | blocked | manual_review_required. Risk metadata includes strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention.
 ```
 
 ---

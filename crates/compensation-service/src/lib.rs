@@ -26,6 +26,10 @@ pub use compensation_action_repo::{
     CompensationActionRepository, InMemoryCompensationActionRepository,
     SqlxCompensationActionRepository,
 };
-pub use compensation_action_service::{BatchCandidates, CompensationActionService};
+pub use compensation_action_service::{
+    BatchCandidates, CompensationActionService, ErrorClassification, ErrorSeverity,
+    FeasibilityRisk, PolicyGateEvaluation, PolicyGateEvaluationResult, PolicyGateMetadata,
+    PolicyGateStatus, PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
+};
 pub use compensation_executor::{CompensationExecutor, StubCompensationExecutor};
 pub use compensation_planner::{CompensationPlanner, InMemoryCompensationPlanner};
