@@ -133,6 +133,18 @@
     - Tests: cargo test -p compensation-service --all-features (DLQ derivation tests pass)
     - Note: Derived DLQ condition from existing data (Failed + exhausted budget OR non-retryable error). No DLQ table.
 
+[x] Compensation action batch candidates API (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/batch-candidates)
+    - Code: crates/intent-api/src/lib.rs (ListBatchCandidatesResponse, ListBatchCandidatesQuery, BatchCandidatesSummary DTOs)
+    - Code: crates/intent-api/src/lib.rs (list_batch_candidates handler)
+    - Code: crates/compensation-service/src/lib.rs (BatchCandidates re-export)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_batch_candidates method)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (BatchCandidates struct)
+    - OpenAPI: docs/04-api/openapi.yaml (endpoint path and schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (batch candidates tests pass)
+    - Note: Read-only endpoint returning four categories (pending approval, approved auto-executable, retryable failed, DLQ). No execution, orchestration, or policy gate.
+
 [x] Compensation action reapprove API (Phase 3 Batch 1 bounded manual retry slice)
     Evidence:
     - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/reapprove)

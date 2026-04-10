@@ -2493,6 +2493,30 @@ pub struct ListDlqCandidatesResponse {
     pub total: usize,
 }
 
+/// Response for listing batch candidates across all categories
+#[derive(Debug, Clone, Serialize)]
+pub struct ListBatchCandidatesResponse {
+    /// Actions in Pending status awaiting approval
+    pub pending_approval_candidates: Vec<compensation_service::CompensationAction>,
+    /// Approved actions with Automatic feasibility that can be auto-executed
+    pub approved_auto_executable_candidates: Vec<compensation_service::CompensationAction>,
+    /// Failed actions that can be reapproved (retryable error + budget remains)
+    pub retryable_failed_candidates: Vec<compensation_service::CompensationAction>,
+    /// Failed actions that exhausted retry budget or have non-retryable errors
+    pub dlq_candidates: Vec<compensation_service::CompensationAction>,
+    /// Summary counts for each category
+    pub summary: BatchCandidatesSummary,
+}
+
+/// Summary counts for batch candidate categories
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchCandidatesSummary {
+    pub pending_approval_count: usize,
+    pub approved_auto_executable_count: usize,
+    pub retryable_failed_count: usize,
+    pub dlq_count: usize,
+}
+
 /// Query parameters for listing DLQ candidates
 #[derive(Debug, Deserialize)]
 pub struct ListDlqCandidatesQuery {
@@ -2531,6 +2555,56 @@ async fn list_dlq_candidates(
     Ok(Json(ListDlqCandidatesResponse {
         dlq_candidates,
         total,
+    }))
+}
+
+/// Query parameters for listing batch candidates
+#[derive(Debug, Deserialize)]
+pub struct ListBatchCandidatesQuery {
+    pub tenant_id: Uuid,
+}
+
+/// GET /compensation-actions/batch-candidates - List batch candidates across all categories
+///
+/// Phase 3 Batch 1 (bounded read-only batch candidate queue slice): Returns a
+/// consolidated view of all actionable compensation categories for batch processing.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing data.
+///
+/// **Four candidate categories:**
+/// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
+/// 2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+/// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
+/// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
+///
+/// **No execution, orchestration, or policy gate:**
+/// This is a read-only query endpoint. It does not trigger any mutations,
+/// execute any actions, or involve background workers.
+///
+/// **Tenant-scoped:** Results are filtered by the provided tenant_id.
+async fn list_batch_candidates(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListBatchCandidatesQuery>,
+) -> Result<Json<ListBatchCandidatesResponse>, ApiErrorResponse> {
+    let batch = state
+        .compensation_action_service
+        .list_batch_candidates(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let summary = BatchCandidatesSummary {
+        pending_approval_count: batch.pending_approval_candidates.len(),
+        approved_auto_executable_count: batch.approved_auto_executable_candidates.len(),
+        retryable_failed_count: batch.retryable_failed_candidates.len(),
+        dlq_count: batch.dlq_candidates.len(),
+    };
+
+    Ok(Json(ListBatchCandidatesResponse {
+        pending_approval_candidates: batch.pending_approval_candidates,
+        approved_auto_executable_candidates: batch.approved_auto_executable_candidates,
+        retryable_failed_candidates: batch.retryable_failed_candidates,
+        dlq_candidates: batch.dlq_candidates,
+        summary,
     }))
 }
 
@@ -2802,6 +2876,11 @@ pub fn build_router(
             post(reapprove_compensation_action),
         )
         .route("/compensation-actions/dlq", get(list_dlq_candidates))
+        // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
+        .route(
+            "/compensation-actions/batch-candidates",
+            get(list_batch_candidates),
+        )
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))

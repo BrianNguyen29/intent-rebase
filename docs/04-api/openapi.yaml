@@ -1032,6 +1032,51 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /compensation-actions/batch-candidates:
+    get:
+      tags:
+        - compensation
+      summary: List batch candidates across all categories
+      description: |
+        Phase 3 Batch 1 (bounded read-only batch candidate queue slice): Returns a
+        consolidated view of all actionable compensation categories for batch processing.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Four candidate categories:**
+        1. `pending_approval_candidates` - Actions in Pending status awaiting approval
+        2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+        3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
+        4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
+
+        **No execution, orchestration, or policy gate:**
+        This is a read-only query endpoint. It does not trigger any mutations,
+        execute any actions, or involve background workers.
+
+        **Tenant-scoped:** Results are filtered by the provided tenant_id.
+      operationId: listBatchCandidates
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Batch candidates retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBatchCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /approval-requests/pending:
     get:
       tags:
@@ -3377,6 +3422,50 @@ components:
         total:
           type: integer
           description: Total count of DLQ candidates
+
+    BatchCandidatesSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for batch candidate categories
+      properties:
+        pending_approval_count:
+          type: integer
+          description: Count of pending approval candidates
+        approved_auto_executable_count:
+          type: integer
+          description: Count of approved auto-executable candidates
+        retryable_failed_count:
+          type: integer
+          description: Count of retryable failed candidates
+        dlq_count:
+          type: integer
+          description: Count of DLQ candidate actions
+
+    ListBatchCandidatesResponse:
+      type: object
+      description: Phase 3 Batch 1 response for listing batch candidates across all categories
+      properties:
+        pending_approval_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Actions in Pending status awaiting approval
+        approved_auto_executable_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Approved actions with Automatic feasibility that can be auto-executed
+        retryable_failed_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Failed actions that can be reapproved (retryable error + budget remains)
+        dlq_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Failed actions that exhausted retry budget or have non-retryable errors
+        summary:
+          $ref: '#/components/schemas/BatchCandidatesSummary'
 
     CompensationActionResponse:
       type: object

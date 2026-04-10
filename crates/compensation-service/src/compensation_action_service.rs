@@ -463,6 +463,81 @@ impl CompensationActionService {
         let dlq_candidates = self.list_dlq_candidates(tenant_id).await?;
         Ok(dlq_candidates.len())
     }
+
+    /// Get all batch candidate compensation actions for a tenant across all categories.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only batch candidate queue slice): Returns a
+    /// consolidated view of all actionable compensation categories for batch processing.
+    ///
+    /// **This endpoint is READ-ONLY** - it only queries existing data.
+    ///
+    /// **Four candidate categories:**
+    /// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
+    /// 2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+    /// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
+    /// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
+    ///
+    /// **No execution, orchestration, or policy gate:**
+    /// This is a read-only query endpoint. It does not trigger any mutations,
+    /// execute any actions, or involve background workers.
+    pub async fn list_batch_candidates(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<BatchCandidates, IntentRebaseError> {
+        // Fetch all relevant statuses in parallel for efficiency
+        let (pending, approved, failed) = tokio::join!(
+            self.list_by_status(tenant_id, CompensationStatus::Pending),
+            self.list_by_status(tenant_id, CompensationStatus::Approved),
+            self.list_by_status(tenant_id, CompensationStatus::Failed),
+        );
+
+        let pending = pending?;
+        let approved = approved?;
+        let failed = failed?;
+
+        // Category 1: Pending approval candidates (all Pending status)
+        let pending_approval_candidates = pending;
+
+        // Category 2: Approved auto-executable candidates
+        let approved_auto_executable_candidates: Vec<CompensationAction> = approved
+            .into_iter()
+            .filter(|action| action.is_auto_executable())
+            .collect();
+
+        // Category 3: Retryable failed candidates (can be reapproved)
+        let retryable_failed_candidates: Vec<CompensationAction> = failed
+            .iter()
+            .filter(|action| action.can_be_reapproved())
+            .cloned()
+            .collect();
+
+        // Category 4: DLQ candidates (exhausted budget or non-retryable error)
+        let dlq_candidates: Vec<CompensationAction> = failed
+            .iter()
+            .filter(|action| action.is_dlq_candidate())
+            .cloned()
+            .collect();
+
+        Ok(BatchCandidates {
+            pending_approval_candidates,
+            approved_auto_executable_candidates,
+            retryable_failed_candidates,
+            dlq_candidates,
+        })
+    }
+}
+
+/// Batch candidates response containing all four candidate categories.
+#[derive(Debug, Clone)]
+pub struct BatchCandidates {
+    /// Actions in Pending status awaiting approval
+    pub pending_approval_candidates: Vec<CompensationAction>,
+    /// Approved actions with Automatic feasibility that can be auto-executed
+    pub approved_auto_executable_candidates: Vec<CompensationAction>,
+    /// Failed actions that can be reapproved (retryable error + budget remains)
+    pub retryable_failed_candidates: Vec<CompensationAction>,
+    /// Failed actions that exhausted retry budget or have non-retryable errors
+    pub dlq_candidates: Vec<CompensationAction>,
 }
 
 #[cfg(test)]
@@ -1536,5 +1611,241 @@ mod tests {
 
         // Now attempt_count should be 2
         assert_eq!(failed2.attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_batch_candidates_all_categories() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create 4 actions, one for each category
+
+        // Category 1: Pending approval (Pending status + Automatic feasibility)
+        let mut pending_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Pending auto action",
+        );
+        pending_action.max_retries = 3;
+        let pending_created = service.create_action(pending_action).await.unwrap();
+        assert_eq!(pending_created.status, CompensationStatus::Pending);
+
+        // Category 2: Approved auto-executable (Approved status + Automatic feasibility)
+        let mut approved_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Approved auto action",
+        );
+        approved_action.max_retries = 3;
+        let approved_created = service.create_action(approved_action).await.unwrap();
+        let approved_updated = service
+            .approve_action(approved_created.id, approved_created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved_updated.status, CompensationStatus::Approved);
+        assert!(approved_updated.is_auto_executable());
+
+        // Category 3: Retryable failed (Failed status + retryable error + budget remains)
+        let mut retryable_failed_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Retryable failed action",
+        );
+        retryable_failed_action.max_retries = 3;
+        let retryable_created = service
+            .create_action(retryable_failed_action)
+            .await
+            .unwrap();
+        // Approve then fail with retryable error
+        let retryable_approved = service
+            .approve_action(retryable_created.id, retryable_created.lock_version, None)
+            .await
+            .unwrap();
+        let retryable_failed_result =
+            ExecutionResult::failure("Transient", "CONNECTION_TIMEOUT", None);
+        let retryable_failed = service
+            .record_result(
+                retryable_approved.id,
+                &retryable_failed_result,
+                retryable_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(retryable_failed.status, CompensationStatus::Failed);
+        assert!(retryable_failed.can_be_reapproved());
+        assert!(!retryable_failed.is_dlq_candidate());
+
+        // Category 4: DLQ candidate (Failed status + exhausted budget)
+        let mut dlq_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "DLQ candidate action",
+        );
+        dlq_action.max_retries = 1; // Exhausts on first failure
+        let dlq_created = service.create_action(dlq_action).await.unwrap();
+        // Approve then fail to exhaust budget
+        let dlq_approved = service
+            .approve_action(dlq_created.id, dlq_created.lock_version, None)
+            .await
+            .unwrap();
+        let dlq_failed_result = ExecutionResult::failure("Exhausted", "CONNECTION_TIMEOUT", None);
+        let dlq_failed = service
+            .record_result(
+                dlq_approved.id,
+                &dlq_failed_result,
+                dlq_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(dlq_failed.status, CompensationStatus::Failed);
+        assert!(dlq_failed.is_dlq_candidate());
+        assert!(!dlq_failed.can_be_reapproved());
+
+        // Also create a non-retryable DLQ candidate for additional coverage
+        let mut non_retryable_dlq_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Non-retryable DLQ action",
+        );
+        non_retryable_dlq_action.max_retries = 3;
+        let non_retryable_created = service
+            .create_action(non_retryable_dlq_action)
+            .await
+            .unwrap();
+        let non_retryable_approved = service
+            .approve_action(
+                non_retryable_created.id,
+                non_retryable_created.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+        let non_retryable_failed_result =
+            ExecutionResult::failure("Permanent", "INVALID_CONFIG", None);
+        let non_retryable_failed = service
+            .record_result(
+                non_retryable_approved.id,
+                &non_retryable_failed_result,
+                non_retryable_approved.lock_version,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_retryable_failed.status, CompensationStatus::Failed);
+        assert!(non_retryable_failed.is_dlq_candidate());
+        assert!(!non_retryable_failed.can_be_reapproved());
+
+        // Now test the batch candidates endpoint
+        let batch = service.list_batch_candidates(tenant_id).await.unwrap();
+
+        // Verify pending approval candidates
+        assert_eq!(batch.pending_approval_candidates.len(), 1);
+        assert_eq!(batch.pending_approval_candidates[0].id, pending_created.id);
+
+        // Verify approved auto-executable candidates
+        assert_eq!(batch.approved_auto_executable_candidates.len(), 1);
+        assert_eq!(
+            batch.approved_auto_executable_candidates[0].id,
+            approved_updated.id
+        );
+
+        // Verify retryable failed candidates
+        assert_eq!(batch.retryable_failed_candidates.len(), 1);
+        assert_eq!(batch.retryable_failed_candidates[0].id, retryable_failed.id);
+
+        // Verify DLQ candidates (should be 2: exhausted budget + non-retryable error)
+        assert_eq!(batch.dlq_candidates.len(), 2);
+        let dlq_ids: Vec<_> = batch.dlq_candidates.iter().map(|a| a.id).collect();
+        assert!(dlq_ids.contains(&dlq_failed.id));
+        assert!(dlq_ids.contains(&non_retryable_failed.id));
+    }
+
+    #[tokio::test]
+    async fn test_list_batch_candidates_empty_for_tenant() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        let batch = service.list_batch_candidates(tenant_id).await.unwrap();
+
+        assert!(batch.pending_approval_candidates.is_empty());
+        assert!(batch.approved_auto_executable_candidates.is_empty());
+        assert!(batch.retryable_failed_candidates.is_empty());
+        assert!(batch.dlq_candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_batch_candidates_approved_non_auto_not_included() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create an Approved action with SemiAutomatic feasibility (not auto-executable)
+        let mut semi_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Rollback,
+            "Semi-auto approved action",
+        );
+        semi_action.max_retries = 3;
+        let semi_created = service.create_action(semi_action).await.unwrap();
+        let semi_approved = service
+            .approve_action(semi_created.id, semi_created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Should be Approved but NOT auto-executable
+        assert_eq!(semi_approved.status, CompensationStatus::Approved);
+        assert!(!semi_approved.is_auto_executable());
+
+        // Also create a pending action (Automatic feasibility) so we have something in pending
+        let mut pending_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Pending auto action",
+        );
+        pending_action.max_retries = 3;
+        let _pending_created = service.create_action(pending_action).await.unwrap();
+
+        // Batch candidates should NOT include SemiAutomatic in approved_auto_executable
+        // but SHOULD include the Automatic pending action
+        let batch = service.list_batch_candidates(tenant_id).await.unwrap();
+        assert!(batch.approved_auto_executable_candidates.is_empty());
+        assert_eq!(batch.pending_approval_candidates.len(), 1);
+        assert_eq!(
+            batch.pending_approval_candidates[0].feasibility,
+            CompensationFeasibility::Automatic
+        );
     }
 }
