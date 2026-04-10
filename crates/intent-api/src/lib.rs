@@ -3166,6 +3166,331 @@ async fn get_intent_orchestration_coordination(
     Ok(Json(response))
 }
 
+// ============================================================================
+// Manual Orchestration & Dry-Run Planner (Phase 3 Batch 1 bounded slice)
+// ============================================================================
+
+/// Request body for dry-run orchestration action planning.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrchestrationDryRunRequest {
+    /// List of compensation action IDs to plan for
+    pub action_ids: Vec<Uuid>,
+}
+
+/// Response for dry-run orchestration action planning.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunResponse {
+    /// Per-item proposals
+    pub proposals: Vec<OrchestrationDryRunProposalResponse>,
+    /// Actions that were not found
+    pub not_found: Vec<uuid::Uuid>,
+    /// Summary counts
+    pub summary: OrchestrationDryRunSummaryResponse,
+}
+
+/// A single proposal from the dry-run planner.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunProposalResponse {
+    /// The compensation action ID
+    pub action_id: Uuid,
+    /// The proposed action (approve | reapprove | execute | no_action)
+    pub proposed_action: String,
+    /// Human-readable reason for the proposal
+    pub reason: String,
+    /// Current status of the action
+    pub current_status: String,
+}
+
+/// Summary for dry-run results.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunSummaryResponse {
+    pub total: usize,
+    pub can_approve: usize,
+    pub can_reapprove: usize,
+    pub can_execute: usize,
+    pub no_action: usize,
+    pub not_found: usize,
+}
+
+/// Request body for batch orchestration commands.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchOrchestrationRequest {
+    /// List of compensation action IDs to process
+    pub action_ids: Vec<Uuid>,
+    /// Optional actor who initiated the batch (for audit purposes)
+    #[serde(default)]
+    pub initiated_by: Option<String>,
+}
+
+/// Response for batch orchestration commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchOrchestrationResponse {
+    /// Per-item outcomes
+    pub outcomes: Vec<BatchItemOutcomeResponse>,
+    /// Actions that were not found
+    pub not_found: Vec<uuid::Uuid>,
+    /// Summary counts
+    pub summary: BatchOrchestrationSummaryResponse,
+}
+
+/// A single item outcome from a batched command.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchItemOutcomeResponse {
+    /// The compensation action ID
+    pub action_id: Uuid,
+    /// Whether this item succeeded
+    pub success: bool,
+    /// The resulting action (if successful)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<CompensationActionResponse>,
+    /// The error that occurred (if failed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Summary for batched orchestration results.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchOrchestrationSummaryResponse {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub not_found: usize,
+}
+
+/// Query parameters for manual orchestration endpoints
+#[derive(Debug, Deserialize)]
+pub struct OrchestrationQuery {
+    pub tenant_id: Uuid,
+}
+
+/// POST /compensation-actions/orchestration-dry-run - Plan orchestration actions (dry-run)
+///
+/// Phase 3 Batch 1 (bounded dry-run slice): For each provided compensation_action_id,
+/// determines the proposed action (approve | reapprove | execute | no_action) based
+/// on the action's current state.
+///
+/// **This is READ-ONLY** - it does not execute any actions.
+///
+/// **Action determination logic:**
+/// - `approve`: Action is Pending (can transition to Approved)
+/// - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
+/// - `execute`: Action is Approved AND is_auto_executable() (Automatic feasibility)
+/// - `no_action`: Action is in a terminal state or cannot perform any valid transition
+///
+/// **Bounded partial-success semantics:**
+/// - If an action_id is not found, it's added to `not_found` and does not cause failure
+/// - All found actions are processed, even if some have no_action
+///
+/// **No background worker or queue claiming:**
+/// This is a direct query-based planner that reads current state and proposes actions.
+async fn orchestration_dry_run(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<OrchestrationDryRunRequest>,
+) -> Result<Json<OrchestrationDryRunResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .plan_orchestration_actions(query.tenant_id, request.action_ids)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let proposals = result
+        .proposals
+        .into_iter()
+        .map(|p| OrchestrationDryRunProposalResponse {
+            action_id: p.action_id,
+            proposed_action: p.proposed_action.as_str().to_string(),
+            reason: p.reason,
+            current_status: format_compensation_status(&p.current_status),
+        })
+        .collect();
+
+    let response = OrchestrationDryRunResponse {
+        proposals,
+        not_found: result.not_found,
+        summary: OrchestrationDryRunSummaryResponse {
+            total: result.summary.total,
+            can_approve: result.summary.can_approve,
+            can_reapprove: result.summary.can_reapprove,
+            can_execute: result.summary.can_execute,
+            no_action: result.summary.no_action,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-approve - Batch approve compensation actions
+///
+/// Phase 3 Batch 1 (bounded manual orchestration slice): Approves multiple Pending
+/// compensation actions with partial-success semantics.
+///
+/// **Bounded partial-success semantics:**
+/// - If an action_id is not found, it's recorded as `not_found` and continues
+/// - If an action fails validation, it's recorded as `failed` with error reason
+/// - Successful approvals are recorded as `succeeded`
+/// - Does NOT fail-fast on first error - all items are processed
+///
+/// **Transition rules:**
+/// - Only Pending actions can be approved
+/// - Uses optimistic locking via lock_version
+///
+/// **No background worker or queue claiming:**
+/// This is a direct service method that processes actions sequentially.
+async fn batch_approve_compensation_actions(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .batch_approve(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-reapprove - Batch reapprove compensation actions
+///
+/// Phase 3 Batch 1 (bounded manual orchestration slice): Reapproves multiple Failed
+/// compensation actions that are eligible for retry, with partial-success semantics.
+///
+/// **Bounded partial-success semantics:** Same as batch_approve.
+///
+/// **Policy gates (fail closed):**
+/// - Action must be in Failed status
+/// - Action must have remaining retry budget
+/// - Error code must be retryable
+async fn batch_reapprove_compensation_actions(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .batch_reapprove(query.tenant_id, request.action_ids)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-execute - Batch execute compensation actions
+///
+/// Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple Approved
+/// compensation actions that are auto-executable, with partial-success semantics.
+///
+/// **Bounded partial-success semantics:** Same as batch_approve.
+///
+/// **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+async fn batch_execute_compensation_actions(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .batch_execute(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
 /// Request body for artifact ingest with optional side effect capture
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactIngestRequest {
@@ -3424,6 +3749,24 @@ pub fn build_router(
         .route(
             "/intents/{intent_id}/orchestration-coordination",
             get(get_intent_orchestration_coordination),
+        )
+        // Manual orchestration & dry-run planner endpoints (Phase 3 Batch 1 bounded slice)
+        // NOTE: These routes are placed before graph routes to avoid path conflict
+        .route(
+            "/compensation-actions/orchestration-dry-run",
+            post(orchestration_dry_run),
+        )
+        .route(
+            "/compensation-actions/batch-approve",
+            post(batch_approve_compensation_actions),
+        )
+        .route(
+            "/compensation-actions/batch-reapprove",
+            post(batch_reapprove_compensation_actions),
+        )
+        .route(
+            "/compensation-actions/batch-execute",
+            post(batch_execute_compensation_actions),
         )
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))

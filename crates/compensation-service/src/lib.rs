@@ -27,8 +27,10 @@ pub use compensation_action_repo::{
     SqlxCompensationActionRepository,
 };
 pub use compensation_action_service::{
-    BatchCandidates, CompensationActionService, CoordinationRecord, CoordinationResult,
-    CoordinationStatus, CoordinationSummary, ErrorClassification, ErrorSeverity, FeasibilityRisk,
+    BatchCandidates, BatchItemOutcome, BatchOrchestrationResult, BatchOrchestrationSummary,
+    CompensationActionService, CoordinationRecord, CoordinationResult, CoordinationStatus,
+    CoordinationSummary, ErrorClassification, ErrorSeverity, FeasibilityRisk, OrchestrationAction,
+    OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary,
     PolicyGateEvaluation, PolicyGateEvaluationResult, PolicyGateMetadata, PolicyGateStatus,
     PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
 };

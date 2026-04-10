@@ -191,6 +191,51 @@
     - OpenAPI: docs/04-api/openapi.yaml (OrchestrationCoordinationResponse, CoordinationRecordResponse, CoordinationSummaryResponse schema definitions)
     - OpenAPI: docs/04-api/openapi.yaml (updated API description with new endpoints)
     - Note: Bounded read-only orchestration coordination view. Canonical statuses: ready | awaiting_policy | awaiting_manual_review | blocked | terminal. Per-item records include coordination_status, coordination_reason, and action details. Summary counts: ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count. No new orchestration engine - all fields derive from existing CompensationAction fields at query time.
+
+[x] Orchestration dry-run planner API (Phase 3 Batch 1 bounded manual orchestration dry-run slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (OrchestrationAction enum: Approve, Reapprove, Execute, NoAction)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (plan_orchestration_actions, compute_action_proposal methods)
+    - Code: crates/compensation-service/src/lib.rs (OrchestrationAction, OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/orchestration-dry-run)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationActionProposalResponse, OrchestrationDryRunSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (orchestration_dry_run handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/orchestration-dry-run endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationActionProposalResponse, OrchestrationDryRunSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded READ-ONLY dry-run. Returns per-item proposed action (approve | reapprove | execute | no_action) + reason. No execution, no background worker, no queue claiming. Tenant isolation enforced.
+
+[x] Batch approve API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (BatchOrchestrationResult, BatchItemOutcome, BatchOrchestrationSummary structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_approve method)
+    - Code: crates/compensation-service/src/lib.rs (BatchOrchestrationResult, BatchItemOutcome, BatchOrchestrationSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-approve)
+    - Code: crates/intent-api/src/lib.rs (BatchOrchestrationRequest, BatchOrchestrationResponse, BatchItemOutcomeResponse, BatchOrchestrationSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (batch_approve_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-approve endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (BatchOrchestrationRequest, BatchOrchestrationResponse, BatchItemOutcomeResponse, BatchOrchestrationSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch approve for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing approve_action service method with tenant isolation.
+
+[x] Batch reapprove API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_reapprove method)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-reapprove)
+    - Code: crates/intent-api/src/lib.rs (batch_reapprove_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-reapprove endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch reapprove for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing reapprove_action service method with tenant isolation.
+
+[x] Batch execute API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_execute method)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-execute)
+    - Code: crates/intent-api/src/lib.rs (batch_execute_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-execute endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch execute for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing execute_action service method with tenant isolation.
 ```
 
 ---

@@ -106,6 +106,17 @@ info:
     - **Attempt count is preserved** during reapproval (not reset) for audit trail
     - **No background workers** - all operations are explicit API calls
 
+    ## Phase 3 Batch 1: Manual Orchestration + Dry-Run Planner (Bounded Slice)
+    - **Dry-run planner:** POST /compensation-actions/orchestration-dry-run returns per-item proposed action + reason for explicit IDs
+    - **Manual batch approve:** POST /compensation-actions/batch-approve triggers approve for explicit IDs with partial-success semantics
+    - **Manual batch reapprove:** POST /compensation-actions/batch-reapprove triggers reapprove for explicit IDs with partial-success semantics
+    - **Manual batch execute:** POST /compensation-actions/batch-execute triggers execute for explicit IDs with partial-success semantics
+    - **Bounded partial-success semantics:** Even if some items fail, the batch continues and reports per-item outcomes explicitly
+    - **No fail-fast:** All items are processed, results are accumulated and returned together
+    - **No background worker or queue claiming:** All operations are explicit API calls via existing service methods
+    - **Dry-run response includes:** per-item proposed_action (approve | reapprove | execute | no_action) + reason
+    - **Batch command response includes:** per-item success/failure + resulting action or error + summary counts
+
     ## Phase 2b Bounded Delivery
     - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
     - Bounded runtime adapter integration for Temporal-backed signal/replay execution
@@ -1093,6 +1104,200 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListBatchCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/orchestration-dry-run:
+    post:
+      tags:
+        - compensation
+      summary: Plan orchestration actions for compensation action IDs (dry-run)
+      description: |
+        Phase 3 Batch 1 (bounded dry-run slice): For each provided compensation_action_id,
+        determines the proposed action (approve | reapprove | execute | no_action) based
+        on the action's current state.
+
+        **This is READ-ONLY** - it does not execute any actions.
+
+        **Action determination logic:**
+        - `approve`: Action is Pending (can transition to Approved)
+        - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
+        - `execute`: Action is Approved AND is_auto_executable() (Automatic feasibility)
+        - `no_action`: Action is in a terminal state or cannot perform any valid transition
+
+        **Bounded partial-success semantics:**
+        - If an action_id is not found, it's added to `not_found` and does not cause failure
+        - All found actions are processed, even if some have no_action
+
+        **No background worker or queue claiming:**
+        This is a direct query-based planner that reads current state and proposes actions.
+      operationId: orchestrationDryRun
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestrationDryRunRequest'
+      responses:
+        '200':
+          description: Dry-run plan computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationDryRunResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-approve:
+    post:
+      tags:
+        - compensation
+      summary: Batch approve compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Approves multiple Pending
+        compensation actions with partial-success semantics.
+
+        **Bounded partial-success semantics:**
+        - If an action_id is not found, it's recorded as `not_found` and continues
+        - If an action fails validation, it's recorded as `failed` with error reason
+        - Successful approvals are recorded as `succeeded`
+        - Does NOT fail-fast on first error - all items are processed
+
+        **Transition rules:**
+        - Only Pending actions can be approved
+        - Uses optimistic locking via lock_version
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchApproveCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch approve completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-reapprove:
+    post:
+      tags:
+        - compensation
+      summary: Batch reapprove compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Reapproves multiple Failed
+        compensation actions that are eligible for retry, with partial-success semantics.
+
+        **Bounded partial-success semantics:** Same as batch-approve.
+
+        **Policy gates (fail closed):**
+        - Action must be in Failed status
+        - Action must have remaining retry budget
+        - Error code must be retryable
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchReapproveCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch reapprove completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-execute:
+    post:
+      tags:
+        - compensation
+      summary: Batch execute compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple Approved
+        compensation actions that are auto-executable, with partial-success semantics.
+
+        **Bounded partial-success semantics:** Same as batch-approve.
+
+        **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchExecuteCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch execute completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
         '500':
           description: Internal server error
           content:
@@ -3663,6 +3868,155 @@ components:
           description: Count of retryable failed candidates
         dlq_count:
           type: integer
+
+    # ----- Manual Orchestration & Dry-Run Planner (Phase 3 Batch 1) -----
+    OrchestrationDryRunRequest:
+      type: object
+      description: Phase 3 Batch 1 request for dry-run orchestration action planning
+      required: [action_ids]
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to plan for
+
+    OrchestrationDryRunResponse:
+      type: object
+      description: Phase 3 Batch 1 response for dry-run orchestration action planning
+      required: [proposals, not_found, summary]
+      properties:
+        proposals:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestrationDryRunProposal'
+          description: Per-item proposals
+        not_found:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs that were not found
+        summary:
+          $ref: '#/components/schemas/OrchestrationDryRunSummary'
+
+    OrchestrationDryRunProposal:
+      type: object
+      description: Phase 3 Batch 1 proposal for a single compensation action
+      required: [action_id, proposed_action, reason, current_status]
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        proposed_action:
+          type: string
+          enum: [approve, reapprove, execute, no_action]
+          description: The proposed action (approve | reapprove | execute | no_action)
+        reason:
+          type: string
+          description: Human-readable reason for the proposal
+        current_status:
+          type: string
+          description: Current status of the action
+
+    OrchestrationDryRunSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for dry-run results
+      properties:
+        total:
+          type: integer
+          description: Total number of actions processed
+        can_approve:
+          type: integer
+          description: Number of actions that can be approved
+        can_reapprove:
+          type: integer
+          description: Number of actions that can be reapproved
+        can_execute:
+          type: integer
+          description: Number of actions that can be executed
+        no_action:
+          type: integer
+          description: Number of actions with no viable action
+        not_found:
+          type: integer
+          description: Number of actions not found
+
+    BatchOrchestrationRequest:
+      type: object
+      description: Phase 3 Batch 1 request for batch orchestration commands
+      required: [action_ids]
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to process
+        initiated_by:
+          type: string
+          nullable: true
+          description: Optional actor who initiated the batch (for audit purposes)
+
+    BatchOrchestrationResponse:
+      type: object
+      description: Phase 3 Batch 1 response for batch orchestration commands
+      required: [outcomes, not_found, summary]
+      properties:
+        outcomes:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchItemOutcome'
+          description: Per-item outcomes
+        not_found:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs that were not found
+        summary:
+          $ref: '#/components/schemas/BatchOrchestrationSummary'
+
+    BatchItemOutcome:
+      type: object
+      description: Phase 3 Batch 1 outcome for a single compensation action in a batch
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        success:
+          type: boolean
+          description: Whether this item succeeded
+        result:
+          $ref: '#/components/schemas/CompensationActionResponse'
+          nullable: true
+          description: The resulting action (if successful)
+        error:
+          type: string
+          nullable: true
+          description: The error that occurred (if failed)
+
+    BatchOrchestrationSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for batch orchestration results
+      properties:
+        total:
+          type: integer
+          description: Total number of actions processed
+        succeeded:
+          type: integer
+          description: Number of actions that succeeded
+        failed:
+          type: integer
+          description: Number of actions that failed
+        not_found:
+          type: integer
+          description: Number of actions not found
+
+    ListBatchCandidatesResponse:
           description: Count of DLQ candidate actions
 
     ListBatchCandidatesResponse:
