@@ -126,6 +126,21 @@
     - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
     - Note: Executor gate: Only Approved actions can execute. Stub executor returns success. Real rollback/counter-action logic is Batch 1+ scope.
 
+[x] Compensation action DLQ query API (Phase 3 Batch 1 bounded manual retry slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/dlq)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_dlq_candidates, get_dlq_candidate_count)
+    - Tests: cargo test -p compensation-service --all-features (DLQ derivation tests pass)
+    - Note: Derived DLQ condition from existing data (Failed + exhausted budget OR non-retryable error). No DLQ table.
+
+[x] Compensation action reapprove API (Phase 3 Batch 1 bounded manual retry slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/reapprove)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (reapprove_action method)
+    - Code: crates/compensation-service/src/compensation_action_repo.rs (reapprove repository method)
+    - Tests: cargo test -p compensation-service --all-features (reapprove tests pass)
+    - Note: Manual retry gate with fail-closed policy. Only retryable errors AND remaining budget allow reapproval.
+
 [x] Status transition validation (Phase 3 Batch 1 bounded execution slice)
     Evidence:
     - Code: crates/compensation-service/src/compensation_action.rs (can_transition_to method)
@@ -144,10 +159,13 @@
     - Tests: cargo test -p compensation-service --all-features (102 tests pass)
     - Note: Bounded to Rollback+Automatic path only. Non-Rollback strategies fail closed with UNSUPPORTED_STRATEGY_TYPE. Non-Automatic feasibility fails closed with UNSUPPORTED_FEASIBILITY. Missing side effect fails closed with SIDE_EFFECT_NOT_FOUND. Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged". Does NOT claim external reversal.
 
-[ ] Compensation retry logic (max retries, backoff, dead-letter)
+[x] Compensation retry logic (max retries, backoff, dead-letter)
     Evidence:
-    - Code: compensation-service/retry.rs (stub scaffold only)
-    - Status: Batch 1+ scope
+    - Code: compensation-service/src/compensation_action.rs (max_retries field, DEFAULT_MAX_RETRIES=3)
+    - Code: compensation-service/src/compensation_action_service.rs (reapprove_action, list_dlq_candidates)
+    - Code: compensation-service/src/compensation_action_repo.rs (reapprove method)
+    - Tests: cargo test -p compensation-service --all-features (retry/DLQ tests pass)
+    - Note: Bounded manual retry slice implemented. max_retries field, retryable error allowlist, DLQ derivation from existing data. No background worker.
 
 [ ] Compensation audit trail
     Evidence:
@@ -155,9 +173,15 @@
     - Doc: ../../14-governance/01-audit-event-spec.md (updated)
     - Status: Batch 1+ scope
 
-[ ] Failed → Pending reapproval path
+[x] Failed → Pending reapproval path
     Evidence:
-    - Status: Batch 1+ scope (not implemented in Phase 3 Batch 1)
+    - Code: compensation-service/src/compensation_action.rs (can_be_reapproved, reapproval_denial_reason, is_dlq_candidate)
+    - Code: compensation-service/src/compensation_action_service.rs (reapprove_action method with policy gates)
+    - Code: compensation-service/src/compensation_action_repo.rs (reapprove repository method)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/reapprove endpoint)
+    - Code: crates/intent-rebase-types/src/error.rs (CompensationActionNotReapprovable error)
+    - Tests: cargo test -p compensation-service --all-features (reapprove tests pass)
+    - Note: Manual retry gate implemented with fail-closed policy. Only retryable errors AND remaining budget allow reapproval.
 ```
 
 ---

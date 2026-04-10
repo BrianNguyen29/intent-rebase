@@ -101,6 +101,10 @@ CREATE TABLE IF NOT EXISTS compensation_actions (
     -- Execution attempt counter for idempotency/retry tracking
     attempt_count INT NOT NULL DEFAULT 0,
     
+    -- Maximum retry attempts allowed before the action becomes a DLQ candidate
+    -- Defaults to 3 (DEFAULT_MAX_RETRIES) if not explicitly set
+    max_retries INT NOT NULL DEFAULT 3,
+    
     -- Lock version for optimistic concurrency during status transitions
     lock_version INT NOT NULL DEFAULT 0
 );
@@ -147,4 +151,5 @@ COMMENT ON COLUMN compensation_actions.executed_at IS 'Timestamp when compensati
 COMMENT ON COLUMN compensation_actions.failed_at IS 'Timestamp when compensation failed';
 COMMENT ON COLUMN compensation_actions.execution_result_payload IS 'Execution outcome payload for executed or failed compensation actions as JSONB';
 COMMENT ON COLUMN compensation_actions.attempt_count IS 'Execution attempt counter for idempotency/retry tracking';
+COMMENT ON COLUMN compensation_actions.max_retries IS 'Maximum retry attempts allowed before the action becomes a DLQ candidate (defaults to 3)';
 COMMENT ON COLUMN compensation_actions.lock_version IS 'Lock version for optimistic concurrency during status transitions';

@@ -100,4 +100,16 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Concurrency conflict updating compensation action
     #[error("concurrency conflict updating compensation action {0}")]
     CompensationActionConcurrencyConflict(Uuid),
+
+    /// Phase 3 Batch 1: Compensation action cannot be reapproved (retry budget exhausted or non-retryable error)
+    #[error("compensation action {0} cannot be reapproved: {1}")]
+    CompensationActionNotReapprovable(Uuid, String),
+
+    /// Phase 3 Batch 1: Retry budget exhausted for compensation action
+    #[error("compensation action {0} has exhausted retry budget ({1} attempts)")]
+    CompensationActionRetryExhausted(Uuid, i32),
+
+    /// Phase 3 Batch 1: Non-retryable error in compensation action
+    #[error("compensation action {0} failed with non-retryable error: {1}")]
+    CompensationActionNonRetryableError(Uuid, String),
 }

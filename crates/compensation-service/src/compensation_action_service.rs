@@ -7,7 +7,8 @@
 //! **Bounded executor slice scope:**
 //! - Executor is RollbackExecutor for Rollback+Automatic path; StubCompensationExecutor for tests
 //! - Only Approved actions can execute; illegal transitions fail closed
-//! - No retry/DLQ systems; Failed actions remain Failed (retry/reapproval is Batch 1+ scope)
+//! - **Manual retry:** Failed actions can be reapproved when retryable error + budget remains
+//! - **Derived DLQ:** Failed actions with exhausted budget or non-retryable error are DLQ candidates
 //! - No background workers; all operations are explicit API calls
 
 use std::sync::Arc;
@@ -350,6 +351,117 @@ impl CompensationActionService {
         self.repo
             .list_by_status(tenant_id, CompensationStatus::Failed)
             .await
+    }
+
+    /// Manually reapprove a failed compensation action (Failed → Pending).
+    ///
+    /// **Phase 3 Batch 1 bounded manual retry slice:**
+    /// This allows manual recovery of failed actions by transitioning them back to
+    /// Pending status, where they can be approved and executed again.
+    ///
+    /// **Policy gates (fail closed):**
+    /// - Action must be in Failed status
+    /// - Action must have remaining retry budget (attempt_count < max_retries)
+    /// - Error code must be retryable (not a permanent failure)
+    ///
+    /// **Fails closed when:**
+    /// - Action is not in Failed status → InvalidCompensationActionTransition
+    /// - Retry budget exhausted → CompensationActionNotReapprovable
+    /// - Error is non-retryable → CompensationActionNotReapprovable
+    /// - Optimistic lock conflict → ConcurrencyConflict
+    ///
+    /// **Note:** This does NOT reset the attempt_count. The action retains its
+    /// failure history. Reapproval just allows another execution attempt within
+    /// the retry budget.
+    ///
+    /// **Reapproval preserves:** approved_at/approved_by if previously approved
+    /// (those fields are for initial approval, not reapproval).
+    pub async fn reapprove_action(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        // Fetch current action to validate state
+        let action = self.repo.get(action_id).await?;
+
+        // Policy gate 1: Must be in Failed status
+        if action.status != CompensationStatus::Failed {
+            return Err(IntentRebaseError::InvalidCompensationActionTransition {
+                from_status: format!("{:?}", action.status),
+                to_status: "Pending".into(),
+                reason: "Only Failed actions can be reapproved".to_string(),
+            });
+        }
+
+        // Policy gate 2: Check retry budget
+        if action.attempt_count >= action.max_retries {
+            return Err(IntentRebaseError::CompensationActionNotReapprovable(
+                action_id,
+                format!(
+                    "Retry budget exhausted: {} attempts made (max={})",
+                    action.attempt_count, action.max_retries
+                ),
+            ));
+        }
+
+        // Policy gate 3: Error must be retryable (non-retryable error = denial)
+        // reapproval_denial_reason() returns Some only if reapproval should be denied
+        // (i.e., can_be_reapproved() would return false)
+        if let Some(denial_reason) = action.reapproval_denial_reason() {
+            return Err(IntentRebaseError::CompensationActionNotReapprovable(
+                action_id,
+                denial_reason,
+            ));
+        }
+
+        // Perform the Failed → Pending transition using dedicated reapprove method
+        // This preserves approval history without corrupting timestamps
+        let updated = self.repo.reapprove(action_id, lock_version).await?;
+
+        Ok(updated)
+    }
+
+    /// Get all DLQ (Dead Letter Queue) candidate compensation actions for a tenant.
+    ///
+    /// **Derived DLQ condition:** An action is a DLQ candidate when:
+    /// 1. Status is Failed AND
+    /// 2. Either:
+    ///    a. attempt_count >= max_retries (exhausted retry budget), OR
+    ///    b. The error code is non-retryable (permanent failure)
+    ///
+    /// **No DLQ table:** This is a read-only derived query from existing data.
+    /// DLQ candidates cannot be reapproved - they represent failures that have
+    /// exhausted automated retry possibilities and require manual investigation.
+    ///
+    /// **This slice:** No background worker processes DLQ. Manual intervention
+    /// is the only path forward for DLQ candidates.
+    pub async fn list_dlq_candidates(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<CompensationAction>, IntentRebaseError> {
+        let failed_actions = self
+            .repo
+            .list_by_status(tenant_id, CompensationStatus::Failed)
+            .await?;
+
+        // Filter to DLQ candidates only
+        let dlq_candidates: Vec<CompensationAction> = failed_actions
+            .into_iter()
+            .filter(|action| action.is_dlq_candidate())
+            .collect();
+
+        Ok(dlq_candidates)
+    }
+
+    /// Get a summary of DLQ candidates for a tenant (count only).
+    ///
+    /// Useful for dashboards and alerting without fetching full action data.
+    pub async fn get_dlq_candidate_count(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<usize, IntentRebaseError> {
+        let dlq_candidates = self.list_dlq_candidates(tenant_id).await?;
+        Ok(dlq_candidates.len())
     }
 }
 
@@ -1043,10 +1155,11 @@ mod tests {
     }
 
     #[test]
-    fn test_status_transition_failed_is_terminal() {
-        assert!(CompensationStatus::Failed.is_terminal());
+    fn test_status_transition_failed_is_not_terminal() {
+        // Phase 3 Batch 1: Failed is NOT terminal because manual retry allows Failed → Pending
+        assert!(!CompensationStatus::Failed.is_terminal());
         let validation = CompensationStatus::Failed.can_transition_to(CompensationStatus::Pending);
-        assert!(!validation.allowed);
+        assert!(validation.allowed);
         assert!(validation.reason.is_some());
     }
 
@@ -1079,5 +1192,349 @@ mod tests {
         let validation = CompensationStatus::Pending.can_transition_to(CompensationStatus::Pending);
         assert!(!validation.allowed);
         assert!(validation.reason.is_some());
+    }
+
+    // === Manual Retry Tests ===
+
+    #[tokio::test]
+    async fn test_reapprove_action_success() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First make it Failed with a retryable error via record_result
+        let failed_result = ExecutionResult::failure(
+            "Temporary failure",
+            "CONNECTION_TIMEOUT",
+            Some("Connection timed out".to_string()),
+        );
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        assert_eq!(failed.status, CompensationStatus::Failed);
+        assert_eq!(failed.attempt_count, 1);
+
+        // Now reapprove it
+        let reapproved = service
+            .reapprove_action(failed.id, failed.lock_version)
+            .await
+            .unwrap();
+
+        assert_eq!(reapproved.status, CompensationStatus::Pending);
+        assert_eq!(reapproved.attempt_count, 1); // attempt_count preserved
+        assert!(reapproved.failed_at.is_none()); // failed_at cleared
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_action_fails_on_non_failed_status() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Try to reapprove a Pending action - should fail
+        let result = service
+            .reapprove_action(created.id, created.lock_version)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::InvalidCompensationActionTransition { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_action_fails_on_retry_budget_exhausted() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action with max_retries = 1 for testing
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test rollback",
+        );
+        action.max_retries = 1; // Set to 1 so first failure exhausts budget
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First failure
+        let failed_result1 = ExecutionResult::failure("First failure", "CONNECTION_TIMEOUT", None);
+        let failed1 = service
+            .record_result(created.id, &failed_result1, created.lock_version, None)
+            .await
+            .unwrap();
+
+        assert_eq!(failed1.attempt_count, 1);
+
+        // Try to reapprove - should fail because budget exhausted
+        let result = service
+            .reapprove_action(failed1.id, failed1.lock_version)
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            IntentRebaseError::CompensationActionNotReapprovable(_, _)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_action_fails_on_non_retryable_error() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Fail with a non-retryable error
+        let failed_result = ExecutionResult::failure(
+            "Permanent failure",
+            "INVALID_CONFIGURATION", // Non-retryable error
+            Some("Invalid configuration".to_string()),
+        );
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        assert_eq!(failed.status, CompensationStatus::Failed);
+
+        // Try to reapprove - should fail because error is non-retryable
+        let result = service
+            .reapprove_action(failed.id, failed.lock_version)
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            IntentRebaseError::CompensationActionNotReapprovable(_, _)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_action_fails_on_concurrency_conflict() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First make it Failed
+        let failed_result = ExecutionResult::failure("Failure", "CONNECTION_TIMEOUT", None);
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Try to reapprove with wrong lock_version - should fail
+        let result = service
+            .reapprove_action(failed.id, failed.lock_version + 1)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ConcurrencyConflict(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_list_dlq_candidates_empty() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        let dlq = service.list_dlq_candidates(tenant_id).await.unwrap();
+        assert!(dlq.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_dlq_candidates_returns_exhausted_budget() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action with max_retries = 1
+        let mut action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test",
+        );
+        action.max_retries = 1;
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First failure exhausts budget
+        let failed_result = ExecutionResult::failure("Failure", "CONNECTION_TIMEOUT", None);
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Verify it's a DLQ candidate
+        assert!(failed.is_dlq_candidate());
+
+        // List DLQ candidates
+        let dlq = service.list_dlq_candidates(tenant_id).await.unwrap();
+        assert_eq!(dlq.len(), 1);
+        assert_eq!(dlq[0].id, failed.id);
+    }
+
+    #[tokio::test]
+    async fn test_list_dlq_candidates_returns_non_retryable_error() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Fail with non-retryable error
+        let failed_result =
+            ExecutionResult::failure("Permanent failure", "INVALID_CONFIGURATION", None);
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Verify it's a DLQ candidate
+        assert!(failed.is_dlq_candidate());
+
+        // List DLQ candidates
+        let dlq = service.list_dlq_candidates(tenant_id).await.unwrap();
+        assert_eq!(dlq.len(), 1);
+        assert_eq!(dlq[0].id, failed.id);
+    }
+
+    #[tokio::test]
+    async fn test_list_dlq_candidates_excludes_retryable_failures() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Fail with retryable error
+        let failed_result = ExecutionResult::failure(
+            "Temporary failure",
+            "CONNECTION_TIMEOUT", // Retryable
+            None,
+        );
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Verify it's NOT a DLQ candidate (can be reapproved)
+        assert!(!failed.is_dlq_candidate());
+        assert!(failed.can_be_reapproved());
+
+        // List DLQ candidates
+        let dlq = service.list_dlq_candidates(tenant_id).await.unwrap();
+        assert!(dlq.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_dlq_candidate_count() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create action with max_retries = 1
+        let mut action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test",
+        );
+        action.max_retries = 1;
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First failure exhausts budget
+        let failed_result = ExecutionResult::failure("Failure", "CONNECTION_TIMEOUT", None);
+        service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        let count = service.get_dlq_candidate_count(tenant_id).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_preserves_attempt_count() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, Uuid::new_v4(), intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // First failure
+        let failed_result = ExecutionResult::failure("Failure", "CONNECTION_TIMEOUT", None);
+        let failed = service
+            .record_result(created.id, &failed_result, created.lock_version, None)
+            .await
+            .unwrap();
+
+        assert_eq!(failed.attempt_count, 1);
+
+        // Reapprove
+        let reapproved = service
+            .reapprove_action(failed.id, failed.lock_version)
+            .await
+            .unwrap();
+
+        // Attempt count should be preserved
+        assert_eq!(reapproved.attempt_count, 1);
+
+        // Execute and fail again
+        let approved = service
+            .approve_action(reapproved.id, reapproved.lock_version, None)
+            .await
+            .unwrap();
+
+        let failed2_result = ExecutionResult::failure("Second failure", "READ_TIMEOUT", None);
+        let failed2 = service
+            .record_result(approved.id, &failed2_result, approved.lock_version, None)
+            .await
+            .unwrap();
+
+        // Now attempt_count should be 2
+        assert_eq!(failed2.attempt_count, 2);
     }
 }

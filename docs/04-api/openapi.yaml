@@ -61,7 +61,19 @@ info:
       - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
       - Does NOT claim external reversal if current data model cannot support it
     - **Stub executor path:** Non-Rollback+Automatic paths return ExecutionResult failure (not success)
-    - **No retry/DLQ:** Failed actions remain Failed; retry/reapproval is Batch 1+ scope
+
+    ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
+    - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
+    - **DLQ query endpoint:** GET /compensation-actions/dlq lists derived DLQ candidates
+    - **Derived DLQ condition:** An action is a DLQ candidate when Failed AND (exhausted retry budget OR non-retryable error)
+    - **No DLQ table:** DLQ is a read-only derived condition from existing data
+    - **Retry policy gates (fail closed):**
+      - Only retryable error codes allow reapproval (explicit allowlist: CONNECTION_TIMEOUT, SERVICE_UNAVAILABLE, etc.)
+      - Non-retryable errors (INVALID_CONFIGURATION, PERMISSION_DENIED, etc.) cannot be reapproved
+      - Exhausted retry budget (attempt_count >= max_retries) cannot be reapproved
+      - Default max_retries is 3
+    - **Attempt count is preserved** during reapproval (not reset) for audit trail
+    - **No background workers** - all operations are explicit API calls
 
     ## Phase 2b Bounded Delivery
     - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
@@ -79,8 +91,7 @@ info:
     - Replay audit trail and replay status tracking beyond the bounded replay slice (Phase 3 deferral)
     - Compensation planner: full risk scoring, strategy selection (Batch 1+ scope)
     - Compensation executor: real rollback/counter-action logic (Batch 1+ scope; stub executor implemented)
-    - Compensation retry logic: max retries, backoff, dead-letter (Batch 1+ scope)
-    - Failed → Pending reapproval path (Batch 1+ scope)
+    - Compensation retry logic: max retries, backoff (Batch 1+ scope)
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team
@@ -842,6 +853,114 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/{action_id}/reapprove:
+    post:
+      tags:
+        - compensation
+      summary: Manually reapprove a failed compensation action
+      description: |
+        Phase 3 Batch 1 (bounded manual retry slice): Transitions a Failed compensation
+        action back to Pending status, enabling it to be approved and executed again.
+
+        **Policy gates (fail closed):**
+        - Action must be in Failed status
+        - Action must have remaining retry budget (attempt_count < max_retries)
+        - Error code must be retryable (not a permanent failure)
+
+        **Fails closed when:**
+        - Action is not in Failed status → 409 Conflict
+        - Retry budget exhausted → 409 Conflict
+        - Error is non-retryable → 409 Conflict
+        - Optimistic lock conflict → 409 Conflict
+
+        **Note:** This does NOT reset the attempt_count. The action retains its
+        failure history. Reapproval just allows another execution attempt within
+        the retry budget.
+      operationId: reapproveCompensationAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Compensation action ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReapproveCompensationActionBody'
+      responses:
+        '200':
+          description: Compensation action reapproved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationActionResponse'
+        '404':
+          description: Compensation action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Compensation action cannot be reapproved (policy gate failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/dlq:
+    get:
+      tags:
+        - compensation
+      summary: List DLQ (Dead Letter Queue) candidates
+      description: |
+        Phase 3 Batch 1 (bounded manual retry slice): Returns all compensation
+        actions that are DLQ candidates.
+
+        **Derived DLQ condition:** An action is a DLQ candidate when:
+        1. Status is Failed AND
+        2. Either:
+           a. attempt_count >= max_retries (exhausted retry budget), OR
+           b. The error code is non-retryable (permanent failure)
+
+        **No DLQ table:** This is a read-only derived query from existing data.
+        DLQ candidates cannot be reapproved - they represent failures that have
+        exhausted automated retry possibilities.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+        Manual intervention is the only path forward for DLQ candidates.
+      operationId: listDlqCandidates
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: DLQ candidates retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDlqCandidatesResponse'
         '500':
           description: Internal server error
           content:
@@ -3079,6 +3198,27 @@ components:
           type: string
           nullable: true
           description: Optional actor who executed (for audit purposes)
+
+    ReapproveCompensationActionBody:
+      type: object
+      description: Phase 3 Batch 1 request body for reapproving a failed compensation action
+      properties:
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency control
+
+    ListDlqCandidatesResponse:
+      type: object
+      description: Phase 3 Batch 1 response for listing DLQ candidates
+      properties:
+        dlq_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: List of DLQ candidate compensation actions
+        total:
+          type: integer
+          description: Total count of DLQ candidates
 
     CompensationActionResponse:
       type: object

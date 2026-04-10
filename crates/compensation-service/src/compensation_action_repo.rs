@@ -75,6 +75,20 @@ pub trait CompensationActionRepository: Send + Sync {
         lock_version: i32,
         executed_by: Option<&str>,
     ) -> Result<CompensationAction, IntentRebaseError>;
+
+    /// Reapprove a failed compensation action (Failed → Pending).
+    ///
+    /// This is distinct from update_status because reapproval:
+    /// - Does NOT modify approved_at/approved_by (those are for initial approval)
+    /// - Does NOT modify waived_at/waived_by
+    /// - Simply transitions status back to Pending with optimistic locking
+    ///
+    /// Uses optimistic locking via lock_version.
+    async fn reapprove(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+    ) -> Result<CompensationAction, IntentRebaseError>;
 }
 
 /// In-memory implementation for testing and Phase 3 Batch 1.
@@ -357,6 +371,55 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
 
         Ok(action.clone())
     }
+
+    async fn reapprove(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        let mut actions = self.actions.write().await;
+        let mut by_status = self.by_status.write().await;
+
+        let action = actions
+            .get_mut(&action_id)
+            .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))?;
+
+        // Optimistic locking check
+        if action.lock_version != lock_version {
+            return Err(IntentRebaseError::ConcurrencyConflict(action_id));
+        }
+
+        // Must be in Failed status to reapprove
+        if action.status != CompensationStatus::Failed {
+            return Err(IntentRebaseError::InvalidCompensationActionTransition {
+                from_status: format!("{:?}", action.status),
+                to_status: "Pending".to_string(),
+                reason: "Only Failed actions can be reapproved".to_string(),
+            });
+        }
+
+        let old_status = action.status;
+        let tenant_id = action.tenant_id;
+
+        // Update lock version only - do NOT modify timestamps or actor fields
+        // Reapproval preserves the original approval/waive history
+        action.lock_version += 1;
+        action.status = CompensationStatus::Pending;
+        // Clear failed_at since we're moving out of Failed
+        action.failed_at = None;
+        // Note: execution_result_payload is preserved for audit/history
+
+        // Maintain by_status secondary index: remove from old status list, add to new
+        if let Some(old_list) = by_status.get_mut(&(tenant_id, old_status)) {
+            old_list.retain(|&id| id != action_id);
+        }
+        by_status
+            .entry((tenant_id, CompensationStatus::Pending))
+            .or_insert_with(Vec::new)
+            .push(action_id);
+
+        Ok(action.clone())
+    }
 }
 
 // =============================================================================
@@ -413,6 +476,7 @@ impl SqlxCompensationActionRepository {
             rationale: row.get("rationale"),
             status: compensation_status_from_string(&row.get::<String, _>("status"))?,
             attempt_count: row.get("attempt_count"),
+            max_retries: row.get("max_retries"),
             lock_version: row.get("lock_version"),
             generated_at: row.get("generated_at"),
             approved_at: row.get("approved_at"),
@@ -452,10 +516,10 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             INSERT INTO compensation_actions (
                 id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
             "#,
         )
         .bind(action.id)
@@ -469,6 +533,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         .bind(&action.rationale)
         .bind(status_str)
         .bind(action.attempt_count)
+        .bind(action.max_retries)
         .bind(action.lock_version)
         .bind(action.generated_at)
         .bind(action.approved_at)
@@ -492,7 +557,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             r#"
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE id = $1
@@ -521,7 +586,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             r#"
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE tenant_id = $1
@@ -549,7 +614,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             r#"
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE side_effect_id = $1 AND tenant_id = $2
@@ -579,7 +644,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             r#"
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE intent_id = $1 AND tenant_id = $2
@@ -607,7 +672,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             r#"
             SELECT id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             FROM compensation_actions
             WHERE tenant_id = $1 AND status = $2
@@ -659,7 +724,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             WHERE id = $1 AND lock_version = $9
             RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             "#,
         )
@@ -718,7 +783,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
             WHERE id = $1 AND lock_version = $5
             RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
                 execution_result_payload, feasibility, strategy_type,
-                rationale, status, attempt_count, lock_version, generated_at,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
                 approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
             "#,
         )
@@ -737,6 +802,58 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         match row {
             Some(r) => self.row_to_action(r),
             None => Err(IntentRebaseError::ConcurrencyConflict(action_id)),
+        }
+    }
+
+    async fn reapprove(
+        &self,
+        action_id: Uuid,
+        lock_version: i32,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        // Reapproval sets status back to Pending and clears failed_at
+        // Does NOT modify approved_at/approved_by or waived_at/waived_by
+        let row = sqlx::query(
+            r#"
+            UPDATE compensation_actions
+            SET status = 'pending',
+                lock_version = lock_version + 1,
+                failed_at = NULL
+            WHERE id = $1 AND lock_version = $2 AND status = 'failed'
+            RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
+                execution_result_payload, feasibility, strategy_type,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
+            "#,
+        )
+        .bind(action_id)
+        .bind(lock_version)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("reapprove compensation action: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_action(r),
+            None => {
+                // Could be either not found, wrong lock_version, or not in Failed status
+                // Check which error to return
+                let action = self.get(action_id).await;
+                match action {
+                    Ok(a) if a.status != CompensationStatus::Failed => {
+                        Err(IntentRebaseError::InvalidCompensationActionTransition {
+                            from_status: format!("{:?}", a.status),
+                            to_status: "Pending".to_string(),
+                            reason: "Only Failed actions can be reapproved".to_string(),
+                        })
+                    }
+                    Ok(_) => {
+                        // Lock version conflict
+                        Err(IntentRebaseError::ConcurrencyConflict(action_id))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 }

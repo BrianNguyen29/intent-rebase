@@ -50,9 +50,10 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 1-6f | Status transition validation matrix | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Explicit validation with fail-closed semantics. |
 | 1-7 | Compensation planner: generate compensation plan from side effects | Stub ✅ skeleton contract delivered (Phase 3 Batch 1) |
 | 1-8 | Compensation executor: real rollback/acknowledgment logic | ✅ delivered (Phase 3 Batch 1 bounded RollbackExecutor for Rollback+Automatic path). Real rollback acknowledgment validated against side effect ledger. Non-Rollback strategies and non-Automatic feasibility fail closed. Truthful success summaries (acknowledged, not reversed). Counter-action logic for non-Rollback strategies is Batch 1+ scope. |
-| 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | |
+| 1-9 | Compensation retry logic (max retries, backoff, dead-letter) | ✅ delivered (Phase 3 Batch 1 bounded manual retry slice). max_retries field with DEFAULT_MAX_RETRIES=3. Retryable error allowlist (CONNECTION_TIMEOUT, SERVICE_UNAVAILABLE, etc.). Derived DLQ condition from existing data. No background worker or automatic retry. |
+| 1-9b | Compensation DLQ query API: GET /compensation-actions/dlq | ✅ delivered (Phase 3 Batch 1 bounded manual retry slice). Derived DLQ candidates from Failed + (exhausted budget OR non-retryable error). |
 | 1-10 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | |
-| 1-11 | Failed → Pending reapproval path | Batch 1+ scope (not in Phase 3 Batch 1) |
+| 1-11 | Failed → Pending reapproval path | ✅ delivered (Phase 3 Batch 1 bounded manual retry slice). POST /compensation-actions/{action_id}/reapprove with fail-closed policy gates. Only retryable errors AND remaining budget allow reapproval. |
 
 ---
 

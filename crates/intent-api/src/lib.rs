@@ -305,6 +305,21 @@ impl IntoResponse for ApiErrorResponse {
                 "COMPENSATION_ACTION_CONCURRENCY_CONFLICT",
                 true,
             ),
+            IntentRebaseError::CompensationActionNotReapprovable(_, _) => (
+                StatusCode::CONFLICT,
+                "COMPENSATION_ACTION_NOT_REAPPROVABLE",
+                false,
+            ),
+            IntentRebaseError::CompensationActionRetryExhausted(_, _) => (
+                StatusCode::CONFLICT,
+                "COMPENSATION_ACTION_RETRY_EXHAUSTED",
+                false,
+            ),
+            IntentRebaseError::CompensationActionNonRetryableError(_, _) => (
+                StatusCode::CONFLICT,
+                "COMPENSATION_ACTION_NON_RETRYABLE_ERROR",
+                false,
+            ),
         };
 
         let body = ApiError {
@@ -2265,6 +2280,94 @@ async fn execute_compensation_action(
     Ok(Json(CompensationActionResponse::from(updated)))
 }
 
+/// Request body for reapprove compensation action (manual retry)
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReapproveCompensationActionBody {
+    /// Lock version for optimistic concurrency control
+    pub lock_version: i32,
+}
+
+/// Response for listing DLQ candidates
+#[derive(Debug, Clone, Serialize)]
+pub struct ListDlqCandidatesResponse {
+    pub dlq_candidates: Vec<compensation_service::CompensationAction>,
+    pub total: usize,
+}
+
+/// Query parameters for listing DLQ candidates
+#[derive(Debug, Deserialize)]
+pub struct ListDlqCandidatesQuery {
+    pub tenant_id: Uuid,
+}
+
+/// GET /compensation-actions/dlq - List DLQ (Dead Letter Queue) candidates
+///
+/// Phase 3 Batch 1 (bounded manual retry slice): Returns all compensation
+/// actions that are DLQ candidates.
+///
+/// **Derived DLQ condition:** An action is a DLQ candidate when:
+/// 1. Status is Failed AND
+/// 2. Either:
+///    a. attempt_count >= max_retries (exhausted retry budget), OR
+///    b. The error code is non-retryable (permanent failure)
+///
+/// **No DLQ table:** This is a read-only derived query from existing data.
+/// DLQ candidates cannot be reapproved - they represent failures that have
+/// exhausted automated retry possibilities.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing data.
+/// **Manual intervention is the only path forward for DLQ candidates.**
+async fn list_dlq_candidates(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListDlqCandidatesQuery>,
+) -> Result<Json<ListDlqCandidatesResponse>, ApiErrorResponse> {
+    let dlq_candidates = state
+        .compensation_action_service
+        .list_dlq_candidates(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = dlq_candidates.len();
+
+    Ok(Json(ListDlqCandidatesResponse {
+        dlq_candidates,
+        total,
+    }))
+}
+
+/// POST /compensation-actions/{action_id}/reapprove - Manually reapprove a failed action
+///
+/// Phase 3 Batch 1 (bounded manual retry slice): Transitions a Failed compensation
+/// action back to Pending status, enabling it to be approved and executed again.
+///
+/// **Policy gates (fail closed):**
+/// - Action must be in Failed status
+/// - Action must have remaining retry budget (attempt_count < max_retries)
+/// - Error code must be retryable (not a permanent failure)
+///
+/// **Fails closed when:**
+/// - Action is not in Failed status → 409 Conflict
+/// - Retry budget exhausted → 409 Conflict
+/// - Error is non-retryable → 409 Conflict
+/// - Optimistic lock conflict → 409 Conflict
+///
+/// **Note:** This does NOT reset the attempt_count. The action retains its
+/// failure history. Reapproval just allows another execution attempt within
+/// the retry budget.
+async fn reapprove_compensation_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<ReapproveCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    let updated = state
+        .compensation_action_service
+        .reapprove_action(action_id, body.lock_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
+}
+
 /// Request body for artifact ingest with optional side effect capture
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactIngestRequest {
@@ -2489,6 +2592,12 @@ pub fn build_router(
             "/compensation-actions/{action_id}/execute",
             post(execute_compensation_action),
         )
+        // Compensation action manual retry and DLQ endpoints (Phase 3 Batch 1 bounded manual retry slice)
+        .route(
+            "/compensation-actions/{action_id}/reapprove",
+            post(reapprove_compensation_action),
+        )
+        .route("/compensation-actions/dlq", get(list_dlq_candidates))
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
         .route("/v1/graph/nodes", get(list_graph_nodes))
