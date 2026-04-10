@@ -175,6 +175,22 @@
     - OpenAPI: docs/04-api/openapi.yaml (CompensationPolicyGateResponse, PolicyGateEvaluationResponse, PolicyGateMetadataResponse, RiskMetadataResponse, PolicyGateSummaryResponse schema definitions)
     - Tests: cargo test -p compensation-service --all-features (141 tests pass), cargo test -p intent-api --all-features (80 tests pass)
     - Note: Bounded read-only endpoint. Gate status derived from existing fields (status, feasibility, attempt_count, max_retries, error_code). No new policy engine. Canonical statuses: eligible | blocked | manual_review_required. Risk metadata includes strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention.
+
+[x] Orchestration coordination status API (Phase 3 Batch 1 bounded read-only orchestration coordination view)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationStatus enum: ready, awaiting_policy, awaiting_manual_review, blocked, terminal)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationRecord, CoordinationSummary, CoordinationResult structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationStatus::from_compensation_action, CoordinationRecord::from_action methods)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (evaluate_coordination_status, evaluate_coordination_status_for_intent, evaluate_coordination_from_actions methods)
+    - Code: crates/compensation-service/src/lib.rs (CoordinationRecord, CoordinationResult, CoordinationStatus, CoordinationSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/orchestration-coordination and GET /intents/{intent_id}/orchestration-coordination)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationCoordinationQuery, IntentOrchestrationCoordinationQuery, OrchestrationCoordinationResponse, CoordinationRecordResponse, CoordinationSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_orchestration_coordination and get_intent_orchestration_coordination handlers)
+    - Code: crates/intent-api/src/lib.rs (format_coordination_status formatter)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/orchestration-coordination and /intents/{intent_id}/orchestration-coordination endpoint definitions)
+    - OpenAPI: docs/04-api/openapi.yaml (OrchestrationCoordinationResponse, CoordinationRecordResponse, CoordinationSummaryResponse schema definitions)
+    - OpenAPI: docs/04-api/openapi.yaml (updated API description with new endpoints)
+    - Note: Bounded read-only orchestration coordination view. Canonical statuses: ready | awaiting_policy | awaiting_manual_review | blocked | terminal. Per-item records include coordination_status, coordination_reason, and action details. Summary counts: ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count. No new orchestration engine - all fields derive from existing CompensationAction fields at query time.
 ```
 
 ---

@@ -45,6 +45,8 @@ info:
     - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
     - GET /compensation-actions/policy-gate — Tenant-scoped policy gate evaluation (read-only query)
     - GET /intents/{intent_id}/compensation-policy-gate — Intent-scoped policy gate evaluation (read-only query)
+    - GET /compensation-actions/orchestration-coordination — Tenant-scoped orchestration coordination status (read-only query)
+    - GET /intents/{intent_id}/orchestration-coordination — Intent-scoped orchestration coordination status (read-only query)
     - POST /compensation-actions/{action_id}/approve — Approve a pending compensation action (bounded slice)
     - POST /compensation-actions/{action_id}/waive — Waive a pending compensation action (bounded slice)
     - POST /compensation-actions/{action_id}/execute — Execute an approved compensation action (bounded slice, stub executor)
@@ -80,6 +82,16 @@ info:
     - **This endpoint is READ-ONLY** — does not trigger compensation execution, orchestration engine, or background processing
     - **Truthful summaries** — all counts are derived from persisted data via existing service query helpers
     - No batch execution, no orchestration engine, no background processing claims
+
+    ## Phase 3 Batch 1: Orchestration Coordination Status
+    - **Bounded read-only orchestration coordination view** — no execution, no persistence writes, no orchestration engine
+    - **GET /compensation-actions/orchestration-coordination?tenant_id=...** — Tenant-scoped coordination status for all tenant actions
+    - **GET /intents/{intent_id}/orchestration-coordination?tenant_id=...** — Intent-scoped coordination status
+    - **Canonical coordination statuses** — exactly: ready | awaiting_policy | awaiting_manual_review | blocked | terminal
+    - **Per-item records** — each action has coordination_status, coordination_reason, and action details
+    - **Summary counts** — ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count
+    - **No new orchestration engine** — all fields derive from existing CompensationAction fields at query time
+    - **Response includes** — summary + per-item coordination records
 
     ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
     - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
@@ -1182,6 +1194,107 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompensationPolicyGateResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/orchestration-coordination:
+    get:
+      tags:
+        - compensation
+      summary: Tenant-scoped orchestration coordination status
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+        coordination status for all compensation actions belonging to the specified tenant.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical coordination statuses:**
+        - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `awaiting_policy`: Action awaits policy approval (Pending status)
+        - `awaiting_manual_review`: Action requires human intervention
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+        - `terminal`: Action has reached terminal state (Executed, Waived)
+
+        **Response includes:**
+        - Per-item coordination records with status, reason, and action details
+        - Summary counts by coordination status
+
+        **Derivation:** Coordination status is derived from existing CompensationAction fields
+        at query time. No new orchestration engine is queried.
+      operationId: getOrchestrationCoordination
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration coordination status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationCoordinationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/orchestration-coordination:
+    get:
+      tags:
+        - compensation
+      summary: Intent-scoped orchestration coordination status
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+        coordination status for all compensation actions belonging to the specified intent.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical coordination statuses:**
+        - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `awaiting_policy`: Action awaits policy approval (Pending status)
+        - `awaiting_manual_review`: Action requires human intervention
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+        - `terminal`: Action has reached terminal state (Executed, Waived)
+
+        **Response includes:**
+        - Per-item coordination records with status, reason, and action details
+        - Summary counts by coordination status
+
+        **Derivation:** Coordination status is derived from existing CompensationAction fields
+        at query time. No new orchestration engine is queried.
+      operationId: getIntentOrchestrationCoordination
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration coordination status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationCoordinationResponse'
         '500':
           description: Internal server error
           content:
@@ -3722,6 +3835,103 @@ components:
         pending_approval_count:
           type: integer
           description: Number of actions pending approval
+        auto_executable_count:
+          type: integer
+          description: Number of auto-executable actions
+
+    # ----- Orchestration Coordination Status (Phase 3 Batch 1) -----
+    OrchestrationCoordinationResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Response for
+        orchestration coordination status. Returns coordination records and summary for
+        compensation actions.
+      required: [tenant_id, records, summary]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Intent ID (set for intent-scoped queries)
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoordinationRecordResponse'
+          description: Per-item coordination records
+        summary:
+          $ref: '#/components/schemas/CoordinationSummaryResponse'
+
+    CoordinationRecordResponse:
+      type: object
+      description: Coordination record for a single compensation action
+      required: [action, coordination_status, coordination_reason, auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, feasibility, strategy_type, status, attempt_count, max_retries]
+      properties:
+        action:
+          $ref: '#/components/schemas/FullCompensationAction'
+        coordination_status:
+          type: string
+          enum: [ready, awaiting_policy, awaiting_manual_review, blocked, terminal]
+          description: Canonical coordination status
+        coordination_reason:
+          type: string
+          description: Human-readable reason for coordination status
+        auto_executable:
+          type: boolean
+          description: Whether action is auto-executable
+        is_dlq_candidate:
+          type: boolean
+          description: Whether action is a DLQ candidate
+        can_reapprove:
+          type: boolean
+          description: Whether action can be reapproved after failure
+        retry_budget_exhausted:
+          type: boolean
+          description: Whether retry budget is exhausted
+        feasibility:
+          type: string
+          description: Feasibility level
+        strategy_type:
+          type: string
+          description: Strategy type
+        status:
+          type: string
+          description: Current status
+        attempt_count:
+          type: integer
+          description: Number of attempts made
+        max_retries:
+          type: integer
+          description: Maximum retries allowed
+
+    CoordinationSummaryResponse:
+      type: object
+      description: Summary of coordination records
+      properties:
+        total_actions:
+          type: integer
+          description: Total number of actions
+        ready_count:
+          type: integer
+          description: Number of ready actions
+        awaiting_policy_count:
+          type: integer
+          description: Number of actions awaiting policy
+        awaiting_manual_review_count:
+          type: integer
+          description: Number of actions awaiting manual review
+        blocked_count:
+          type: integer
+          description: Number of blocked actions
+        terminal_count:
+          type: integer
+          description: Number of actions in terminal state
+        dlq_candidate_count:
+          type: integer
+          description: Number of DLQ candidates
         auto_executable_count:
           type: integer
           description: Number of auto-executable actions

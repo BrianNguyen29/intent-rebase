@@ -563,6 +563,90 @@ pub enum PolicyGateStatus {
     ManualReviewRequired,
 }
 
+// ============================================================================
+// Coordination Status (Phase 3 Batch 1 bounded read-only orchestration view)
+// ============================================================================
+
+/// Canonical coordination statuses for the orchestration coordination read model.
+///
+/// These statuses represent the higher-level coordination state of compensation
+/// actions within the intent rebase workflow.
+///
+/// **Bounded Phase 3 Batch 1 read-only slice:** Coordination status is derived
+/// from existing CompensationAction fields at query time. No new orchestration
+/// engine is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinationStatus {
+    /// Action is ready to proceed: Approved + Automatic feasibility + no blocking conditions
+    Ready,
+    /// Action is awaiting policy evaluation before it can proceed
+    AwaitingPolicy,
+    /// Action requires human intervention/manaul review
+    AwaitingManualReview,
+    /// Action is blocked and cannot proceed (DLQ, non-retryable error, exhausted budget)
+    Blocked,
+    /// Action has reached a terminal state (Executed, Waived)
+    Terminal,
+}
+
+impl CoordinationStatus {
+    /// Derive the coordination status for a compensation action.
+    ///
+    /// This function maps the compensation action's state to one of the five
+    /// canonical coordination statuses.
+    ///
+    /// **Derivation logic:**
+    /// - `Ready`: Approved + Automatic feasibility + not blocked + not terminal
+    /// - `AwaitingPolicy`: Pending status (waiting for policy approval)
+    /// - `AwaitingManualReview`: Approved but not Automatic (SemiAutomatic/ManualOnly feasibility)
+    /// - `Blocked`: Failed + DLQ candidate OR non-retryable error OR exhausted budget
+    /// - `Terminal`: Executed or Waived status
+    pub fn from_compensation_action(action: &CompensationAction) -> Self {
+        use CompensationStatus::*;
+
+        // Terminal statuses are always Terminal
+        if action.status.is_terminal() {
+            return CoordinationStatus::Terminal;
+        }
+
+        // DLQ candidates are Blocked
+        if action.is_dlq_candidate() {
+            return CoordinationStatus::Blocked;
+        }
+
+        match action.status {
+            // Pending → AwaitingPolicy (waiting for approval/policy decision)
+            Pending => CoordinationStatus::AwaitingPolicy,
+
+            // Failed → depends on whether it can be reapproved
+            Failed => {
+                if action.can_be_reapproved() {
+                    // Has retry budget and retryable error → AwaitingManualReview
+                    CoordinationStatus::AwaitingManualReview
+                } else {
+                    // Non-retryable error or exhausted budget → Blocked
+                    CoordinationStatus::Blocked
+                }
+            }
+
+            // Approved → check feasibility
+            Approved => {
+                if action.is_auto_executable() {
+                    // Automatic feasibility with no blocking → Ready
+                    CoordinationStatus::Ready
+                } else {
+                    // SemiAutomatic/ManualOnly → AwaitingManualReview
+                    CoordinationStatus::AwaitingManualReview
+                }
+            }
+
+            // Executed/Waived handled above via is_terminal()
+            Executed | Waived => CoordinationStatus::Terminal,
+        }
+    }
+}
+
 /// Policy gate evaluation for a single compensation action.
 ///
 /// Contains the gate outcome plus policy/risk metadata useful for UI display.
@@ -780,6 +864,182 @@ pub struct PolicyGateEvaluationResult {
     pub evaluations: Vec<PolicyGateEvaluation>,
     /// Summary counts
     pub summary: PolicyGateSummary,
+}
+
+// ============================================================================
+// Coordination Record (Phase 3 Batch 1 bounded read-only orchestration view)
+// ============================================================================
+
+/// A per-item coordination record for the orchestration coordination read model.
+///
+/// Represents the coordination state of a single compensation action within
+/// the intent rebase workflow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoordinationRecord {
+    /// The compensation action this record is for
+    pub action: CompensationAction,
+    /// Canonical coordination status for this action
+    pub coordination_status: CoordinationStatus,
+    /// Human-readable reason for the coordination status
+    pub coordination_reason: String,
+    /// Whether the action is auto-executable
+    pub auto_executable: bool,
+    /// Whether the action is a DLQ candidate
+    pub is_dlq_candidate: bool,
+    /// Whether the action can be reapproved after failure
+    pub can_reapprove: bool,
+    /// Whether the action has exhausted its retry budget
+    pub retry_budget_exhausted: bool,
+    /// Feasibility level of the action
+    pub feasibility: CompensationFeasibility,
+    /// Strategy type of the action
+    pub strategy_type: StrategyType,
+    /// Current status of the action
+    pub status: CompensationStatus,
+    /// Number of attempts made
+    pub attempt_count: i32,
+    /// Maximum retries allowed
+    pub max_retries: i32,
+}
+
+impl CoordinationRecord {
+    /// Create a coordination record from a compensation action.
+    pub fn from_action(action: &CompensationAction) -> Self {
+        let coordination_status = CoordinationStatus::from_compensation_action(action);
+        let coordination_reason = Self::compute_coordination_reason(action, &coordination_status);
+
+        let has_non_retryable_error = action
+            .execution_result_payload
+            .as_ref()
+            .and_then(|r| r.error_code.as_ref())
+            .map(|code| {
+                let classification = CompensationAction::classify_error_code(code);
+                classification.retryable == RetryableErrorClass::NonRetryable
+            })
+            .unwrap_or(false);
+
+        Self {
+            action: action.clone(),
+            coordination_status,
+            coordination_reason,
+            auto_executable: action.is_auto_executable(),
+            is_dlq_candidate: action.is_dlq_candidate(),
+            can_reapprove: action.can_be_reapproved(),
+            retry_budget_exhausted: action.attempt_count >= action.max_retries,
+            feasibility: action.feasibility,
+            strategy_type: action.strategy_type,
+            status: action.status,
+            attempt_count: action.attempt_count,
+            max_retries: action.max_retries,
+        }
+    }
+
+    /// Compute the human-readable reason for the coordination status.
+    fn compute_coordination_reason(
+        action: &CompensationAction,
+        status: &CoordinationStatus,
+    ) -> String {
+        use CompensationStatus::*;
+
+        match status {
+            CoordinationStatus::Ready => {
+                format!(
+                    "Action is ready: approved with {} feasibility and no blocking conditions",
+                    format_feasibility(action.feasibility)
+                )
+            }
+            CoordinationStatus::AwaitingPolicy => {
+                format!(
+                    "Action is awaiting policy approval ({} feasibility)",
+                    format_feasibility(action.feasibility)
+                )
+            }
+            CoordinationStatus::AwaitingManualReview => {
+                if action.status == Failed {
+                    if action.can_be_reapproved() {
+                        return format!(
+                            "Action failed but can be reapproved ({} retry attempts remaining, {} feasibility)",
+                            action.max_retries - action.attempt_count,
+                            format_feasibility(action.feasibility)
+                        );
+                    }
+                    return format!(
+                        "Action failed and requires manual review ({} feasibility)",
+                        format_feasibility(action.feasibility)
+                    );
+                }
+                if action.status == Approved {
+                    return format!(
+                        "Action requires manual execution ({})",
+                        format_feasibility(action.feasibility)
+                    );
+                }
+                format!(
+                    "Action requires manual review ({})",
+                    format_feasibility(action.feasibility)
+                )
+            }
+            CoordinationStatus::Blocked => {
+                if action.status.is_terminal() {
+                    return format!("Action is in terminal status ({:?})", action.status);
+                }
+                if action.is_dlq_candidate() {
+                    if action.attempt_count >= action.max_retries {
+                        return format!(
+                            "Action is blocked: retry budget exhausted ({}/{} attempts)",
+                            action.attempt_count, action.max_retries
+                        );
+                    }
+                    if let Some(ref result) = action.execution_result_payload {
+                        if let Some(ref error_code) = result.error_code {
+                            return format!(
+                                "Action is blocked: non-retryable error ({})",
+                                error_code
+                            );
+                        }
+                    }
+                    return "Action is blocked: DLQ candidate".to_string();
+                }
+                if let Some(ref reason) = action.reapproval_denial_reason() {
+                    return reason.clone();
+                }
+                format!("Action is blocked due to {:?}", action.status)
+            }
+            CoordinationStatus::Terminal => {
+                format!("Action has reached terminal status ({:?})", action.status)
+            }
+        }
+    }
+}
+
+/// Summary of coordination records for a set of compensation actions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoordinationSummary {
+    /// Total number of actions
+    pub total_actions: usize,
+    /// Number of ready actions
+    pub ready_count: usize,
+    /// Number of actions awaiting policy
+    pub awaiting_policy_count: usize,
+    /// Number of actions awaiting manual review
+    pub awaiting_manual_review_count: usize,
+    /// Number of blocked actions
+    pub blocked_count: usize,
+    /// Number of actions in terminal state
+    pub terminal_count: usize,
+    /// Number of DLQ candidates (subset of blocked)
+    pub dlq_candidate_count: usize,
+    /// Number of auto-executable actions (subset of ready)
+    pub auto_executable_count: usize,
+}
+
+/// Result of coordination status query for a set of compensation actions.
+#[derive(Debug, Clone)]
+pub struct CoordinationResult {
+    /// Per-item coordination records
+    pub records: Vec<CoordinationRecord>,
+    /// Summary counts
+    pub summary: CoordinationSummary,
 }
 
 impl CompensationActionService {
@@ -1070,6 +1330,90 @@ impl CompensationActionService {
                 CompensationStatus::Pending | CompensationStatus::Failed
             ) || !action.is_auto_executable(),
         }
+    }
+
+    // ============================================================================
+    // Coordination Status Evaluation (Phase 3 Batch 1 bounded read-only orchestration view)
+    // ============================================================================
+
+    /// Evaluate coordination status for all compensation actions of a tenant.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+    /// coordination status for all compensation actions belonging to the specified tenant.
+    ///
+    /// **This endpoint is READ-ONLY** - it only queries existing data.
+    ///
+    /// **Canonical coordination statuses:**
+    /// - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+    /// - `awaiting_policy`: Action awaits policy approval (Pending status)
+    /// - `awaiting_manual_review`: Action requires human intervention (Failed + can reapprove, or Approved + non-Automatic)
+    /// - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+    /// - `terminal`: Action has reached terminal state (Executed, Waived)
+    ///
+    /// **Derivation from existing surfaces:**
+    /// - Coordination status is derived from existing CompensationAction fields at query time
+    /// - No new orchestration engine or external policy surface is queried
+    pub async fn evaluate_coordination_status(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<CoordinationResult, IntentRebaseError> {
+        let actions = self.list_by_tenant(tenant_id, None).await?;
+        Ok(self.evaluate_coordination_from_actions(actions))
+    }
+
+    /// Evaluate coordination status for all compensation actions of an intent.
+    ///
+    /// Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+    /// coordination status for all compensation actions belonging to the specified intent.
+    ///
+    /// **This endpoint is READ-ONLY** - it only queries existing data.
+    ///
+    /// **Canonical coordination statuses:** Same as `evaluate_coordination_status`.
+    pub async fn evaluate_coordination_status_for_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<CoordinationResult, IntentRebaseError> {
+        let actions = self.list_by_intent(intent_id, tenant_id).await?;
+        Ok(self.evaluate_coordination_from_actions(actions))
+    }
+
+    /// Evaluate coordination status from a collection of compensation actions.
+    ///
+    /// Internal helper that computes coordination records and summary.
+    fn evaluate_coordination_from_actions(
+        &self,
+        actions: Vec<CompensationAction>,
+    ) -> CoordinationResult {
+        let total_actions = actions.len();
+        let mut records = Vec::with_capacity(total_actions);
+        let mut summary = CoordinationSummary::default();
+
+        for action in actions {
+            let record = CoordinationRecord::from_action(&action);
+            match record.coordination_status {
+                CoordinationStatus::Ready => summary.ready_count += 1,
+                CoordinationStatus::AwaitingPolicy => summary.awaiting_policy_count += 1,
+                CoordinationStatus::AwaitingManualReview => {
+                    summary.awaiting_manual_review_count += 1
+                }
+                CoordinationStatus::Blocked => summary.blocked_count += 1,
+                CoordinationStatus::Terminal => summary.terminal_count += 1,
+            }
+
+            if record.is_dlq_candidate {
+                summary.dlq_candidate_count += 1;
+            }
+            if record.auto_executable {
+                summary.auto_executable_count += 1;
+            }
+
+            records.push(record);
+        }
+
+        summary.total_actions = total_actions;
+
+        CoordinationResult { records, summary }
     }
 }
 
@@ -2767,5 +3111,384 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.summary.total_actions, 1);
+    }
+
+    // ============================================================================
+    // Coordination Status Tests (Phase 3 Batch 1 bounded read-only orchestration view)
+    // ============================================================================
+
+    #[test]
+    fn test_coordination_status_ready() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test ready action",
+        );
+
+        // Approved + Automatic + not blocked = Ready
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::AwaitingPolicy
+        );
+
+        let mut approved_action = action;
+        approved_action.status = CompensationStatus::Approved;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&approved_action),
+            CoordinationStatus::Ready
+        );
+    }
+
+    #[test]
+    fn test_coordination_status_awaiting_policy() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test pending action",
+        );
+
+        // Pending = AwaitingPolicy
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::AwaitingPolicy
+        );
+    }
+
+    #[test]
+    fn test_coordination_status_awaiting_manual_review() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Approved + ManualOnly = AwaitingManualReview
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::ManualOnly,
+            StrategyType::CounterAction,
+            "Test manual action",
+        );
+        action.status = CompensationStatus::Approved;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::AwaitingManualReview
+        );
+
+        // Failed + can reapprove = AwaitingManualReview
+        let mut retryable_action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test retryable failed",
+        );
+        retryable_action.status = CompensationStatus::Failed;
+        retryable_action.execution_result_payload = Some(ExecutionResult::failure(
+            "Temporary failure",
+            "CONNECTION_TIMEOUT",
+            None,
+        ));
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&retryable_action),
+            CoordinationStatus::AwaitingManualReview
+        );
+    }
+
+    #[test]
+    fn test_coordination_status_blocked() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // DLQ candidate (exhausted budget) = Blocked
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test DLQ action",
+        );
+        action.status = CompensationStatus::Failed;
+        action.attempt_count = 3;
+        action.max_retries = 3;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::Blocked
+        );
+
+        // Failed + non-retryable error = Blocked
+        let mut non_retryable_action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test non-retryable",
+        );
+        non_retryable_action.status = CompensationStatus::Failed;
+        non_retryable_action.execution_result_payload = Some(ExecutionResult::failure(
+            "Permanent failure",
+            "INVALID_CONFIGURATION",
+            None,
+        ));
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&non_retryable_action),
+            CoordinationStatus::Blocked
+        );
+    }
+
+    #[test]
+    fn test_coordination_status_terminal() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Executed = Terminal
+        let mut executed_action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test executed",
+        );
+        executed_action.status = CompensationStatus::Executed;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&executed_action),
+            CoordinationStatus::Terminal
+        );
+
+        // Waived = Terminal
+        let mut waived_action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test waived",
+        );
+        waived_action.status = CompensationStatus::Waived;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&waived_action),
+            CoordinationStatus::Terminal
+        );
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_coordination_status_empty_for_tenant() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        let result = service
+            .evaluate_coordination_status(tenant_id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary.total_actions, 0);
+        assert_eq!(result.summary.ready_count, 0);
+        assert_eq!(result.summary.awaiting_policy_count, 0);
+        assert_eq!(result.summary.awaiting_manual_review_count, 0);
+        assert_eq!(result.summary.blocked_count, 0);
+        assert_eq!(result.summary.terminal_count, 0);
+        assert!(result.records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_coordination_status_mixed_actions() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        // Create: Pending = AwaitingPolicy
+        let pending_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Pending",
+        );
+        service.create_action(pending_action).await.unwrap();
+
+        // Create: Approved + Automatic = Ready
+        let mut ready_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Ready",
+        );
+        ready_action.status = CompensationStatus::Approved;
+        service.create_action(ready_action).await.unwrap();
+
+        // Create: Approved + ManualOnly = AwaitingManualReview
+        let mut manual_review_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::ManualOnly,
+            StrategyType::CounterAction,
+            "Manual",
+        );
+        manual_review_action.status = CompensationStatus::Approved;
+        service.create_action(manual_review_action).await.unwrap();
+
+        // Create: Failed + retryable = AwaitingManualReview
+        let mut retryable_failed = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Retryable failed",
+        );
+        retryable_failed.status = CompensationStatus::Failed;
+        retryable_failed.execution_result_payload =
+            Some(ExecutionResult::failure("Temp", "CONNECTION_TIMEOUT", None));
+        service.create_action(retryable_failed).await.unwrap();
+
+        // Create: Failed + exhausted = Blocked
+        let mut blocked_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Blocked",
+        );
+        blocked_action.status = CompensationStatus::Failed;
+        blocked_action.attempt_count = 3;
+        blocked_action.max_retries = 3;
+        service.create_action(blocked_action).await.unwrap();
+
+        // Create: Executed = Terminal
+        let mut terminal_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Terminal",
+        );
+        terminal_action.status = CompensationStatus::Executed;
+        service.create_action(terminal_action).await.unwrap();
+
+        let result = service
+            .evaluate_coordination_status(tenant_id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary.total_actions, 6);
+        assert_eq!(result.summary.ready_count, 1); // Approved + Automatic
+        assert_eq!(result.summary.awaiting_policy_count, 1); // Pending
+        assert_eq!(result.summary.awaiting_manual_review_count, 2); // ManualOnly + retryable failed
+        assert_eq!(result.summary.blocked_count, 1); // exhausted budget
+        assert_eq!(result.summary.terminal_count, 1); // Executed
+        assert_eq!(result.records.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_coordination_status_for_intent() {
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let other_intent_id = Uuid::new_v4();
+
+        // Create action for the target intent
+        let action1 = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            RebaseContext::new(intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "For target intent",
+        );
+        service.create_action(action1).await.unwrap();
+
+        // Create action for a different intent
+        let action2 = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            other_intent_id,
+            RebaseContext::new(other_intent_id, 1, 2, Uuid::new_v4()),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "For other intent",
+        );
+        service.create_action(action2).await.unwrap();
+
+        // Evaluate for target intent only
+        let result = service
+            .evaluate_coordination_status_for_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary.total_actions, 1);
+    }
+
+    #[tokio::test]
+    async fn test_coordination_record_from_action() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test action",
+        );
+        action.status = CompensationStatus::Approved;
+
+        let record = CoordinationRecord::from_action(&action);
+
+        assert_eq!(record.coordination_status, CoordinationStatus::Ready);
+        assert!(record.auto_executable);
+        assert!(!record.is_dlq_candidate);
+        assert_eq!(record.feasibility, CompensationFeasibility::Automatic);
+        assert_eq!(record.strategy_type, StrategyType::Rollback);
+        assert_eq!(record.status, CompensationStatus::Approved);
     }
 }
