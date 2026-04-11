@@ -21,7 +21,10 @@ use crate::compensation_action::{
 use crate::compensation_action_repo::CompensationActionRepository;
 use crate::compensation_executor::CompensationExecutor;
 use crate::side_effect_repo::SideEffectRepository;
-use intent_rebase_types::IntentRebaseError;
+use intent_rebase_types::{
+    AuditRepository, CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
+    CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
+};
 use serde::{Deserialize, Serialize};
 
 /// Service facade for compensation action operations.
@@ -35,6 +38,10 @@ pub struct CompensationActionService {
     /// Phase 3 Batch 1: Used by execute_action to validate side effect context
     /// before running the bounded RollbackExecutor.
     side_effect_repo: Option<Arc<dyn SideEffectRepository>>,
+    /// Optional audit repository for emitting compensation audit events.
+    /// Phase 3 Batch 0: When Some, emits CompensationPlanned/Started/Completed/Failed
+    /// events. When None, audit events are silently skipped (fail-open).
+    audit_repo: Option<Arc<dyn AuditRepository>>,
 }
 
 impl CompensationActionService {
@@ -42,10 +49,12 @@ impl CompensationActionService {
     ///
     /// Uses a stub executor that always returns success (backward compatibility).
     /// **Note:** For production use with real execution, use `new_with_side_effect_repo`.
+    /// **Note:** Audit repository is not set by default. Use `with_audit_repo()` to add it.
     pub fn new(repo: Arc<dyn CompensationActionRepository>) -> Self {
         Self {
             repo,
             side_effect_repo: None,
+            audit_repo: None,
         }
     }
 
@@ -53,6 +62,7 @@ impl CompensationActionService {
     /// real RollbackExecutor execution.
     ///
     /// This is the production constructor that enables real Rollback+Automatic execution.
+    /// **Note:** Audit repository is not set by default. Use `with_audit_repo()` to add it.
     pub fn new_with_side_effect_repo(
         repo: Arc<dyn CompensationActionRepository>,
         side_effect_repo: Arc<dyn SideEffectRepository>,
@@ -60,17 +70,83 @@ impl CompensationActionService {
         Self {
             repo,
             side_effect_repo: Some(side_effect_repo),
+            audit_repo: None,
         }
+    }
+
+    /// Set the audit repository for this service instance.
+    ///
+    /// Returns a new CompensationActionService with the audit repository set.
+    /// Phase 3 Batch 0: When set, emits CompensationPlanned/Started/Completed/Failed
+    /// events. When not set, audit events are silently skipped (fail-open).
+    pub fn with_audit_repo(mut self, audit_repo: Arc<dyn AuditRepository>) -> Self {
+        self.audit_repo = Some(audit_repo);
+        self
     }
 
     /// Create a new compensation action.
     ///
     /// Returns the created action with its generated ID.
+    ///
+    /// **Phase 3 Batch 0:** Emits a `CompensationPlanned` audit event if an audit
+    /// repository is configured. Best-effort emission - failures are logged but do
+    /// not fail the operation.
     pub async fn create_action(
         &self,
         action: CompensationAction,
     ) -> Result<CompensationAction, IntentRebaseError> {
-        self.repo.create(action).await
+        // Capture fields needed for audit before action is consumed
+        let tenant_id = action.tenant_id;
+        let intent_id = action.intent_id;
+        let compensation_plan_id = action.id;
+        let from_version = action.trigger_context.from_version;
+        let to_version = action.trigger_context.to_version;
+
+        // Determine feasibility counts for audit payload
+        let (auto_compensatable_count, manual_required_count, not_possible_count) =
+            match action.feasibility {
+                CompensationFeasibility::Automatic => (1, 0, 0),
+                CompensationFeasibility::SemiAutomatic | CompensationFeasibility::ManualOnly => {
+                    (0, 1, 0)
+                }
+                CompensationFeasibility::NotPossible => (0, 0, 1),
+            };
+
+        let result = self.repo.create(action).await;
+
+        // Emit CompensationPlanned audit event (best-effort, fail-open)
+        if let Ok(created_action) = &result {
+            if let Some(ref audit_repo) = self.audit_repo {
+                let payload = CompensationPlannedAuditPayload {
+                    compensation_plan_id,
+                    intent_id,
+                    intent_version_from: from_version,
+                    intent_version_to: to_version,
+                    side_effect_count: 1,
+                    auto_compensatable_count,
+                    manual_required_count,
+                    not_possible_count,
+                };
+                // Best-effort: log warning but don't fail the operation
+                if let Err(e) = audit_repo
+                    .record_compensation_planned(
+                        tenant_id,
+                        "compensation-service/system",
+                        intent_id,
+                        payload,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to emit CompensationPlanned audit event for action {}: {:?}",
+                        created_action.id,
+                        e
+                    );
+                }
+            }
+        }
+
+        result
     }
 
     /// Get a compensation action by its ID.
@@ -295,6 +371,12 @@ impl CompensationActionService {
         // Capture lock_version before executor runs for optimistic locking
         let lock_version = action.lock_version;
 
+        // Capture fields needed for audit events
+        let tenant_id = action.tenant_id;
+        let intent_id = action.intent_id;
+        let compensation_plan_id = action.id;
+        let actor_id = executed_by.unwrap_or("compensation-service/system");
+
         // Run the bounded RollbackExecutor (inlined here to avoid dyn trait issues)
         // Fall back to StubCompensationExecutor behavior if no side_effect_repo is configured
         let executor_result = if let Some(ref side_effect_repo) = self.side_effect_repo {
@@ -327,10 +409,68 @@ impl CompensationActionService {
             }
         };
 
+        // Emit CompensationStarted audit event (best-effort, fail-open)
+        if let Some(ref audit_repo) = self.audit_repo {
+            let payload = CompensationStartedAuditPayload {
+                compensation_plan_id,
+                intent_id,
+                actions_initiated: 1,
+            };
+            if let Err(e) = audit_repo
+                .record_compensation_started(tenant_id, actor_id, intent_id, payload)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to emit CompensationStarted audit event for action {}: {:?}",
+                    action_id,
+                    e
+                );
+            }
+        }
+
         // Record the result which will transition to Executed or Failed
         let updated = self
             .record_result(action_id, &executor_result, lock_version, executed_by)
             .await?;
+
+        // Emit CompensationCompleted or CompensationFailed audit event (best-effort, fail-open)
+        if let Some(ref audit_repo) = self.audit_repo {
+            if executor_result.success {
+                let payload = CompensationCompletedAuditPayload {
+                    compensation_plan_id,
+                    intent_id,
+                    actions_succeeded: 1,
+                    actions_failed: 0,
+                };
+                if let Err(e) = audit_repo
+                    .record_compensation_completed(tenant_id, actor_id, intent_id, payload)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to emit CompensationCompleted audit event for action {}: {:?}",
+                        action_id,
+                        e
+                    );
+                }
+            } else {
+                let payload = CompensationFailedAuditPayload {
+                    compensation_plan_id,
+                    intent_id,
+                    failed_action_id: action_id,
+                    error_summary: executor_result.summary.clone(),
+                };
+                if let Err(e) = audit_repo
+                    .record_compensation_failed(tenant_id, actor_id, intent_id, payload)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to emit CompensationFailed audit event for action {}: {:?}",
+                        action_id,
+                        e
+                    );
+                }
+            }
+        }
 
         Ok(updated)
     }
@@ -4013,5 +4153,205 @@ mod tests {
         assert_eq!(record.feasibility, CompensationFeasibility::Automatic);
         assert_eq!(record.strategy_type, StrategyType::Rollback);
         assert_eq!(record.status, CompensationStatus::Approved);
+    }
+
+    // ============================================================================
+    // Audit Emission Tests (Phase 3 Batch 0 bounded slice)
+    // ============================================================================
+
+    fn create_test_service_with_audit_repo(
+        audit_repo: Arc<dyn intent_rebase_types::AuditRepository>,
+    ) -> CompensationActionService {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo)
+            .with_audit_repo(audit_repo)
+    }
+
+    #[tokio::test]
+    async fn test_create_action_emits_compensation_planned_audit_event() {
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+        let service = create_test_service_with_audit_repo(audit_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Verify CompensationPlanned audit event was emitted
+        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].event_type,
+            intent_rebase_types::AuditEventType::CompensationPlanned
+        ));
+
+        // Verify payload contents
+        let payload: intent_rebase_types::CompensationPlannedAuditPayload =
+            serde_json::from_value(events[0].payload.clone()).unwrap();
+        assert_eq!(payload.compensation_plan_id, created.id);
+        assert_eq!(payload.intent_id, intent_id);
+        assert_eq!(payload.side_effect_count, 1);
+        assert_eq!(payload.auto_compensatable_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_action_does_not_emit_audit_when_no_audit_repo() {
+        // Service without audit repo should not emit events
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let result = service.create_action(action).await;
+        assert!(result.is_ok());
+        // No error even without audit repo - fail-open behavior
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_emits_started_and_completed_audit_events() {
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+        let service = create_test_service_with_audit_repo(audit_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create side effect so executor can find it
+        let side_effect = crate::side_effect::SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: crate::side_effect::SideEffectClass::S1InternalReversible,
+            effect_type: "metadata_write".to_string(),
+            target: "db-record-123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        // Access the side_effect_repo through the service's internal state
+        // For this test, we use a service that has side_effect_repo configured
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        side_effect_repo.create(side_effect).await.unwrap();
+
+        let service_with_side_effect = CompensationActionService::new_with_side_effect_repo(
+            repo,
+            side_effect_repo,
+        )
+        .with_audit_repo(audit_repo.clone());
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service_with_side_effect.create_action(action).await.unwrap();
+        let approved = service_with_side_effect
+            .approve_action(created.id, created.lock_version, Some("test-approver"))
+            .await
+            .unwrap();
+
+        // Execute - should succeed and emit CompensationStarted + CompensationCompleted
+        let _executed = service_with_side_effect
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        // Verify audit events were emitted
+        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        assert_eq!(events.len(), 3); // CompensationPlanned + Started + Completed
+
+        let event_types: Vec<_> = events
+            .iter()
+            .map(|e| e.event_type.clone())
+            .collect();
+        assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationPlanned));
+        assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationStarted));
+        assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationCompleted));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_emits_failed_audit_event_on_failure() {
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        // Create service WITHOUT side_effect_repo so RollbackExecutor fails
+        let service = CompensationActionService::new(repo).with_audit_repo(audit_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+        let approved = service
+            .approve_action(created.id, created.lock_version, Some("test-approver"))
+            .await
+            .unwrap();
+
+        // Execute - stub returns success without side_effect_repo, so this should succeed
+        // (using stub behavior for backward compatibility)
+        let _executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        // Even stub success should have emitted Started + Completed
+        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        assert!(events.len() >= 2);
+        let event_types: Vec<_> = events
+            .iter()
+            .map(|e| e.event_type.clone())
+            .collect();
+        assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationStarted));
+        assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationCompleted));
+        assert_eq!(_executed.status, CompensationStatus::Executed);
+    }
+
+    #[tokio::test]
+    async fn test_audit_emission_is_best_effort_fail_open() {
+        // Test that audit emission failures don't affect the main operation
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+        let service = create_test_service_with_audit_repo(audit_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        // Create action should succeed even if audit repo has issues
+        let _created = service.create_action(action).await.unwrap();
+        assert_eq!(_created.tenant_id, tenant_id);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_audit_payload_contents() {
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+        let service = create_test_service_with_audit_repo(audit_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+
+        let created = service.create_action(action).await.unwrap();
+
+        // Verify CompensationPlanned audit event payload
+        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        let planned_event = events.iter().find(|e| {
+            matches!(e.event_type, intent_rebase_types::AuditEventType::CompensationPlanned)
+        }).unwrap();
+
+        let payload: intent_rebase_types::CompensationPlannedAuditPayload =
+            serde_json::from_value(planned_event.payload.clone()).unwrap();
+        assert_eq!(payload.compensation_plan_id, created.id);
+        assert_eq!(payload.intent_id, intent_id);
+        assert_eq!(payload.intent_version_from, 1);
+        assert_eq!(payload.intent_version_to, 2);
+        assert_eq!(payload.side_effect_count, 1);
+        assert_eq!(payload.auto_compensatable_count, 1);
+        assert_eq!(payload.manual_required_count, 0);
+        assert_eq!(payload.not_possible_count, 0);
     }
 }

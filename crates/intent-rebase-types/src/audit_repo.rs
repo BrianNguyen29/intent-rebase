@@ -6,7 +6,9 @@
 
 use super::{
     ApprovalCancelledAuditPayload, ApprovalExpiredAuditPayload, ApprovalGrantedAuditPayload,
-    ApprovalRevokedAuditPayload, AuditEvent, AuditEventType, IntentRebaseError,
+    ApprovalRevokedAuditPayload, AuditEvent, AuditEventType,
+    CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
+    CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
     RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, ReplayAuditPayload,
 };
 use async_trait::async_trait;
@@ -243,9 +245,117 @@ pub trait AuditRepository: Send + Sync {
         };
         self.create_audit_event(event).await
     }
-}
 
-/// In-memory audit repository for testing and Phase 2b bounded slice
+    /// Record a CompensationPlanned audit event (Phase 3 Batch 0 scaffold)
+    ///
+    /// Emitted when a compensation action is created/planned.
+    /// Note: This uses the action's own ID as the compensation_plan_id since
+    /// the CompensationActionService does not have a separate planning phase.
+    async fn record_compensation_planned(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: CompensationPlannedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::CompensationPlanned,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record a CompensationStarted audit event (Phase 3 Batch 0 scaffold)
+    ///
+    /// Emitted when compensation execution begins.
+    async fn record_compensation_started(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: CompensationStartedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::CompensationStarted,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record a CompensationCompleted audit event (Phase 3 Batch 0 scaffold)
+    ///
+    /// Emitted when compensation execution completes successfully.
+    async fn record_compensation_completed(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: CompensationCompletedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::CompensationCompleted,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record a CompensationFailed audit event (Phase 3 Batch 0 scaffold)
+    ///
+    /// Emitted when compensation execution fails.
+    async fn record_compensation_failed(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: CompensationFailedAuditPayload,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::CompensationFailed,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+}
 pub struct InMemoryAuditRepository {
     events: RwLock<HashMap<Uuid, AuditEvent>>,
     by_intent: RwLock<HashMap<Uuid, Vec<Uuid>>>,
