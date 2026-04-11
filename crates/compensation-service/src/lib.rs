@@ -12,6 +12,9 @@ pub mod compensation_action_repo;
 pub mod compensation_action_service;
 pub mod compensation_executor;
 pub mod compensation_planner;
+pub mod orchestration_run;
+pub mod orchestration_run_repo;
+pub mod orchestration_runtime;
 pub mod side_effect;
 pub mod side_effect_repo;
 pub mod side_effect_service;
@@ -36,3 +39,10 @@ pub use compensation_action_service::{
 };
 pub use compensation_executor::{CompensationExecutor, StubCompensationExecutor};
 pub use compensation_planner::{CompensationPlanner, InMemoryCompensationPlanner};
+pub use orchestration_run::{
+    OrchestrationActionDecision, OrchestrationRun, RunItemResult, RunStatus,
+};
+pub use orchestration_run_repo::{
+    InMemoryOrchestrationRunRepository, OrchestrationRunRepository, SqlxOrchestrationRunRepository,
+};
+pub use orchestration_runtime::OrchestrationRuntime;

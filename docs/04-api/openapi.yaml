@@ -106,6 +106,31 @@ info:
     - **Attempt count is preserved** during reapproval (not reset) for audit trail
     - **No background workers** - all operations are explicit API calls
 
+    ## Phase 3 Batch 1: Single-Shot Orchestration Runtime (Bounded HTTP + CLI Slice)
+    - **HTTP POST /compensation-actions/runs:** Create and execute a single-shot orchestration run for explicit action IDs
+    - **HTTP GET /compensation-actions/runs/{run_id}:** Get an existing orchestration run by ID
+    - **Bounded single-shot semantics:**
+      - Single-shot: one run = one explicit action list, one auto-decide pass
+      - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
+      - Runtime auto-decides per action: approve | reapprove | execute | skip
+      - Uses existing CompensationActionService methods (does not replace enforcement)
+      - Partial-success: continues on per-item failures, records all outcomes
+    - **Auto-decide logic:**
+      - `Pending` → approve via approve_action
+      - `Failed` (can_be_reapproved) → reapprove via reapprove_action
+      - `Approved` (is_auto_executable) → execute via execute_action
+      - Terminal / policy-blocked → skip
+      - Not found → record not_found
+    - **Run status (HTTP 202 Accepted):**
+      - `pending` → run created, awaiting execution
+      - `running` → run is executing
+      - `completed` → all actions succeeded
+      - `completed_with_errors` → some actions failed
+      - `failed` → all actions failed or system error
+    - **CLI sync:** `intent-cli run --action-ids <ids> --tenant-id <id>` for explicit action IDs (single-shot sync)
+    - **No queue polling, no distributed claiming/locking, no scheduler**
+    - **CLI response includes:** run ID, status, per-action results (action_taken, success, reason, resulting_status)
+
     ## Phase 3 Batch 1: Manual Orchestration + Dry-Run Planner (Bounded Slice)
     - **Dry-run planner:** POST /compensation-actions/orchestration-dry-run returns per-item proposed action + reason for explicit IDs
     - **Manual batch approve:** POST /compensation-actions/batch-approve triggers approve for explicit IDs with partial-success semantics
@@ -1104,6 +1129,125 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListBatchCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/runs:
+    post:
+      tags:
+        - compensation
+      summary: Create and execute a single-shot orchestration run
+      description: |
+        Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+        Creates a new orchestration run for the given compensation action IDs,
+        persists it in Pending state, and returns HTTP 202 immediately with the
+        run handle. Execution proceeds in the background via execute_existing_run.
+
+        **Bounded single-shot semantics:**
+        - Single-shot: one run = one explicit action list, one auto-decide pass
+        - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
+        - Background execution: run executes asynchronously after response is sent
+        - Runtime auto-decides per action: approve | reapprove | execute | skip
+        - Uses existing CompensationActionService methods (does not replace enforcement)
+        - Partial-success: continues on per-item failures, records all outcomes
+
+        **Auto-decide logic:**
+        - `Pending` → approve via approve_action
+        - `Failed` (can_be_reapproved) → reapprove via reapprove_action
+        - `Approved` (is_auto_executable) → execute via execute_action
+        - Terminal / policy-blocked → skip
+        - Not found → record not_found
+
+        **Run status (HTTP 202 Accepted):**
+        - `pending` → run created, awaiting execution
+        - `running` → run is executing
+        - `completed` → all actions succeeded
+        - `completed_with_errors` → some actions failed
+        - `failed` → all actions failed or system error
+
+        **No queue polling, no distributed claiming/locking, no scheduler**
+      operationId: createOrchestrationRun
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrchestrationRunRequest'
+      responses:
+        '202':
+          description: Run accepted and persisted (execution in progress or completed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationRunResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Run not found (when fetching by ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/runs/{run_id}:
+    get:
+      tags:
+        - compensation
+      summary: Get an orchestration run by ID
+      description: |
+        Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+        Returns the run including its current status, counts, and per-item results.
+      operationId: getOrchestrationRun
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The orchestration run ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to verify ownership
+      responses:
+        '200':
+          description: Run retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationRunResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
@@ -4045,6 +4189,119 @@ components:
           description: Failed actions that exhausted retry budget or have non-retryable errors
         summary:
           $ref: '#/components/schemas/BatchCandidatesSummary'
+
+    # ----- Single-Shot Orchestration Run (Phase 3 Batch 1) -----
+    CreateOrchestrationRunRequest:
+      type: object
+      description: Phase 3 Batch 1 request for creating a single-shot orchestration run
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to process in this run
+        intent_id:
+          type: string
+          format: uuid
+          description: Optional intent scope for this run
+        initiated_by:
+          type: string
+          description: Optional actor who initiated this run (for audit purposes)
+
+    OrchestrationRunResponse:
+      type: object
+      description: Phase 3 Batch 1 response for an orchestration run
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique run identifier
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          description: Optional intent scope
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs processed in this run
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - completed_with_errors
+            - failed
+          description: Current run status
+        initiated_by:
+          type: string
+          description: Actor who initiated this run
+        created_at:
+          type: string
+          format: date-time
+          description: When the run was created
+        started_at:
+          type: string
+          format: date-time
+          description: When the run started executing
+        completed_at:
+          type: string
+          format: date-time
+          description: When the run completed
+        succeeded_count:
+          type: integer
+          description: Number of actions that succeeded
+        failed_count:
+          type: integer
+          description: Number of actions that failed
+        skipped_count:
+          type: integer
+          description: Number of actions skipped
+        not_found_count:
+          type: integer
+          description: Number of actions not found
+        total_count:
+          type: integer
+          description: Total number of actions
+        item_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunItemResultResponse'
+          description: Per-action results
+
+    RunItemResultResponse:
+      type: object
+      description: Phase 3 Batch 1 per-item result within a run
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        action_taken:
+          type: string
+          enum:
+            - approve
+            - reapprove
+            - execute
+            - skip
+            - not_found
+          description: The action taken by the runtime
+        success:
+          type: boolean
+          description: Whether the action succeeded
+        reason:
+          type: string
+          description: Human-readable reason for the action taken
+        resulting_status:
+          type: string
+          description: The resulting status of the action
 
     # ----- Policy Gate Evaluation (Phase 3 Batch 1) -----
     CompensationPolicyGateResponse:

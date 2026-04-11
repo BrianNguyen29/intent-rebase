@@ -236,6 +236,38 @@
     - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-execute endpoint definition)
     - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
     - Note: Bounded batch execute for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing execute_action service method with tenant isolation.
+
+[x] Single-shot orchestration runtime - HTTP POST /compensation-actions/runs (Phase 3 Batch 1 bounded single-shot HTTP slice)
+    Evidence:
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (OrchestrationRuntime struct with execute_run method)
+    - Code: crates/compensation-service/src/orchestration_run.rs (OrchestrationRun, RunStatus, OrchestrationActionDecision, RunItemResult models)
+    - Code: crates/compensation-service/src/orchestration_run_repo.rs (OrchestrationRunRepository trait + InMemory/Sqlx implementations)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/runs, create_orchestration_run handler, HTTP 202 Accepted)
+    - Code: crates/intent-api/src/lib.rs (CreateOrchestrationRunRequest, OrchestrationRunResponse, RunItemResultResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (AppState.orchestration_runtime field + routing)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/runs POST endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (CreateOrchestrationRunRequest, OrchestrationRunResponse, RunItemResultResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (166 tests pass including orchestration_runtime tests), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded single-shot HTTP. Auto-decides approve|reapprove|execute|skip per action using existing service methods. HTTP 202 returns persisted run handle. No queue polling, no distributed claiming/locking, no scheduler.
+
+[x] Single-shot orchestration runtime - HTTP GET /compensation-actions/runs/{run_id} (Phase 3 Batch 1 bounded read surface)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/runs/{run_id}, get_orchestration_run handler)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationRunQuery for tenant_id parameter)
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (OrchestrationRuntime.get_run method)
+    - Code: crates/compensation-service/src/orchestration_run_repo.rs (OrchestrationRunRepository.get_run method)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/runs/{run_id} GET endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (166 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded read surface for persisted run handles. Tenant isolation verified. Returns run status, counts, and per-item results.
+
+[x] Single-shot orchestration runtime - CLI sync (Phase 3 Batch 1 bounded CLI slice)
+    Evidence:
+    - Code: crates/intent-cli/Cargo.toml (new crate with ureq, clap dependencies)
+    - Code: crates/intent-cli/src/main.rs (CLI with run and get-run subcommands)
+    - Code: crates/intent-cli/src/main.rs (run_orchestration function: POST /compensation-actions/runs)
+    - Code: crates/intent-cli/src/main.rs (get_run function: GET /compensation-actions/runs/{run_id})
+    - Tests: cargo check -p intent-cli (compiles successfully)
+    - Note: Bounded CLI sync for explicit action IDs. Uses ureq for HTTP transport. Auto-decides approve|reapprove|execute|skip per action. Single-shot only - one run per invocation.
 ```
 
 ---

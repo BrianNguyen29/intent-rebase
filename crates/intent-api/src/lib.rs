@@ -177,6 +177,9 @@ pub struct AppState {
     /// Phase 3 Batch 1: Compensation action service for querying compensation actions.
     /// This is a read-only query facade; mutation/execution is Batch 1+ scope.
     pub compensation_action_service: Arc<compensation_service::CompensationActionService>,
+    /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
+    /// compensation actions via HTTP accepted flow.
+    pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     pub start_time: Instant,
 }
 
@@ -320,6 +323,9 @@ impl IntoResponse for ApiErrorResponse {
                 "COMPENSATION_ACTION_NON_RETRYABLE_ERROR",
                 false,
             ),
+            IntentRebaseError::OrchestrationRunNotFound(_) => {
+                (StatusCode::NOT_FOUND, "ORCHESTRATION_RUN_NOT_FOUND", false)
+            }
         };
 
         let body = ApiError {
@@ -2642,6 +2648,205 @@ async fn reapprove_compensation_action(
 }
 
 // ============================================================================
+// Orchestration Run Handlers (Phase 3 Batch 1 bounded single-shot HTTP slice)
+// ============================================================================
+
+/// Request body for creating an orchestration run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateOrchestrationRunRequest {
+    /// List of compensation action IDs to process in this run.
+    pub action_ids: Vec<Uuid>,
+    /// Optional intent scope for this run.
+    #[serde(default)]
+    pub intent_id: Option<Uuid>,
+    /// Optional actor who initiated this run (for audit purposes).
+    #[serde(default)]
+    pub initiated_by: Option<String>,
+}
+
+/// Query parameters for getting/listing orchestration runs.
+#[derive(Debug, Deserialize)]
+pub struct OrchestrationRunQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for an orchestration run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationRunResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Option<Uuid>,
+    pub action_ids: Vec<Uuid>,
+    pub status: String,
+    pub initiated_by: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub succeeded_count: usize,
+    pub failed_count: usize,
+    pub skipped_count: usize,
+    pub not_found_count: usize,
+    pub total_count: usize,
+    pub item_results: Vec<RunItemResultResponse>,
+}
+
+/// Per-item result within a run (API version).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunItemResultResponse {
+    pub action_id: Uuid,
+    pub action_taken: String,
+    pub success: bool,
+    pub reason: String,
+    pub resulting_status: String,
+}
+
+impl From<compensation_service::OrchestrationRun> for OrchestrationRunResponse {
+    fn from(run: compensation_service::OrchestrationRun) -> Self {
+        Self {
+            id: run.id,
+            tenant_id: run.tenant_id,
+            intent_id: run.intent_id,
+            action_ids: run.action_ids,
+            status: format_run_status(&run.status),
+            initiated_by: run.initiated_by,
+            created_at: run.created_at,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
+            succeeded_count: run.succeeded_count,
+            failed_count: run.failed_count,
+            skipped_count: run.skipped_count,
+            not_found_count: run.not_found_count,
+            total_count: run.total_count,
+            item_results: run
+                .item_results
+                .into_iter()
+                .map(|r| RunItemResultResponse {
+                    action_id: r.action_id,
+                    action_taken: format_action_decision(&r.action_taken),
+                    success: r.success,
+                    reason: r.reason,
+                    resulting_status: r.resulting_status,
+                })
+                .collect(),
+        }
+    }
+}
+
+fn format_run_status(s: &compensation_service::RunStatus) -> String {
+    match s {
+        compensation_service::RunStatus::Pending => "pending".to_string(),
+        compensation_service::RunStatus::Running => "running".to_string(),
+        compensation_service::RunStatus::Completed => "completed".to_string(),
+        compensation_service::RunStatus::CompletedWithErrors => "completed_with_errors".to_string(),
+        compensation_service::RunStatus::Failed => "failed".to_string(),
+    }
+}
+
+fn format_action_decision(d: &compensation_service::OrchestrationActionDecision) -> String {
+    match d {
+        compensation_service::OrchestrationActionDecision::Approve => "approve".to_string(),
+        compensation_service::OrchestrationActionDecision::Reapprove => "reapprove".to_string(),
+        compensation_service::OrchestrationActionDecision::Execute => "execute".to_string(),
+        compensation_service::OrchestrationActionDecision::Skip => "skip".to_string(),
+        compensation_service::OrchestrationActionDecision::NotFound => "not_found".to_string(),
+    }
+}
+
+/// POST /compensation-actions/runs - Create and execute a single-shot orchestration run
+///
+/// Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+/// Creates a new orchestration run for the given compensation action IDs,
+/// persists it in Pending state, and returns HTTP 202 immediately with the
+/// run handle. Execution proceeds in the background via execute_existing_run.
+///
+/// **Bounded single-shot semantics:**
+/// - Single-shot: one run = one explicit action list, one auto-decide pass
+/// - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
+/// - Background execution: run executes asynchronously after response is sent
+/// - Runtime auto-decides per action: approve | reapprove | execute | skip
+/// - Uses existing CompensationActionService methods (does not replace enforcement)
+/// - Partial-success: continues on per-item failures, records all outcomes
+///
+/// **Auto-decide logic:**
+/// - `Pending` → approve via approve_action
+/// - `Failed` (can_be_reapproved) → reapprove via reapprove_action
+/// - `Approved` (is_auto_executable) → execute via execute_action
+/// - Terminal / policy-blocked → skip
+/// - Not found → record not_found
+///
+/// **Run status (HTTP 202 Accepted):**
+/// - `pending` → run created, awaiting execution
+/// - `running` → run is executing
+/// - `completed` → all actions succeeded
+/// - `completed_with_errors` → some actions failed
+/// - `failed` → all actions failed or system error
+async fn create_orchestration_run(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationRunQuery>,
+    Json(request): Json<CreateOrchestrationRunRequest>,
+) -> Result<(StatusCode, Json<OrchestrationRunResponse>), ApiErrorResponse> {
+    // Step 1: Create run in Pending state and return 202 immediately
+    let run = state
+        .orchestration_runtime
+        .create_run(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by,
+            request.intent_id,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let run_id = run.id;
+
+    // Step 2: Spawn background execution
+    // The run handle is already returned to the client; execution proceeds in the background.
+    let runtime = state.orchestration_runtime.clone();
+    tokio::spawn(async move {
+        // Background execution; errors are logged but cannot be reported to the HTTP client
+        match runtime.execute_existing_run(run_id).await {
+            Ok(_) => {
+                tracing::debug!("Background orchestration run {} completed", run_id);
+            }
+            Err(e) => {
+                tracing::error!("Background orchestration run {} failed: {}", run_id, e);
+            }
+        }
+    });
+
+    // Return 202 Accepted with the persisted (pending) run handle immediately
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(OrchestrationRunResponse::from(run)),
+    ))
+}
+
+/// GET /compensation-actions/runs/{run_id} - Get an orchestration run by ID
+///
+/// Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+/// Returns the run including its current status, counts, and per-item results.
+async fn get_orchestration_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationRunQuery>,
+) -> Result<Json<OrchestrationRunResponse>, ApiErrorResponse> {
+    let run = state
+        .orchestration_runtime
+        .get_run(run_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Verify tenant ownership
+    if run.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::OrchestrationRunNotFound(run_id),
+        ));
+    }
+
+    Ok(Json(OrchestrationRunResponse::from(run)))
+}
+
+// ============================================================================
 // Policy Gate Evaluation (Phase 3 Batch 1 bounded read-only slice)
 // ============================================================================
 
@@ -3657,6 +3862,7 @@ pub fn build_router(
     graph_service: Arc<GraphService>,
     side_effect_service: Arc<compensation_service::SideEffectService>,
     compensation_action_service: Arc<compensation_service::CompensationActionService>,
+    orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     orchestrator: Arc<RebaseOrchestrator>,
     audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
@@ -3668,6 +3874,7 @@ pub fn build_router(
         graph_service,
         side_effect_service,
         compensation_action_service,
+        orchestration_runtime,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -3767,6 +3974,12 @@ pub fn build_router(
         .route(
             "/compensation-actions/batch-execute",
             post(batch_execute_compensation_actions),
+        )
+        // Orchestration run endpoints (Phase 3 Batch 1 bounded single-shot HTTP orchestration slice)
+        .route("/compensation-actions/runs", post(create_orchestration_run))
+        .route(
+            "/compensation-actions/runs/{run_id}",
+            get(get_orchestration_run),
         )
         // Graph endpoints (Phase 1 - internal CRUD only)
         .route("/v1/graph/nodes", post(create_graph_node))
@@ -3868,6 +4081,7 @@ pub fn build_router_with_sql_audit_and_approval(
     graph_service: Arc<GraphService>,
     side_effect_service: Arc<compensation_service::SideEffectService>,
     compensation_action_service: Arc<compensation_service::CompensationActionService>,
+    orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
@@ -3885,6 +4099,7 @@ pub fn build_router_with_sql_audit_and_approval(
         graph_service,
         side_effect_service,
         compensation_action_service,
+        orchestration_runtime,
         orchestrator,
         audit_service,
         approval_request_repo,
@@ -3930,11 +4145,19 @@ mod tests {
         let compensation_action_svc = Arc::new(
             compensation_service::CompensationActionService::new(compensation_action_repo),
         );
+        // Phase 3 Batch 1: In-memory orchestration run repository for tests
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
             side_effect_service: side_effect_svc,
             compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -4501,17 +4724,26 @@ mod tests {
             graph_svc.clone(),
             Arc::new(MockAdapter::ready()),
         ));
+        // Phase 3 Batch 1: In-memory orchestration runtime for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
-            compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(Arc::new(
-                    compensation_service::InMemoryCompensationActionRepository::new(),
-                )),
-            ),
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -4696,17 +4928,26 @@ mod tests {
             graph_svc.clone(),
             Arc::new(MockAdapter::ready()),
         ));
+        // Phase 3 Batch 1: In-memory orchestration runtime for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
-            compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(Arc::new(
-                    compensation_service::InMemoryCompensationActionRepository::new(),
-                )),
-            ),
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
@@ -4717,6 +4958,8 @@ mod tests {
             event_publisher: None, // Phase 2b: event publishing optional in tests
             start_time: Instant::now(),
         };
+
+        // Create a test intent
 
         // Create an intent
         let create_request = CreateIntentRequest {
@@ -5839,17 +6082,26 @@ mod tests {
             as Arc<dyn intent_service::ApprovalRequestRepository>;
         let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
             as Arc<dyn intent_service::PolicySnapshotRepository>;
+        // Phase 3 Batch 1: In-memory orchestration runtime for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
-            compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(Arc::new(
-                    compensation_service::InMemoryCompensationActionRepository::new(),
-                )),
-            ),
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -5980,12 +6232,19 @@ mod tests {
             Arc::new(compensation_service::CompensationActionService::new(
                 Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
             ));
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
 
         let _router: axum::Router = build_router(
             service,
             graph_svc,
             side_effect_svc,
             compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_repo,
             approval_repo,
@@ -6044,17 +6303,26 @@ mod tests {
             as Arc<dyn intent_service::ApprovalRequestRepository>;
         let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
             as Arc<dyn intent_service::PolicySnapshotRepository>;
+        // Phase 3 Batch 1: In-memory orchestration runtime for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
             side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
                 compensation_service::InMemorySideEffectRepository::new(),
             ))),
-            compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(Arc::new(
-                    compensation_service::InMemoryCompensationActionRepository::new(),
-                )),
-            ),
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,
@@ -6892,13 +7160,20 @@ mod tests {
         let compensation_action_repo =
             Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
         let compensation_action_svc = Arc::new(
-            compensation_service::CompensationActionService::new(compensation_action_repo),
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
         );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
             side_effect_service: side_effect_svc,
             compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
             orchestrator,
             audit_service: audit_repo,
             approval_request_repo: approval_repo,

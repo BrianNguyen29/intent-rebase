@@ -112,4 +112,8 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Non-retryable error in compensation action
     #[error("compensation action {0} failed with non-retryable error: {1}")]
     CompensationActionNonRetryableError(Uuid, String),
+
+    /// Phase 3 Batch 1: Orchestration run not found
+    #[error("orchestration run not found: {0}")]
+    OrchestrationRunNotFound(Uuid),
 }
