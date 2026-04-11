@@ -11,7 +11,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | 🔄 In Progress | Critical |
+| [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
 | [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | ⬜ Not Started | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
@@ -31,11 +31,11 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | **ID** | P1 |
 | **Title** | Phase 2b Exit Gate |
 | **Purpose** | Complete Phase 2b to unblock Phase 3 Batch 2+. Phase 2b scope: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. |
-| **Status** | 🔄 In Progress (Slices A-B ✅ — sign-off remaining) |
+| **Status** | ✅ **APPROVED — Phase 2b exit gate closed; name/date pending documentation per user instruction** |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Prepare and collect Product Owner, Security, and Runtime Integration sign-off using the verification evidence and deferral register |
-| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b Slice A (evidence verification) complete — all gates green. **Slice B (residual risk & Phase 3 deferral register) delivered — see [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md).** Phase 2b overall not yet signed off; remaining work is formal sign-off only. Phase 3 Batch 2+ gated on Phase 2b exit. |
+| **Suggested Next Step** | Phase 3 Batch 2+ work is now unblocked — begin P2 (Phase 3 Batch 2 — Observability + SRE) |
+| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b Slice A (evidence verification) complete — all gates green. **Slice B (residual risk & Phase 3 deferral register) delivered — see [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md).** **Phase 2b is APPROVED — Product Owner ✅, Security ✅, Runtime Integration ✅ — name/date pending documentation per user instruction. Phase 2b exit gate CLOSED. Phase 3 Batch 2+ is now unblocked.** |
 
 ### Slice A — Evidence Verification ✅ GREEN
 

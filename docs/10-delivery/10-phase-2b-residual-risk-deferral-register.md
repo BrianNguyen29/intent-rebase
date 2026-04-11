@@ -2,7 +2,7 @@
 
 > **Purpose:** Catalog all explicit Phase 3 deferrals identified during Phase 2b exit review — items that are intentionally out of Phase 2b scope but required for Phase 3 production hardening. This register supports sign-off by making deferred risks explicit, traceable, and owned.
 > **Basis:** Phase 2b exit gate review (2026-04-09). Most items below are explicit `[ ] PHASE 3 ITEM` entries in [checklist-phase-2.md](./checklist-phase-2.md); D-09 and D-10 are bounded-scope Phase 2b limitations derived from checked-item notes that still require Phase 3 follow-up.
-> **Status:** `P1 STILL IN PROGRESS — Phase 2b conditionally complete with explicit Phase 3 deferrals; formal sign-off pending external reviewer sign-off`
+> **Status:** `P1 APPROVED — Phase 2b conditionally complete with explicit Phase 3 deferrals; external sign-off received (Product Owner ✅, Security ✅, Runtime Integration ✅); name/date pending documentation per user instruction`
 
 ---
 
@@ -35,16 +35,14 @@
 
 ## Sign-off Readiness
 
-This register does not change the Phase 2b exit gate status. Phase 2b remains **conditionally complete** with explicit Phase 3 deferrals — consistent with the Phase 2 exit gate definition in checklist-phase-2.md.
+Phase 2b exit gate is now **CLOSED**. Phase 2b is **conditionally complete** with explicit Phase 3 deferrals — consistent with the Phase 2 exit gate definition in checklist-phase-2.md.
 
-Reviewers should:
-1. Read this register to understand what is intentionally deferred to Phase 3
-2. Confirm each deferred item's owning proposal is scheduled and resourced
-3. Add any additional deferrals discovered during sign-off review as new IDs (D-11, D-12, …)
+**Sign-off status:** Product Owner ✅ APPROVED | Security ✅ APPROVED | Runtime Integration ✅ APPROVED  
+*(name/date pending documentation per user instruction — see [11-phase-2b-sign-off-packet.md](./11-phase-2b-sign-off-packet.md) Section 5)*
 
-**Do not sign off Phase 2b if:**
-- Any item in this register represents an unacceptable unknown risk that was not explicitly deferred
-- Any Phase 3 deferral was not consciously accepted by the reviewing stakeholder
+**Phase 3 entry: AUTHORIZED**
+
+**Reviewers:** The full sign-off is captured in the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) — scope reviewed, evidence package, per-role review questions and acceptance prompts, and final decision capture.
 
 ---
 

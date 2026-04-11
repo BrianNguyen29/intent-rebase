@@ -3,7 +3,7 @@
 ## Executive Summary
 
 **Current Phase:** Phase 3 — Compensation + Production Hardening, Batch 1 largely delivered.  
-**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off preparation) still in progress. Phase 2b exit not yet formally signed off. Phase 3 full execution gated on Phase 2b exit. See [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md) for the catalog of explicit Phase 3 deferrals.  
+**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — all three reviewers (Product Owner, Security, Runtime Integration) have signed off as APPROVED with name/date pending documentation per user instruction. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.  
 **Phase 3 Batch 1 delivered:** Side effect ledger, compensation-actions CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot orchestration runtime (HTTP + CLI). Full planner/executor/retry/rollback record remains gated on Phase 2b exit.  
 **Production readiness:** Not yet production-ready. Phase 3 Batch 1 delivers bounded API surfaces; SRE hardening, tenant isolation, forensic replay, and performance work are still open.
 
@@ -15,7 +15,7 @@
 |-------|--------|----------------|
 | Phase 0 — Foundations | ✓ Complete | Repo scaffold, ADRs, architecture baseline, local dev, CI |
 | Phase 1 — Core Control Plane MVP | ✓ Complete | Intent schema + versioning (PR #21), Graph HTTP API (PR #22), Observability v1 (PR #23), Security v1 (PR #24) |
-| Phase 2 — Runtime-Integrated Rebase | ⚠️ Partial | Phase 2a runtime adapter delivered; Phase 2b in-flight (apply endpoint, risk classification, graph update, replay API, event streaming) |
+| Phase 2 — Runtime-Integrated Rebase | ✅ Complete | Phase 2a runtime adapter delivered; Phase 2b complete and signed off — exit gate CLOSED |
 | Phase 3 — Compensation + Hardening | 🔄 Active | Batch 0 scaffold + planning ✅; Batch 1 largely delivered ⚠️; Batches 2–4 not started |
 
 ---
@@ -63,7 +63,7 @@
 
 | Area | Status | Blocking |
 |------|--------|----------|
-| Phase 2b exit gate | In progress | Required before Phase 3 Batch 2+ |
+| Phase 2b exit gate | ✅ Closed | All three reviewers approved (name/date pending documentation) |
 | Side effect rollback record (compensation applied, result) | Not started | |
 | Compensation planner (full — stub delivered) | Not started | |
 | Compensation executor (real rollback/counter-action — stub delivered) | Not started | |

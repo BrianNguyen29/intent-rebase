@@ -3,8 +3,8 @@
 **Exit Gate:** Phase 2 complete khi tất cả Phase 2-scoped items checked và có evidence; items explicitly deferred to Phase 3 with rationale do not block Phase 2 exit.  
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `PHASE 2 CONDITIONALLY COMPLETE — GATE READY WITH EXPLICIT PHASE 3 DEFERRALS` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered. Remaining unchecked items are explicit Phase 3 infrastructure deferrals (artifact S3 operations, full notification delivery, schema evolution, DLQ, replay override/full replay compatibility) rather than unimplemented Phase 2 functional gaps.
-**Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ with Phase 3 infra deferred)  
+**Trạng thái:** `PHASE 2 COMPLETE — GATE CLOSED` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered and externally signed off (Product Owner ✅, Security ✅, Runtime Integration ✅). All Phase 2b sign-offs recorded as APPROVED with name/date pending documentation per user instruction. Phase 3 entry is authorized.
+**Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ | 2b exit gate CLOSED ✓)  
 **Target Duration:** 6–10 tuần
 
 ### Phase 2b Slice A — Evidence Verification ✅ GREEN (2026-04-11)
@@ -574,24 +574,24 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 ```
 ALL ITEMS COMPLETE: ☑ Yes (all Phase 2-scoped items complete; remaining unchecked items explicitly deferred to Phase 3)
 
-Phase 2 Exit Gate Review Date: 2026-04-09
-Reviewed By: AI orchestrator (bounded delivery + deferral audit)
-Product Owner Sign-off: ___________  (name / date / decision)
-Security Sign-off: ___________  (name / date / decision)
-Runtime Integration Sign-off: ___________  (name / date / decision)
+Phase 2 Exit Gate Review Date: 2026-04-11
+Reviewed By: External sign-off complete (Product Owner ✅ | Security ✅ | Runtime Integration ✅)
+Product Owner Sign-off: APPROVED — name pending / date pending
+Security Sign-off: APPROVED — name pending / date pending
+Runtime Integration Sign-off: APPROVED — name pending / date pending
 
 Required sign-off packet:
+- **📋 Phase 2b External Sign-Off Packet:** [11-phase-2b-sign-off-packet.md](../11-phase-2b-sign-off-packet.md) — contains scope reviewed, evidence package, Phase 3 deferrals, per-role review questions/acceptance prompts, and final decision capture
 - Slice A evidence verification: `cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`
-- Slice B residual risk / Phase 3 deferral register: ../10-phase-2b-residual-risk-deferral-register.md
+- Slice B residual risk / Phase 3 deferral register: [../10-phase-2b-residual-risk-deferral-register.md](../10-phase-2b-residual-risk-deferral-register.md)
 - Acceptance basis: all unchecked items above are explicit Phase 3 deferrals, not Phase 2 functional gaps
 
 Blocking Issues (if any):
-1.
-2.
-3.
+— None
 
 Notes:
--
+- Phase 2b exit gate formally closed upon all three reviewer sign-offs recorded as APPROVED
+- Phase 3 entry is authorized
 ```
 
 **Next Phase:** [Phase 3 — Compensation + Production Hardening](./checklist-phase-3.md)
