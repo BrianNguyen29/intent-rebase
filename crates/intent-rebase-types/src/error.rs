@@ -116,4 +116,8 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Orchestration run not found
     #[error("orchestration run not found: {0}")]
     OrchestrationRunNotFound(Uuid),
+
+    /// Phase 3 Batch 1: Side effect rollback record not found
+    #[error("rollback record not found: {0}")]
+    RollbackRecordNotFound(Uuid),
 }

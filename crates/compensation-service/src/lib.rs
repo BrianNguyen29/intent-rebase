@@ -15,11 +15,14 @@ pub mod compensation_planner;
 pub mod orchestration_run;
 pub mod orchestration_run_repo;
 pub mod orchestration_runtime;
+pub mod rollback_record;
+pub mod rollback_record_repo;
 pub mod side_effect;
 pub mod side_effect_repo;
 pub mod side_effect_service;
 
 pub use compensation_action::*;
+pub use rollback_record::*;
 pub use side_effect::*;
 pub use side_effect_repo::*;
 pub use side_effect_service::*;
@@ -46,3 +49,4 @@ pub use orchestration_run_repo::{
     InMemoryOrchestrationRunRepository, OrchestrationRunRepository, SqlxOrchestrationRunRepository,
 };
 pub use orchestration_runtime::OrchestrationRuntime;
+// RollbackRecordRepository is used via explicit re-exports below

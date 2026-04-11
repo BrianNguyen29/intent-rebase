@@ -20,6 +20,7 @@ use crate::compensation_action::{
 };
 use crate::compensation_action_repo::CompensationActionRepository;
 use crate::compensation_executor::CompensationExecutor;
+use crate::rollback_record_repo::RollbackRecordRepository;
 use crate::side_effect_repo::SideEffectRepository;
 use intent_rebase_types::{
     AuditRepository, CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
@@ -38,6 +39,10 @@ pub struct CompensationActionService {
     /// Phase 3 Batch 1: Used by execute_action to validate side effect context
     /// before running the bounded RollbackExecutor.
     side_effect_repo: Option<Arc<dyn SideEffectRepository>>,
+    /// Optional rollback record repository for creating audit records on execute/waive.
+    /// Phase 3 Batch 1: When Some, creates SideEffectRollbackRecord on execute and waive paths.
+    /// When None, rollback records are silently skipped (additive-only, fail-open).
+    rollback_record_repo: Option<Arc<dyn RollbackRecordRepository>>,
     /// Optional audit repository for emitting compensation audit events.
     /// Phase 3 Batch 0: When Some, emits CompensationPlanned/Started/Completed/Failed
     /// events. When None, audit events are silently skipped (fail-open).
@@ -54,6 +59,7 @@ impl CompensationActionService {
         Self {
             repo,
             side_effect_repo: None,
+            rollback_record_repo: None,
             audit_repo: None,
         }
     }
@@ -70,8 +76,22 @@ impl CompensationActionService {
         Self {
             repo,
             side_effect_repo: Some(side_effect_repo),
+            rollback_record_repo: None,
             audit_repo: None,
         }
+    }
+
+    /// Set the rollback record repository for this service instance.
+    ///
+    /// Returns a new CompensationActionService with the rollback record repository set.
+    /// Phase 3 Batch 1: When set, creates SideEffectRollbackRecord on execute and waive paths.
+    /// When not set, rollback record creation is silently skipped (additive-only, fail-open).
+    pub fn with_rollback_record_repo(
+        mut self,
+        rollback_record_repo: Arc<dyn RollbackRecordRepository>,
+    ) -> Self {
+        self.rollback_record_repo = Some(rollback_record_repo);
+        self
     }
 
     /// Set the audit repository for this service instance.
@@ -304,8 +324,15 @@ impl CompensationActionService {
             });
         }
 
+        // Capture fields needed for rollback record before update
+        let tenant_id = action.tenant_id;
+        let compensation_action_id = action.id;
+        let side_effect_id = action.side_effect_id;
+        let intent_id = action.intent_id;
+
         // Update status with optimistic locking and persist actor info
-        self.repo
+        let updated = self
+            .repo
             .update_status(
                 action_id,
                 CompensationStatus::Waived,
@@ -313,7 +340,30 @@ impl CompensationActionService {
                 None,
                 waived_by,
             )
-            .await
+            .await?;
+
+        // Create rollback record on waive path (best-effort, fail-open)
+        // Phase 3 Batch 1: Records waiver for audit/replay
+        if let Some(ref rollback_record_repo) = self.rollback_record_repo {
+            use crate::rollback_record::SideEffectRollbackRecord;
+            let rollback_record = SideEffectRollbackRecord::waived(
+                tenant_id,
+                compensation_action_id,
+                side_effect_id,
+                intent_id,
+                "Compensation action waived",
+                waived_by,
+            );
+            if let Err(e) = rollback_record_repo.create(rollback_record).await {
+                tracing::warn!(
+                    "Failed to create rollback record for waived action {}: {:?}",
+                    action_id,
+                    e
+                );
+            }
+        }
+
+        Ok(updated)
     }
 
     /// Execute an approved compensation action.
@@ -469,6 +519,43 @@ impl CompensationActionService {
                         e
                     );
                 }
+            }
+        }
+
+        // Create rollback record on execute path (best-effort, fail-open)
+        // Phase 3 Batch 1: Records compensation execution outcome for audit/replay
+        if let Some(ref rollback_record_repo) = self.rollback_record_repo {
+            use crate::rollback_record::SideEffectRollbackRecord;
+            let rollback_record = if executor_result.success {
+                SideEffectRollbackRecord::success(
+                    tenant_id,
+                    compensation_plan_id,
+                    action.side_effect_id,
+                    intent_id,
+                    &executor_result.summary,
+                    executed_by,
+                )
+            } else {
+                SideEffectRollbackRecord::failure_with_actor(
+                    tenant_id,
+                    compensation_plan_id,
+                    action.side_effect_id,
+                    intent_id,
+                    &executor_result.summary,
+                    executor_result
+                        .error_code
+                        .as_deref()
+                        .unwrap_or("UNKNOWN_ERROR"),
+                    executor_result.error_detail.clone(),
+                    executed_by,
+                )
+            };
+            if let Err(e) = rollback_record_repo.create(rollback_record).await {
+                tracing::warn!(
+                    "Failed to create rollback record for action {}: {:?}",
+                    action_id,
+                    e
+                );
             }
         }
 
@@ -2095,6 +2182,8 @@ mod tests {
     use super::*;
     use crate::compensation_action::{CompensationFeasibility, RebaseContext, StrategyType};
     use crate::compensation_action_repo::InMemoryCompensationActionRepository;
+    use crate::rollback_record_repo::InMemoryRollbackRecordRepository;
+    use crate::rollback_record::{RollbackRecordResult, SideEffectRollbackRecord};
     use std::sync::Arc;
 
     fn create_test_service() -> CompensationActionService {
@@ -4353,5 +4442,189 @@ mod tests {
         assert_eq!(payload.auto_compensatable_count, 1);
         assert_eq!(payload.manual_required_count, 0);
         assert_eq!(payload.not_possible_count, 0);
+    }
+
+    // ============================================================================
+    // Rollback Record Tests (Phase 3 Batch 1 bounded rollback record slice)
+    // ============================================================================
+
+    fn create_test_service_with_rollback_record_repo(
+        rollback_record_repo: Arc<dyn RollbackRecordRepository>,
+    ) -> (CompensationActionService, Arc<crate::side_effect_repo::InMemorySideEffectRepository>) {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let service = CompensationActionService::new_with_side_effect_repo(
+            repo,
+            side_effect_repo.clone(),
+        )
+        .with_rollback_record_repo(rollback_record_repo);
+        (service, side_effect_repo)
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_creates_rollback_record_on_success() {
+        let rollback_record_repo =
+            Arc::new(InMemoryRollbackRecordRepository::new());
+        let (service, side_effect_repo) =
+            create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create the side effect first so executor can find it
+        let side_effect = crate::side_effect::SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: crate::side_effect::SideEffectClass::S1InternalReversible,
+            effect_type: "metadata_write".to_string(),
+            target: "db-record-123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        side_effect_repo.create(side_effect).await.unwrap();
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        // Approve and execute
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute - with side effect present, executor succeeds
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        // Verify rollback records exist
+        let records = rollback_record_repo
+            .list_by_compensation_action(executed.id, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].result, RollbackRecordResult::Success);
+        assert_eq!(records[0].compensation_action_id, executed.id);
+        assert_eq!(records[0].side_effect_id, side_effect_id);
+        assert_eq!(records[0].intent_id, intent_id);
+        assert_eq!(records[0].recorded_by, Some("test-executor".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_creates_rollback_record_on_failure() {
+        let rollback_record_repo =
+            Arc::new(InMemoryRollbackRecordRepository::new());
+        let (service, _side_effect_repo) =
+            create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        // Use a side_effect_id that won't exist, causing executor to fail
+        let side_effect_id = Uuid::new_v4();
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        // Approve
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute - should fail because side effect doesn't exist in repo
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        // Verify rollback record was created with failure
+        let records = rollback_record_repo
+            .list_by_compensation_action(executed.id, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].result, RollbackRecordResult::Failure);
+        assert!(records[0].error_code.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_waive_action_creates_rollback_record() {
+        let rollback_record_repo =
+            Arc::new(InMemoryRollbackRecordRepository::new());
+        let (service, _side_effect_repo) =
+            create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        // Waive the action
+        let waived = service
+            .waive_action(created.id, created.lock_version, Some("test-waiver"))
+            .await
+            .unwrap();
+
+        // Verify rollback record was created
+        let records = rollback_record_repo
+            .list_by_compensation_action(waived.id, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].result, RollbackRecordResult::Waived);
+        assert_eq!(records[0].recorded_by, Some("test-waiver".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_skips_rollback_record_when_repo_not_configured() {
+        // Service WITHOUT rollback_record_repo - should not fail
+        let service = create_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute should succeed even without rollback_record_repo
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+
+        assert_eq!(executed.status, CompensationStatus::Executed);
+    }
+
+    #[tokio::test]
+    async fn test_waive_action_skips_rollback_record_when_repo_not_configured() {
+        // Service WITHOUT rollback_record_repo - should not fail
+        let service = create_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        let action = create_test_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        // Waive should succeed even without rollback_record_repo
+        let waived = service
+            .waive_action(created.id, created.lock_version, Some("test-waiver"))
+            .await
+            .unwrap();
+
+        assert_eq!(waived.status, CompensationStatus::Waived);
     }
 }

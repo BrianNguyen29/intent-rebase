@@ -326,6 +326,9 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::OrchestrationRunNotFound(_) => {
                 (StatusCode::NOT_FOUND, "ORCHESTRATION_RUN_NOT_FOUND", false)
             }
+            IntentRebaseError::RollbackRecordNotFound(_) => {
+                (StatusCode::NOT_FOUND, "ROLLBACK_RECORD_NOT_FOUND", false)
+            }
         };
 
         let body = ApiError {
