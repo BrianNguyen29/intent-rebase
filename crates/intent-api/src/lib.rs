@@ -3857,6 +3857,7 @@ async fn ingest_artifact(
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
 /// When `None` (default), audit events are persisted but NOT streamed.
 /// When `Some`, events are also published to the event stream (best-effort, fail-open).
+#[allow(clippy::too_many_arguments)]
 pub fn build_router(
     service: Arc<IntentService>,
     graph_service: Arc<GraphService>,
@@ -4075,6 +4076,7 @@ pub fn build_router(
 /// When `Some`, events are also published to the event stream (best-effort, fail-open).
 ///
 /// Phase 3: Full NATS JetStream integration with consumers and DLQ.
+#[allow(clippy::too_many_arguments)]
 pub fn build_router_with_sql_audit_and_approval(
     pool: sqlx::PgPool,
     service: Arc<IntentService>,

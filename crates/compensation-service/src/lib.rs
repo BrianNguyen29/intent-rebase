@@ -5,7 +5,7 @@
 //!
 //! **Batch 1 scope (this slice):** compensation_actions table migration + repo + service
 //!   + planner/executor skeleton contracts.
-//! **Batch 1+ scope:** Full planner logic, executor logic, runtime adapter, API (not yet implemented).
+//!     **Batch 1+ scope:** Full planner logic, executor logic, runtime adapter, API (not yet implemented).
 
 pub mod compensation_action;
 pub mod compensation_action_repo;

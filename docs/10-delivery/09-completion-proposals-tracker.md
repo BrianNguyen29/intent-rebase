@@ -31,11 +31,23 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | **ID** | P1 |
 | **Title** | Phase 2b Exit Gate |
 | **Purpose** | Complete Phase 2b to unblock Phase 3 Batch 2+. Phase 2b scope: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. |
-| **Status** | 🔄 In Progress |
+| **Status** | 🔄 In Progress (Slices A-B ✅ — sign-off remaining) |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Confirm remaining Phase 2b acceptance criteria; schedule exit gate review |
-| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b in flight. Phase 3 full execution gated on this exit. |
+| **Suggested Next Step** | Prepare and collect Product Owner, Security, and Runtime Integration sign-off using the verification evidence and deferral register |
+| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b Slice A (evidence verification) complete — all gates green. **Slice B (residual risk & Phase 3 deferral register) delivered — see [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md).** Phase 2b overall not yet signed off; remaining work is formal sign-off only. Phase 3 Batch 2+ gated on Phase 2b exit. |
+
+### Slice A — Evidence Verification ✅ GREEN
+
+All three canonical gates passed with zero warnings as errors:
+
+| Command | Result |
+|---------|--------|
+| `cargo test --all-features` | ✅ All tests pass |
+| `cargo check --all` | ✅ No errors |
+| `cargo clippy --all-features -- -D warnings` | ✅ Clean |
+
+Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, graph update, replay API, event streaming, bounded external surfaces) are delivered and gate-verified. Exit gate sign-off is still pending Slice B residual close-out.
 
 ---
 

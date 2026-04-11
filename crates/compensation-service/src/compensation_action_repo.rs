@@ -164,7 +164,7 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
         actions
             .get(&action_id)
             .cloned()
-            .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))
+            .ok_or(IntentRebaseError::CompensationActionNotFound(action_id))
     }
 
     async fn list_by_tenant(
@@ -265,7 +265,7 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
 
         let action = actions
             .get_mut(&action_id)
-            .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))?;
+            .ok_or(IntentRebaseError::CompensationActionNotFound(action_id))?;
 
         // Optimistic locking check
         if action.lock_version != lock_version {
@@ -327,7 +327,7 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
 
         let action = actions
             .get_mut(&action_id)
-            .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))?;
+            .ok_or(IntentRebaseError::CompensationActionNotFound(action_id))?;
 
         // Optimistic locking check
         if action.lock_version != lock_version {
@@ -382,7 +382,7 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
 
         let action = actions
             .get_mut(&action_id)
-            .ok_or_else(|| IntentRebaseError::CompensationActionNotFound(action_id))?;
+            .ok_or(IntentRebaseError::CompensationActionNotFound(action_id))?;
 
         // Optimistic locking check
         if action.lock_version != lock_version {
@@ -505,7 +505,7 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
         let execution_result_payload_json = action
             .execution_result_payload
             .as_ref()
-            .map(|r| serde_json::to_value(r))
+            .map(serde_json::to_value)
             .transpose()
             .map_err(|e| {
                 IntentRebaseError::Internal(format!("serialize execution_result_payload: {}", e))

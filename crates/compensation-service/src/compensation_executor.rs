@@ -35,12 +35,13 @@ use intent_rebase_types::IntentRebaseError;
 ///
 /// **This slice:** Trait definition + bounded RollbackExecutor for supported path
 /// + StubCompensationExecutor for unsupported paths.
-/// Full executor logic for non-Rollback strategies is Batch 1+ scope.
+///   Full executor logic for non-Rollback strategies is Batch 1+ scope.
 pub trait CompensationExecutor: Send + Sync {
     /// Execute a compensation action and return the result.
     ///
     /// Returns a result indicating success or failure with detail.
     /// Does not throw — all outcomes are captured in ExecutionResult.
+    #[allow(async_fn_in_trait)]
     async fn execute(
         &self,
         action: &CompensationAction,

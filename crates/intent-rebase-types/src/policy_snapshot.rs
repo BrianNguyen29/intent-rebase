@@ -125,8 +125,8 @@ impl PolicySnapshot {
     /// Uses canonical JSON serialization to ensure deterministic hashes:
     /// - Object keys are sorted alphabetically at each level
     /// - Array elements are sorted if they are objects (by canonical form)
-    /// This ensures semantically equivalent scopes with different key ordering
-    /// produce identical hashes.
+    ///   This ensures semantically equivalent scopes with different key ordering
+    ///   produce identical hashes.
     pub fn compute_scope_hash(scope_definition: &ScopeDefinition) -> String {
         use sha2::{Digest, Sha256};
         let canonical = canonicalize_scope_definition(scope_definition);

@@ -71,13 +71,13 @@ impl OrchestrationRunRepository for InMemoryOrchestrationRunRepository {
         let runs = self.runs.read().await;
         runs.get(&run_id)
             .cloned()
-            .ok_or_else(|| IntentRebaseError::OrchestrationRunNotFound(run_id))
+            .ok_or(IntentRebaseError::OrchestrationRunNotFound(run_id))
     }
 
     async fn update(&self, run: &OrchestrationRun) -> Result<OrchestrationRun, IntentRebaseError> {
         let mut runs = self.runs.write().await;
-        if runs.contains_key(&run.id) {
-            runs.insert(run.id, run.clone());
+        if let std::collections::hash_map::Entry::Occupied(mut e) = runs.entry(run.id) {
+            e.insert(run.clone());
             Ok(run.clone())
         } else {
             Err(IntentRebaseError::OrchestrationRunNotFound(run.id))
@@ -114,7 +114,7 @@ impl OrchestrationRunRepository for InMemoryOrchestrationRunRepository {
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use super::orchestration_run::{OrchestrationActionDecision, RunItemResult};
+use super::orchestration_run::RunItemResult;
 
 /// SQL-backed repository for orchestration run storage using PostgreSQL.
 pub struct SqlxOrchestrationRunRepository {
@@ -243,7 +243,7 @@ impl OrchestrationRunRepository for SqlxOrchestrationRunRepository {
     }
 
     async fn update(&self, run: &OrchestrationRun) -> Result<OrchestrationRun, IntentRebaseError> {
-        let action_ids_json = serde_json::to_value(&run.action_ids)
+        let _action_ids_json = serde_json::to_value(&run.action_ids)
             .map_err(|e| IntentRebaseError::Internal(format!("serialize action_ids: {}", e)))?;
         let item_results_json = serde_json::to_value(&run.item_results)
             .map_err(|e| IntentRebaseError::Internal(format!("serialize item_results: {}", e)))?;
@@ -319,7 +319,6 @@ impl OrchestrationRunRepository for SqlxOrchestrationRunRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orchestration_run::OrchestrationActionDecision;
 
     fn create_test_run(tenant_id: Uuid) -> OrchestrationRun {
         OrchestrationRun::new(

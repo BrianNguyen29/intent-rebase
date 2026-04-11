@@ -78,6 +78,7 @@ impl SideEffectService {
     /// # Implementation Note
     /// Uses atomic get-or-create under the hood to avoid TOCTOU races between
     /// checking for existing entries and creating new ones.
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_side_effect_with_idempotency(
         &self,
         tenant_id: Uuid,

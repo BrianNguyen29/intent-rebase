@@ -7,6 +7,20 @@
 **Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ with Phase 3 infra deferred)  
 **Target Duration:** 6–10 tuần
 
+### Phase 2b Slice A — Evidence Verification ✅ GREEN (2026-04-11)
+
+All canonical gate commands passed with zero warnings-as-errors:
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test --all-features` | ✅ Pass |
+| `cargo check --all` | ✅ Pass |
+| `cargo clippy --all-features -- -D warnings` | ✅ Clean |
+
+Slice A verification complete. Slice B (residual risk items, deferral register, exit sign-off) remains before Phase 2b exit is formally closed.
+
+> **📋 Slice B — Residual Risk & Phase 3 Deferral Register:** See [10-phase-2b-residual-risk-deferral-register.md](../10-phase-2b-residual-risk-deferral-register.md) for the full catalog of explicit Phase 3 deferrals with rationale, owning proposal, risk-if-delayed, and sign-off notes.
+
 ---
 
 ## 1. Runtime Adapter v1 (Temporal)
@@ -562,9 +576,14 @@ ALL ITEMS COMPLETE: ☑ Yes (all Phase 2-scoped items complete; remaining unchec
 
 Phase 2 Exit Gate Review Date: 2026-04-09
 Reviewed By: AI orchestrator (bounded delivery + deferral audit)
-Product Owner Sign-off: ___________
-Security Sign-off: ___________
-Runtime Integration Sign-off: ___________
+Product Owner Sign-off: ___________  (name / date / decision)
+Security Sign-off: ___________  (name / date / decision)
+Runtime Integration Sign-off: ___________  (name / date / decision)
+
+Required sign-off packet:
+- Slice A evidence verification: `cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`
+- Slice B residual risk / Phase 3 deferral register: ../10-phase-2b-residual-risk-deferral-register.md
+- Acceptance basis: all unchecked items above are explicit Phase 3 deferrals, not Phase 2 functional gaps
 
 Blocking Issues (if any):
 1.

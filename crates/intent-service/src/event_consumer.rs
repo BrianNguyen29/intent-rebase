@@ -341,7 +341,7 @@ impl SnapshotCreatorConsumer {
             .payload
             .get("affected_resources")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.clone())
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -352,7 +352,7 @@ impl SnapshotCreatorConsumer {
             .payload
             .get("required_approvers")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.clone())
+            .cloned()
             .unwrap_or_default()
     }
 

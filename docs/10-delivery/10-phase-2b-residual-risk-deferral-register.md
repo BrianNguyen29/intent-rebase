@@ -1,0 +1,57 @@
+# Phase 2b Residual Risk & Phase 3 Deferral Register
+
+> **Purpose:** Catalog all explicit Phase 3 deferrals identified during Phase 2b exit review — items that are intentionally out of Phase 2b scope but required for Phase 3 production hardening. This register supports sign-off by making deferred risks explicit, traceable, and owned.
+> **Basis:** Phase 2b exit gate review (2026-04-09). Most items below are explicit `[ ] PHASE 3 ITEM` entries in [checklist-phase-2.md](./checklist-phase-2.md); D-09 and D-10 are bounded-scope Phase 2b limitations derived from checked-item notes that still require Phase 3 follow-up.
+> **Status:** `P1 STILL IN PROGRESS — Phase 2b conditionally complete with explicit Phase 3 deferrals; formal sign-off pending external reviewer sign-off`
+
+---
+
+## Deferral Register
+
+| ID | Deferred Capability | Why Deferred | Owning Proposal | Risk If Delayed | Sign-off Note |
+|----|---------------------|--------------|-----------------|-----------------|---------------|
+| D-01 | Artifact quarantine: S3 move to quarantine path | Requires artifact-service with S3 integration (not yet delivered) | P2 (Phase 3 Batch 2 — Observability + SRE) | Invalidated artifacts remain in original S3 path; quarantine metadata is recorded but no actual isolation. Artifacts not moved during rebase until Phase 3 artifact-service is wired. | **Acknowledge:** S3 quarantine move is Phase 3. No artifacts are actually moved to quarantine during Phase 2b rebase. Phase 3 artifact-service integration is required before quarantine is enforceable in production. |
+| D-02 | Artifact release from quarantine (if rebase resolved) | Requires artifact-service with S3 integration | P2 | No automated release path; artifacts remain in quarantine after rebase resolves until Phase 3. Manual S3 intervention required if release needed before Phase 3. | **Acknowledge:** No automated release mechanism exists. If rebase resolves before Phase 3 artifact-service delivery, artifacts stay in quarantine unless manually released via direct S3 operation. |
+| D-03 | Artifact permanent deletion (if rebase requires discard) | Requires artifact-service with S3 integration; requires `security-reviewer` role approval | P2 | Discarded artifacts are not actually deleted from S3; only metadata is updated. Data retained until Phase 3 deletion workflow is implemented. Security/data-retention risk if rebase discard is used before Phase 3. | **Acknowledge:** Permanent artifact deletion is not enforceable in Phase 2b. Requires Phase 3 artifact-service with security-reviewer role. Discarded artifacts persist in S3. |
+| D-04 | Replay with new intent version (intent version override) | Requires Phase 3 replay/status infrastructure and event streaming support | P4 (Phase 3 Batch 3b — Forensic Replay Bundle) | Current replay endpoint supports cooperative signal-based replay via checkpoint only. Intent version override is not available. Forensic or correction replay requiring version override is not possible until Phase 3. | **Acknowledge:** Only checkpoint-based cooperative replay is available in Phase 2b. Intent version override replay is Phase 3 P4 scope. |
+| D-05 | Full replay compatibility (event streaming, replay status tracking) | Requires Phase 3 replay status / event-service infrastructure | P4 | Replay initiation is delivered but replay status tracking and event streaming are not. Full forensic replay capability is limited until Phase 3 P4 is delivered. | **Acknowledge:** Bounded replay initiation exists; full replay status/event-service is Phase 3 P4. |
+| D-06 | Full notification delivery (email, webhook, NATS) | NotifierConsumer records notification intents in-memory only; actual external delivery requires Phase 3 infrastructure | P2 | Notifications are recorded as intents but not delivered externally. Users do not receive email/webhook/NATS notifications until Phase 3. Approval flow still creates records but relies on polling. | **Acknowledge:** In-memory notification recording only; no external delivery in Phase 2b. Phase 3 notification infrastructure required for production notification delivery. |
+| D-07 | Event schema versioning (v2 migration path) | v1 → v2 migration deferred to Phase 3 | P2 | All events use v1 schema. If breaking schema changes are needed before Phase 3, v2 migration would need to be expedited. Downstream consumers locked to v1 until Phase 3 migration. | **Acknowledge:** Events are v1 schema only. v2 migration is Phase 3. If schema evolution is needed before Phase 3, coordinate migration explicitly. |
+| D-08 | Dead-letter queue (DLQ) for failed event processing | Requires Phase 3 event-service with DLQ infrastructure | P2 | Failed event processing fails open (audit succeeds even if streaming fails). No DLQ means failed events are not retried or held for investigation until Phase 3. Silent failure risk in event streaming path. | **Acknowledge:** DLQ is not implemented in Phase 2b. Failed events fail open — audit is the source of truth; streaming failures are not retried or held. DLQ required before production-grade event streaming. |
+| D-09 | Full NATS-based event consumers (startup wiring, DLQ, retry, consumer groups) | Bounded in-memory consumer infrastructure used for testing only; Phase 2b intentionally scoped to abstraction layer | P2 | Only in-memory consumer buffer available for testing. No persistent NATS consumers, no consumer groups, no retry/DLQ. Production event-driven checkpoint creation and notification delivery require Phase 3 consumer infrastructure. | **Acknowledge:** In-memory consumer infrastructure is for testing only. Phase 3 NATS consumer infrastructure required before event-driven checkpoint creation or notification delivery is production-ready. |
+| D-10 | Policy snapshot write/revalidation API (S3 upload, write endpoints) | Phase 2b scope limited to read-only GET endpoints; write/revalidation requires Phase 3 workflow | P7 (Phase 3 Batch 1 Closure — Compensation Planner/Executor) | Policy snapshots can be read but not created or revalidated via API in Phase 2b. Snapshot creation relies on event-driven SnapshotCreatorConsumer with bounded scope data. Full scope accuracy requires Phase 3 intent scope access. | **Acknowledge:** Read-only policy snapshot API in Phase 2b. Write/revalidation requires Phase 3. SnapshotCreatorConsumer is event-driven with scope data limitations noted. |
+
+---
+
+## Deferred Items by Owning Proposal
+
+| Proposal | IDs | Summary |
+|----------|-----|---------|
+| P2 — Phase 3 Batch 2 — Observability + SRE | D-01, D-02, D-03, D-06, D-07, D-08, D-09 | Artifact-service S3 integration, full notification delivery, event schema versioning, DLQ, NATS consumer infrastructure |
+| P4 — Phase 3 Batch 3b — Forensic Replay Bundle | D-04, D-05 | Intent version override replay, full replay compatibility |
+| P7 — Phase 3 Batch 1 Closure | D-10 | Policy snapshot write/revalidation API |
+
+---
+
+## Sign-off Readiness
+
+This register does not change the Phase 2b exit gate status. Phase 2b remains **conditionally complete** with explicit Phase 3 deferrals — consistent with the Phase 2 exit gate definition in checklist-phase-2.md.
+
+Reviewers should:
+1. Read this register to understand what is intentionally deferred to Phase 3
+2. Confirm each deferred item's owning proposal is scheduled and resourced
+3. Add any additional deferrals discovered during sign-off review as new IDs (D-11, D-12, …)
+
+**Do not sign off Phase 2b if:**
+- Any item in this register represents an unacceptable unknown risk that was not explicitly deferred
+- Any Phase 3 deferral was not consciously accepted by the reviewing stakeholder
+
+---
+
+## Related Docs
+
+- [Phase 2b Checklist — Runtime-Integrated Rebase](./checklists/checklist-phase-2.md) (source of Phase 3 deferral items)
+- [Phase 2b Slice A Evidence Verification](./checklists/checklist-phase-2.md#phase-2b-slice-a--evidence-verification--green-2026-04-11)
+- [Phase 3 Hardening Plan](./05-phase-3-hardening.md)
+- [10 Completion Proposals Tracker](./09-completion-proposals-tracker.md)
+- [Current Project Status](./00-current-status.md)

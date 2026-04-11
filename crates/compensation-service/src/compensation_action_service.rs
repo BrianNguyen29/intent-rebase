@@ -246,7 +246,7 @@ impl CompensationActionService {
     /// 1. Validates the action is in Approved status (fails closed otherwise)
     /// 2. Validates execution policy: only `Automatic` feasibility can execute in this slice
     ///    (SemiAutomatic/ManualOnly require human intervention not in this slice;
-    ///     NotPossible cannot be executed at all)
+    ///    NotPossible cannot be executed at all)
     /// 3. Runs the RollbackExecutor (for Rollback+Automatic path) or returns failure
     ///    (for all other strategy/feasibility combos)
     /// 4. Records the result via record_result, which transitions to Executed or Failed
@@ -559,8 +559,10 @@ impl CompensationActionService {
     ) -> Result<OrchestrationDryRunResult, IntentRebaseError> {
         let mut proposals = Vec::with_capacity(action_ids.len());
         let mut not_found = Vec::new();
-        let mut summary = OrchestrationDryRunSummary::default();
-        summary.total = action_ids.len();
+        let mut summary = OrchestrationDryRunSummary {
+            total: action_ids.len(),
+            ..Default::default()
+        };
 
         for action_id in action_ids {
             match self.get_action(action_id).await {
@@ -675,11 +677,11 @@ impl CompensationActionService {
             // Terminal states - no action possible
             Executed => (
                 OrchestrationAction::NoAction,
-                format!("Action has already been executed (terminal state)"),
+                "Action has already been executed (terminal state)".to_string(),
             ),
             Waived => (
                 OrchestrationAction::NoAction,
-                format!("Action has been waived (terminal state)"),
+                "Action has been waived (terminal state)".to_string(),
             ),
         };
 
@@ -717,8 +719,10 @@ impl CompensationActionService {
     ) -> Result<BatchOrchestrationResult, IntentRebaseError> {
         let mut outcomes = Vec::with_capacity(action_ids.len());
         let mut not_found = Vec::new();
-        let mut summary = BatchOrchestrationSummary::default();
-        summary.total = action_ids.len();
+        let mut summary = BatchOrchestrationSummary {
+            total: action_ids.len(),
+            ..Default::default()
+        };
 
         for action_id in action_ids {
             match self.get_action(action_id).await {
@@ -800,8 +804,10 @@ impl CompensationActionService {
     ) -> Result<BatchOrchestrationResult, IntentRebaseError> {
         let mut outcomes = Vec::with_capacity(action_ids.len());
         let mut not_found = Vec::new();
-        let mut summary = BatchOrchestrationSummary::default();
-        summary.total = action_ids.len();
+        let mut summary = BatchOrchestrationSummary {
+            total: action_ids.len(),
+            ..Default::default()
+        };
 
         for action_id in action_ids {
             match self.get_action(action_id).await {
@@ -878,8 +884,10 @@ impl CompensationActionService {
     ) -> Result<BatchOrchestrationResult, IntentRebaseError> {
         let mut outcomes = Vec::with_capacity(action_ids.len());
         let mut not_found = Vec::new();
-        let mut summary = BatchOrchestrationSummary::default();
-        summary.total = action_ids.len();
+        let mut summary = BatchOrchestrationSummary {
+            total: action_ids.len(),
+            ..Default::default()
+        };
 
         for action_id in action_ids {
             match self.get_action(action_id).await {
@@ -1423,7 +1431,7 @@ impl CoordinationRecord {
         let coordination_status = CoordinationStatus::from_compensation_action(action);
         let coordination_reason = Self::compute_coordination_reason(action, &coordination_status);
 
-        let has_non_retryable_error = action
+        let _has_non_retryable_error = action
             .execution_result_payload
             .as_ref()
             .and_then(|r| r.error_code.as_ref())

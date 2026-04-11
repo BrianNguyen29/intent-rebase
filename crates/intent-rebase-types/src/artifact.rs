@@ -71,6 +71,7 @@ pub enum QuarantineStatus {
     Released,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for QuarantineStatus {
     fn default() -> Self {
         QuarantineStatus::Signaled

@@ -3,7 +3,7 @@
 ## Executive Summary
 
 **Current Phase:** Phase 3 — Compensation + Production Hardening, Batch 1 largely delivered.  
-**Phase 2b status:** In progress; Phase 3 full execution is gated on Phase 2b exit.  
+**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off preparation) still in progress. Phase 2b exit not yet formally signed off. Phase 3 full execution gated on Phase 2b exit. See [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md) for the catalog of explicit Phase 3 deferrals.  
 **Phase 3 Batch 1 delivered:** Side effect ledger, compensation-actions CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot orchestration runtime (HTTP + CLI). Full planner/executor/retry/rollback record remains gated on Phase 2b exit.  
 **Production readiness:** Not yet production-ready. Phase 3 Batch 1 delivers bounded API surfaces; SRE hardening, tenant isolation, forensic replay, and performance work are still open.
 
