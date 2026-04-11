@@ -13,6 +13,10 @@ See [`docs/README.md`](./docs/README.md) for the v1 documentation index, archite
 | PR #23 | Observability v1 | ✓ Complete |
 | PR #24 | Security v1 | ✓ Complete |
 
+## Phase 3 Status
+
+**Phase 3 Batch 1 delivered slices:** side effect ledger (model, query API, idempotency, capture-on-write), compensation actions query/approve/waive/execute APIs, DLQ API, batch approve/reapprove/execute, policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Full planner/executor/retry/rollback record gated on remaining Phase 2b exit.
+
 ## Workspace Crates
 
 | Crate | Purpose |
@@ -22,7 +26,11 @@ See [`docs/README.md`](./docs/README.md) for the v1 documentation index, archite
 | `intent-api` | HTTP API server |
 | `rebase-engine` | Rebase decision engine |
 | `graph-service` | Dependency graph service |
-| `runtime-adapter` | Runtime execution adapter (Task 5) |
+| `runtime-adapter` | Runtime execution adapter |
+| `rebase-orchestrator` | Orchestration coordination |
+| `compensation-service` | Compensation action management |
+| `forensic-service` | Forensic bundle replay |
+| `intent-cli` | CLI for orchestration runs |
 
 ## Deferred / Fixed Issues
 

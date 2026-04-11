@@ -1,5 +1,7 @@
 # REST API
 
+> **Canonical source:** Full endpoint definitions, request/response schemas, and parameter details are maintained in [`openapi.yaml`](./openapi.yaml). This guide covers design principles and high-level resource layout only; example resources below may include target-state/planned surfaces that are not yet implemented.
+
 ## Design principles
 - JSON over HTTPS
 - idempotency cho create/update có side effects
@@ -8,9 +10,12 @@
 - explicit tenant scoping
 
 ## Base path
-`/v1`
+
+Conceptually `/v1`, but the current implementation contains a mix of legacy `/v1/...` and newer non-prefixed routes. Treat [`openapi.yaml`](./openapi.yaml) as the source of truth for live paths.
 
 ## Resources
+
+> **Important:** The resource paths in this section are conceptual/design-time examples for API shape discussion. They are **not** a guaranteed inventory of implemented endpoints or exact live path shapes. For canonical implemented routes, always use [`openapi.yaml`](./openapi.yaml).
 
 ### POST /intents
 Tạo intent mới.
@@ -94,8 +99,12 @@ Trả impact graph rút gọn để hiển thị UI.
 ### POST /approvals/{approval_id}/revalidate
 ### GET /artifacts/{artifact_id}/provenance
 ### GET /side-effects/{side_effect_id}
-### POST /side-effects/{side_effect_id}/compensate
 
+## Planned / target-state resources
+
+The following resources are part of the broader design direction and may not exist yet in the current implementation. Check [`openapi.yaml`](./openapi.yaml) before integrating against them.
+
+### POST /side-effects/{side_effect_id}/compensate
 ### GET /audit/events
 ### GET /replays/{workflow_id}
 ### POST /replays/{workflow_id}/export

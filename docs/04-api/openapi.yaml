@@ -1,16 +1,35 @@
 # Intent Rebase Engine - OpenAPI Specification
-# Phase 1 - Core Control Plane
 #
-# Note: OpenAPI spec is maintained alongside code as endpoints are implemented.
-# HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
+# Note: This spec is the canonical source for implemented HTTP endpoints.
+# HTTP framework: lightweight approach — see docs for decision rationale.
+# Phase coverage: Phase 1 + Phase 3 Batch 1 (see implemented sections below).
 
 openapi: 3.1.0
 info:
   title: Intent Rebase Engine API
   description: |
-    Phase 1 - Core Control Plane API
-    
     Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
+    
+    ## Implemented scopes
+    
+    ### Phase 1 — Core Control Plane
+    - Health & observability endpoints
+    - Intent lifecycle (create/read/version)
+    - Intent analysis (validate, diff, rebase-preview)
+    - Dependency graph CRUD
+    
+    ### Phase 3 Batch 1 — Compensation + Orchestration
+    - Side effect capture and query
+    - Compensation action CRUD and approve/waive/execute
+    - DLQ and batch candidate APIs
+    - Policy gate evaluation
+    - Orchestration dashboard and coordination view
+    - Orchestration dry-run planner and batch approve/reapprove/execute
+    - Single-shot orchestration runtime (HTTP + CLI)
+    
+    ## Bounded scope note
+    Phase 3 Batch 1 delivers bounded slices of the compensation engine.
+    Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
     
     ## Implemented (Phase 1)
     

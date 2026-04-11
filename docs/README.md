@@ -89,6 +89,8 @@ Bộ tài liệu về audit, governance, compliance: audit event spec, provenanc
 
 ### Triển khai theo Phase
 - [10-delivery/checklists/](./10-delivery/checklists/README.md) — Tất cả phase checklists từ Phase 0 đến Phase 4
+- [Current Project Status](./10-delivery/00-current-status.md) — snapshot trạng thái hiện tại của dự án (đã deliver gì, còn gì open)
+- [10 Completion Proposals Tracker](./10-delivery/09-completion-proposals-tracker.md) — danh sách 10 proposal còn lại để hoàn thành dự án
 
 ### Security & Compliance
 - [Audit & Governance Pack README](./14-governance/README.md) — Toàn bộ specs về audit, provenance, policy snapshots, authorization, tenant isolation, forensic bundles, và incident response
