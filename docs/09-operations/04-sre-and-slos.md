@@ -1,5 +1,24 @@
 # SRE and SLOs
 
+## P2-S1 Metrics Evidence (Phase 3 Batch 2 Slice 1 — Bounded)
+
+**P2-S1 delivered:** Real metrics instrumentation on existing `/metrics` endpoint via `metrics-exporter-prometheus`. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope.
+
+**Instrumented candidate metrics (real code paths, verified by cargo check/test):**
+- `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors` — create_intent handler
+- `intent_rebase.version.create.total` / `intent_rebase.version.create.errors` — create_version handler
+- `intent_rebase.rebase.preview.total` / `intent_rebase.rebase.preview.errors` / `intent_rebase.rebase.preview.duration_seconds` — rebase_preview handler
+- `intent_rebase.rebase.apply.total` / `intent_rebase.rebase.apply.errors` / `intent_rebase.rebase.apply.duration_seconds` — rebase_apply handler
+- `intent_rebase.compensation.actions.total` / `intent_rebase.compensation.actions.errors` — approve/waive/execute/reapprove handlers
+- `intent_rebase.compensation.execute.total` / `intent_rebase.compensation.execute.duration_seconds` / `intent_rebase.compensation.execute.success` / `intent_rebase.compensation.execute.failure` — execute_compensation_action handler
+- `intent_rebase.compensation.planned.total` / `intent_rebase.compensation.planned.by_feasibility` — plan_compensation_actions in compensation-service
+
+**Exposed via:** `GET /metrics` on intent-api (text/plain; version=0.0.4 Prometheus format)
+
+**SLO applicability:** These metrics directly measure P2 candidate SLO paths (rebase preview availability, rebase apply path availability, intent creation success rate). Histogram buckets available for p50/p95/p99 latency derivation via standard Prometheus `histogram_quantile()`.
+
+---
+
 ## Example SLOs
 - 99.9% successful intent version creation
 - 99.5% rebase preview availability

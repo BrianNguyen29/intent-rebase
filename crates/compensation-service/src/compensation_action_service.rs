@@ -11,6 +11,7 @@
 //! - **Derived DLQ:** Failed actions with exhausted budget or non-retryable error are DLQ candidates
 //! - No background workers; all operations are explicit API calls
 
+use metrics::counter;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -156,6 +157,19 @@ impl CompensationActionService {
         for action in generated_actions {
             let created = self.create_action(action).await?;
             persisted_actions.push(created);
+        }
+
+        // P2-S1 candidate metrics: compensation planning counts
+        counter!("intent_rebase.compensation.planned.total").increment(persisted_actions.len() as u64);
+        // Track by feasibility for SLO evidence
+        for action in &persisted_actions {
+            let feasibility_label = match action.feasibility {
+                CompensationFeasibility::Automatic => "automatic",
+                CompensationFeasibility::SemiAutomatic => "semi_automatic",
+                CompensationFeasibility::ManualOnly => "manual_only",
+                CompensationFeasibility::NotPossible => "not_possible",
+            };
+            counter!("intent_rebase.compensation.planned.by_feasibility", "feasibility" => feasibility_label).increment(1);
         }
 
         Ok(persisted_actions)
