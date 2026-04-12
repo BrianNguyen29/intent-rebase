@@ -159,19 +159,6 @@ impl CompensationActionService {
             persisted_actions.push(created);
         }
 
-        // P2-S1 candidate metrics: compensation planning counts
-        counter!("intent_rebase.compensation.planned.total").increment(persisted_actions.len() as u64);
-        // Track by feasibility for SLO evidence
-        for action in &persisted_actions {
-            let feasibility_label = match action.feasibility {
-                CompensationFeasibility::Automatic => "automatic",
-                CompensationFeasibility::SemiAutomatic => "semi_automatic",
-                CompensationFeasibility::ManualOnly => "manual_only",
-                CompensationFeasibility::NotPossible => "not_possible",
-            };
-            counter!("intent_rebase.compensation.planned.by_feasibility", "feasibility" => feasibility_label).increment(1);
-        }
-
         Ok(persisted_actions)
     }
 

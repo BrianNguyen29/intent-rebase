@@ -12,7 +12,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
-| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | ⬜ Not Started | High |
+| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress — P2-S2 Delivered | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
@@ -58,26 +58,16 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress — Slice S1 (metrics instrumentation) delivered |
+| **Status** | 🔄 In Progress — P2-S2 Bounded Slice Delivered |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | **P2-S1 DELIVERED:** Real metrics instrumentation on `/metrics` endpoint via existing metrics-exporter-prometheus crate. Candidate metrics cover rebase preview/apply latency and counts, intent/version creation, and compensation action execute/planning. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope. Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. |
-
-**P2-S1 Candidate Metrics (instrumented, real code paths):**
-- `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors`
-- `intent_rebase.version.create.total` / `intent_rebase.version.create.errors`
-- `intent_rebase.rebase.preview.total` / `intent_rebase.rebase.preview.errors` / `intent_rebase.rebase.preview.duration_seconds`
-- `intent_rebase.rebase.apply.total` / `intent_rebase.rebase.apply.errors` / `intent_rebase.rebase.apply.duration_seconds`
-- `intent_rebase.compensation.actions.total` / `intent_rebase.compensation.actions.errors`
-- `intent_rebase.compensation.execute.total` / `intent_rebase.compensation.execute.duration_seconds` / `intent_rebase.compensation.execute.success` / `intent_rebase.compensation.execute.failure`
-- `intent_rebase.compensation.planned.total` / `intent_rebase.compensation.planned.by_feasibility`
+| **Suggested Next Step** | P2-S2 complete (2-1, 2-2, 2-3). Remaining: 2-4 (distributed tracing), 2-5 (benchmarks), 2-6 (runbooks). |
+| **Progress Notes** | P2-S2 bounded slice delivered: SLO definitions, alerting rules, error-budget dashboard, metrics infrastructure, observability docker-compose stack. Items 2-4, 2-5, 2-6 remain open. |
 
 **Items:**
-- [x] P2-S1: Metrics instrumentation (bounded slice — real metrics on real code paths) — ✅ delivered
-- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
-- [ ] Alerting rules (warning, critical thresholds)
-- [ ] Error budget tracking dashboard + runbook
+- [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — **P2-S2 Delivered**
+- [x] Alerting rules (warning, critical thresholds) — **P2-S2 Delivered**
+- [x] Error budget tracking dashboard + runbook — **P2-S2 Delivered**
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
 - [ ] Performance benchmarks: rebase latency p50/p95/p99 (target: p95 < 60s for low/medium risk)
 - [ ] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout

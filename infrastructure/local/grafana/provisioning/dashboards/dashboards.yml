@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning configuration
+# Phase 3 Batch 2 - P2-S2 bounded slice
+
+apiVersion: 1
+
+providers:
+  - name: 'Intent Rebase Engine Dashboards'
+    orgId: 1
+    folder: 'Intent Rebase Engine'
+    folderUid: 'intent-rebase'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

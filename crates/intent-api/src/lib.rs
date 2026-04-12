@@ -704,7 +704,7 @@ async fn create_intent(
 ) -> Result<(StatusCode, Json<CreateIntentResponse>), ApiErrorResponse> {
     // P2-S1 candidate metrics: intent creation
     counter!("intent_rebase.intent.create.total", "handler" => "create_intent").increment(1);
-    
+
     // Phase 1: Input validation
     validate_create_intent_request(&request).map_err(|e| {
         counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);

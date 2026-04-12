@@ -274,36 +274,28 @@
 
 ## 3. SRE & Observability
 
-```
-[~] SRE & Observability — P2-S1 (metrics instrumentation) DELIVERED; remainder P2-S2+ scope
-    Evidence:
-    - PR merged: <link> (P2-S1 bounded slice)
-    - Metrics: intent_rebase.intent.create.total/errors, intent_rebase.version.create.total/errors
-    - Metrics: intent_rebase.rebase.preview.total/errors/duration_seconds
-    - Metrics: intent_rebase.rebase.apply.total/errors/duration_seconds
-    - Metrics: intent_rebase.compensation.actions.total/errors
-    - Metrics: intent_rebase.compensation.execute.total/duration_seconds/success/failure
-    - Metrics: intent_rebase.compensation.planned.total/by_feasibility
-    - Doc: ../../09-operations/04-sre-and-slos.md (SLOs marked provisional; P2-S1 evidence recorded)
-    - Doc: ../09-completion-proposals-tracker.md (P2 status updated to in-progress; P2-S1 evidence recorded)
-    - Note: Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope
+**P2-S2 Bounded Slice — Items 2-1, 2-2, 2-3 Delivered**
 
-[ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
+```
+[x] SLO definitions (intent processing latency, rebase latency, approval wait time) ✅ P2-S2
     Evidence:
     - PR merged: <link>
     - Doc: ../../09-operations/04-sre-and-slos.md (updated)
-    - Dashboard: Grafana SLO dashboard
+    - Dashboard: Grafana SLO dashboard (intent-rebase-slo)
+    - Metrics defined: crates/intent-api/src/metrics.rs
 
-[ ] Alerting rules (warning, critical thresholds)
+[x] Alerting rules (warning, critical thresholds) ✅ P2-S2
     Evidence:
     - PR merged: <link>
-    - Alert rules: alertmanager.yml or equivalent
-    - Tests: alerting tests pass (send test alerts)
+    - Alert rules: infrastructure/local/prometheus/rules.yml
+    - Alertmanager config: infrastructure/local/alertmanager/alertmanager.yml
+    - Grafana datasource: infrastructure/local/grafana/provisioning/datasources/datasources.yml
 
-[ ] Error budget tracking
+[x] Error budget tracking ✅ P2-S2
     Evidence:
-    - Dashboard: error budget dashboard
-    - Runbook: error budget exceeded response
+    - Dashboard: infrastructure/local/grafana/provisioning/dashboards/error-budget-dashboard.json
+    - Runbook: ../../09-operations/05-runbooks.md (RB6, RB7, RB8, RB9 added)
+    - Metrics: intent_api_error_budget_remaining gauge per SLO
 
 [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
     Evidence:
