@@ -173,17 +173,18 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P7 |
 | **Title** | Phase 3 Batch 1 Closure — Compensation Planner/Executor |
 | **Purpose** | Complete the compensation planner stub (full plan generation from side effects) and replace the stub executor with real rollback/counter-action logic. Also add compensation audit trail. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 Bounded Executors Delivered — S2 Planner/Executor Alignment Gap Remains (Phase 3 Batch 1) |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Define compensation planner contract with Phase 2b artifact model; design rollback/counter-action strategy selection |
-| **Progress Notes** | Planner stub skeleton delivered; real plan generation not yet implemented. Stub executor returns success always. Counter-action logic for non-Rollback strategies is Batch 1+ scope. Phase 2b exit gate is a prerequisite. |
+| **Suggested Next Step** | Close S2 planner/executor alignment gap; then proceed to Batch 2 observability + SRE hardening |
+| **Progress Notes** | Four bounded executors delivered: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). Audit trail events delivered. **Alignment gap:** planner routes S2ExternalReversible → Rollback strategy + SemiAutomatic feasibility; no bounded executor gate accepts this combination (RollbackExecutor accepts Rollback+Automatic only). Planner/executor alignment for S2 remains to close before Phase 3 exit gate. |
 
 **Items:**
-- [ ] Side effect rollback record (compensation applied, compensation result) — schema migration TBD
-- [ ] Compensation planner: generate compensation plan from side effects (full — stub currently)
-- [ ] Compensation executor: real rollback/acknowledgment logic (replace stub — stub currently always succeeds)
-- [ ] Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`)
+- [x] Side effect rollback record (compensation applied, compensation result) — ✅ delivered (Phase 3 Batch 1 bounded slice)
+- [x] Compensation planner: generate compensation plan from side effects — ✅ delivered (Phase 3 Batch 1 bounded; class-based strategy routing with `default_rollback_strategy`; fail-closed on non-Rollback/unsupported strategies; S2 alignment gap remains open)
+- [x] Four bounded compensation executors (RollbackExecutor, CounterActionExecutor, FollowupNoticeExecutor, EscalationExecutor) — ✅ delivered (Phase 3 Batch 1 bounded slice; each executor is strategy+feasibility-gated; acknowledges against side effect ledger; all other combos fail closed)
+- [x] Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) — ✅ delivered (Phase 3 Batch 1 bounded slice)
+- [ ] **S2 planner/executor alignment** — open: planner routes S2ExternalReversible → Rollback + SemiAutomatic; no executor gate accepts this combo; must be resolved before Phase 3 exit gate
 
 ---
 

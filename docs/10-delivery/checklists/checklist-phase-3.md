@@ -124,7 +124,7 @@
     - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/execute)
     - Code: crates/compensation-service/src/compensation_action_service.rs (execute_action method)
     - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
-    - Note: Executor gate: Only Approved actions can execute. Stub executor returns success. Real rollback/counter-action logic is Batch 1+ scope.
+    - Note: Bounded RollbackExecutor for Rollback+Automatic path only. Three additional bounded executors delivered: CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). All four executors acknowledge against side effect ledger; fail-closed on non-matching strategy/feasibility combos. **S2 alignment gap:** planner routes S2ExternalReversible → Rollback + SemiAutomatic; no executor gate accepts this combination — gap remains to close before Phase 3 exit gate. Counter-action logic for non-Rollback strategies is Batch 1+ scope.
 
 [x] Compensation action DLQ query API (Phase 3 Batch 1 bounded manual retry slice)
     Evidence:
