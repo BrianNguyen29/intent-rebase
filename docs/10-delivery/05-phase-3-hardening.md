@@ -84,7 +84,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 | Item | Description | Notes |
 |------|-------------|-------|
-| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | |
+| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | P3-S1: ✅ intent-api approval-request endpoint tests (list, approve, reject, expire) + orchestration dashboard |
 | 3-2 | Resource quota enforcement (intents per tenant, artifacts per tenant) | |
 | 3-3 | Tenant-specific rule pack isolation | |
 | 3-4 | Tenant audit log separation | S3 tenant-scoped buckets/prefixes |
