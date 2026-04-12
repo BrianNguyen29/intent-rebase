@@ -120,4 +120,15 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Side effect rollback record not found
     #[error("rollback record not found: {0}")]
     RollbackRecordNotFound(Uuid),
+
+    /// Phase 3 Batch 3a (P3-S2 bounded slice): Tenant quota exceeded
+    #[error(
+        "quota exceeded: tenant {tenant_id} has {current}/{limit} {resource} (limit: {limit})"
+    )]
+    QuotaExceeded {
+        tenant_id: Uuid,
+        resource: String,
+        current: i32,
+        limit: i32,
+    },
 }
