@@ -1462,6 +1462,7 @@ mod tests {
 
     fn create_test_request() -> CreateIntentRequest {
         CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),

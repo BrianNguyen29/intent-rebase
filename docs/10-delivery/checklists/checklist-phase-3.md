@@ -327,11 +327,15 @@
     - Tests: intent-api approval-request endpoints (list, approve, reject, expire)
     - Tests: orchestration dashboard tenant isolation
 
-[ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
+[x] Resource quota enforcement (intents per tenant, artifacts per tenant) — P3-S2 bounded slice
     Evidence:
-    - PR merged: <link>
-    - Code: tenant-service/quota.rs
-    - Tests: quota enforcement tests pass
+    - Code: crates/intent-rebase-types/src/quota.rs (QuotaService, InMemoryQuotaRepository, QuotaRepository trait)
+    - Code: crates/intent-rebase-types/src/error.rs (QuotaExceeded error variant)
+    - Code: crates/intent-api/src/lib.rs (quota_service field in AppState, quota checks on create_intent and ingest_artifact)
+    - Code: crates/intent-service/src/sqlx_repository.rs (tenant_id from request)
+    - Code: crates/intent-rebase-types/src/intent.rs (tenant_id field on CreateIntentRequest)
+    - Tests: cargo test -p intent-rebase-types --all-features (quota tests pass)
+    - Default limits: 10000 intents, 100000 artifacts per tenant
 
 [ ] Tenant-specific rule pack isolation
     Evidence:

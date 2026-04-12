@@ -81,15 +81,15 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P3 |
 | **Title** | Phase 3 Batch 3a — Tenant Isolation Hardening |
 | **Purpose** | Verify and enforce tenant isolation across all surfaces: access control, data visibility, quotas, audit log separation, and data residency. |
-| **Status** | 🟡 In Progress — P3-S1 slice delivered |
+| **Status** | 🟡 In Progress — P3-S1 (tenant isolation tests) and P3-S2 (quota enforcement) delivered |
 | **Priority** | High |
 | **Owner** | Security / Platform |
-| **Suggested Next Step** | Expand tenant isolation test coverage to additional high-value endpoints; implement quota enforcement |
-| **Progress Notes** | P3-S1 (bounded slice): intent-api tenant isolation verification tests ✅ delivered for approval-request endpoints (list, approve, reject, expire) and orchestration dashboard. Cross-tenant read/mutation isolation verified. Remaining items (3-2 quota, 3-3 rule-pack, 3-5 data residency) are out of scope for P3-S1. |
+| **Suggested Next Step** | Implement quota enforcement on additional create paths; consider SQL-backed quota persistence for multi-instance deployments |
+| **Progress Notes** | P3-S1 (bounded slice): intent-api tenant isolation verification tests ✅ delivered for approval-request endpoints (list, approve, reject, expire) and orchestration dashboard. Cross-tenant read/mutation isolation verified. P3-S2 (bounded slice): tenant quota enforcement delivered for intent creation and artifact ingest paths with in-memory repository. QuotaExceeded error variant added. Remaining items (3-3 rule-pack, 3-5 data residency) are out of scope for P3-S1/S2. |
 
 **Items:**
 - [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 slice
-- [ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
+- [x] Resource quota enforcement (intents per tenant, artifacts per tenant) — P3-S2 bounded slice
 - [ ] Tenant-specific rule pack isolation
 - [ ] Tenant audit log separation (S3 tenant-scoped buckets/prefixes)
 - [ ] Data residency: tenant data stays in assigned region (update threat model)

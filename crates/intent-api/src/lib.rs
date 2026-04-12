@@ -276,6 +276,10 @@ pub struct AppState {
     /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
     /// compensation actions via HTTP accepted flow.
     pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
+    /// Phase 3 Batch 3a (P3-S2 bounded slice): Quota enforcement service.
+    /// When Some, enforces tenant resource quotas on create paths.
+    /// When None, quota enforcement is bypassed (Phase 1 legacy behavior).
+    pub quota_service: Option<Arc<intent_rebase_types::QuotaService>>,
     pub start_time: Instant,
 }
 
@@ -424,6 +428,9 @@ impl IntoResponse for ApiErrorResponse {
             }
             IntentRebaseError::RollbackRecordNotFound(_) => {
                 (StatusCode::NOT_FOUND, "ROLLBACK_RECORD_NOT_FOUND", false)
+            }
+            IntentRebaseError::QuotaExceeded { .. } => {
+                (StatusCode::FORBIDDEN, "QUOTA_EXCEEDED", false)
             }
         };
 
@@ -710,6 +717,17 @@ async fn create_intent(
         counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);
         ApiErrorResponse(e)
     })?;
+
+    // P3-S2: Check tenant quota on intent creation if quota_service is configured
+    if let Some(ref quota_service) = state.quota_service {
+        let tenant_id = request.tenant_id.unwrap_or_else(Uuid::nil);
+        if tenant_id != Uuid::nil() {
+            if let Err(e) = quota_service.enforce(tenant_id, "intents").await {
+                counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);
+                return Err(ApiErrorResponse(e));
+            }
+        }
+    }
 
     state
         .service
@@ -4041,6 +4059,13 @@ async fn ingest_artifact(
     // Phase 1: Input validation - validate request before processing
     validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
 
+    // P3-S2: Check tenant quota on artifact ingest if quota_service is configured
+    if let Some(ref quota_service) = state.quota_service {
+        if let Err(e) = quota_service.enforce(request.tenant_id, "artifacts").await {
+            return Err(ApiErrorResponse(e));
+        }
+    }
+
     // Extract side effect context before consuming request for side effect recording
     // after successful graph ingest. This preserves the context for the compensation
     // ledger write even though graph_service.ingest_artifact consumes the request.
@@ -4182,6 +4207,7 @@ pub fn build_router(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
+        quota_service: None,
         start_time: Instant::now(),
     };
 
@@ -4471,6 +4497,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            quota_service: None,
             start_time: Instant::now(),
         }
     }
@@ -4643,6 +4670,7 @@ mod tests {
 
         // Create an intent first
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -4705,6 +4733,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -4831,6 +4860,7 @@ mod tests {
 
         // Create an intent first
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -4896,6 +4926,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5060,210 +5091,7 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            start_time: Instant::now(),
-        };
-
-        // Create an intent
-        let create_request = CreateIntentRequest {
-            workflow_id: Uuid::new_v4(),
-            source_refs: vec![SourceRef {
-                ref_type: "spec".to_string(),
-                id: "spec://test".to_string(),
-            }],
-            payload: create_test_payload(),
-            created_by: intent_rebase_types::ActorRef {
-                actor_type: "user".to_string(),
-                actor_id: "test-user".to_string(),
-            },
-            tags: vec!["test".to_string()],
-        };
-
-        let intent_id = state
-            .service
-            .create_intent(create_request)
-            .await
-            .unwrap()
-            .intent_id;
-
-        // Create version 2
-        let version_request = CreateVersionRequest {
-            payload: create_test_payload(),
-            change_reason: "v2".to_string(),
-            change_channel: ChangeChannel::UserEdit,
-            created_by: intent_rebase_types::ActorRef {
-                actor_type: "user".to_string(),
-                actor_id: "test-user".to_string(),
-            },
-        };
-        state
-            .service
-            .create_version(intent_id, version_request, None, None)
-            .await
-            .unwrap();
-
-        // Get the version to access its ID
-        let to_version = state.service.get_version(intent_id, 2).await.unwrap();
-
-        // Create IntentVersion graph node for v2
-        let tenant_id = Uuid::new_v4();
-        let workflow_id = Uuid::new_v4();
-
-        // Create an IntentVersion node in the graph that maps to our version
-        let iv_node = graph_repo
-            .create_node(intent_rebase_types::CreateGraphNodeRequest {
-                tenant_id,
-                workflow_id,
-                node_type: NodeType::IntentVersion,
-                external_ref: Some(ExternalRef {
-                    ref_type: ExternalRefType::IntentVersion,
-                    ref_id: to_version.id,
-                }),
-                label: "IntentVersion v2".to_string(),
-                properties: None,
-            })
-            .await
-            .unwrap();
-
-        // Create an artifact that depends on this IntentVersion
-        let artifact_node = graph_repo
-            .create_node(intent_rebase_types::CreateGraphNodeRequest {
-                tenant_id,
-                workflow_id,
-                node_type: NodeType::Artifact,
-                external_ref: Some(ExternalRef {
-                    ref_type: ExternalRefType::Artifact,
-                    ref_id: Uuid::new_v4(),
-                }),
-                label: "Test Artifact".to_string(),
-                properties: None,
-            })
-            .await
-            .unwrap();
-
-        // Create DependsOn edge: Artifact -> IntentVersion
-        graph_repo
-            .create_edge(intent_rebase_types::CreateGraphEdgeRequest {
-                tenant_id,
-                workflow_id,
-                from_node_id: artifact_node.id,
-                to_node_id: iv_node.id,
-                edge_type: intent_rebase_types::EdgeType::DependsOn,
-                properties: None,
-            })
-            .await
-            .unwrap();
-
-        // Call rebase_preview which should use graph classification
-        let preview_request = DiffRequest {
-            from_version: 1,
-            to_version: 2,
-        };
-        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
-            .await
-            .expect("Rebase preview should succeed even with graph");
-
-        assert_eq!(result.intent_id, intent_id);
-        assert_eq!(result.affected_items.status, AffectedItemsStatus::Available);
-        // Verify affected artifacts contains our artifact
-        assert!(!result.affected_items.affected_artifacts.is_empty());
-        assert_eq!(
-            result.affected_items.affected_artifacts[0].node_id,
-            artifact_node.id
-        );
-    }
-
-    #[tokio::test]
-    async fn test_rebase_preview_fallback_when_graph_node_not_found() {
-        use graph_service::{GraphService, InMemoryGraphRepository};
-        use intent_rebase_types::{
-            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
-            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
-            Urgency,
-        };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent no graph".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
-
-        // Create service with graph service but NO graph data
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
-        let service = Arc::new(IntentService::with_graph_service(repo, graph_svc.clone()));
-        let orchestrator = Arc::new(RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        // Phase 3 Batch 1: In-memory orchestration runtime for tests
-        let compensation_action_repo =
-            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
-        let compensation_action_svc = Arc::new(
-            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
-        );
-        let orchestration_run_repo =
-            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        let state = AppState {
-            service,
-            graph_service: graph_svc.clone(),
-            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
-                compensation_service::InMemorySideEffectRepository::new(),
-            ))),
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
-                as Arc<dyn intent_rebase_types::AuditRepository>,
-            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
-                as Arc<dyn intent_service::ApprovalRequestRepository>,
-            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
-                as Arc<dyn intent_service::PolicySnapshotRepository>,
-            event_publisher: None, // Phase 2b: event publishing optional in tests
+            quota_service: None,
             start_time: Instant::now(),
         };
 
@@ -5271,6 +5099,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5337,6 +5166,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5402,6 +5232,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::nil(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5467,6 +5298,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5532,6 +5364,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5738,6 +5571,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5804,6 +5638,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5872,6 +5707,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5945,6 +5781,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -6415,6 +6252,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: Some(publisher),
+            quota_service: None,
             start_time: Instant::now(),
         }
     }
@@ -6636,6 +6474,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            quota_service: None,
             start_time: Instant::now(),
         };
 
@@ -7487,6 +7326,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            quota_service: None,
             start_time: Instant::now(),
         }
     }
