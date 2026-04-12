@@ -2701,7 +2701,7 @@ pub struct FeasibilityCounts {
 /// |-------|----------|-------------|--------|
 /// | S0PureRead | (none) | NotPossible | Skip - no action needed |
 /// | S1InternalReversible | Rollback | Automatic | Auto rollback |
-/// | S2ExternalReversible | Rollback | SemiAutomatic | Rollback with manual trigger |
+/// | S2ExternalReversible | CounterAction | SemiAutomatic | Counter-action with manual trigger |
 /// | S3ExternalPartiallyReversible | FollowupNotice | ManualOnly | Manual followup required |
 /// | S4Irreversible | Escalation | NotPossible | Escalation required |
 ///

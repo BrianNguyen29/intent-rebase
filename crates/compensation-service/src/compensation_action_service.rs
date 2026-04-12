@@ -126,7 +126,7 @@ impl CompensationActionService {
     /// |-------|----------|-------------|
     /// | S0PureRead | (none) | NotPossible | Skip - no action needed |
     /// | S1InternalReversible | Rollback | Automatic |
-    /// | S2ExternalReversible | Rollback | SemiAutomatic |
+    /// | S2ExternalReversible | CounterAction | SemiAutomatic |
     /// | S3ExternalPartiallyReversible | FollowupNotice | ManualOnly |
     /// | S4Irreversible | Escalation | NotPossible |
     pub async fn plan_compensation_actions(

@@ -109,21 +109,18 @@ impl CompensationPlanner for InMemoryCompensationPlanner {
 /// |-------|----------|-------------|-----------|
 /// | S0PureRead | Quarantine | NotPossible | Skip - no action needed |
 /// | S1InternalReversible | Rollback | Automatic | Auto rollback internal changes |
-/// | S2ExternalReversible | Rollback | SemiAutomatic | Rollback with manual trigger |
+/// | S2ExternalReversible | CounterAction | SemiAutomatic | Counter-action for external effect |
 /// | S3ExternalPartiallyReversible | FollowupNotice | ManualOnly | Manual followup required |
 /// | S4Irreversible | Escalation | NotPossible | Escalation required - cannot compensate |
 pub struct BoundedCompensationPlanner {
-    /// Optional default strategy type for S1/S2 when rollback is not ideal.
-    /// Phase 3 (this slice): Uses Rollback for S1/S2 by default.
-    default_rollback_strategy: StrategyType,
+    /// Reserved field for future extension (e.g., custom strategy per class).
+    _reserved: (),
 }
 
 impl BoundedCompensationPlanner {
     /// Create a new BoundedCompensationPlanner with default settings.
     pub fn new() -> Self {
-        Self {
-            default_rollback_strategy: StrategyType::Rollback,
-        }
+        Self { _reserved: () }
     }
 
     /// Plan compensation actions from actual side effects.
@@ -180,15 +177,15 @@ impl BoundedCompensationPlanner {
                 ))
             }
             SideEffectClass::S2ExternalReversible => {
-                // S2: External reversible - semi-automatic rollback
+                // S2: External reversible - counter-action compensation
                 Some(self.create_action(
                     tenant_id,
                     side_effect,
                     rebase_context,
-                    self.default_rollback_strategy,
+                    StrategyType::CounterAction,
                     CompensationFeasibility::SemiAutomatic,
                     &format!(
-                        "Rollback external reversible effect '{}' targeting {} for rebase v{} -> v{}",
+                        "Counter-action for external reversible effect '{}' targeting {} for rebase v{} -> v{}",
                         side_effect.effect_type,
                         side_effect.target,
                         rebase_context.from_version,
@@ -335,7 +332,7 @@ mod bounded_planner_tests {
         assert_eq!(actions.len(), 1);
 
         let action = &actions[0];
-        assert_eq!(action.strategy_type, StrategyType::Rollback);
+        assert_eq!(action.strategy_type, StrategyType::CounterAction);
         assert_eq!(action.feasibility, CompensationFeasibility::SemiAutomatic);
     }
 
@@ -445,7 +442,7 @@ mod bounded_planner_tests {
 
         // Verify action types are as expected
         let strategies: Vec<StrategyType> = actions.iter().map(|a| a.strategy_type).collect();
-        assert!(strategies.contains(&StrategyType::Rollback)); // S1 and S2
+        assert!(strategies.contains(&StrategyType::Rollback)); // S1
         assert!(strategies.contains(&StrategyType::FollowupNotice)); // S3
         assert!(strategies.contains(&StrategyType::Escalation)); // S4
     }
