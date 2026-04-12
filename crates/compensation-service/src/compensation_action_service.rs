@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::compensation_action::{
     CompensationAction, CompensationFeasibility, CompensationStatus, ExecutionResult,
-    RetryableErrorClass, StrategyType,
+    RebaseContext, RetryableErrorClass, StrategyType,
 };
 use crate::compensation_action_repo::CompensationActionRepository;
 use crate::compensation_executor::CompensationExecutor;
@@ -102,6 +102,63 @@ impl CompensationActionService {
     pub fn with_audit_repo(mut self, audit_repo: Arc<dyn AuditRepository>) -> Self {
         self.audit_repo = Some(audit_repo);
         self
+    }
+
+    /// Plan and generate compensation actions for an intent's side effects.
+    ///
+    /// Phase 3 (bounded planner slice): Uses actual SideEffect data to generate
+    /// appropriate compensation actions based on S0-S4 classification.
+    ///
+    /// **Process:**
+    /// 1. Fetch all side effects for the intent via side_effect_repo
+    /// 2. Classify each side effect using BoundedCompensationPlanner
+    /// 3. Persist generated compensation actions
+    ///
+    /// **Returns:** All generated compensation actions (excluding S0 which produces no action).
+    ///
+    /// **Error conditions:**
+    /// - If side_effect_repo is not configured, returns error
+    /// - If fetching side effects fails, returns error
+    /// - If persisting any action fails, returns error (partial-success not implemented)
+    ///
+    /// **S0-S4 classification:**
+    /// | Class | Strategy | Feasibility |
+    /// |-------|----------|-------------|
+    /// | S0PureRead | (none) | NotPossible | Skip - no action needed |
+    /// | S1InternalReversible | Rollback | Automatic |
+    /// | S2ExternalReversible | Rollback | SemiAutomatic |
+    /// | S3ExternalPartiallyReversible | FollowupNotice | ManualOnly |
+    /// | S4Irreversible | Escalation | NotPossible |
+    pub async fn plan_compensation_actions(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        rebase_context: RebaseContext,
+    ) -> Result<Vec<CompensationAction>, IntentRebaseError> {
+        // Require side_effect_repo for bounded planning
+        let side_effect_repo = self.side_effect_repo.as_ref().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "side_effect_repo is required for bounded compensation planning".into(),
+            )
+        })?;
+
+        // Fetch side effects for this intent
+        let side_effects = side_effect_repo
+            .list_by_intent(intent_id, tenant_id)
+            .await?;
+
+        // Use bounded planner to classify and generate actions
+        let planner = crate::BoundedCompensationPlanner::new();
+        let generated_actions = planner.plan_from_side_effects(&rebase_context, &side_effects, tenant_id);
+
+        // Persist all generated actions
+        let mut persisted_actions = Vec::with_capacity(generated_actions.len());
+        for action in generated_actions {
+            let created = self.create_action(action).await?;
+            persisted_actions.push(created);
+        }
+
+        Ok(persisted_actions)
     }
 
     /// Create a new compensation action.

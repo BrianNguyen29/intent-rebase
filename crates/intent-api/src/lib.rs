@@ -2651,6 +2651,116 @@ async fn reapprove_compensation_action(
 }
 
 // ============================================================================
+// Bounded Compensation Planner (Phase 3 bounded planner slice)
+// ============================================================================
+
+/// Request body for planning compensation actions from side effects.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlanCompensationActionsRequest {
+    /// Intent ID to plan compensation for
+    pub intent_id: Uuid,
+    /// Tenant ID for scoping
+    pub tenant_id: Uuid,
+    /// Source version before rebase
+    pub from_version: i32,
+    /// Target version after rebase
+    pub to_version: i32,
+    /// Workflow ID that initiated the rebase
+    pub workflow_id: Uuid,
+}
+
+/// Response for compensation action planning.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCompensationActionsResponse {
+    /// Generated compensation actions
+    pub actions: Vec<CompensationActionResponse>,
+    /// Total count of generated actions
+    pub total: usize,
+    /// Count by feasibility level
+    pub feasibility_counts: FeasibilityCounts,
+}
+
+/// Counts of actions by feasibility level.
+#[derive(Debug, Clone, Serialize)]
+pub struct FeasibilityCounts {
+    pub automatic: usize,
+    pub semi_automatic: usize,
+    pub manual_only: usize,
+    pub not_possible: usize,
+}
+
+/// POST /compensation-actions/plan - Plan compensation actions from side effects
+///
+/// Phase 3 (bounded planner slice): Fetches side effects for the given intent,
+/// classifies them using S0-S4 classification, and generates appropriate
+/// compensation actions.
+///
+/// **S0-S4 classification:**
+/// | Class | Strategy | Feasibility | Action |
+/// |-------|----------|-------------|--------|
+/// | S0PureRead | (none) | NotPossible | Skip - no action needed |
+/// | S1InternalReversible | Rollback | Automatic | Auto rollback |
+/// | S2ExternalReversible | Rollback | SemiAutomatic | Rollback with manual trigger |
+/// | S3ExternalPartiallyReversible | FollowupNotice | ManualOnly | Manual followup required |
+/// | S4Irreversible | Escalation | NotPossible | Escalation required |
+///
+/// **Returns:** All generated compensation actions (S0 produces no action).
+async fn plan_compensation_actions(
+    State(state): State<AppState>,
+    Json(request): Json<PlanCompensationActionsRequest>,
+) -> Result<Json<PlanCompensationActionsResponse>, ApiErrorResponse> {
+    let rebase_context = compensation_service::RebaseContext::new(
+        request.intent_id,
+        request.from_version,
+        request.to_version,
+        request.workflow_id,
+    );
+
+    let actions = state
+        .compensation_action_service
+        .plan_compensation_actions(request.intent_id, request.tenant_id, rebase_context)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Count by feasibility
+    let mut feasibility_counts = FeasibilityCounts {
+        automatic: 0,
+        semi_automatic: 0,
+        manual_only: 0,
+        not_possible: 0,
+    };
+
+    for action in &actions {
+        match action.feasibility {
+            compensation_service::CompensationFeasibility::Automatic => {
+                feasibility_counts.automatic += 1
+            }
+            compensation_service::CompensationFeasibility::SemiAutomatic => {
+                feasibility_counts.semi_automatic += 1
+            }
+            compensation_service::CompensationFeasibility::ManualOnly => {
+                feasibility_counts.manual_only += 1
+            }
+            compensation_service::CompensationFeasibility::NotPossible => {
+                feasibility_counts.not_possible += 1
+            }
+        }
+    }
+
+    let total = actions.len();
+    let action_responses: Vec<CompensationActionResponse> = actions
+        .into_iter()
+        .map(CompensationActionResponse::from)
+        .collect();
+
+    Ok(Json(PlanCompensationActionsResponse {
+        actions: action_responses,
+        total,
+        feasibility_counts,
+    }))
+}
+
+// ============================================================================
 // Orchestration Run Handlers (Phase 3 Batch 1 bounded single-shot HTTP slice)
 // ============================================================================
 
@@ -3935,6 +4045,11 @@ pub fn build_router(
         .route(
             "/compensation-actions/{action_id}/reapprove",
             post(reapprove_compensation_action),
+        )
+        // Bounded compensation planner endpoint (Phase 3 bounded planner slice)
+        .route(
+            "/compensation-actions/plan",
+            post(plan_compensation_actions),
         )
         .route("/compensation-actions/dlq", get(list_dlq_candidates))
         // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
