@@ -1,9 +1,11 @@
-//! Compensation planner — skeleton contract and stub implementation.
+//! Compensation planner — primary bounded implementation and legacy stub.
 //!
-//! Phase 3 Batch 1 (bounded persistence slice): skeleton planner contract only.
+//! Phase 3 Batch 1+: `BoundedCompensationPlanner` is the primary delivered implementation.
+//! `InMemoryCompensationPlanner` is retained for backward compatibility as a legacy stub.
 //!
-//! **This slice scope:** Trait definition + in-memory stub + bounded side-effect-aware planner.
-//! **Batch 1+ scope:** Full planner logic (risk scoring, strategy selection, etc.)
+//! **Scope:** Bounded side-effect-aware planner that generates compensation plans from
+//! side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic;
+//! fail-closed on unsupported strategy classes.
 //!
 //! See [../../../../docs/03-spec/05-compensation.md] for full specification.
 
@@ -36,10 +38,10 @@ pub trait CompensationPlanner: Send + Sync {
     ) -> Result<Vec<CompensationAction>, IntentRebaseError>;
 }
 
-/// In-memory stub planner for testing and Phase 3 Batch 1.
+/// In-memory stub planner for testing and backward-compatibility.
 ///
 /// This is a minimal stub — actual planner logic (risk scoring, strategy selection,
-/// multi-side-effect coordination) is Batch 1+ scope.
+/// multi-side-effect coordination) lives in the production planner.
 pub struct InMemoryCompensationPlanner {
     /// Default strategy type to use when creating actions
     default_strategy: crate::compensation_action::StrategyType,

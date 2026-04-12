@@ -17,7 +17,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
 | [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | ⬜ Not Started | High |
-| [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ⬜ Not Started | Critical |
+| [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ✅ Closed (Phase 3 Batch 1) | Critical |
 | [P8](#p8--phase-4-enterprise-expansion--policy-simulation) | Phase 4 — Enterprise Expansion: Policy Simulation | ⬜ Not Started | Medium |
 | [P9](#p9--phase-4-enterprise-expansion--advanced-adapters--cross-workflow) | Phase 4 — Advanced Adapters + Cross-Workflow Families | ⬜ Not Started | Medium |
 | [P10](#p10--phase-4-enterprise-expansion--trust-scoring--integrations) | Phase 4 — Trust Scoring + Enterprise Integrations | ⬜ Not Started | Low |
@@ -47,7 +47,7 @@ All three canonical gates passed with zero warnings as errors:
 | `cargo check --all` | ✅ No errors |
 | `cargo clippy --all-features -- -D warnings` | ✅ Clean |
 
-Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, graph update, replay API, event streaming, bounded external surfaces) are delivered and gate-verified. Exit gate sign-off is still pending Slice B residual close-out.
+Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, graph update, replay API, event streaming, bounded external surfaces) are delivered and gate-verified. Exit gate sign-off was pending Slice B residual close-out (now resolved).
 
 ---
 
@@ -172,7 +172,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 |-------|-------|
 | **ID** | P7 |
 | **Title** | Phase 3 Batch 1 Closure — Compensation Planner/Executor |
-| **Purpose** | Complete the compensation planner stub (full plan generation from side effects) and replace the stub executor with real rollback/counter-action logic. Also add compensation audit trail. |
+| **Purpose** | Deliver bounded compensation planner (plan generation from side effects), four bounded executors (rollback/counter-action logic), and compensation audit trail. |
 | **Status** | ✅ Closed (Phase 3 Batch 1) |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |

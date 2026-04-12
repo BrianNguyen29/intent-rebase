@@ -1,6 +1,6 @@
 # Phase 3 — Compensation + Production Hardening Checklist
 
-**Exit Gate:** Phase 3 complete khi tất cả items checked và có evidence.  
+**Exit Gate:** Phase 3 exit gate khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
 **Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.  
@@ -79,10 +79,10 @@
     - Tests: cargo test -p compensation-service --all-features (idempotency tests pass, including concurrent duplicate protection)
     - Note: Atomic tenant-scoped idempotency is now implemented in the service/repository path. Broader artifact-service coverage remains open.
 
-[ ] Side effect rollback record (compensation applied, compensation result)
+[x] Side effect rollback record (compensation applied, compensation result)
     Evidence:
-    - Code: compensation-service/rollback.rs
-    - Schema: side-effect rollback migration TBD
+    - Code: crates/compensation-service/src/rollback_record.rs
+    - Tests: cargo test -p compensation-service --all-features
 ```
 
 ---
@@ -96,7 +96,7 @@
     - Code: crates/compensation-service/src/compensation_action_repo.rs (trait + InMemory/SQL implementations)
     - Schema: infrastructure/migrations/011_create_compensation_actions.sql
     - Tests: cargo test -p compensation-service --all-features
-    - Note: Planner remains as stub (Batch 1+ scope)
+    - Note: Planner delivered (Phase 3 Batch 1 bounded slice; class-based strategy routing; S2 routes to CounterAction+SemiAutomatic; fail-closed on unsupported strategy classes)
 
 [x] Compensation actions query API (Phase 3 Batch 1 bounded read-only slice)
     Evidence:

@@ -33,7 +33,7 @@
 - Query API: `GET /intents/{intent_id}/compensation-actions` (read-only; no execution)
 - Approve API: `POST /compensation-actions/{action_id}/approve` — Pending → Approved
 - Waive API: `POST /compensation-actions/{action_id}/waive` — Pending → Waived
-- Execute API: `POST /compensation-actions/{action_id}/execute` — executor gate: only Approved actions execute; stub executor returns success
+- Execute API: `POST /compensation-actions/{action_id}/execute` — executor gate: only Approved actions execute; routes to one of four bounded executors (RollbackExecutor, CounterActionExecutor, FollowupNoticeExecutor, EscalationExecutor)
 - Reapprove API: `POST /compensation-actions/{action_id}/reapprove` — Failed → Pending (fail-closed; retryable errors + remaining budget only)
 
 ### Batch Orchestration
@@ -65,7 +65,7 @@
 |------|--------|----------|
 | Phase 2b exit gate | ✅ Closed | All three reviewers approved (name/date pending documentation) |
 | Side effect rollback record (compensation applied, result) | ✅ Delivered | Bounded: schema + repository for compensation applied/result fields |
-| Compensation planner (full — stub delivered) | ✅ Delivered | Bounded planner: generates compensation plans from side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic (per class routing); fail-closed on unsupported strategy classes |
+| Compensation planner (full — bounded delivered) | ✅ Delivered | Bounded planner: generates compensation plans from side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic (per class routing); fail-closed on unsupported strategy classes |
 | Compensation executor (four bounded executors — Rollback/CounterAction/FollowupNotice/Escalation) | ✅ Delivered | Bounded: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible); fail-closed on non-matching combos; S2 planner/executor alignment resolved (S2ExternalReversible routes to CounterAction+SemiAutomatic) |
 | Compensation audit trail | ✅ Delivered | Bounded: `compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed` events |
 | SLO definitions + alerting + error budget | Not started | |
