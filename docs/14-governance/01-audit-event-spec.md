@@ -60,13 +60,22 @@ Canonical audit event schema cho phép:
 | Category | Event Types |
 |----------|-------------|
 | **Intent lifecycle** | `intent.created`, `intent.updated`, `intent.deleted`, `intent.version_created` |
-| **Diff & rebase** | `rebase.detected`, `rebase.preview_generated`, `rebase.preview_viewed`, `rebase.applied`, `rebase.rejected`, `rebase.rolled_back` |
+| **Diff & rebase** | `rebase.detected`, `rebase.preview_generated`, `rebase.preview_viewed`, `rebase.applied`, `rebase.apply_blocked`, `rebase.rejected`, `rebase.rolled_back` |
 | **Graph operations** | `graph.node_created`, `graph.node_updated`, `graph.edge_created`, `graph.edge_deleted`, `graph.traversed`, `graph.orphan_detected` |
 | **Artifact lifecycle** | `artifact.created`, `artifact.invalidated`, `artifact.quarantined`, `artifact.released`, `artifact.deleted` |
 | **Approval workflow** | `approval.requested`, `approval.granted`, `approval.revoked`, `approval.expired`, `approval.revalidated`, `approval.scope_changed` |
 | **Policy snapshots** | `snapshot.created`, `snapshot.referenced`, `snapshot.verified` |
 | **Security** | `auth.login`, `auth.logout`, `auth.token_issued`, `auth.token_revoked`, `auth.access_denied`, `auth.impersonation` |
 | **System** | `system.startup`, `system.shutdown`, `system.config_changed`, `system.maintenance_started`, `system.maintenance_completed` |
+
+### Current bounded implementation status (Phase 2b)
+
+- External `POST /intents/{intent_id}/rebase-apply` currently emits bounded audit records for apply outcomes and blocked-manual-review outcomes.
+- Approval queue endpoints currently emit bounded approval decision audit records for approve/reject actions.
+- Replay endpoint (`POST /intents/{intent_id}/replay`) emits `ReplayInitiated` audit event with checkpoint selection and runtime execution metadata. This is bounded cooperative signal-based replay semantics, not native Temporal reset.
+- Actor attribution is currently best-effort with fallback values such as `external-api/unknown`, `external-api/approver`, `external-api/rejector`, and `external-api/replay` when richer identity is unavailable.
+- The canonical taxonomy above remains the target-state contract. Current Rust enum variants (`RebaseApplied`, `RebaseApplyBlocked`, `ApprovalGranted`, `ApprovalRevoked`, `ReplayInitiated`) back the bounded implementation, and naming/serialization normalization to canonical event strings remains open.
+- Append-only Postgres enforcement, hash-chain verification, and NATS/S3 downstream integration remain target-state requirements rather than fully enforced runtime guarantees in the current bounded slice.
 
 ---
 

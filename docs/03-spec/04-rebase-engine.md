@@ -1,54 +1,5 @@
 # Rebase Engine Specification
 
-## Phase 1 Status (PR #15 + PR #16 + PR #17 + PR #18)
-
-**PR #15 — Preview Endpoint:**
-- Decision classes A-E mapping from diff+risk analysis
-- `RebasePlan` output type with typed decision class, rationale, and section decisions
-- Deterministic decision class computation (same input → same output)
-- `RebaseEngine::generate_plan()` for plan generation
-- Rebase preview HTTP endpoint: POST /v1/intents/{id}/rebase-preview
-
-**PR #16 — Graph-Integrated Affected Items:**
-- `AffectedItemsPreview` with `status` field (available/unavailable)
-- Graph-based impact classification via `classify_impact()` from dependency graph
-- `affected_items` list in preview response when graph data is available
-- Endpoint remains functional even when graph coverage is incomplete
-- Safe default: classification starts from target IntentVersion graph node (to_version)
-
-**PR #17 — Apply/Checkpoint Groundwork:**
-- Typed internal contract for checkpoint selection readiness (`CheckpointSelection`)
-- Typed internal contract for approval revalidation readiness (`ApprovalRevalidation`)
-- Typed internal contract for compensation action readiness (`CompensationReadiness`)
-- `DeferredFields` replaced stringly TODO placeholders with structured Phase 1 groundwork types
-- New types exported from `rebase_engine`: `CheckpointSelection`, `CheckpointCandidate`, `ApprovalRevalidation`, `ApprovalNeedingRevalidation`, `RevalidationStrategy`, `CompensationReadiness`, `CompensationAction`
-- All Phase 2 fields have `ready: false` in Phase 1
-- Deterministic unit tests verify deferred state properties
-- Apply HTTP endpoint NOT added (Phase 2)
-
-**PR #18 — Internal Checkpoint Heuristic Baseline:**
-- `CheckpointSelection::heuristic_baseline()` adds deterministic internal checkpoint strategy hints by decision class
-- Class C prefers the nearest validated checkpoint before the first invalidated node
-- Class D prefers a checkpoint before irreversible side effects when possible
-- Class E surfaces a manual-handoff boundary without auto-selecting a restart point
-- `CheckpointSelection.ready` remains `false`; no runtime-backed checkpoint execution exists yet
-
-**PR #19 — Internal Approval-Revalidation Heuristic Baseline:**
-- `ApprovalRevalidation::heuristic_baseline()` adds deterministic internal strategy hints by decision class
-- When graph-derived `affected_approvals` are available (via PR #16 graph integration), they are mapped to `ApprovalNeedingRevalidation` entries for Class C and D
-- Class E drops all approvals (clean slate before manual handoff) regardless of graph data
-- Class A and B produce no invalidation candidates (no immediate revalidation needed)
-- When `affected_approvals` is unavailable, the heuristic falls back to empty approvals with a truthful rationale
-- `ApprovalRevalidation.ready` remains `false`; execution deferred to Phase 2 runtime adapter
-- No public API or OpenAPI changes; internal-only heuristic baseline
-
-**NOT YET IMPLEMENTED (Phase 2+):**
-- Runtime-backed checkpoint discovery and execution
-- Approval revalidation execution hooks
-- Runtime adapter integration
-- Rebase apply (preview-only in Phase 1)
-- Compensation action generation (identified in `side_effects`, not generated)
-
 ## Mục tiêu
 Tạo quyết định có cấu trúc khi intent thay đổi:
 - giữ cái gì
@@ -129,8 +80,6 @@ Không đủ an toàn để auto-repair.
 - không bỏ sót dependency bắt buộc
 - tránh rerun side effects đã irreversible nếu không cần
 
-PR #18 chỉ mới thêm heuristic baseline nội bộ để xếp hạng checkpoint strategy hints theo decision class; mapping sang checkpoint runtime thật vẫn deferred tới Phase 2.
-
 ## Repair primitives
 - drop_task(node)
 - rescope_task(node, intent_delta)
@@ -153,3 +102,22 @@ PR #18 chỉ mới thêm heuristic baseline nội bộ để xếp hạng checkp
 - percentage full restarts avoided
 - invalidation precision/recall (estimated via review labels)
 - incident reduction due to stale intent
+
+## Phase 1 Status
+
+**Phase 1 (Core Control Plane MVP):** ✓ COMPLETE
+
+Implemented components:
+- Intent Schema Validation (PR #21)
+- Graph HTTP API (PR #22)
+- Observability v1 (PR #23)
+- Security v1 (PR #24)
+
+### Version Chain Integrity
+
+The rebase engine maintains version chain integrity through `parent_version_id` tracking. Each intent version references its parent, enabling:
+- Accurate semantic diff computation between versions
+- Reliable rollback to any previous checkpoint
+- Complete invalidation set generation when intent changes
+
+For full Phase 1 checklist, see [checklist-phase-1.md](../10-delivery/checklists/checklist-phase-1.md)

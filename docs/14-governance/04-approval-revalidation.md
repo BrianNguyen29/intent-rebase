@@ -47,13 +47,15 @@ Defines how approval scope is computed, how approvals are invalidated on intent 
 [Approval Requested]
     ↓
 [Pending Approval] ← → [Approval Granted] ← → [Approval Revoked]
-                        ↓                       ↓
-                 [Intent Executed]       [Compensation Triggered]
-                        ↓
-                 [Approval Valid] ← → [Approval Expired]
-                        ↓
-                 [Intent Changed] → [Scope Changed] → [Revalidation Required]
+                         ↓                       ↓
+                  [Intent Executed]       [Compensation Triggered]
+                         ↓
+                  [Approval Valid] ← → [Approval Expired (manual)]
+                         ↓
+                  [Intent Changed] → [Scope Changed] → [Revalidation Required]
 ```
+
+**Note:** `Approval Expired` is a manual transition via `POST /approval-requests/{id}/expire`. No background worker or automatic expiry machinery exists in Phase 2b.
 
 ---
 
@@ -98,29 +100,90 @@ Defines how approval scope is computed, how approvals are invalidated on intent 
 
 ### Revalidation API
 
+**IMPLEMENTED (Phase 2b bounded):**
 ```yaml
-GET /api/v1/approvals/{id}/revalidate:
-  description: Check if approval is still valid
+GET /approval-requests/{id}/revalidate:
+  description: Check if approval is still valid (read-only scope comparison)
   response:
     {
       "approval_id": "uuid",
-      "valid": false,
-      "reason": "scope_changed",
-      "new_scope": {...},
-      "revalidation_required": true
+      "valid": true|false,
+      "reason": "Scope unchanged since approval was granted" | "Scope has changed since approval was granted",
+      "approval_basis_scope_hash": "sha256...",
+      "current_scope_hash": "sha256..." | null,
+      "revalidation_required": true|false,
+      "intent_id": "uuid",
+      "approval_basis_version": 1
     }
+  Note: Read-only scope_hash comparison. Does NOT modify approval state or trigger re-approval.
 
-POST /api/v1/approvals/{id}/revalidate:
-  description: Trigger revalidation workflow
-  body: { intent_id: uuid, new_intent_version: int }
+POST /approval-requests/{id}/expire:
+  description: Manually mark a pending approval request as expired
+  body:
+    {
+      "reason": "Approval time limit exceeded"  # optional, defaults to "Approval time limit exceeded"
+    }
   response:
     {
-      "approval_id": "uuid",
-      "revalidation_id": "uuid",
-      "status": "pending",
-      "required_approvers": [...]
+      "id": "uuid",
+      "intent_id": "uuid",
+      "status": "Expired",
+      "resolved_by": "system/expire",
+      "resolved_at": "2025-04-09T00:00:00Z",
+      "resolution_notes": "Approval time limit exceeded"
     }
+  Note: Manual expiry only — no background worker or automatic expiry in Phase 2b.
+
+POST /approval-requests/trigger-reapproval:
+  description: Trigger re-approval workflow (bounded - creates approval record, returns queue intent)
+  body:
+    {
+      "intent_id": "uuid",
+      "original_version_from": 1,
+      "current_version_to": 2,
+      "original_scope_hash": "sha256...",
+      "current_scope_hash": "sha256...",
+      "reapproval_reason": "Scope has changed since approval was granted"
+    }
+  response:
+    {
+      "approval_request_id": "uuid",
+      "intent_id": "uuid",
+      "intent_version_from": 1,
+      "intent_version_to": 2,
+      "notification_intent": true,
+      "status": "pending",
+      "reason": "Scope has changed since approval was granted"
+    }
+  Note: notification_intent=true is advisory only. Does NOT send actual notifications.
+        External notification systems integration is Phase 3 deferred work.
 ```
+
+**NOT YET IMPLEMENTED (Future Phase 3):**
+```yaml
+POST /api/v1/approvals/{id}/revalidate:
+  description: Full revalidation workflow with external notification delivery
+  ...
+```
+
+**Bounded read-only behavior:**
+- GET /approval-requests/{id}/revalidate: Compares approval-basis snapshot scope_hash with latest snapshot scope_hash
+- Returns validity status without triggering workflow or modifying approval state
+- If latest snapshot missing, returns valid=false (cannot determine current policy)
+- Does NOT auto-invalidate approvals, queue notifications, or start re-approval workflows
+
+**Bounded expire behavior (Phase 2b):**
+- POST /approval-requests/{id}/expire: Manually transitions Pending → Expired
+- No background worker or automatic expiry machinery
+- Emits ApprovalExpired audit event
+- Does NOT trigger re-approval workflow or resume/re-trigger apply
+
+**Bounded trigger behavior (Phase 2b):**
+- POST /approval-requests/trigger-reapproval: Creates new pending approval request record
+- Returns approval_request_id for queue/notification tracking
+- Sets notification_intent=true to indicate notification SHOULD happen
+- Does NOT send actual notifications (Phase 3 external notification system out of scope)
+- Caller is responsible for actual notification delivery or Phase 3 integration
 
 ---
 
@@ -147,6 +210,8 @@ POST /api/v1/approvals/{id}/revalidate:
          └─→│         Invalidated        │
             └─────────────────────────────┘
 ```
+
+**Note:** `Approval Expired` is a manual transition (POST /approval-requests/{id}/expire). No automatic expiry or background worker exists in Phase 2b.
 
 ---
 

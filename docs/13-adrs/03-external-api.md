@@ -1,6 +1,6 @@
 # ADR-03 — External API Protocol
 
-**Status:** Accepted  
+**Status:** Proposed  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 0–1  

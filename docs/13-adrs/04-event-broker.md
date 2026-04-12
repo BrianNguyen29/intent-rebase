@@ -1,6 +1,6 @@
 # ADR-04 — Event Broker Selection
 
-**Status:** Deferred (interim default: NATS JetStream; revisit gate: platform mandate or Phase 2)  
+**Status:** Proposed (NATS recommended if no platform bias)  
 **Date:** 2026-04-03  
 **Authors:** Intent Rebase Engine Team  
 **Phase:** Phase 0–P1  
@@ -23,7 +23,7 @@ Options considered:
 
 ## Decision
 
-**NATS JetStream as interim default event broker, pending platform mandate confirmation; Kafka remains the alternative if organizational platform bias favors it.**
+**NATS JetStream as primary event broker, unless organizational platform bias favors Kafka.**
 
 ### Rationale
 
@@ -76,18 +76,6 @@ If the deployment platform has existing Kafka infrastructure:
 ### Neutral
 - Phase 0: local NATS container for development
 - Phase 3: production NATS cluster with TLS and authentication
-
----
-
-## Defer Note
-
-**Reason:** Deferred pending platform mandate confirmation. If the deployment platform has a pre-existing Kafka investment (Confluent, AWS MSK, etc.), Kafka may be preferred.
-
-**Interim Default:** NATS JetStream for local dev and initial deployment.
-
-**Revisit Gate:** Phase 2, triggered by: (a) platform team mandate for Kafka, or (b) scale requirements exceed NATS JetStream benchmarks.
-
-**Action:** In Phase 1, implement NATS JetStream adapter. Create KafkaAdapter interface stub so migration path is clear when gate is reached.
 
 ---
 

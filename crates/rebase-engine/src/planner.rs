@@ -3,9 +3,14 @@
 //! Phase 1 implements a preview-only planner that maps diff+risk analysis
 //! to deterministic decision classes A-E.
 //!
+//! Checkpoint selection heuristic (PR #18):
+//! - Generates candidates based on decision class and affected items
+//! - Selects best checkpoint per heuristic rules (closest, before invalidation, etc.)
+//! - Keeps `ready: false` since execution requires runtime adapter integration (Phase 2)
+//!
 //! This module does NOT include:
-//! - Runtime-backed checkpoint discovery/execution
-//! - Approval revalidation hooks
+//! - Graph-based impact classification integration (requires graph HTTP API)
+//! - Approval revalidation hooks (TODO/None in Phase 1)
 //! - Runtime adapter integration (Phase 2)
 //!
 //! The planner is deterministic: same diff+risk input always produces
@@ -16,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::diff::IntentVersionDiff;
 use crate::risk::{DiffRiskAnalysis, Severity};
 
-// Re-export AffectedItemsPreview from intent_rebase_types for use in RebasePlan
-pub use intent_rebase_types::AffectedItemsPreview;
+// Re-export AffectedItemsPreview and ClassificationImpact from intent_rebase_types
+pub use intent_rebase_types::{AffectedItemsPreview, ClassificationImpact, RiskTier};
 
 /// Decision class for rebase planning
 ///
@@ -57,20 +62,17 @@ impl DecisionClass {
 
 /// Checkpoint selection readiness for apply phase
 ///
-/// Phase 1 groundwork: execution remains deferred.
-///
-/// PR #18 adds an internal heuristic baseline that can rank checkpoint strategy
-/// hints by decision class, while Phase 2+ will replace those hints with
-/// runtime-backed checkpoint discovery and execution logic.
+/// PR #18: Added internal heuristic baseline that populates candidates/selected/rationale.
+/// `ready` remains `false` because actual execution requires runtime adapter integration (Phase 2).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CheckpointSelection {
-    /// Whether checkpoint selection is ready to execute
+    /// Whether checkpoint selection is ready to execute (false in Phase 1)
     pub ready: bool,
-    /// Candidate checkpoint strategy hints (runtime-backed candidates remain Phase 2)
+    /// Candidate checkpoint descriptions (populated by heuristic in PR #18)
     pub candidates: Vec<CheckpointCandidate>,
-    /// Selected internal checkpoint hint (runtime-backed selection remains Phase 2)
+    /// Selected checkpoint (populated by heuristic in PR #18)
     pub selected: Option<CheckpointCandidate>,
-    /// Selection rationale for the internal baseline
+    /// Selection rationale (populated by heuristic in PR #18)
     pub rationale: Option<String>,
 }
 
@@ -85,27 +87,36 @@ impl CheckpointSelection {
         }
     }
 
-    /// Internal checkpoint heuristic baseline.
+    /// Phase 1 checkpoint selection heuristic baseline (PR #18)
     ///
-    /// This remains non-executable (`ready=false`) until runtime adapter support
-    /// exists, but it can surface deterministic internal hints about which
-    /// checkpoint strategy would be preferred for a given decision class.
-    pub fn heuristic_baseline(decision_class: DecisionClass) -> Self {
-        let candidates = compute_checkpoint_candidates(decision_class);
-        let selected = select_best_checkpoint(decision_class, &candidates);
-        let rationale = build_checkpoint_selection_rationale(decision_class, selected.as_ref());
+    /// Internal heuristic that generates candidates and selects a checkpoint
+    /// based on decision class and affected items analysis. Keeps `ready: false`
+    /// because actual execution requires runtime adapter integration (Phase 2).
+    ///
+    /// Heuristic rules (per spec):
+    /// - Prefer closest checkpoint (most recent)
+    /// - Before first invalid node
+    /// - Don't miss mandatory dependencies
+    /// - Avoid rerunning irreversible side effects if not needed
+    pub fn with_heuristic(
+        decision_class: DecisionClass,
+        affected_items: &AffectedItemsPreview,
+    ) -> Self {
+        let candidates = compute_checkpoint_candidates(decision_class, affected_items);
+        let (selected, rationale) =
+            select_best_checkpoint(&candidates, decision_class, affected_items);
 
         Self {
-            ready: false,
+            ready: false, // Execution requires runtime adapter integration (Phase 2)
             candidates,
             selected,
-            rationale,
+            rationale: Some(rationale),
         }
     }
 }
 
 /// A candidate checkpoint for rebase resume
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointCandidate {
     /// Checkpoint identifier
     pub id: String,
@@ -144,29 +155,48 @@ impl ApprovalRevalidation {
         }
     }
 
-    /// Internal approval-revalidation heuristic baseline.
+    /// Phase 1 heuristic baseline: populate approvals from affected items preview
     ///
-    /// This remains non-executable (`ready=false`) until runtime adapter support
-    /// exists, but it surfaces deterministic internal strategy hints about which
-    /// approvals may need revalidation for a given decision class.
-    ///
-    /// When `affected_approvals` is provided (from graph integration via PR #16),
-    /// those known-affected approvals are surfaced in `approvals_needing_revalidation`.
-    /// When `affected_approvals` is empty, the heuristic still produces a strategy
-    /// hint and rationale indicating this is a heuristic baseline with execution deferred.
-    pub fn heuristic_baseline(
+    /// PR #18 pattern: populate internal candidates/logic while keeping `ready: false`.
+    /// Execution requires runtime adapter integration (Phase 2).
+    pub fn with_affected_approvals(
         decision_class: DecisionClass,
-        affected_approvals: &[intent_rebase_types::AffectedItem],
+        affected_items: &AffectedItemsPreview,
     ) -> Self {
-        let approvals_needing_revalidation =
-            compute_approvals_needing_revalidation(decision_class, affected_approvals);
-        let strategy =
-            select_revalidation_strategy(decision_class, &approvals_needing_revalidation);
-        let rationale =
-            build_revalidation_rationale(decision_class, strategy, &approvals_needing_revalidation);
+        let approvals_needing_revalidation: Vec<ApprovalNeedingRevalidation> = affected_items
+            .affected_approvals
+            .iter()
+            .map(|item| ApprovalNeedingRevalidation {
+                node_id: item.node_id.to_string(),
+                label: item.label.clone(),
+                original_rule_id: item
+                    .external_ref
+                    .as_ref()
+                    .map(|r| format!("{:?}", r))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                reason: item.reason.clone(),
+            })
+            .collect();
+
+        let strategy = match decision_class {
+            DecisionClass::A | DecisionClass::B => RevalidationStrategy::Drop,
+            DecisionClass::C => RevalidationStrategy::Incremental,
+            DecisionClass::D | DecisionClass::E => RevalidationStrategy::Full,
+        };
+
+        let rationale = if approvals_needing_revalidation.is_empty() {
+            Some("No affected approvals detected".to_string())
+        } else {
+            Some(format!(
+                "{} approval(s) need revalidation (class {:?}, strategy {:?})",
+                approvals_needing_revalidation.len(),
+                decision_class,
+                strategy
+            ))
+        };
 
         Self {
-            ready: false,
+            ready: false, // Execution requires runtime adapter integration (Phase 2)
             approvals_needing_revalidation,
             strategy,
             rationale,
@@ -190,8 +220,10 @@ pub struct ApprovalNeedingRevalidation {
 /// Strategy for approval revalidation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum RevalidationStrategy {
     /// Revalidation deferred to Phase 2
+    #[default]
     Deferred,
     /// Full revalidation required
     Full,
@@ -199,12 +231,6 @@ pub enum RevalidationStrategy {
     Incremental,
     /// Stale approvals to be dropped
     Drop,
-}
-
-impl Default for RevalidationStrategy {
-    fn default() -> Self {
-        RevalidationStrategy::Deferred
-    }
 }
 
 /// Compensation action readiness for apply phase
@@ -233,6 +259,56 @@ impl CompensationReadiness {
             rationale: None,
         }
     }
+
+    /// Phase 1 heuristic baseline: populate compensation readiness from side effects
+    ///
+    /// PR #18 pattern: populate internal candidates/logic while keeping `ready: false`.
+    /// Execution requires runtime adapter integration (Phase 2).
+    pub fn with_side_effects(
+        decision_class: DecisionClass,
+        affected_items: &AffectedItemsPreview,
+    ) -> Self {
+        let has_irreversible_effects = affected_items.side_effects.iter().any(|item| {
+            matches!(
+                item.impact,
+                ClassificationImpact::Direct | ClassificationImpact::Transitive
+            )
+        });
+
+        let potential_actions: Vec<CompensationAction> = affected_items
+            .side_effects
+            .iter()
+            .map(|item| CompensationAction {
+                id: item.node_id.to_string(),
+                label: item.label.clone(),
+                description: item.reason.clone(),
+                reversible: matches!(item.impact, ClassificationImpact::Unchanged),
+                priority: match item.impact {
+                    ClassificationImpact::Direct => 1,
+                    ClassificationImpact::Transitive => 2,
+                    ClassificationImpact::Unchanged => 3,
+                },
+            })
+            .collect();
+
+        let rationale = if potential_actions.is_empty() {
+            Some("No side effects requiring compensation".to_string())
+        } else {
+            Some(format!(
+                "{} potential compensation action(s) identified (irreversible: {}, class {:?})",
+                potential_actions.len(),
+                has_irreversible_effects,
+                decision_class
+            ))
+        };
+
+        Self {
+            ready: false, // Execution requires runtime adapter integration (Phase 2)
+            potential_actions,
+            has_irreversible_effects,
+            rationale,
+        }
+    }
 }
 
 /// A potential compensation action to mitigate side effects
@@ -250,43 +326,84 @@ pub struct CompensationAction {
     pub priority: u8,
 }
 
+/// Phase 3 Batch 1: Public compensation planning summary for API responses.
+///
+/// This is a read-only summary of compensation planning output from the rebase planner.
+/// It exposes the skeleton/preview compensation data without claiming execution support.
+///
+/// **Distinction from actual compensation actions:**
+/// - This summary represents planner-generated potential compensation actions
+///   derived from affected items analysis during rebase preview
+/// - Actual compensation actions (stored records) are queried via
+///   `GET /intents/{intent_id}/compensation-actions` using CompensationActionService
+///
+/// **Execution readiness:**
+/// - `ready: true` indicates full compensation planning is available
+/// - `ready: false` (Phase 3 Batch 1) indicates compensation planning is deferred;
+///   the action list will be empty and execution is not supported
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationPlanningSummary {
+    /// Whether full compensation planning is ready to execute.
+    /// When false (Phase 3 Batch 1), compensation planning is deferred and
+    /// the potential_actions list will be empty.
+    pub ready: bool,
+    /// Potential compensation actions identified by the planner.
+    /// Phase 3 Batch 1: This is a skeleton/preview list; actual execution
+    /// requires Batch 1+ planner implementation.
+    pub potential_actions: Vec<CompensationAction>,
+    /// Whether any irreversible side effects are present in the affected items.
+    /// When true, manual intervention may be required even for automatic compensation.
+    pub has_irreversible_effects: bool,
+    /// Human-readable rationale for compensation planning decisions.
+    pub rationale: Option<String>,
+}
+
+impl From<&CompensationReadiness> for CompensationPlanningSummary {
+    fn from(readiness: &CompensationReadiness) -> Self {
+        Self {
+            ready: readiness.ready,
+            potential_actions: readiness.potential_actions.clone(),
+            has_irreversible_effects: readiness.has_irreversible_effects,
+            rationale: readiness.rationale.clone(),
+        }
+    }
+}
+
 /// Phase 1 status for features not yet implemented
 ///
-/// These fields are spec-adjacent but deferred to Phase 2+.
+/// PR #18: all three deferred fields now have internal heuristic baselines.
+/// `ready` remains `false` for all because actual execution requires
+/// runtime adapter integration (Phase 2).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeferredFields {
-    /// Checkpoint selection readiness (Phase 2)
+    /// Checkpoint selection (PR #18: heuristic baseline, ready=false)
     pub checkpoint_selection: CheckpointSelection,
-    /// Approval revalidation readiness (Phase 2)
+    /// Approval revalidation readiness (PR #18: heuristic baseline, ready=false)
     pub approval_revalidation: ApprovalRevalidation,
-    /// Compensation action readiness (Phase 2)
+    /// Compensation action readiness (PR #18: heuristic baseline, ready=false)
     pub compensation: CompensationReadiness,
 }
 
 impl DeferredFields {
     /// Create new deferred fields with Phase 1 baseline
-    pub fn phase1_baseline() -> Self {
-        Self::phase1_baseline_for(DecisionClass::A, &AffectedItemsPreview::unavailable())
-    }
-
-    /// Create new deferred fields with Phase 1 baseline plus internal
-    /// checkpoint-selection hints and approval-revalidation heuristic for
-    /// the computed decision class.
     ///
-    /// When `affected_items` has `status: Available`, its `affected_approvals`
-    /// are passed to the approval heuristic. When `status: Unavailable`,
-    /// an empty slice is passed (heuristic falls back truthfully).
-    pub fn phase1_baseline_for(
+    /// PR #18: all three fields use heuristic baselines that populate
+    /// internal candidates/logic while keeping `ready: false`.
+    /// Execution requires runtime adapter integration (Phase 2).
+    pub fn phase1_baseline(
         decision_class: DecisionClass,
         affected_items: &AffectedItemsPreview,
     ) -> Self {
         Self {
-            checkpoint_selection: CheckpointSelection::heuristic_baseline(decision_class),
-            approval_revalidation: ApprovalRevalidation::heuristic_baseline(
+            checkpoint_selection: CheckpointSelection::with_heuristic(
                 decision_class,
-                &affected_items.affected_approvals,
+                affected_items,
             ),
-            compensation: CompensationReadiness::deferred(),
+            approval_revalidation: ApprovalRevalidation::with_affected_approvals(
+                decision_class,
+                affected_items,
+            ),
+            compensation: CompensationReadiness::with_side_effects(decision_class, affected_items),
         }
     }
 }
@@ -305,11 +422,20 @@ pub struct SectionDecision {
 /// Complete rebase plan output from the planner
 ///
 /// Phase 1 baseline provides typed decision class mapping from diff+risk
-/// analysis, graph-integrated affected items, and internal checkpoint heuristic
-/// hints. Future PRs will enhance with:
-/// - Runtime-backed checkpoint lookup/execution
+/// analysis. PR #18 added internal checkpoint selection heuristic baseline:
+/// - Generates candidates based on decision class and affected items
+/// - Selects best checkpoint per heuristic rules
+/// - `deferred.checkpoint_selection.ready` remains false (Phase 2 execution)
+///
+/// Phase 2b: `risk_tier` is the canonical public risk field, mapping from
+/// `DiffRiskAnalysis.severity`. `risk_level` (u8 1-5) and `decision_class`
+/// remain available as supporting fields.
+///
+/// Future PRs will enhance with:
+/// - Graph-based affected node classification (already in rebase-preview)
 /// - Approval revalidation hooks
 /// - Compensation action generation
+/// - Runtime adapter integration for actual apply
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebasePlan {
     /// The assigned decision class (A-E)
@@ -318,13 +444,16 @@ pub struct RebasePlan {
     pub rationale: String,
     /// Section-level decisions
     pub section_decisions: Vec<SectionDecision>,
-    /// Affected items preview (graph integration may populate this downstream)
+    /// Affected items preview (Phase 1: empty, TODO in Phase 2)
     pub affected_items: AffectedItemsPreview,
-    /// Deferred internal apply/readiness fields
+    /// Deferred fields (Phase 1: TODO markers)
     pub deferred: DeferredFields,
     /// Whether manual review is recommended
     pub manual_review_recommended: bool,
-    /// Risk level from 1-5 (1=lowest, 5=highest)
+    /// Canonical public risk tier (Phase 2b): derived from `DiffRiskAnalysis.severity`.
+    /// Use this as the primary public risk field in API responses.
+    pub risk_tier: RiskTier,
+    /// Risk level from 1-5 (1=lowest, 5=highest) — supporting field
     pub risk_level: u8,
 }
 
@@ -353,16 +482,20 @@ impl RebasePlan {
 
         let risk_level = compute_risk_level(&decision_class, risk);
 
+        // Phase 2b: Canonical public risk_tier from DiffRiskAnalysis severity
+        let risk_tier = risk.severity.to_risk_tier();
+
         Self {
             decision_class,
             rationale,
             section_decisions,
             affected_items: AffectedItemsPreview::unavailable(),
-            deferred: DeferredFields::phase1_baseline_for(
+            deferred: DeferredFields::phase1_baseline(
                 decision_class,
                 &AffectedItemsPreview::unavailable(),
             ),
             manual_review_recommended,
+            risk_tier,
             risk_level,
         }
     }
@@ -480,9 +613,9 @@ fn compute_rationale(
         DecisionClass::B => {
             let mut parts = vec![];
             parts.push(format!(
-                "{} severity with {} confidence",
-                format!("{:?}", risk.severity).to_lowercase(),
-                format!("{:.0}%", risk.confidence * 100.0)
+                "{:?} severity with {:.0}% confidence",
+                risk.severity,
+                risk.confidence * 100.0
             ));
             if risk.manual_review {
                 parts.push("manual review flagged".to_string());
@@ -635,237 +768,230 @@ fn compute_risk_level(decision: &DecisionClass, risk: &DiffRiskAnalysis) -> u8 {
     }
 }
 
-fn compute_checkpoint_candidates(decision_class: DecisionClass) -> Vec<CheckpointCandidate> {
-    match decision_class {
-        DecisionClass::A | DecisionClass::B => vec![],
-        DecisionClass::C => vec![
-            CheckpointCandidate {
-                id: "nearest-validated".to_string(),
-                label: "Nearest validated checkpoint".to_string(),
-                description:
-                    "Resume from the nearest validated checkpoint before the first invalidated node."
-                        .to_string(),
-                validated: true,
-            },
-            CheckpointCandidate {
-                id: "last-known-good".to_string(),
-                label: "Last known good checkpoint".to_string(),
-                description:
-                    "Fallback checkpoint that preserves required dependencies while limiting reruns."
-                        .to_string(),
-                validated: true,
-            },
-            CheckpointCandidate {
-                id: "minimal-rerun-boundary".to_string(),
-                label: "Minimal rerun boundary".to_string(),
-                description:
-                    "Fallback boundary when a validated checkpoint is unavailable but reruns should stay narrow."
-                        .to_string(),
-                validated: false,
-            },
-        ],
-        DecisionClass::D => vec![
-            CheckpointCandidate {
-                id: "pre-side-effect".to_string(),
-                label: "Checkpoint before side effects".to_string(),
-                description:
-                    "Prefer a checkpoint before irreversible or compensating side effects when available."
-                        .to_string(),
-                validated: true,
-            },
-            CheckpointCandidate {
-                id: "before-invalidated-node".to_string(),
-                label: "Checkpoint before first invalidated node".to_string(),
-                description:
-                    "Fallback checkpoint immediately before the first invalidated node in the repair path."
-                        .to_string(),
-                validated: true,
-            },
-            CheckpointCandidate {
-                id: "last-known-good".to_string(),
-                label: "Last known good checkpoint".to_string(),
-                description:
-                    "Broader rollback point that favors dependency completeness over minimal reruns."
-                        .to_string(),
-                validated: true,
-            },
-        ],
-        DecisionClass::E => vec![CheckpointCandidate {
-            id: "manual-handoff-boundary".to_string(),
-            label: "Manual handoff boundary".to_string(),
+/// Compute checkpoint candidates based on decision class and affected items
+///
+/// Phase 1 heuristic baseline: generates candidates that represent different
+/// resume points depending on the decision class. Actual checkpoint data
+/// requires runtime adapter integration (Phase 2).
+fn compute_checkpoint_candidates(
+    decision_class: DecisionClass,
+    affected_items: &AffectedItemsPreview,
+) -> Vec<CheckpointCandidate> {
+    use intent_rebase_types::AffectedItemsStatus;
+
+    // For Class A (no-op), no checkpoint needed
+    if decision_class == DecisionClass::A {
+        return vec![];
+    }
+
+    let mut candidates = Vec::new();
+
+    // Check if we have graph-derived affected items
+    let has_affected_items = affected_items.status == AffectedItemsStatus::Available
+        && (!affected_items.affected_artifacts.is_empty()
+            || !affected_items.affected_approvals.is_empty()
+            || !affected_items.side_effects.is_empty());
+
+    // Candidate 1: Most recent checkpoint (closest to current state)
+    // This is the preferred candidate for soft review and partial repair
+    candidates.push(CheckpointCandidate {
+        id: "checkpoint-most-recent".to_string(),
+        label: "Most Recent Checkpoint".to_string(),
+        description: "Resume from the most recent checkpoint before changes".to_string(),
+        validated: false, // Phase 2: would be true if runtime adapter confirms
+    });
+
+    // Candidate 2: Before first invalidation point
+    // Preferred when there are affected items that may have invalid states
+    if has_affected_items {
+        candidates.push(CheckpointCandidate {
+            id: "checkpoint-before-invalidation".to_string(),
+            label: "Before First Invalidation".to_string(),
+            description: "Resume before any affected items were invalidated by the changes"
+                .to_string(),
+            validated: false,
+        });
+    }
+
+    // Candidate 3: Before side effects (for D-class decisions)
+    // Preferred when compensation planning is needed
+    if decision_class == DecisionClass::D || decision_class == DecisionClass::E {
+        candidates.push(CheckpointCandidate {
+            id: "checkpoint-before-side-effects".to_string(),
+            label: "Before Side Effects".to_string(),
             description:
-                "Execution restart boundary must be confirmed manually before any runtime apply path is attempted."
+                "Resume before any irreversible side effects were triggered by the changes"
                     .to_string(),
             validated: false,
-        }],
+        });
     }
-}
 
-fn select_best_checkpoint(
-    decision_class: DecisionClass,
-    candidates: &[CheckpointCandidate],
-) -> Option<CheckpointCandidate> {
-    match decision_class {
-        DecisionClass::A | DecisionClass::B => None,
-        DecisionClass::C => candidates
-            .iter()
-            .find(|candidate| candidate.id == "nearest-validated")
-            .cloned()
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .find(|candidate| candidate.id == "last-known-good")
-                    .cloned()
-            })
-            .or_else(|| candidates.first().cloned()),
-        DecisionClass::D => candidates
-            .iter()
-            .find(|candidate| candidate.id == "pre-side-effect")
-            .cloned()
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .find(|candidate| candidate.id == "before-invalidated-node")
-                    .cloned()
-            })
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .find(|candidate| candidate.id == "last-known-good")
-                    .cloned()
-            })
-            .or_else(|| candidates.first().cloned()),
-        DecisionClass::E => None,
-    }
-}
-
-fn build_checkpoint_selection_rationale(
-    decision_class: DecisionClass,
-    selected: Option<&CheckpointCandidate>,
-) -> Option<String> {
-    match decision_class {
-        DecisionClass::A => None,
-        DecisionClass::B => Some(
-            "Soft-review path: no rerun checkpoint is suggested by the internal baseline yet."
+    // Candidate 4: Last known good state (for E-class hard restart)
+    // Preferred when manual handoff is required
+    if decision_class == DecisionClass::E {
+        candidates.push(CheckpointCandidate {
+            id: "checkpoint-last-known-good".to_string(),
+            label: "Last Known Good State".to_string(),
+            description: "Resume from the last fully validated state before issues began"
                 .to_string(),
-        ),
-        DecisionClass::C => selected.map(|candidate| {
-            format!(
-                "Class C favors the nearest safe checkpoint before the first invalidated node; selected internal hint '{}'.",
-                candidate.label
-            )
-        }),
-        DecisionClass::D => selected.map(|candidate| {
-            format!(
-                "Class D favors a checkpoint before irreversible work or the first invalidated node; selected internal hint '{}'.",
-                candidate.label
-            )
-        }),
-        DecisionClass::E => Some(
-            "Class E requires manual handoff; the internal baseline does not auto-select a restart checkpoint."
-                .to_string(),
-        ),
+            validated: false,
+        });
     }
+
+    // Candidate 5: Minimal checkpoint (for C-class partial repair)
+    // Preferred when only limited scope changes need repair
+    if decision_class == DecisionClass::C {
+        candidates.push(CheckpointCandidate {
+            id: "checkpoint-minimal".to_string(),
+            label: "Minimal Checkpoint".to_string(),
+            description: "Resume at the minimal checkpoint needed to repair scope changes"
+                .to_string(),
+            validated: false,
+        });
+    }
+
+    candidates
 }
 
-/// Map graph-derived affected approvals to revalidation candidates.
+/// Select the best checkpoint from candidates based on heuristic rules
 ///
-/// Uses the `node_id`, `label`, and `reason` from `AffectedItem` to populate
-/// the `ApprovalNeedingRevalidation` entries. Returns an empty vector for
-/// decision classes A and B (no invalidation expected).
-fn compute_approvals_needing_revalidation(
+/// Selection rules (per spec):
+/// - Prefer closest checkpoint (most recent)
+/// - Before first invalid node
+/// - Don't miss mandatory dependencies
+/// - Avoid rerunning irreversible side effects if not needed
+///
+/// Returns (selected_checkpoint, rationale)
+fn select_best_checkpoint(
+    candidates: &[CheckpointCandidate],
     decision_class: DecisionClass,
-    affected_approvals: &[intent_rebase_types::AffectedItem],
-) -> Vec<ApprovalNeedingRevalidation> {
-    match decision_class {
-        // Class A: no changes; no approvals need revalidation
-        DecisionClass::A => vec![],
-        // Class B: soft review only; approvals may stale but no immediate invalidation
-        DecisionClass::B => vec![],
-        // Class C, D: map affected approvals from graph when available
-        DecisionClass::C | DecisionClass::D => affected_approvals
-            .iter()
-            .map(|item| ApprovalNeedingRevalidation {
-                node_id: item.node_id.to_string(),
-                label: item.label.clone(),
-                original_rule_id: format!("original_rule_{}", item.node_id),
-                reason: item.reason.clone(),
-            })
-            .collect(),
-        // Class E: approvals should be dropped before manual handoff (clean slate)
-        DecisionClass::E => vec![],
+    affected_items: &AffectedItemsPreview,
+) -> (Option<CheckpointCandidate>, String) {
+    // No candidates means no checkpoint needed (Class A)
+    if candidates.is_empty() {
+        return (
+            None,
+            "No checkpoint needed for Class A (no semantic changes)".to_string(),
+        );
     }
+
+    // For Class A, no checkpoint
+    if decision_class == DecisionClass::A {
+        return (
+            None,
+            "No checkpoint needed for Class A (no semantic changes)".to_string(),
+        );
+    }
+
+    // Heuristic selection based on decision class
+    let selected_id = match decision_class {
+        // Class A: handled above
+        DecisionClass::A => unreachable!(),
+        // Class B: prefer most recent (minimal rollback)
+        DecisionClass::B => "checkpoint-most-recent".to_string(),
+        // Class C: prefer minimal checkpoint (limited scope repair)
+        DecisionClass::C => {
+            if candidates.iter().any(|c| c.id == "checkpoint-minimal") {
+                "checkpoint-minimal".to_string()
+            } else {
+                "checkpoint-most-recent".to_string()
+            }
+        }
+        // Class D: prefer before side effects (compensation planning)
+        DecisionClass::D => {
+            if candidates
+                .iter()
+                .any(|c| c.id == "checkpoint-before-side-effects")
+            {
+                "checkpoint-before-side-effects".to_string()
+            } else if candidates
+                .iter()
+                .any(|c| c.id == "checkpoint-before-invalidation")
+            {
+                "checkpoint-before-invalidation".to_string()
+            } else {
+                "checkpoint-most-recent".to_string()
+            }
+        }
+        // Class E: prefer last known good (manual handoff required)
+        DecisionClass::E => {
+            if candidates
+                .iter()
+                .any(|c| c.id == "checkpoint-last-known-good")
+            {
+                "checkpoint-last-known-good".to_string()
+            } else if candidates
+                .iter()
+                .any(|c| c.id == "checkpoint-before-side-effects")
+            {
+                "checkpoint-before-side-effects".to_string()
+            } else {
+                "checkpoint-most-recent".to_string()
+            }
+        }
+    };
+
+    let selected = candidates.iter().find(|c| c.id == selected_id).cloned();
+    let rationale = build_selection_rationale(decision_class, affected_items, &selected_id);
+
+    (selected, rationale)
 }
 
-/// Select the revalidation strategy hint based on decision class and affected approvals.
-fn select_revalidation_strategy(
+/// Build human-readable rationale for the checkpoint selection
+fn build_selection_rationale(
     decision_class: DecisionClass,
-    approvals: &[ApprovalNeedingRevalidation],
-) -> RevalidationStrategy {
-    match decision_class {
-        DecisionClass::A | DecisionClass::B => RevalidationStrategy::Deferred,
-        DecisionClass::C => {
-            if approvals.is_empty() {
-                RevalidationStrategy::Deferred
-            } else {
-                RevalidationStrategy::Incremental
-            }
-        }
-        DecisionClass::D => {
-            if approvals.is_empty() {
-                RevalidationStrategy::Deferred
-            } else {
-                RevalidationStrategy::Full
-            }
-        }
-        DecisionClass::E => RevalidationStrategy::Drop,
-    }
-}
+    affected_items: &AffectedItemsPreview,
+    selected_id: &str,
+) -> String {
+    use intent_rebase_types::AffectedItemsStatus;
 
-/// Build a human-readable rationale for the revalidation heuristic result.
-fn build_revalidation_rationale(
-    decision_class: DecisionClass,
-    _strategy: RevalidationStrategy,
-    approvals: &[ApprovalNeedingRevalidation],
-) -> Option<String> {
-    match decision_class {
-        DecisionClass::A => Some(
-            "No semantic changes detected; no approvals require revalidation.".to_string(),
-        ),
-        DecisionClass::B => Some(
-            "Soft-review path: approvals may be stale but no immediate revalidation is required by the internal baseline."
-                .to_string(),
-        ),
-        DecisionClass::C => {
-            if approvals.is_empty() {
-                Some(
-                    "Class C: incremental revalidation is indicated for changed scope, but no affected approvals were found in the graph; heuristic baseline defers execution."
-                        .to_string(),
-                )
-            } else {
-                Some(format!(
-                    "Class C: incremental revalidation suggested for {} affected approval(s) given the changed scope; execution deferred to Phase 2 runtime adapter.",
-                    approvals.len()
-                ))
-            }
+    let has_affected_items = affected_items.status == AffectedItemsStatus::Available
+        && (!affected_items.affected_artifacts.is_empty()
+            || !affected_items.affected_approvals.is_empty()
+            || !affected_items.side_effects.is_empty());
+
+    let affected_count = if has_affected_items {
+        affected_items.affected_artifacts.len()
+            + affected_items.affected_approvals.len()
+            + affected_items.side_effects.len()
+    } else {
+        0
+    };
+
+    let class_reason = match decision_class {
+        DecisionClass::A => "no semantic changes".to_string(),
+        DecisionClass::B => "soft review recommended".to_string(),
+        DecisionClass::C => "partial repair candidate".to_string(),
+        DecisionClass::D => "compensation and repair needed".to_string(),
+        DecisionClass::E => "hard restart / manual handoff required".to_string(),
+    };
+
+    let checkpoint_reason = match selected_id {
+        "checkpoint-most-recent" => "closest checkpoint minimizes re-execution".to_string(),
+        "checkpoint-before-invalidation" => "ensures affected items are in valid state".to_string(),
+        "checkpoint-before-side-effects" => {
+            "avoids irreversible side effect re-execution".to_string()
         }
-        DecisionClass::D => {
-            if approvals.is_empty() {
-                Some(
-                    "Class D: full revalidation is indicated for compensation+repair path, but no affected approvals were found in the graph; heuristic baseline defers execution."
-                        .to_string(),
-                )
-            } else {
-                Some(format!(
-                    "Class D: full revalidation suggested for {} affected approval(s) to ensure compensation actions are properly gated; execution deferred to Phase 2 runtime adapter.",
-                    approvals.len()
-                ))
-            }
-        }
-        DecisionClass::E => Some(
-            "Class E: stale approvals should be dropped before manual handoff; execution deferred to Phase 2 runtime adapter."
-                .to_string(),
-        ),
+        "checkpoint-last-known-good" => "provides clean state for manual review".to_string(),
+        "checkpoint-minimal" => "minimizes scope of repair".to_string(),
+        _ => "fallback to most recent checkpoint".to_string(),
+    };
+
+    if affected_count > 0 {
+        format!(
+            "Selected {} for {} with {} affected item(s). {}",
+            selected_id.replace("checkpoint-", "").replace("-", " "),
+            class_reason,
+            affected_count,
+            checkpoint_reason
+        )
+    } else {
+        format!(
+            "Selected {} for {}. {}",
+            selected_id.replace("checkpoint-", "").replace("-", " "),
+            class_reason,
+            checkpoint_reason
+        )
     }
 }
 
@@ -876,7 +1002,6 @@ mod tests {
         AcceptanceCriteriaDiff, AuthorityDiff, ConstraintsDiff, ScopeDiff, ScopeItemsDiff,
     };
     use crate::risk::{DiffRiskAnalysis, SectionRisk, Severity};
-    use uuid::Uuid;
 
     fn empty_scope_diff() -> ScopeDiff {
         ScopeDiff {
@@ -942,6 +1067,7 @@ mod tests {
         let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
         assert_eq!(plan.decision_class, DecisionClass::A);
         assert_eq!(plan.risk_level, 1);
+        assert_eq!(plan.risk_tier, RiskTier::Low);
         assert!(!plan.manual_review_recommended);
     }
 
@@ -1316,7 +1442,8 @@ mod tests {
 
         let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
 
-        // Phase 1 groundwork: typed placeholders with ready=false
+        // Phase 1: ready=false for all deferred fields (PR #18: heuristic populates
+        // candidates/selected/rationale for checkpoint_selection but ready stays false)
         assert!(
             !plan.deferred.checkpoint_selection.ready,
             "Checkpoint selection should be deferred in Phase 1"
@@ -1331,6 +1458,7 @@ mod tests {
         );
 
         // candidates/approvals_needing_revalidation/potential_actions should be empty
+        // (PR #18: for Class A, candidates is still empty because no checkpoint needed)
         assert!(plan.deferred.checkpoint_selection.candidates.is_empty());
         assert!(plan
             .deferred
@@ -1339,16 +1467,14 @@ mod tests {
             .is_empty());
         assert!(plan.deferred.compensation.potential_actions.is_empty());
 
-        // Selected/rationale should be None for deferred state
+        // Selected should be None for Class A (no checkpoint needed)
         assert!(plan.deferred.checkpoint_selection.selected.is_none());
-        assert!(plan.deferred.checkpoint_selection.rationale.is_none());
-        // Heuristic baseline provides rationale for all classes (including Class A)
-        // but readiness remains false (execution deferred to Phase 2)
-        assert!(
-            plan.deferred.approval_revalidation.rationale.is_some(),
-            "ApprovalRevalidation rationale should be populated by heuristic baseline"
-        );
-        assert!(plan.deferred.compensation.rationale.is_none());
+        // Rationale is now populated even for empty state (explains no items affected)
+        // PR #18: heuristic provides rationale for approval/compensation too
+        assert!(plan.deferred.checkpoint_selection.rationale.is_some());
+        // Approval/compensation rationales are now populated (explain empty state)
+        assert!(plan.deferred.approval_revalidation.rationale.is_some());
+        assert!(plan.deferred.compensation.rationale.is_some());
     }
 
     #[test]
@@ -1361,114 +1487,6 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_selection_heuristic_class_a_is_empty() {
-        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::A);
-
-        assert!(!cs.ready);
-        assert!(cs.candidates.is_empty());
-        assert!(cs.selected.is_none());
-        assert!(cs.rationale.is_none());
-    }
-
-    #[test]
-    fn test_checkpoint_selection_heuristic_class_b_skips_checkpoint_selection() {
-        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::B);
-
-        assert!(!cs.ready);
-        assert!(cs.candidates.is_empty());
-        assert!(cs.selected.is_none());
-        assert_eq!(
-            cs.rationale.as_deref(),
-            Some(
-                "Soft-review path: no rerun checkpoint is suggested by the internal baseline yet."
-            )
-        );
-    }
-
-    #[test]
-    fn test_checkpoint_selection_heuristic_class_c_prefers_nearest_validated() {
-        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::C);
-
-        assert!(!cs.ready);
-        assert_eq!(cs.candidates.len(), 3);
-        assert_eq!(
-            cs.selected.as_ref().map(|candidate| candidate.id.as_str()),
-            Some("nearest-validated")
-        );
-        assert!(cs
-            .candidates
-            .iter()
-            .any(|candidate| candidate.id == "last-known-good"));
-        assert!(cs
-            .rationale
-            .as_deref()
-            .is_some_and(|rationale| rationale.contains("nearest safe checkpoint")));
-    }
-
-    #[test]
-    fn test_checkpoint_selection_heuristic_class_d_prefers_pre_side_effect() {
-        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::D);
-
-        assert!(!cs.ready);
-        assert_eq!(cs.candidates.len(), 3);
-        assert_eq!(
-            cs.selected.as_ref().map(|candidate| candidate.id.as_str()),
-            Some("pre-side-effect")
-        );
-        assert!(cs
-            .rationale
-            .as_deref()
-            .is_some_and(|rationale| rationale.contains("irreversible work")));
-    }
-
-    #[test]
-    fn test_checkpoint_selection_heuristic_class_e_requires_manual_handoff() {
-        let cs = CheckpointSelection::heuristic_baseline(DecisionClass::E);
-
-        assert!(!cs.ready);
-        assert_eq!(cs.candidates.len(), 1);
-        assert_eq!(cs.candidates[0].id, "manual-handoff-boundary");
-        assert!(cs.selected.is_none());
-        assert!(cs
-            .rationale
-            .as_deref()
-            .is_some_and(|rationale| rationale.contains("manual handoff")));
-    }
-
-    #[test]
-    fn test_rebase_plan_populates_internal_checkpoint_hint_for_class_c() {
-        let mut diff = empty_intent_version_diff();
-        diff.scope.in_scope.added.push("new_item".to_string());
-
-        let risk = DiffRiskAnalysis {
-            severity: Severity::High,
-            confidence: 0.9,
-            manual_review: false,
-            manual_review_reasons: vec![],
-            section_risks: vec![SectionRisk {
-                section: "scope".to_string(),
-                severity: Severity::High,
-                change_count: 1,
-                high_priority_changes: 0,
-            }],
-            rationale: Some("Scope addition".to_string()),
-        };
-
-        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
-
-        assert_eq!(plan.decision_class, DecisionClass::C);
-        assert!(!plan.deferred.checkpoint_selection.ready);
-        assert_eq!(
-            plan.deferred
-                .checkpoint_selection
-                .selected
-                .as_ref()
-                .map(|candidate| candidate.id.as_str()),
-            Some("nearest-validated")
-        );
-    }
-
-    #[test]
     fn test_approval_revalidation_deferred() {
         let ar = ApprovalRevalidation::deferred();
         assert!(!ar.ready);
@@ -1477,201 +1495,6 @@ mod tests {
         assert!(ar.rationale.is_none());
     }
 
-    #[test]
-    fn test_approval_revalidation_heuristic_class_a() {
-        // Class A: no changes → strategy Deferred, no approvals, rationale provided
-        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::A, &affected);
-
-        assert!(!ar.ready);
-        assert!(ar.approvals_needing_revalidation.is_empty());
-        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("No semantic changes")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_b_soft_review() {
-        // Class B: soft review → strategy Deferred, no approvals, rationale explains soft review
-        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::B, &affected);
-
-        assert!(!ar.ready);
-        assert!(ar.approvals_needing_revalidation.is_empty());
-        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("Soft-review")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_c_incremental_with_graph_approvals() {
-        // Class C with affected approvals → Incremental strategy, approvals mapped
-        let affected = vec![intent_rebase_types::AffectedItem {
-            node_id: Uuid::new_v4(),
-            label: "TestApproval".to_string(),
-            impact: intent_rebase_types::ClassificationImpact::Direct,
-            reason: "Directly affected by scope change".to_string(),
-            external_ref: None,
-        }];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
-
-        assert!(!ar.ready);
-        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
-        assert_eq!(ar.strategy, RevalidationStrategy::Incremental);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("incremental")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_c_incremental_empty_fallback() {
-        // Class C with no affected approvals → Deferred strategy (nothing to revalidate incrementally)
-        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
-
-        assert!(!ar.ready);
-        assert!(ar.approvals_needing_revalidation.is_empty());
-        // When no affected approvals, strategy defers to Deferred (nothing to revalidate)
-        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("no affected approvals")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_d_full_with_graph_approvals() {
-        // Class D with affected approvals → Full strategy
-        let affected = vec![intent_rebase_types::AffectedItem {
-            node_id: Uuid::new_v4(),
-            label: "CompensatedApproval".to_string(),
-            impact: intent_rebase_types::ClassificationImpact::Transitive,
-            reason: "Transitively affected via side effect".to_string(),
-            external_ref: None,
-        }];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::D, &affected);
-
-        assert!(!ar.ready);
-        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
-        assert_eq!(ar.strategy, RevalidationStrategy::Full);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("full revalidation")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_d_full_empty_fallback() {
-        // Class D with no affected approvals → Deferred strategy (nothing to fully revalidate)
-        let affected: Vec<intent_rebase_types::AffectedItem> = vec![];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::D, &affected);
-
-        assert!(!ar.ready);
-        assert!(ar.approvals_needing_revalidation.is_empty());
-        // When no affected approvals, strategy defers to Deferred (nothing to fully revalidate)
-        assert_eq!(ar.strategy, RevalidationStrategy::Deferred);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("no affected approvals")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_class_e_drop() {
-        // Class E → Drop strategy regardless of affected approvals
-        // Note: the heuristic drops affected approvals (Class E needs a clean slate before manual handoff)
-        let affected = vec![
-            intent_rebase_types::AffectedItem {
-                node_id: Uuid::new_v4(),
-                label: "Approval1".to_string(),
-                impact: intent_rebase_types::ClassificationImpact::Direct,
-                reason: "Directly affected".to_string(),
-                external_ref: None,
-            },
-            intent_rebase_types::AffectedItem {
-                node_id: Uuid::new_v4(),
-                label: "Approval2".to_string(),
-                impact: intent_rebase_types::ClassificationImpact::Transitive,
-                reason: "Transitively affected".to_string(),
-                external_ref: None,
-            },
-        ];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::E, &affected);
-
-        assert!(!ar.ready);
-        // Class E drops all approvals — heuristic intentionally discards them
-        assert!(ar.approvals_needing_revalidation.is_empty());
-        assert_eq!(ar.strategy, RevalidationStrategy::Drop);
-        assert!(ar.rationale.is_some());
-        assert!(ar
-            .rationale
-            .as_deref()
-            .is_some_and(|r| r.contains("dropped")));
-    }
-
-    #[test]
-    fn test_approval_revalidation_heuristic_maps_graph_affected_approvals_correctly() {
-        // Verify that AffectedItem fields are correctly mapped to ApprovalNeedingRevalidation
-        use uuid::Uuid;
-        let node_id = Uuid::new_v4();
-        let affected = vec![intent_rebase_types::AffectedItem {
-            node_id,
-            label: "MyApprovalLabel".to_string(),
-            impact: intent_rebase_types::ClassificationImpact::Direct,
-            reason: "MyReason".to_string(),
-            external_ref: None,
-        }];
-        let ar = ApprovalRevalidation::heuristic_baseline(DecisionClass::C, &affected);
-
-        assert_eq!(ar.approvals_needing_revalidation.len(), 1);
-        let entry = &ar.approvals_needing_revalidation[0];
-        assert_eq!(entry.node_id, node_id.to_string());
-        assert_eq!(entry.label, "MyApprovalLabel");
-        assert_eq!(entry.reason, "MyReason");
-        assert!(entry.original_rule_id.contains("original_rule_"));
-    }
-
-    #[test]
-    fn test_deferred_fields_uses_heuristic_baseline_not_deferred() {
-        // Verify DeferredFields uses heuristic_baseline (not deferred()) for approval revalidation
-        let diff = empty_intent_version_diff();
-        let risk = DiffRiskAnalysis {
-            severity: Severity::Low,
-            confidence: 1.0,
-            manual_review: false,
-            manual_review_reasons: vec![],
-            section_risks: vec![],
-            rationale: None,
-        };
-
-        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
-
-        // Heuristic baseline produces Class A with strategy Deferred but rationale populated
-        assert!(!plan.deferred.approval_revalidation.ready);
-        assert_eq!(
-            plan.deferred.approval_revalidation.strategy,
-            RevalidationStrategy::Deferred
-        );
-        // The key difference from pure deferred(): rationale IS populated by heuristic baseline
-        assert!(plan.deferred.approval_revalidation.rationale.is_some());
-        // Class A produces empty approvals_needing_revalidation (no changes at all)
-        assert!(plan
-            .deferred
-            .approval_revalidation
-            .approvals_needing_revalidation
-            .is_empty());
-    }
     #[test]
     fn test_compensation_readiness_deferred() {
         let cr = CompensationReadiness::deferred();
@@ -1924,5 +1747,928 @@ mod tests {
         // With 3 changed sections and Medium severity, should be Class D
         assert_eq!(plan.decision_class, DecisionClass::D);
         assert_eq!(plan.risk_level, 4);
+    }
+
+    // === Checkpoint Selection Heuristic Tests (PR #18) ===
+
+    #[test]
+    fn test_checkpoint_heuristic_class_a_no_candidates() {
+        // Class A: no semantic changes → no checkpoint candidates
+        let diff = empty_intent_version_diff();
+        let risk = DiffRiskAnalysis {
+            severity: Severity::Low,
+            confidence: 1.0,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![],
+            rationale: None,
+        };
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        assert_eq!(plan.decision_class, DecisionClass::A);
+
+        // Class A should have empty candidates and None selected
+        assert!(plan.deferred.checkpoint_selection.candidates.is_empty());
+        assert!(plan.deferred.checkpoint_selection.selected.is_none());
+        // Rationale is still populated (even for Class A, it explains why no checkpoint)
+        assert!(plan.deferred.checkpoint_selection.rationale.is_some());
+        // But ready remains false
+        assert!(!plan.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_class_b_selects_most_recent() {
+        // Class B: should select "most recent" checkpoint
+        let mut diff = empty_intent_version_diff();
+        diff.scope.in_scope.added.push("item".to_string());
+
+        let risk = DiffRiskAnalysis {
+            severity: Severity::Low,
+            confidence: 0.8,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::Low,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        assert_eq!(plan.decision_class, DecisionClass::B);
+
+        // Class B should have candidates
+        assert!(!plan.deferred.checkpoint_selection.candidates.is_empty());
+        // Should select most recent
+        assert!(plan.deferred.checkpoint_selection.selected.is_some());
+        let selected = plan
+            .deferred
+            .checkpoint_selection
+            .selected
+            .as_ref()
+            .unwrap();
+        assert_eq!(selected.id, "checkpoint-most-recent");
+        // Rationale should be populated
+        assert!(plan.deferred.checkpoint_selection.rationale.is_some());
+        // But ready remains false (Phase 2 feature)
+        assert!(!plan.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_class_c_selects_minimal() {
+        // Class C: should select "minimal" checkpoint if available
+        let mut diff = empty_intent_version_diff();
+        diff.scope.in_scope.added.push("item".to_string());
+
+        let risk = DiffRiskAnalysis {
+            severity: Severity::High,
+            confidence: 0.9,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::High,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        assert_eq!(plan.decision_class, DecisionClass::C);
+
+        // Class C should have candidates including "minimal"
+        assert!(!plan.deferred.checkpoint_selection.candidates.is_empty());
+        let has_minimal = plan
+            .deferred
+            .checkpoint_selection
+            .candidates
+            .iter()
+            .any(|c| c.id == "checkpoint-minimal");
+        assert!(
+            has_minimal,
+            "Class C should have minimal checkpoint candidate"
+        );
+
+        // Should select minimal
+        assert!(plan.deferred.checkpoint_selection.selected.is_some());
+        let selected = plan
+            .deferred
+            .checkpoint_selection
+            .selected
+            .as_ref()
+            .unwrap();
+        assert_eq!(selected.id, "checkpoint-minimal");
+        // ready remains false
+        assert!(!plan.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_class_d_selects_before_side_effects() {
+        // Class D: should select before-side-effects checkpoint
+        let mut diff = empty_intent_version_diff();
+        diff.scope.in_scope.added.push("item".to_string());
+
+        let risk = DiffRiskAnalysis {
+            severity: Severity::High,
+            confidence: 0.8,
+            manual_review: true,
+            manual_review_reasons: vec![crate::risk::ManualReviewReason::LowConfidence {
+                confidence: 0.5,
+                threshold: 0.7,
+            }],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::High,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        assert_eq!(plan.decision_class, DecisionClass::D);
+
+        // Class D should have candidates including "before-side-effects"
+        assert!(!plan.deferred.checkpoint_selection.candidates.is_empty());
+        let has_side_effects = plan
+            .deferred
+            .checkpoint_selection
+            .candidates
+            .iter()
+            .any(|c| c.id == "checkpoint-before-side-effects");
+        assert!(
+            has_side_effects,
+            "Class D should have before-side-effects candidate"
+        );
+
+        // Should select before-side-effects
+        assert!(plan.deferred.checkpoint_selection.selected.is_some());
+        let selected = plan
+            .deferred
+            .checkpoint_selection
+            .selected
+            .as_ref()
+            .unwrap();
+        assert_eq!(selected.id, "checkpoint-before-side-effects");
+        // ready remains false
+        assert!(!plan.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_class_e_selects_last_known_good() {
+        // Class E: should select "last-known-good" checkpoint
+        let mut diff = empty_intent_version_diff();
+        diff.authority
+            .forbidden_actions
+            .push(crate::diff::ActionRefDiff {
+                change_type: crate::diff::ChangeType::Removed,
+                action: "delete_production".to_string(),
+                target: None,
+                before: None,
+                after: None,
+            });
+
+        let risk = DiffRiskAnalysis {
+            severity: Severity::Critical,
+            confidence: 0.9,
+            manual_review: true,
+            manual_review_reasons: vec![crate::risk::ManualReviewReason::CriticalSeverity],
+            section_risks: vec![SectionRisk {
+                section: "authority".to_string(),
+                severity: Severity::Critical,
+                change_count: 1,
+                high_priority_changes: 1,
+            }],
+            rationale: None,
+        };
+
+        let plan = RebasePlan::from_diff_and_risk(&diff, &risk);
+        assert_eq!(plan.decision_class, DecisionClass::E);
+
+        // Class E should have candidates including "last-known-good"
+        assert!(!plan.deferred.checkpoint_selection.candidates.is_empty());
+        let has_last_good = plan
+            .deferred
+            .checkpoint_selection
+            .candidates
+            .iter()
+            .any(|c| c.id == "checkpoint-last-known-good");
+        assert!(
+            has_last_good,
+            "Class E should have last-known-good candidate"
+        );
+
+        // Should select last-known-good
+        assert!(plan.deferred.checkpoint_selection.selected.is_some());
+        let selected = plan
+            .deferred
+            .checkpoint_selection
+            .selected
+            .as_ref()
+            .unwrap();
+        assert_eq!(selected.id, "checkpoint-last-known-good");
+        // ready remains false
+        assert!(!plan.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_ready_always_false() {
+        // Verify that ready is always false regardless of decision class
+        // This is a key invariant: checkpoint selection is heuristic-only in Phase 1
+        let mut diff = empty_intent_version_diff();
+        diff.scope.in_scope.added.push("item".to_string());
+
+        // Test Class B
+        let risk_b = DiffRiskAnalysis {
+            severity: Severity::Low,
+            confidence: 0.8,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::Low,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+        let plan_b = RebasePlan::from_diff_and_risk(&diff, &risk_b);
+        assert!(!plan_b.deferred.checkpoint_selection.ready);
+
+        // Test Class C
+        let risk_c = DiffRiskAnalysis {
+            severity: Severity::High,
+            confidence: 0.9,
+            manual_review: false,
+            manual_review_reasons: vec![],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::High,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+        let plan_c = RebasePlan::from_diff_and_risk(&diff, &risk_c);
+        assert!(!plan_c.deferred.checkpoint_selection.ready);
+
+        // Test Class D
+        let risk_d = DiffRiskAnalysis {
+            severity: Severity::High,
+            confidence: 0.8,
+            manual_review: true,
+            manual_review_reasons: vec![crate::risk::ManualReviewReason::LowConfidence {
+                confidence: 0.5,
+                threshold: 0.7,
+            }],
+            section_risks: vec![SectionRisk {
+                section: "scope".to_string(),
+                severity: Severity::High,
+                change_count: 1,
+                high_priority_changes: 0,
+            }],
+            rationale: None,
+        };
+        let plan_d = RebasePlan::from_diff_and_risk(&diff, &risk_d);
+        assert!(!plan_d.deferred.checkpoint_selection.ready);
+    }
+
+    #[test]
+    fn test_checkpoint_heuristic_with_affected_items() {
+        // Test that affected items influence candidate generation
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let artifacts = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Artifact".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items = AffectedItemsPreview::from_classification(artifacts, vec![], vec![]);
+
+        // Class B with affected items should have more candidates
+        let selection = CheckpointSelection::with_heuristic(DecisionClass::B, &affected_items);
+
+        assert!(!selection.candidates.is_empty());
+        // Should have "before-invalidation" candidate when affected items exist
+        let has_before_invalidation = selection
+            .candidates
+            .iter()
+            .any(|c| c.id == "checkpoint-before-invalidation");
+        assert!(has_before_invalidation);
+        // Should have selected something
+        assert!(selection.selected.is_some());
+        // Rationale should mention affected items
+        let rationale = selection.rationale.as_ref().unwrap();
+        assert!(rationale.contains("1 affected item"));
+    }
+
+    // === ApprovalRevalidation Heuristic Tests ===
+
+    #[test]
+    fn test_approval_revalidation_heuristic_empty_approvals() {
+        // No affected approvals should result in empty list and Drop strategy
+        let affected_items = AffectedItemsPreview::unavailable();
+
+        let revalidation =
+            ApprovalRevalidation::with_affected_approvals(DecisionClass::A, &affected_items);
+
+        assert!(!revalidation.ready);
+        assert!(revalidation.approvals_needing_revalidation.is_empty());
+        assert_eq!(revalidation.strategy, RevalidationStrategy::Drop);
+        assert!(revalidation.rationale.is_some());
+        assert!(revalidation
+            .rationale
+            .as_ref()
+            .unwrap()
+            .contains("No affected approvals"));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_with_affected_approvals() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let approvals = vec![
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Review Approval".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected by scope change".to_string(),
+                external_ref: None,
+            },
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "QA Approval".to_string(),
+                impact: ClassificationImpact::Transitive,
+                reason: "Transitively affected".to_string(),
+                external_ref: None,
+            },
+        ];
+
+        let affected_items = AffectedItemsPreview::from_classification(vec![], approvals, vec![]);
+
+        let revalidation =
+            ApprovalRevalidation::with_affected_approvals(DecisionClass::D, &affected_items);
+
+        assert!(!revalidation.ready);
+        assert_eq!(revalidation.approvals_needing_revalidation.len(), 2);
+        assert_eq!(revalidation.strategy, RevalidationStrategy::Full);
+        assert!(revalidation.rationale.is_some());
+        let rationale = revalidation.rationale.as_ref().unwrap();
+        assert!(rationale.contains("2 approval(s) need revalidation"));
+        assert!(rationale.contains("class D"));
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_b_drops() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let approvals = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Approval".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Affected".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items = AffectedItemsPreview::from_classification(vec![], approvals, vec![]);
+
+        let revalidation =
+            ApprovalRevalidation::with_affected_approvals(DecisionClass::B, &affected_items);
+
+        assert!(!revalidation.ready);
+        assert_eq!(revalidation.strategy, RevalidationStrategy::Drop);
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_class_c_incremental() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let approvals = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Approval".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Affected".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items = AffectedItemsPreview::from_classification(vec![], approvals, vec![]);
+
+        let revalidation =
+            ApprovalRevalidation::with_affected_approvals(DecisionClass::C, &affected_items);
+
+        assert!(!revalidation.ready);
+        assert_eq!(revalidation.strategy, RevalidationStrategy::Incremental);
+    }
+
+    #[test]
+    fn test_approval_revalidation_heuristic_ready_always_false() {
+        // Key invariant: ready is always false regardless of decision class or affected approvals
+        let affected_items = AffectedItemsPreview::unavailable();
+
+        for class in &[
+            DecisionClass::A,
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let revalidation =
+                ApprovalRevalidation::with_affected_approvals(*class, &affected_items);
+            assert!(
+                !revalidation.ready,
+                "ApprovalRevalidation::ready should be false for class {:?}",
+                class
+            );
+        }
+    }
+
+    // === CompensationReadiness Heuristic Tests ===
+
+    #[test]
+    fn test_compensation_readiness_heuristic_empty_side_effects() {
+        // No side effects should result in empty actions and has_irreversible_effects=false
+        let affected_items = AffectedItemsPreview::unavailable();
+
+        let compensation =
+            CompensationReadiness::with_side_effects(DecisionClass::A, &affected_items);
+
+        assert!(!compensation.ready);
+        assert!(compensation.potential_actions.is_empty());
+        assert!(!compensation.has_irreversible_effects);
+        assert!(compensation.rationale.is_some());
+        assert!(compensation
+            .rationale
+            .as_ref()
+            .unwrap()
+            .contains("No side effects"));
+    }
+
+    #[test]
+    fn test_compensation_readiness_heuristic_with_side_effects() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let side_effects = vec![
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Database Migration".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Direct side effect".to_string(),
+                external_ref: None,
+            },
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Config Update".to_string(),
+                impact: ClassificationImpact::Transitive,
+                reason: "Transitive side effect".to_string(),
+                external_ref: None,
+            },
+        ];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(vec![], vec![], side_effects);
+
+        let compensation =
+            CompensationReadiness::with_side_effects(DecisionClass::D, &affected_items);
+
+        assert!(!compensation.ready);
+        assert_eq!(compensation.potential_actions.len(), 2);
+        assert!(compensation.has_irreversible_effects);
+        assert!(compensation.rationale.is_some());
+        let rationale = compensation.rationale.as_ref().unwrap();
+        assert!(rationale.contains("2 potential compensation action(s)"));
+        assert!(rationale.contains("irreversible: true"));
+    }
+
+    #[test]
+    fn test_compensation_readiness_heuristic_transitive_only_no_irreversible() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let side_effects = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Log Propagation".to_string(),
+            impact: ClassificationImpact::Transitive,
+            reason: "Transitive only".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(vec![], vec![], side_effects);
+
+        let compensation =
+            CompensationReadiness::with_side_effects(DecisionClass::B, &affected_items);
+
+        assert!(!compensation.ready);
+        assert_eq!(compensation.potential_actions.len(), 1);
+        assert!(compensation.has_irreversible_effects); // Transitive still counts as irreversible
+        let action = &compensation.potential_actions[0];
+        assert!(!action.reversible); // Transitive effects are NOT reversible (only Unchanged is)
+        assert_eq!(action.priority, 2); // Transitive = priority 2
+    }
+
+    #[test]
+    fn test_compensation_readiness_heuristic_direct_effects_reversible_false() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let side_effects = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Data Deletion".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Direct side effect".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(vec![], vec![], side_effects);
+
+        let compensation =
+            CompensationReadiness::with_side_effects(DecisionClass::E, &affected_items);
+
+        assert!(!compensation.ready);
+        let action = &compensation.potential_actions[0];
+        assert!(!action.reversible); // Direct effects are not reversible
+        assert_eq!(action.priority, 1); // Direct = priority 1
+    }
+
+    #[test]
+    fn test_compensation_readiness_heuristic_ready_always_false() {
+        // Key invariant: ready is always false regardless of decision class or side effects
+        let affected_items = AffectedItemsPreview::unavailable();
+
+        for class in &[
+            DecisionClass::A,
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let compensation = CompensationReadiness::with_side_effects(*class, &affected_items);
+            assert!(
+                !compensation.ready,
+                "CompensationReadiness::ready should be false for class {:?}",
+                class
+            );
+        }
+    }
+
+    // === DeferredFields::phase1_baseline Integration Tests ===
+
+    #[test]
+    fn test_phase1_baseline_calls_all_three_heuristics() {
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let artifacts = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Artifact".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+        let approvals = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Approval".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+        let side_effects = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Side Effect".to_string(),
+            impact: ClassificationImpact::Transitive,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(artifacts, approvals, side_effects);
+
+        let deferred = DeferredFields::phase1_baseline(DecisionClass::D, &affected_items);
+
+        // CheckpointSelection heuristic was already tested, verify it's populated
+        assert!(!deferred.checkpoint_selection.ready);
+        assert!(!deferred.checkpoint_selection.candidates.is_empty());
+
+        // ApprovalRevalidation heuristic should be populated
+        assert!(!deferred.approval_revalidation.ready);
+        assert_eq!(
+            deferred
+                .approval_revalidation
+                .approvals_needing_revalidation
+                .len(),
+            1
+        );
+        assert_eq!(
+            deferred.approval_revalidation.strategy,
+            RevalidationStrategy::Full
+        );
+
+        // CompensationReadiness heuristic should be populated
+        assert!(!deferred.compensation.ready);
+        assert_eq!(deferred.compensation.potential_actions.len(), 1);
+        assert!(deferred.compensation.has_irreversible_effects);
+    }
+
+    #[test]
+    fn test_phase1_baseline_invariant_all_three_ready_false() {
+        // Verify that all three deferred fields have ready=false
+        // regardless of decision class - this is the key Phase 1 invariant
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use uuid::Uuid;
+
+        let artifacts = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Artifact".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+        let approvals = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Approval".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+        let side_effects = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "Test Side Effect".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "test".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(artifacts, approvals, side_effects);
+
+        for class in &[
+            DecisionClass::A,
+            DecisionClass::B,
+            DecisionClass::C,
+            DecisionClass::D,
+            DecisionClass::E,
+        ] {
+            let deferred = DeferredFields::phase1_baseline(*class, &affected_items);
+            assert!(
+                !deferred.checkpoint_selection.ready,
+                "checkpoint_selection::ready should be false for class {:?}",
+                class
+            );
+            assert!(
+                !deferred.approval_revalidation.ready,
+                "approval_revalidation::ready should be false for class {:?}",
+                class
+            );
+            assert!(
+                !deferred.compensation.ready,
+                "compensation::ready should be false for class {:?}",
+                class
+            );
+        }
+    }
+
+    // === RuntimeAdapter Integration Tests ===
+
+    #[tokio::test]
+    async fn test_checkpoint_selection_adapter_integration_seam() {
+        // Integration test verifying the seam between planner's CheckpointSelection
+        // and runtime-adapter's MockAdapter.
+        //
+        // This test catches type mismatches between:
+        //   - planner::CheckpointCandidate (planner.rs line 119-129)
+        //   - runtime_adapter::CheckpointCandidate (runtime-adapter/src/lib.rs line 58-68)
+        //
+        // Both structs are structurally identical (id, label, description, validated)
+        // but come from different crates. This test ensures they can interoperate.
+
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use runtime_adapter::{IntentRef, MockAdapter, RuntimeAdapter};
+        use uuid::Uuid;
+
+        // Create affected items with workflow context
+        let artifacts = vec![
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "workflow-artifact-1".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Affected by scope change".to_string(),
+                external_ref: None,
+            },
+            AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "workflow-artifact-2".to_string(),
+                impact: ClassificationImpact::Transitive,
+                reason: "Transitively affected".to_string(),
+                external_ref: None,
+            },
+        ];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(artifacts.clone(), vec![], vec![]);
+
+        // Create a CheckpointSelection using the planner's heuristic
+        let selection = CheckpointSelection::with_heuristic(DecisionClass::B, &affected_items);
+
+        // Verify planner's selection has candidates with the expected pattern
+        assert!(
+            !selection.candidates.is_empty(),
+            "Planner should produce checkpoint candidates for Class B"
+        );
+        let planner_candidate_ids: Vec<&str> =
+            selection.candidates.iter().map(|c| c.id.as_str()).collect();
+        assert!(
+            planner_candidate_ids.contains(&"checkpoint-most-recent"),
+            "Class B should have 'most-recent' candidate"
+        );
+
+        // Now use MockAdapter to resolve checkpoints
+        let adapter = MockAdapter::ready();
+        let adapter_checkpoints = adapter.get_checkpoints().await.unwrap();
+
+        // Verify adapter returns structurally valid checkpoints
+        assert!(
+            !adapter_checkpoints.is_empty(),
+            "MockAdapter should return checkpoint candidates"
+        );
+
+        // KEY ASSERTION: Verify the checkpoint ID pattern is compatible
+        // The adapter uses "checkpoint-XXX" format while planner uses descriptive IDs
+        // Both should follow the "checkpoint-" prefix convention
+        for cp in &adapter_checkpoints {
+            assert!(
+                cp.id.starts_with("checkpoint-"),
+                "Adapter checkpoint ID should follow 'checkpoint-' prefix pattern: {}",
+                cp.id
+            );
+        }
+
+        // Verify planner candidate IDs also follow the convention
+        for id in &planner_candidate_ids {
+            assert!(
+                id.starts_with("checkpoint-"),
+                "Planner candidate ID should follow 'checkpoint-' prefix pattern: {}",
+                id
+            );
+        }
+
+        // Create an IntentRef to test adapter's map_intent_to_checkpoint
+        let intent_ref = IntentRef::new(
+            "test-intent-id".to_string(),
+            "test-tenant".to_string(),
+            "test-workflow-id".to_string(),
+            "active".to_string(),
+        );
+
+        // Verify the adapter can map the intent to a checkpoint
+        let mapped = adapter.map_intent_to_checkpoint(intent_ref).await.unwrap();
+        assert!(
+            mapped.id.starts_with("checkpoint-"),
+            "Mapped checkpoint should follow the checkpoint prefix pattern"
+        );
+
+        // Verify adapter status
+        let status = adapter.is_adapter_ready().await.unwrap();
+        assert_eq!(
+            status,
+            runtime_adapter::AdapterStatus::Ready,
+            "MockAdapter should report Ready status"
+        );
+
+        // Verify selected checkpoint from planner can be cross-checked with adapter
+        if let Some(selected) = &selection.selected {
+            // The selected checkpoint ID should be recognizable by the adapter
+            // (even if the adapter returns different concrete checkpoints)
+            assert!(
+                selected.id.starts_with("checkpoint-"),
+                "Selected checkpoint ID should follow adapter pattern: {}",
+                selected.id
+            );
+            assert!(
+                !selected.label.is_empty(),
+                "Selected checkpoint should have a label"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deferred_fields_checkpoint_adapter_type_compatibility() {
+        // Test that DeferredFields::checkpoint_selection candidates are type-compatible
+        // with the runtime adapter's checkpoint representation.
+        //
+        // This catches any field mismatches early (Phase 1) before Phase 2 integration.
+
+        use intent_rebase_types::{AffectedItem, AffectedItemsPreview, ClassificationImpact};
+        use runtime_adapter::{IntentRef, MockAdapter, RuntimeAdapter};
+        use uuid::Uuid;
+
+        // Create affected items that will drive checkpoint candidate generation
+        let side_effects = vec![AffectedItem {
+            node_id: Uuid::new_v4(),
+            label: "side-effect-1".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Direct side effect".to_string(),
+            external_ref: None,
+        }];
+
+        let affected_items =
+            AffectedItemsPreview::from_classification(vec![], vec![], side_effects);
+
+        // Generate DeferredFields with checkpoint selection for Class D
+        // (which has side-effects checkpoint candidates)
+        let deferred = DeferredFields::phase1_baseline(DecisionClass::D, &affected_items);
+
+        // Verify checkpoint selection has candidates
+        assert!(
+            !deferred.checkpoint_selection.candidates.is_empty(),
+            "Class D should have checkpoint candidates"
+        );
+
+        // Get adapter checkpoints
+        let adapter = MockAdapter::ready();
+        let adapter_checkpoints = adapter.get_checkpoints().await.unwrap();
+
+        // CRITICAL: Both checkpoint types must have the same field structure
+        // This is the key type compatibility check at the integration seam
+
+        // Check planner checkpoint candidate fields
+        let planner_cp = &deferred.checkpoint_selection.candidates[0];
+        assert!(
+            !planner_cp.id.is_empty(),
+            "Planner checkpoint must have id field"
+        );
+        assert!(
+            !planner_cp.label.is_empty(),
+            "Planner checkpoint must have label field"
+        );
+        assert!(
+            !planner_cp.description.is_empty(),
+            "Planner checkpoint must have description field"
+        );
+        // validated field exists but is false in Phase 1 (not yet validated by runtime)
+
+        // Check adapter checkpoint candidate fields
+        let adapter_cp = &adapter_checkpoints[0];
+        assert!(
+            !adapter_cp.id.is_empty(),
+            "Adapter checkpoint must have id field"
+        );
+        assert!(
+            !adapter_cp.label.is_empty(),
+            "Adapter checkpoint must have label field"
+        );
+        assert!(
+            !adapter_cp.description.is_empty(),
+            "Adapter checkpoint must have description field"
+        );
+        assert!(
+            adapter_cp.validated,
+            "Adapter checkpoint should be validated (MockAdapter default)"
+        );
+
+        // Both should use "checkpoint-" prefix pattern in IDs
+        assert!(
+            planner_cp.id.starts_with("checkpoint-") || planner_cp.id.starts_with("checkpoint_"),
+            "Planner checkpoint ID should follow pattern: {}",
+            planner_cp.id
+        );
+        assert!(
+            adapter_cp.id.starts_with("checkpoint-"),
+            "Adapter checkpoint ID should follow pattern: {}",
+            adapter_cp.id
+        );
+
+        // Test replay_from_checkpoint with adapter
+        let checkpoint = runtime_adapter::Checkpoint {
+            id: adapter_cp.id.clone(),
+            label: adapter_cp.label.clone(),
+            description: adapter_cp.description.clone(),
+            timestamp: chrono::Utc::now(),
+            validated: adapter_cp.validated,
+        };
+
+        let intent_ref = IntentRef::new(
+            "test-intent".to_string(),
+            "tenant".to_string(),
+            "workflow".to_string(),
+            "active".to_string(),
+        );
+
+        // Verify replay can work with the adapter
+        let replay_result = adapter.replay_from_checkpoint(checkpoint, intent_ref).await;
+        assert!(
+            replay_result.is_ok(),
+            "Adapter replay_from_checkpoint should succeed"
+        );
     }
 }

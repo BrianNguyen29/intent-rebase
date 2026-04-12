@@ -10,10 +10,16 @@
 use serde::{Deserialize, Serialize};
 
 /// Severity levels for diff changes
+///
+/// Phase 2b: `Severity` is the internal risk classification (used by the engine).
+/// For public API exposure, use `to_risk_tier()` to convert to the canonical
+/// `intent_rebase_types::RiskTier` enum which uses the same variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Severity {
     /// No semantic change or clarification only
+    #[default]
     Low,
     /// Minor functional change with limited impact
     Medium,
@@ -23,9 +29,20 @@ pub enum Severity {
     Critical,
 }
 
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::Low
+use intent_rebase_types::RiskTier;
+
+impl Severity {
+    /// Phase 2b: Convert internal `Severity` to public `RiskTier` for API exposure.
+    ///
+    /// This is a 1:1 mapping — both enums share the same `Low/Medium/High/Critical` variants.
+    /// Use this method when surfacing risk classification in public API responses.
+    pub fn to_risk_tier(&self) -> RiskTier {
+        match self {
+            Severity::Low => RiskTier::Low,
+            Severity::Medium => RiskTier::Medium,
+            Severity::High => RiskTier::High,
+            Severity::Critical => RiskTier::Critical,
+        }
     }
 }
 

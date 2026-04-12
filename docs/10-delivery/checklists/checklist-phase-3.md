@@ -1,44 +1,88 @@
 # Phase 3 — Compensation + Production Hardening Checklist
 
-**Exit Gate:** Phase 3 complete khi tất cả items checked và có evidence.  
-**Prerequisite:** Phase 2 exit gate passed.
+**Exit Gate:** Phase 3 exit gate khi tất cả items checked và có evidence.  
+**Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `NOT STARTED`  
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.  
 **Phase:** Phase 3  
 **Target Duration:** 6–10 tuần
+
+---
+
+## Batch 0 Progress Snapshot
+
+```
+[x] Batch 0 scaffold: compensation service package structure created
+    Evidence:
+    - Code: crates/compensation-service/Cargo.toml
+    - Code: crates/compensation-service/src/lib.rs
+    - Code: crates/compensation-service/src/side_effect.rs
+    - Code: crates/compensation-service/src/compensation_action.rs
+    - Tests: cargo test -p compensation-service --all-features
+
+[x] Batch 0 scaffold: forensic service package structure created
+    Evidence:
+    - Code: crates/forensic-service/Cargo.toml
+    - Code: crates/forensic-service/src/lib.rs
+    - Code: crates/forensic-service/src/bundle.rs
+    - Code: crates/forensic-service/src/bundle_contents.rs
+    - Tests: cargo test -p forensic-service --all-features
+
+[x] Batch 0 groundwork: Phase 3 audit taxonomy extended for compensation/forensic flows
+    Evidence:
+    - Code: crates/intent-rebase-types/src/audit.rs
+    - Code: crates/intent-rebase-types/src/audit_repo.rs
+    - Scope: additive event taxonomy only; no producer/consumer wiring yet
+
+[~] Batch 0 planning/admin items partially prepared
+    Evidence:
+    - Dependency audit artifact: ../07-phase-3-dependency-audit.md
+    - Phase 2b security input artifact: ../08-phase-2b-security-findings-input.md
+    - Provisional SLO prep: ../../09-operations/04-sre-and-slos.md
+    - Ownership/sign-off still awaits named assignees and external confirmation
+    - Final SRE/security/compliance sign-off remains open
+    - Tracking plan: ../06-phase-3-batch-0-execution.md
+```
 
 ---
 
 ## 1. Side Effect Ledger
 
 ```
-[ ] Side effect model (effect_id, intent_id, intent_version, effect_type, target, timestamp)
+[x] Side effect model (effect_id, intent_id, intent_version, effect_type, target, timestamp, tenant_id)
     Evidence:
     - PR merged: <link>
-    - Code: compensation-service/side_effect.rs
-    - Schema: 008_side_effects_ledger.sql
+    - Code: crates/compensation-service/src/side_effect.rs (tenant_id added)
+    - Code: crates/compensation-service/src/side_effect_repo.rs (persist/query groundwork only)
+    - Schema: infrastructure/migrations/010_create_side_effects_ledger.sql
+    - Note: This slice delivers persistence + repository groundwork only. Capture-on-write, API, idempotency enforcement, and rollback records remain open below.
 
-[ ] Side effect capture on all artifact-producing operations
+[~] Side effect capture on artifact-producing operations (Phase 3 Batch 1 groundwork)
+    Evidence:
+    - Code: crates/intent-rebase-types/src/graph.rs (SideEffectCaptureContext added)
+    - Code: crates/graph-service/src/lib.rs (side_effect_context field on ArtifactIngestRequest, documentation updated)
+    - Code: crates/intent-api/src/lib.rs (ingest_artifact endpoint with optional side effect capture, 16 validation tests for side_effect_context)
+    - Tests: cargo test -p graph-service --all-features (78 tests pass), cargo test -p intent-api --all-features (67 tests pass)
+    - Note: Delivered capture path is artifact-ingest only (via POST /v1/graph/artifacts with side_effect_context). Broader capture across other artifact-producing operations remains open and requires artifact-service integration.
+
+[x] Side effect query API for compensation planning (Phase 3 Batch 1 groundwork)
     Evidence:
     - PR merged: <link>
-    - Code: artifact-service/effect_capture.rs
-    - Tests: effect capture tests pass
+    - Code: crates/compensation-service/src/side_effect_service.rs (service facade with list_side_effects_by_intent)
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/side-effects endpoint)
+    - Tests: cargo test -p compensation-service --all-features (30 tests pass), cargo test -p intent-api --all-features (67 tests pass)
 
-[ ] Side effect query API for compensation planning
+[x] Side effect idempotency keys (Phase 3 Batch 1 groundwork - via service facade)
     Evidence:
-    - PR merged: <link>
-    - API: GET /api/v1/intents/{id}/side-effects
-    - Tests: query tests pass
+    - Code: crates/compensation-service/src/side_effect_service.rs (atomic record_side_effect_with_idempotency)
+    - Code: crates/compensation-service/src/side_effect_repo.rs (tenant-scoped get_or_create_idempotent)
+    - Tests: cargo test -p compensation-service --all-features (idempotency tests pass, including concurrent duplicate protection)
+    - Note: Atomic tenant-scoped idempotency is now implemented in the service/repository path. Broader artifact-service coverage remains open.
 
-[ ] Side effect idempotency keys (prevent duplicate compensation)
+[x] Side effect rollback record (compensation applied, compensation result)
     Evidence:
-    - Code: compensation-service/idempotency.rs
-    - Tests: idempotency tests pass
-
-[ ] Side effect rollback record (compensation applied, compensation result)
-    Evidence:
-    - Code: compensation-service/rollback.rs
-    - Schema: 009_side_effect_rollbacks.sql
+    - Code: crates/compensation-service/src/rollback_record.rs
+    - Tests: cargo test -p compensation-service --all-features
 ```
 
 ---
@@ -46,32 +90,184 @@
 ## 2. Compensation Engine
 
 ```
-[ ] Compensation action model (action_type, target, parameters, status)
+[~] Compensation action model and repository (Batch 1 scaffold)
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/action.rs
+    - Code: crates/compensation-service/src/compensation_action.rs (model)
+    - Code: crates/compensation-service/src/compensation_action_repo.rs (trait + InMemory/SQL implementations)
+    - Schema: infrastructure/migrations/011_create_compensation_actions.sql
+    - Tests: cargo test -p compensation-service --all-features
+    - Note: Planner delivered (Phase 3 Batch 1 bounded slice; class-based strategy routing; S2 routes to CounterAction+SemiAutomatic; fail-closed on unsupported strategy classes)
 
-[ ] Compensation planner: generate compensation plan from side effects
+[x] Compensation actions query API (Phase 3 Batch 1 bounded read-only slice)
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/planner.rs
-    - Tests: planner tests pass
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/compensation-actions endpoint)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_by_intent method)
+    - Tests: cargo test -p intent-api --all-features (73 tests pass)
+    - Note: This endpoint is READ-ONLY - does not trigger compensation execution.
 
-[ ] Compensation executor: execute compensation actions
+[x] Compensation action approve API (Phase 3 Batch 1 bounded execution slice)
     Evidence:
-    - PR merged: <link>
-    - Code: compensation-service/executor.rs
-    - Integration test: compensation executed end-to-end
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/approve)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (approve_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Transitions Pending → Approved with optimistic locking; fails closed on illegal transitions.
 
-[ ] Compensation retry logic (max retries, backoff, dead-letter)
+[x] Compensation action waive API (Phase 3 Batch 1 bounded execution slice)
     Evidence:
-    - Code: compensation-service/retry.rs
-    - Tests: retry tests pass
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/waive)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (waive_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Transitions Pending → Waived with optimistic locking; fails closed on illegal transitions.
 
-[ ] Compensation audit trail
+[x] Compensation action execute API (Phase 3 Batch 1 bounded execution slice)
     Evidence:
-    - Audit events: compensation.planned, compensation.started, compensation.completed, compensation.failed
-    - Doc: ../../14-governance/01-audit-event-spec.md (updated)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/execute)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (execute_action method)
+    - Tests: cargo test -p compensation-service --all-features (86 tests pass), cargo test -p intent-api --all-features (73 tests pass)
+    - Note: Bounded RollbackExecutor for Rollback+Automatic path only. Three additional bounded executors delivered: CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). All four executors acknowledge against side effect ledger; fail-closed on non-matching strategy/feasibility combos. S2 alignment resolved: S2ExternalReversible routes to CounterAction+SemiAutomatic.
+
+[x] Compensation action DLQ query API (Phase 3 Batch 1 bounded manual retry slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/dlq)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_dlq_candidates, get_dlq_candidate_count)
+    - Tests: cargo test -p compensation-service --all-features (DLQ derivation tests pass)
+    - Note: Derived DLQ condition from existing data (Failed + exhausted budget OR non-retryable error). No DLQ table.
+
+[x] Compensation action batch candidates API (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/batch-candidates)
+    - Code: crates/intent-api/src/lib.rs (ListBatchCandidatesResponse, ListBatchCandidatesQuery, BatchCandidatesSummary DTOs)
+    - Code: crates/intent-api/src/lib.rs (list_batch_candidates handler)
+    - Code: crates/compensation-service/src/lib.rs (BatchCandidates re-export)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (list_batch_candidates method)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (BatchCandidates struct)
+    - OpenAPI: docs/04-api/openapi.yaml (endpoint path and schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (batch candidates tests pass)
+    - Note: Read-only endpoint returning four categories (pending approval, approved auto-executable, retryable failed, DLQ). No execution, orchestration, or policy gate.
+
+[x] Compensation action reapprove API (Phase 3 Batch 1 bounded manual retry slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/{action_id}/reapprove)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (reapprove_action method)
+    - Code: crates/compensation-service/src/compensation_action_repo.rs (reapprove repository method)
+    - Tests: cargo test -p compensation-service --all-features (reapprove tests pass)
+    - Note: Manual retry gate implemented with fail-closed policy. Only retryable errors AND remaining budget allow reapproval.
+
+[x] Intent orchestration dashboard API (Phase 3 Batch 1 bounded read-only slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /intents/{intent_id}/orchestration-dashboard)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationDashboardResponse, SideEffectSummary, CompensationActionSummary, CompensationActionStatusCounts DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_orchestration_dashboard handler with summary derivation)
+    - OpenAPI: docs/04-api/openapi.yaml (endpoint path and schema definitions)
+    - Tests: cargo test -p intent-api --all-features (7 dashboard tests pass)
+    - Note: Bounded read-only endpoint. All summary fields derived from persisted data via existing service query helpers. No batch execution or orchestration engine claims.
+
+[x] Compensation action policy gate evaluation API (Phase 3 Batch 1 bounded read-only slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/policy-gate and GET /intents/{intent_id}/compensation-policy-gate)
+    - Code: crates/intent-api/src/lib.rs (CompensationPolicyGateQuery, IntentCompensationPolicyGateQuery, CompensationPolicyGateResponse, PolicyGateEvaluationResponse, PolicyGateMetadataResponse, RiskMetadataResponse, ErrorClassificationResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_compensation_policy_gate and get_intent_compensation_policy_gate handlers)
+    - Code: crates/intent-api/src/lib.rs (format_strategy_severity, format_retry_exhaustion_risk, format_feasibility_risk, format_error_severity formatters)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (PolicyGateStatus enum, PolicyGateEvaluation struct, PolicyGateMetadata struct, RiskMetadata struct, StrategySeverity enum, RetryExhaustionRisk enum, FeasibilityRisk enum, ErrorSeverity enum, ErrorClassification struct)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (evaluate_policy_gates, evaluate_policy_gates_for_intent, evaluate_single_action, compute_gate_status, compute_gate_reason, compute_policy_metadata, compute_risk_metadata methods)
+    - Code: crates/compensation-service/src/lib.rs (RiskMetadata, ErrorClassification, ErrorSeverity, FeasibilityRisk, RetryExhaustionRisk, StrategySeverity re-exports)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/policy-gate and /intents/{intent_id}/compensation-policy-gate endpoint definitions with request/response schemas)
+    - OpenAPI: docs/04-api/openapi.yaml (CompensationPolicyGateResponse, PolicyGateEvaluationResponse, PolicyGateMetadataResponse, RiskMetadataResponse, PolicyGateSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (141 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded read-only endpoint. Gate status derived from existing fields (status, feasibility, attempt_count, max_retries, error_code). No new policy engine. Canonical statuses: eligible | blocked | manual_review_required. Risk metadata includes strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention.
+
+[x] Orchestration coordination status API (Phase 3 Batch 1 bounded read-only orchestration coordination view)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationStatus enum: ready, awaiting_policy, awaiting_manual_review, blocked, terminal)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationRecord, CoordinationSummary, CoordinationResult structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (CoordinationStatus::from_compensation_action, CoordinationRecord::from_action methods)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (evaluate_coordination_status, evaluate_coordination_status_for_intent, evaluate_coordination_from_actions methods)
+    - Code: crates/compensation-service/src/lib.rs (CoordinationRecord, CoordinationResult, CoordinationStatus, CoordinationSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/orchestration-coordination and GET /intents/{intent_id}/orchestration-coordination)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationCoordinationQuery, IntentOrchestrationCoordinationQuery, OrchestrationCoordinationResponse, CoordinationRecordResponse, CoordinationSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (get_orchestration_coordination and get_intent_orchestration_coordination handlers)
+    - Code: crates/intent-api/src/lib.rs (format_coordination_status formatter)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/orchestration-coordination and /intents/{intent_id}/orchestration-coordination endpoint definitions)
+    - OpenAPI: docs/04-api/openapi.yaml (OrchestrationCoordinationResponse, CoordinationRecordResponse, CoordinationSummaryResponse schema definitions)
+    - OpenAPI: docs/04-api/openapi.yaml (updated API description with new endpoints)
+    - Note: Bounded read-only orchestration coordination view. Canonical statuses: ready | awaiting_policy | awaiting_manual_review | blocked | terminal. Per-item records include coordination_status, coordination_reason, and action details. Summary counts: ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count. No new orchestration engine - all fields derive from existing CompensationAction fields at query time.
+
+[x] Orchestration dry-run planner API (Phase 3 Batch 1 bounded manual orchestration dry-run slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (OrchestrationAction enum: Approve, Reapprove, Execute, NoAction)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (plan_orchestration_actions, compute_action_proposal methods)
+    - Code: crates/compensation-service/src/lib.rs (OrchestrationAction, OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/orchestration-dry-run)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationActionProposalResponse, OrchestrationDryRunSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (orchestration_dry_run handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/orchestration-dry-run endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationActionProposalResponse, OrchestrationDryRunSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded READ-ONLY dry-run. Returns per-item proposed action (approve | reapprove | execute | no_action) + reason. No execution, no background worker, no queue claiming. Tenant isolation enforced.
+
+[x] Batch approve API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (BatchOrchestrationResult, BatchItemOutcome, BatchOrchestrationSummary structs)
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_approve method)
+    - Code: crates/compensation-service/src/lib.rs (BatchOrchestrationResult, BatchItemOutcome, BatchOrchestrationSummary re-exports)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-approve)
+    - Code: crates/intent-api/src/lib.rs (BatchOrchestrationRequest, BatchOrchestrationResponse, BatchItemOutcomeResponse, BatchOrchestrationSummaryResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (batch_approve_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-approve endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (BatchOrchestrationRequest, BatchOrchestrationResponse, BatchItemOutcomeResponse, BatchOrchestrationSummaryResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch approve for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing approve_action service method with tenant isolation.
+
+[x] Batch reapprove API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_reapprove method)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-reapprove)
+    - Code: crates/intent-api/src/lib.rs (batch_reapprove_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-reapprove endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch reapprove for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing reapprove_action service method with tenant isolation.
+
+[x] Batch execute API (Phase 3 Batch 1 bounded manual orchestration slice)
+    Evidence:
+    - Code: crates/compensation-service/src/compensation_action_service.rs (batch_execute method)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/batch-execute)
+    - Code: crates/intent-api/src/lib.rs (batch_execute_compensation_actions handler)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/batch-execute endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (150 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded batch execute for explicit action IDs with partial-success semantics. No background worker, no queue claiming. Uses existing execute_action service method with tenant isolation.
+
+[x] Single-shot orchestration runtime - HTTP POST /compensation-actions/runs (Phase 3 Batch 1 bounded single-shot HTTP slice)
+    Evidence:
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (OrchestrationRuntime struct with execute_run method)
+    - Code: crates/compensation-service/src/orchestration_run.rs (OrchestrationRun, RunStatus, OrchestrationActionDecision, RunItemResult models)
+    - Code: crates/compensation-service/src/orchestration_run_repo.rs (OrchestrationRunRepository trait + InMemory/Sqlx implementations)
+    - Code: crates/intent-api/src/lib.rs (POST /compensation-actions/runs, create_orchestration_run handler, HTTP 202 Accepted)
+    - Code: crates/intent-api/src/lib.rs (CreateOrchestrationRunRequest, OrchestrationRunResponse, RunItemResultResponse DTOs)
+    - Code: crates/intent-api/src/lib.rs (AppState.orchestration_runtime field + routing)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/runs POST endpoint definition)
+    - OpenAPI: docs/04-api/openapi.yaml (CreateOrchestrationRunRequest, OrchestrationRunResponse, RunItemResultResponse schema definitions)
+    - Tests: cargo test -p compensation-service --all-features (166 tests pass including orchestration_runtime tests), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded single-shot HTTP. Auto-decides approve|reapprove|execute|skip per action using existing service methods. HTTP 202 returns persisted run handle. No queue polling, no distributed claiming/locking, no scheduler.
+
+[x] Single-shot orchestration runtime - HTTP GET /compensation-actions/runs/{run_id} (Phase 3 Batch 1 bounded read surface)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (GET /compensation-actions/runs/{run_id}, get_orchestration_run handler)
+    - Code: crates/intent-api/src/lib.rs (OrchestrationRunQuery for tenant_id parameter)
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (OrchestrationRuntime.get_run method)
+    - Code: crates/compensation-service/src/orchestration_run_repo.rs (OrchestrationRunRepository.get_run method)
+    - OpenAPI: docs/04-api/openapi.yaml (/compensation-actions/runs/{run_id} GET endpoint definition)
+    - Tests: cargo test -p compensation-service --all-features (166 tests pass), cargo test -p intent-api --all-features (80 tests pass)
+    - Note: Bounded read surface for persisted run handles. Tenant isolation verified. Returns run status, counts, and per-item results.
+
+[x] Single-shot orchestration runtime - CLI sync (Phase 3 Batch 1 bounded CLI slice)
+    Evidence:
+    - Code: crates/intent-cli/Cargo.toml (new crate with ureq, clap dependencies)
+    - Code: crates/intent-cli/src/main.rs (CLI with run and get-run subcommands)
+    - Code: crates/intent-cli/src/main.rs (run_orchestration function: POST /compensation-actions/runs)
+    - Code: crates/intent-cli/src/main.rs (get_run function: GET /compensation-actions/runs/{run_id})
+    - Tests: cargo check -p intent-cli (compiles successfully)
+    - Note: Bounded CLI sync for explicit action IDs. Uses ureq for HTTP transport. Auto-decides approve|reapprove|execute|skip per action. Single-shot only - one run per invocation.
 ```
 
 ---
@@ -79,6 +275,19 @@
 ## 3. SRE & Observability
 
 ```
+[~] SRE & Observability — P2-S1 (metrics instrumentation) DELIVERED; remainder P2-S2+ scope
+    Evidence:
+    - PR merged: <link> (P2-S1 bounded slice)
+    - Metrics: intent_rebase.intent.create.total/errors, intent_rebase.version.create.total/errors
+    - Metrics: intent_rebase.rebase.preview.total/errors/duration_seconds
+    - Metrics: intent_rebase.rebase.apply.total/errors/duration_seconds
+    - Metrics: intent_rebase.compensation.actions.total/errors
+    - Metrics: intent_rebase.compensation.execute.total/duration_seconds/success/failure
+    - Metrics: intent_rebase.compensation.planned.total/by_feasibility
+    - Doc: ../../09-operations/04-sre-and-slos.md (SLOs marked provisional; P2-S1 evidence recorded)
+    - Doc: ../09-completion-proposals-tracker.md (P2 status updated to in-progress; P2-S1 evidence recorded)
+    - Note: Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope
+
 [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
     Evidence:
     - PR merged: <link>
@@ -214,7 +423,7 @@
     Evidence:
     - PR merged: <link>
     - EXPLAIN ANALYZE on critical queries
-    - New indexes: 010_optimization_indexes.sql
+    - New indexes: optimization index migration TBD
 
 [ ] Connection pooling (Postgres, NATS)
     Evidence:

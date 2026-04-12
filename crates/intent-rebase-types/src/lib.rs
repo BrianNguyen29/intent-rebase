@@ -5,12 +5,20 @@
 
 pub mod artifact;
 pub mod audit;
+pub mod audit_repo;
+pub mod checkpoint;
 pub mod error;
+pub mod event_publisher;
 pub mod graph;
 pub mod intent;
+pub mod policy_snapshot;
 
 pub use artifact::*;
 pub use audit::*;
+pub use audit_repo::*;
+pub use checkpoint::*;
 pub use error::*;
+pub use event_publisher::*;
 pub use graph::*;
 pub use intent::*;
+pub use policy_snapshot::*;

@@ -2,10 +2,13 @@
 //!
 //! Phase 1 PR #10: Graph traversal baseline (BFS, path-finding, cycle detection) with in-memory repository.
 //! Phase 1 PR #11: Graph ingestors baseline for artifact, approval, and side-effect nodes.
+//! Phase 2b: Edge re-evaluation and orphan detection bounded slices.
 //! Provides persisted graph nodes/edges CRUD for future traversal/classification work.
 //!
 //! Architecture: Repository trait allows swapping to SQL-backed implementation.
 //! See: docs/03-spec/03-dependency-graph.md (storage strategy)
+
+pub mod edge_reevaluation;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -672,7 +675,7 @@ impl GraphService {
         // Build adjacency list
         let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for node in &nodes {
-            adj.entry(node.id).or_insert_with(Vec::new);
+            adj.entry(node.id).or_default();
         }
 
         let edges = self
@@ -685,7 +688,7 @@ impl GraphService {
 
         for edge in &edges {
             adj.entry(edge.from_node_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(edge.to_node_id);
         }
 
@@ -731,10 +734,10 @@ impl GraphService {
                 }
 
                 for &neighbor in neighbors {
-                    if color.get(&neighbor) == Some(&Color::White) {
-                        if dfs(neighbor, adj, color, path, cycle_result) {
-                            return true;
-                        }
+                    if color.get(&neighbor) == Some(&Color::White)
+                        && dfs(neighbor, adj, color, path, cycle_result)
+                    {
+                        return true;
                     }
                 }
             }
@@ -848,6 +851,17 @@ impl GraphService {
     /// Creates an Artifact node and wires DependsOn edges to the specified IntentVersion nodes.
     /// This enforces the graph invariant that every artifact traces to at least one intent version.
     ///
+    /// # Phase 3 Batch 1 (groundwork): Side Effect Capture Context
+    /// When `request.side_effect_context` is provided with sufficient fields, the caller
+    /// (typically intent-api) should record a side effect to the compensation ledger
+    /// after successful ingest. This enables capture-on-write for artifact-producing
+    /// operations that have proper intent/version context.
+    ///
+    /// **Note:** This method consumes the `side_effect_context` but does NOT automatically
+    /// record the side effect. The caller is responsible for checking `request.side_effect_context`
+    /// and recording to compensation-service if provided. This separation keeps graph-service
+    /// free of compensation-service dependency.
+    ///
     /// # Prevalidation
     /// - `depends_on_intent_versions` MUST contain at least one IntentVersion node ID
     /// - All referenced IntentVersion nodes MUST exist, be of type `NodeType::IntentVersion`,
@@ -856,6 +870,12 @@ impl GraphService {
         &self,
         request: ArtifactIngestRequest,
     ) -> Result<IngestorResult, IntentRebaseError> {
+        // Extract side effect context before consuming request
+        // Note: The context is consumed but not used by graph-service itself.
+        // The caller (e.g., intent-api) should check if context was provided
+        // and record the side effect to compensation-service after successful ingest.
+        let _side_effect_context = request.side_effect_context.clone();
+
         // PREVALIDATION: Enforce artifact traceability contract
         if request.depends_on_intent_versions.is_empty() {
             return Err(IntentRebaseError::ArtifactTraceabilityEmpty);
@@ -926,6 +946,11 @@ impl GraphService {
             let edge = self.repo.create_edge(edge_request).await?;
             edges.push(edge);
         }
+
+        // Note: If side_effect_context was provided, the caller should record the side effect
+        // after successful ingest. The context is available via the consumed request's
+        // side_effect_context field. This method does not auto-record to keep graph-service
+        // free of compensation-service dependency.
 
         Ok(IngestorResult { node, edges })
     }
@@ -1386,7 +1411,7 @@ impl GraphService {
                     .or(Some(&config.target_node_types))
             };
 
-            if let Some(ref allowed_types) = target_types {
+            if let Some(allowed_types) = target_types {
                 if !allowed_types.contains(&node.node_type) {
                     // Skip this node but still explore its outgoing edges for propagation
                     if depth < max_depth {
@@ -2975,6 +3000,7 @@ mod tests {
             label: "patch-42".to_string(),
             depends_on_intent_versions: vec![intent_version.id],
             properties: Some(serde_json::json!({"artifact_type": "patch"})),
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await.unwrap();
@@ -3029,6 +3055,7 @@ mod tests {
             label: "multi-dep-artifact".to_string(),
             depends_on_intent_versions: vec![iv1.id, iv2.id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await.unwrap();
@@ -3294,6 +3321,7 @@ mod tests {
             label: "traceable-artifact".to_string(),
             depends_on_intent_versions: vec![iv1.id, iv2.id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await.unwrap();
@@ -3348,6 +3376,7 @@ mod tests {
             label: "orphan-artifact".to_string(),
             depends_on_intent_versions: vec![], // EMPTY - violates contract!
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -3378,6 +3407,7 @@ mod tests {
             label: "artifact-with-bad-ref".to_string(),
             depends_on_intent_versions: vec![nonexistent_id], // Does not exist!
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -3414,6 +3444,7 @@ mod tests {
             label: "artifact-with-wrong-type".to_string(),
             depends_on_intent_versions: vec![wrong_node.id], // Not an IntentVersion!
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -3702,6 +3733,7 @@ mod tests {
             label: "should-not-be-created".to_string(),
             depends_on_intent_versions: vec![nonexistent_id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -3823,6 +3855,7 @@ mod tests {
             label: "cross-tenant-artifact".to_string(),
             depends_on_intent_versions: vec![iv.id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -3886,6 +3919,7 @@ mod tests {
             label: "cross-workflow-artifact".to_string(),
             depends_on_intent_versions: vec![iv.id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;
@@ -4142,6 +4176,7 @@ mod tests {
             label: "same-scope-artifact".to_string(),
             depends_on_intent_versions: vec![iv.id],
             properties: None,
+            ..Default::default()
         };
 
         let result = service.ingest_artifact(artifact_req).await;

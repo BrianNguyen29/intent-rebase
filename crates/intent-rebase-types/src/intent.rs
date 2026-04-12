@@ -3,11 +3,13 @@
 //! Phase 1: Expanded to match intent-model specification.
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use validator::Validate;
 
 /// Source reference for tracking external documents
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SourceRef {
     #[serde(rename = "type")]
     pub ref_type: String,
@@ -15,7 +17,7 @@ pub struct SourceRef {
 }
 
 /// Change channel indicating how a version was created
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeChannel {
     UserEdit,
@@ -25,7 +27,7 @@ pub enum ChangeChannel {
 }
 
 /// Status of an intent document
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentStatus {
     Active,
@@ -34,7 +36,7 @@ pub enum IntentStatus {
 }
 
 /// Status of an intent version
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionStatus {
     Draft,
@@ -44,7 +46,7 @@ pub enum VersionStatus {
 }
 
 /// Clause type for intent constraints
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClauseType {
     Functional,
@@ -55,7 +57,7 @@ pub enum ClauseType {
 }
 
 /// Operator for constraint evaluation
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintOperator {
     Eq,
@@ -71,7 +73,7 @@ pub enum ConstraintOperator {
 }
 
 /// Priority of a clause
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClausePriority {
     Must,
@@ -80,7 +82,7 @@ pub enum ClausePriority {
 }
 
 /// Risk tier for an intent
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskTier {
     Low,
@@ -90,7 +92,7 @@ pub enum RiskTier {
 }
 
 /// Urgency level for an intent
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Urgency {
     Low,
@@ -100,7 +102,7 @@ pub enum Urgency {
 }
 
 /// Tradeoff dimension for preferences
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TradeoffDimension {
     Speed,
@@ -112,7 +114,7 @@ pub enum TradeoffDimension {
 }
 
 /// Tradeoff preference
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TradeoffPreference {
     Prioritize,
@@ -122,7 +124,7 @@ pub enum TradeoffPreference {
 }
 
 /// Document reference for specs, tickets, repos, policies
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocRef {
     #[serde(rename = "type")]
     pub ref_type: String,
@@ -131,22 +133,25 @@ pub struct DocRef {
 }
 
 /// Actor reference (who performed an action)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct ActorRef {
     pub actor_type: String,
     pub actor_id: String,
 }
 
 /// Objective section of intent payload
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct IntentObjective {
+    #[validate(length(min = 1, max = 500))]
     pub summary: String,
+    #[validate(length(min = 1, max = 2000))]
     pub success_statement: String,
+    #[validate(length(min = 1, max = 100))]
     pub domain: String,
 }
 
 /// Scope section defining in/out of scope items
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct IntentScope {
     #[serde(rename = "in_scope")]
     pub in_scope: Vec<String>,
@@ -155,11 +160,12 @@ pub struct IntentScope {
 }
 
 /// A single constraint within the constraints section
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Constraint {
     pub clause_id: Option<Uuid>,
     #[serde(rename = "type")]
     pub constraint_type: ClauseType,
+    #[validate(length(min = 1, max = 200))]
     pub key: String,
     pub operator: ConstraintOperator,
     pub value: serde_json::Value,
@@ -178,9 +184,10 @@ pub struct IntentConstraints {
 }
 
 /// Acceptance criterion
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AcceptanceCriterion {
     pub clause_id: Option<Uuid>,
+    #[validate(length(min = 1, max = 500))]
     pub description: String,
     pub priority: ClausePriority,
 }
@@ -193,21 +200,21 @@ pub struct AcceptanceCriteria {
 }
 
 /// Action reference
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActionRef {
     pub action: String,
     pub target: Option<String>,
 }
 
 /// Approval rule reference
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalRuleRef {
     pub rule_id: String,
     pub description: String,
 }
 
 /// Authority section defining allowed/forbidden actions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentAuthority {
     #[serde(rename = "allowed_actions")]
     pub allowed_actions: Vec<ActionRef>,
@@ -218,20 +225,20 @@ pub struct IntentAuthority {
 }
 
 /// Tradeoff preference entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Tradeoff {
     pub dimension: TradeoffDimension,
     pub preference: TradeoffPreference,
 }
 
 /// Preferences section
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentPreferences {
     pub tradeoffs: Vec<Tradeoff>,
 }
 
 /// References section linking to external documents
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentReferences {
     pub specs: Vec<DocRef>,
     pub tickets: Vec<DocRef>,
@@ -240,23 +247,25 @@ pub struct IntentReferences {
 }
 
 /// Assumptions section with explicit assumptions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct IntentAssumptions {
     pub explicit: Vec<String>,
 }
 
 /// Intent metadata for risk/urgency/confidence
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct IntentMetadataV1 {
     #[serde(rename = "risk_tier")]
     pub risk_tier: RiskTier,
     pub urgency: Urgency,
+    #[validate(range(min = 0.0, max = 1.0))]
     pub confidence: f64,
 }
 
 /// Full intent payload structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct IntentPayload {
+    #[validate(nested)]
     pub objective: IntentObjective,
     pub scope: IntentScope,
     pub constraints: IntentConstraints,
@@ -266,6 +275,7 @@ pub struct IntentPayload {
     pub preferences: IntentPreferences,
     pub references: IntentReferences,
     pub assumptions: IntentAssumptions,
+    #[validate(nested)]
     pub metadata: IntentMetadataV1,
 }
 
@@ -333,12 +343,13 @@ pub struct IntentClause {
 // -------------------------------
 
 /// Request to create a new intent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CreateIntentRequest {
     #[serde(rename = "workflow_id")]
     pub workflow_id: Uuid,
     #[serde(rename = "source_refs")]
     pub source_refs: Vec<SourceRef>,
+    #[validate(nested)]
     pub payload: IntentPayload,
     #[serde(rename = "created_by")]
     pub created_by: ActorRef,
@@ -404,4 +415,18 @@ pub struct ListVersionsResponse {
 pub struct DiffRequest {
     pub from_version: i32,
     pub to_version: i32,
+}
+
+/// Response for intent validation result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidateIntentResponse {
+    pub valid: bool,
+    pub errors: Vec<ValidationError>,
+}
+
+/// A single validation error
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
 }

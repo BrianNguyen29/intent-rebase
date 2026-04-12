@@ -16,13 +16,23 @@ CREATE TABLE IF NOT EXISTS intent_clauses (
 );
 
 -- Indexes
-CREATE INDEX idx_intent_clauses_version_id ON intent_clauses(intent_version_id);
-CREATE INDEX idx_intent_clauses_type ON intent_clauses(clause_type);
-CREATE INDEX idx_intent_clauses_priority ON intent_clauses(priority);
-CREATE INDEX idx_intent_clauses_key ON intent_clauses(key);
+CREATE INDEX IF NOT EXISTS idx_intent_clauses_version_id ON intent_clauses(intent_version_id);
+CREATE INDEX IF NOT EXISTS idx_intent_clauses_type ON intent_clauses(clause_type);
+CREATE INDEX IF NOT EXISTS idx_intent_clauses_priority ON intent_clauses(priority);
+CREATE INDEX IF NOT EXISTS idx_intent_clauses_key ON intent_clauses(key);
 
 -- Composite index for clause lookups
-CREATE INDEX idx_intent_clauses_version_type ON intent_clauses(intent_version_id, clause_type);
+CREATE INDEX IF NOT EXISTS idx_intent_clauses_version_type ON intent_clauses(intent_version_id, clause_type);
+
+-- Post-migration validation notes:
+-- 1. Verify table exists: SELECT COUNT(*) FROM intent_clauses;
+-- 2. Verify indexes exist: SELECT indexname FROM pg_indexes WHERE tablename = 'intent_clauses';
+-- 3. Verify foreign key: SELECT conname FROM pg_constraint WHERE conrelid = 'intent_clauses'::regclass AND contype = 'f';
+-- 4. Verify CHECK constraints: SELECT conname FROM pg_constraint WHERE conrelid = 'intent_clauses'::regclass AND contype = 'c';
+
+-- Rollback:
+-- DROP TABLE IF EXISTS intent_clauses;
+-- (CASCADE will drop dependent objects due to ON DELETE CASCADE on FK from intent_clauses)
 
 -- Comments
 COMMENT ON TABLE intent_clauses IS 'Phase 1: Stores fine-grained intent clauses for traceability';

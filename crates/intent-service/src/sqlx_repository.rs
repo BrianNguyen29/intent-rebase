@@ -15,14 +15,70 @@ use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 use uuid::Uuid;
 
+/// Tenant resolution trait for extracting tenant identity from request context.
+///
+/// This trait provides a seam for tenant extraction that can be implemented
+/// differently based on auth infrastructure (JWT claims, API key metadata, etc.).
+/// Using this trait avoids hardcoding `Uuid::new_v4()` placeholder in SQL paths.
+pub trait TenantResolver: Send + Sync {
+    /// Resolve tenant ID from the current request context.
+    /// Returns None if tenant cannot be determined (caller should handle auth error).
+    fn resolve_tenant_id(&self) -> Option<Uuid>;
+
+    /// Resolve tenant ID or return a default/placeholder.
+    /// Use this only when tenant resolution failure should not block the operation.
+    fn resolve_tenant_id_or_default(&self) -> Uuid {
+        self.resolve_tenant_id().unwrap_or_else(Uuid::new_v4)
+    }
+}
+
+/// Default tenant resolver that always returns None (placeholder behavior).
+/// Production implementations should extract from actual auth context.
+pub struct DefaultTenantResolver;
+
+impl TenantResolver for DefaultTenantResolver {
+    fn resolve_tenant_id(&self) -> Option<Uuid> {
+        None
+    }
+}
+
+/// Simple tenant resolver that extracts from a provided UUID.
+/// Useful for testing and internal service-to-service calls.
+pub struct StaticTenantResolver {
+    tenant_id: Uuid,
+}
+
+impl StaticTenantResolver {
+    pub fn new(tenant_id: Uuid) -> Self {
+        Self { tenant_id }
+    }
+}
+
+impl TenantResolver for StaticTenantResolver {
+    fn resolve_tenant_id(&self) -> Option<Uuid> {
+        Some(self.tenant_id)
+    }
+}
+
 /// SQL-backed repository for intent storage
 pub struct SqlxIntentRepository {
     pool: PgPool,
+    tenant_resolver: Box<dyn TenantResolver>,
 }
 
 impl SqlxIntentRepository {
+    /// Create a new SqlxIntentRepository with default tenant resolver.
+    /// Use this for testing or when tenant resolution is handled at a higher layer.
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self::with_tenant_resolver(pool, DefaultTenantResolver)
+    }
+
+    /// Create a new SqlxIntentRepository with a custom tenant resolver.
+    pub fn with_tenant_resolver(pool: PgPool, resolver: impl TenantResolver + 'static) -> Self {
+        Self {
+            pool,
+            tenant_resolver: Box::new(resolver),
+        }
     }
 
     /// Create a new intent with initial version (transactional)
@@ -36,7 +92,7 @@ impl SqlxIntentRepository {
 
         let intent_id = Uuid::new_v4();
         let now = Utc::now();
-        let tenant_id = Uuid::new_v4(); // TODO: extract from auth context
+        let tenant_id = self.tenant_resolver.resolve_tenant_id_or_default();
 
         // Insert intent
         let source_refs_json = serde_json::to_value(&request.source_refs)

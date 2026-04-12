@@ -3,24 +3,40 @@
 //! Phase 1: First slice implementation with in-memory repository.
 //! Repository trait allows swapping to SQL-backed implementation.
 
+pub mod approval_request_repo;
+pub mod checkpoint_repo;
+pub mod event_consumer;
+pub mod policy_snapshot_repo;
 pub mod sqlx_repository;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use intent_rebase_types::{
-    AffectedItem, AffectedItemsPreview, ChangeChannel, CreateIntentRequest, CreateIntentResponse,
-    CreateVersionRequest, CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError,
-    IntentStatus, IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
+    AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload, AuditRepository,
+    ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
+    CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
+    IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
 };
-use rebase_engine::{
-    compute_diff_with_risk_sync, DeferredFields, DiffRiskAnalysis, IntentVersionDiff, RebasePlan,
-};
+use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub use approval_request_repo::{
+    ApprovalRequest, ApprovalRequestRepository, ApprovalRequestStatus,
+    InMemoryApprovalRequestRepository, SqlxApprovalRequestRepository,
+};
+pub use checkpoint_repo::{
+    CheckpointRepository, InMemoryCheckpointRepository, SqlxCheckpointRepository,
+};
+pub use policy_snapshot_repo::{
+    InMemoryPolicySnapshotRepository, PolicySnapshotRepository, SqlxPolicySnapshotRepository,
+};
 pub use sqlx_repository::SqlxIntentRepository;
+
+// Re-export tenant extraction for internal use
+pub use sqlx_repository::TenantResolver;
 
 /// Repository trait for intent storage
 /// Allows for in-memory (tests) or SQL-backed implementations
@@ -175,12 +191,18 @@ impl IntentRepository for InMemoryIntentRepository {
         let now = Utc::now();
         let payload_hash = compute_payload_hash(&request.payload);
 
+        // Look up the previous version to set parent_version_id
+        let parent_version_id = versions_by_intent
+            .get(&intent_id)
+            .and_then(|ids| ids.last())
+            .copied();
+
         let version_id = Uuid::new_v4();
         let version = IntentVersion {
             id: version_id,
             intent_id,
             version_number: new_version_number,
-            parent_version_id: None, // TODO: link to previous version
+            parent_version_id,
             created_at: now,
             created_by: request.created_by.clone(),
             change_reason: request.change_reason.clone(),
@@ -267,6 +289,12 @@ pub struct IntentService {
     repo: Arc<dyn IntentRepository>,
     /// Optional graph service for impact classification
     graph_service: Option<Arc<graph_service::GraphService>>,
+    /// Optional approval request repository for cancelling pending approvals on version change
+    approval_repo: Option<Arc<dyn ApprovalRequestRepository>>,
+    /// Optional audit repository for recording cancellation events
+    audit_repo: Option<Arc<dyn AuditRepository>>,
+    /// System actor ID used for system-initiated cancellations
+    system_actor_id: String,
 }
 
 impl IntentService {
@@ -274,6 +302,9 @@ impl IntentService {
         Self {
             repo,
             graph_service: None,
+            approval_repo: None,
+            audit_repo: None,
+            system_actor_id: "intent-service/system".to_string(),
         }
     }
 
@@ -285,6 +316,42 @@ impl IntentService {
         Self {
             repo,
             graph_service: Some(graph_service),
+            approval_repo: None,
+            audit_repo: None,
+            system_actor_id: "intent-service/system".to_string(),
+        }
+    }
+
+    /// Create a new IntentService with approval and audit repositories for Phase 2b bounded slice.
+    /// When approval_repo is provided, creating a new intent version will automatically cancel
+    /// any pending approval requests for that intent.
+    pub fn with_approval_and_audit(
+        repo: Arc<dyn IntentRepository>,
+        approval_repo: Arc<dyn ApprovalRequestRepository>,
+        audit_repo: Arc<dyn AuditRepository>,
+    ) -> Self {
+        Self {
+            repo,
+            graph_service: None,
+            approval_repo: Some(approval_repo),
+            audit_repo: Some(audit_repo),
+            system_actor_id: "intent-service/system".to_string(),
+        }
+    }
+
+    /// Create a new IntentService with all optional services for Phase 2b bounded slice.
+    pub fn with_all_services(
+        repo: Arc<dyn IntentRepository>,
+        graph_service: Arc<graph_service::GraphService>,
+        approval_repo: Arc<dyn ApprovalRequestRepository>,
+        audit_repo: Arc<dyn AuditRepository>,
+    ) -> Self {
+        Self {
+            repo,
+            graph_service: Some(graph_service),
+            approval_repo: Some(approval_repo),
+            audit_repo: Some(audit_repo),
+            system_actor_id: "intent-service/system".to_string(),
         }
     }
 
@@ -300,7 +367,10 @@ impl IntentService {
     ///
     /// If `expected_version` and `expected_row_version` are provided (non-zero), performs OCC check:
     /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
-    /// This allows clients to detect concurrent modifications and retry.
+    ///   This allows clients to detect concurrent modifications and retry.
+    ///
+    /// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
+    /// cancel any pending approval requests for the intent when a new version is created.
     pub async fn create_version(
         &self,
         intent_id: Uuid,
@@ -311,9 +381,59 @@ impl IntentService {
         let (intent, row_version) = self.repo.get_intent_for_update(intent_id).await?;
         let exp_ver = expected_version.unwrap_or(intent.current_version);
         let exp_row_ver = expected_row_version.unwrap_or(row_version);
-        self.repo
+
+        // Capture old version number before creating new version for cancellation
+        let old_version = intent.current_version;
+
+        let result = self
+            .repo
             .create_version_with_occ(intent_id, request, exp_ver, exp_row_ver)
-            .await
+            .await?;
+
+        // Phase 2b bounded slice: Cancel pending approval requests if approval_repo is configured
+        if let Some(approval_repo) = &self.approval_repo {
+            let tenant_id = intent.tenant_id;
+            let cancellation_reason = format!(
+                "Intent version changed from v{} to v{}",
+                old_version, result.version_number
+            );
+
+            // Cancel all pending approval requests for this intent
+            let cancelled_count = approval_repo
+                .cancel_pending_by_intent(
+                    intent_id,
+                    tenant_id,
+                    &self.system_actor_id,
+                    &cancellation_reason,
+                )
+                .await
+                .unwrap_or(0);
+
+            // Emit audit event if audit_repo is configured and we cancelled any requests
+            if cancelled_count > 0 {
+                if let Some(audit_repo) = &self.audit_repo {
+                    let audit_payload = ApprovalCancelledAuditPayload {
+                        intent_id,
+                        cancelled_version_from: old_version,
+                        cancelled_version_to: result.version_number,
+                        decision_class: "D/E".to_string(), // High risk decisions require approval
+                        cancelled_by: self.system_actor_id.clone(),
+                        cancellation_reason,
+                        cancelled_count,
+                    };
+                    let _ = audit_repo
+                        .record_approval_cancelled(
+                            tenant_id,
+                            &self.system_actor_id,
+                            intent_id,
+                            audit_payload,
+                        )
+                        .await;
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Get the current (head) version of an intent
@@ -498,19 +618,15 @@ impl IntentService {
                 let affected_items =
                     AffectedItemsPreview::from_classification(artifacts, approvals, side_effects);
 
-                // Rebuild deferred fields with the enriched affected_items so the
-                // approval-revalidation heuristic sees graph-derived affected approvals
-                let deferred =
-                    DeferredFields::phase1_baseline_for(plan.decision_class, &affected_items);
-
-                // Create new plan with enriched affected_items and updated deferred
+                // Create new plan with enriched affected_items
                 let enriched_plan = RebasePlan {
                     decision_class: plan.decision_class,
                     rationale: plan.rationale,
                     section_decisions: plan.section_decisions,
                     affected_items,
-                    deferred,
+                    deferred: plan.deferred,
                     manual_review_recommended: plan.manual_review_recommended,
+                    risk_tier: plan.risk_tier,
                     risk_level: plan.risk_level,
                 };
 
@@ -562,6 +678,733 @@ fn compute_payload_hash(payload: &intent_rebase_types::IntentPayload) -> String 
     hasher.update(json.as_bytes());
     let result = hasher.finalize();
     format!("{:x}", result)
+}
+
+// =============================================================================
+// Checkpoint Service — Phase 2 checkpoint lifecycle management
+// =============================================================================
+
+use intent_rebase_types::CheckpointType;
+
+/// CheckpointService handles checkpoint lifecycle operations for the runtime adapter.
+///
+/// This service layer sits between the API/adapter layer and the repository,
+/// providing checkpoint lifecycle operations including create, query, and expire.
+/// It does NOT handle Temporal SDK integration - that belongs in the runtime-adapter crate.
+pub struct CheckpointService {
+    repo: Arc<dyn CheckpointRepository>,
+    /// Default TTL for checkpoints that don't specify one
+    default_ttl: Option<chrono::Duration>,
+}
+
+impl CheckpointService {
+    /// Create a new CheckpointService with the given repository.
+    pub fn new(repo: Arc<dyn CheckpointRepository>) -> Self {
+        Self {
+            repo,
+            default_ttl: None,
+        }
+    }
+
+    /// Create a new CheckpointService with a custom default TTL for checkpoints.
+    pub fn with_default_ttl(repo: Arc<dyn CheckpointRepository>, ttl: chrono::Duration) -> Self {
+        Self {
+            repo,
+            default_ttl: Some(ttl),
+        }
+    }
+
+    /// Create a new checkpoint for an intent version.
+    ///
+    /// The checkpoint captures the workflow state at a specific point in the rebase lifecycle.
+    /// If `expires_in` is provided, the checkpoint will expire after that duration.
+    /// Otherwise, uses the service's default_ttl, or never expires if no default is set.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_checkpoint(
+        &self,
+        intent_id: Uuid,
+        intent_version: i32,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+        checkpoint_type: CheckpointType,
+        workflow_state: serde_json::Value,
+        expires_in: Option<chrono::Duration>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        let expires_at = expires_in.map(|d| chrono::Utc::now() + d);
+
+        let checkpoint = Checkpoint {
+            checkpoint_id: Uuid::new_v4(),
+            intent_id,
+            intent_version,
+            workflow_id,
+            tenant_id,
+            workflow_state,
+            checkpoint_type,
+            created_at: chrono::Utc::now(),
+            expires_at,
+            status: intent_rebase_types::CheckpointStatus::Pending,
+            metadata: metadata.unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        };
+
+        self.repo.create_checkpoint(checkpoint).await
+    }
+
+    /// Create a checkpoint using the service's default TTL.
+    pub async fn create_checkpoint_with_defaults(
+        &self,
+        intent_id: Uuid,
+        intent_version: i32,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+        checkpoint_type: CheckpointType,
+        workflow_state: serde_json::Value,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        let expires_at = self.default_ttl.map(|d| chrono::Utc::now() + d);
+
+        let checkpoint = Checkpoint {
+            checkpoint_id: Uuid::new_v4(),
+            intent_id,
+            intent_version,
+            workflow_id,
+            tenant_id,
+            workflow_state,
+            checkpoint_type,
+            created_at: chrono::Utc::now(),
+            expires_at,
+            status: intent_rebase_types::CheckpointStatus::Pending,
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+        };
+
+        self.repo.create_checkpoint(checkpoint).await
+    }
+
+    /// Get a checkpoint by its ID.
+    pub async fn get_checkpoint(
+        &self,
+        checkpoint_id: Uuid,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        self.repo.get_checkpoint(checkpoint_id).await
+    }
+
+    /// List all checkpoints for a workflow, ordered by creation time descending.
+    pub async fn list_checkpoints_by_workflow(
+        &self,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Checkpoint>, IntentRebaseError> {
+        self.repo.list_by_workflow(workflow_id, tenant_id).await
+    }
+
+    /// List all checkpoints for an intent, ordered by creation time descending.
+    pub async fn list_checkpoints_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Checkpoint>, IntentRebaseError> {
+        self.repo.list_by_intent(intent_id, tenant_id).await
+    }
+
+    /// Get the latest checkpoint for a workflow.
+    pub async fn get_latest_checkpoint(
+        &self,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Option<Checkpoint>, IntentRebaseError> {
+        let checkpoints = self.repo.list_by_workflow(workflow_id, tenant_id).await?;
+        Ok(checkpoints.into_iter().next())
+    }
+
+    /// Get the latest checkpoint for an intent version.
+    pub async fn get_checkpoint_for_version(
+        &self,
+        intent_id: Uuid,
+        intent_version: i32,
+        tenant_id: Uuid,
+    ) -> Result<Option<Checkpoint>, IntentRebaseError> {
+        let checkpoints = self.repo.list_by_intent(intent_id, tenant_id).await?;
+        Ok(checkpoints
+            .into_iter()
+            .find(|c| c.intent_version == intent_version))
+    }
+
+    /// Activate a checkpoint (mark it as active and ready for replay).
+    pub async fn activate_checkpoint(
+        &self,
+        checkpoint_id: Uuid,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        self.repo
+            .update_status(checkpoint_id, intent_rebase_types::CheckpointStatus::Active)
+            .await
+    }
+
+    /// Supersede a checkpoint (mark it as superseded by a newer checkpoint).
+    pub async fn supersede_checkpoint(
+        &self,
+        checkpoint_id: Uuid,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        self.repo
+            .update_status(
+                checkpoint_id,
+                intent_rebase_types::CheckpointStatus::Superseded,
+            )
+            .await
+    }
+
+    /// Invalidate a checkpoint due to an error or invalid state.
+    pub async fn invalidate_checkpoint(
+        &self,
+        checkpoint_id: Uuid,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        self.repo
+            .update_status(
+                checkpoint_id,
+                intent_rebase_types::CheckpointStatus::Invalidated,
+            )
+            .await
+    }
+
+    /// Run checkpoint expiration job.
+    ///
+    /// This should be called periodically (e.g., by a background worker)
+    /// to mark expired checkpoints and reclaim resources.
+    ///
+    /// Returns the number of checkpoints that were expired.
+    pub async fn run_expiration(&self) -> Result<usize, IntentRebaseError> {
+        self.repo.expire_checkpoints().await
+    }
+
+    /// Get checkpoints by type for a workflow.
+    pub async fn list_checkpoints_by_type(
+        &self,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+        checkpoint_type: CheckpointType,
+    ) -> Result<Vec<Checkpoint>, IntentRebaseError> {
+        let checkpoints = self.repo.list_by_workflow(workflow_id, tenant_id).await?;
+        Ok(checkpoints
+            .into_iter()
+            .filter(|c| c.checkpoint_type == checkpoint_type)
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_service_tests {
+    use super::*;
+    use intent_rebase_types::CheckpointType;
+
+    fn create_test_checkpoint(
+        intent_id: Uuid,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+        checkpoint_type: CheckpointType,
+    ) -> Checkpoint {
+        Checkpoint::with_required(intent_id, 1, workflow_id, tenant_id, checkpoint_type)
+    }
+
+    #[tokio::test]
+    async fn test_create_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                Some(chrono::Duration::hours(1)),
+                None,
+            )
+            .await;
+
+        assert!(checkpoint.is_ok());
+        let checkpoint = checkpoint.unwrap();
+        assert_eq!(checkpoint.intent_id, intent_id);
+        assert_eq!(checkpoint.workflow_id, workflow_id);
+        assert_eq!(checkpoint.tenant_id, tenant_id);
+        assert_eq!(checkpoint.intent_version, 1);
+        assert_eq!(checkpoint.checkpoint_type, CheckpointType::Initial);
+        assert!(checkpoint.expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_checkpoint_with_defaults() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service =
+            CheckpointService::with_default_ttl(repo.clone(), chrono::Duration::hours(24));
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = service
+            .create_checkpoint_with_defaults(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::PreFlight,
+                serde_json::json!({"step": 1}),
+            )
+            .await;
+
+        assert!(checkpoint.is_ok());
+        let checkpoint = checkpoint.unwrap();
+        assert!(checkpoint.expires_at.is_some()); // Should use default TTL
+    }
+
+    #[tokio::test]
+    async fn test_create_checkpoint_no_expiry() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // No expiry specified
+        let checkpoint = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Final,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await;
+
+        assert!(checkpoint.is_ok());
+        let checkpoint = checkpoint.unwrap();
+        assert!(checkpoint.expires_at.is_none()); // Should never expire
+    }
+
+    #[tokio::test]
+    async fn test_get_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let created = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let retrieved = service.get_checkpoint(created.checkpoint_id).await;
+        assert!(retrieved.is_ok());
+        assert_eq!(retrieved.unwrap().checkpoint_id, created.checkpoint_id);
+    }
+
+    #[tokio::test]
+    async fn test_list_checkpoints_by_workflow() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create multiple checkpoints
+        for i in 0..3 {
+            service
+                .create_checkpoint(
+                    intent_id,
+                    i as i32 + 1,
+                    workflow_id,
+                    tenant_id,
+                    CheckpointType::Initial,
+                    serde_json::json!({}),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let checkpoints = service
+            .list_checkpoints_by_workflow(workflow_id, tenant_id)
+            .await;
+        assert!(checkpoints.is_ok());
+        assert_eq!(checkpoints.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_checkpoints_by_intent() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create multiple checkpoints for same intent (different versions)
+        for i in 0..3 {
+            service
+                .create_checkpoint(
+                    intent_id,
+                    i as i32 + 1,
+                    workflow_id,
+                    tenant_id,
+                    CheckpointType::Initial,
+                    serde_json::json!({}),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let checkpoints = service
+            .list_checkpoints_by_intent(intent_id, tenant_id)
+            .await;
+        assert!(checkpoints.is_ok());
+        assert_eq!(checkpoints.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create checkpoints with slight delay to ensure different timestamps
+        for i in 0..3 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            service
+                .create_checkpoint(
+                    intent_id,
+                    i as i32 + 1,
+                    workflow_id,
+                    tenant_id,
+                    CheckpointType::Initial,
+                    serde_json::json!({}),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let latest = service.get_latest_checkpoint(workflow_id, tenant_id).await;
+        assert!(latest.is_ok());
+        let latest = latest.unwrap();
+        assert!(latest.is_some());
+        // Latest should be the one with highest created_at (version 3 in this case)
+        assert_eq!(latest.unwrap().intent_version, 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_checkpoint_for_version() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create checkpoints for versions 1 and 2
+        service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let v2 = service
+            .create_checkpoint(
+                intent_id,
+                2,
+                workflow_id,
+                tenant_id,
+                CheckpointType::PreFlight,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let found = service
+            .get_checkpoint_for_version(intent_id, 2, tenant_id)
+            .await;
+        assert!(found.is_ok());
+        assert_eq!(found.unwrap().unwrap().checkpoint_id, v2.checkpoint_id);
+
+        // Version 3 doesn't exist
+        let not_found = service
+            .get_checkpoint_for_version(intent_id, 3, tenant_id)
+            .await;
+        assert!(not_found.is_ok());
+        assert!(not_found.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_activate_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::IntentReceived,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let activated = service.activate_checkpoint(checkpoint.checkpoint_id).await;
+        assert!(activated.is_ok());
+        assert_eq!(
+            activated.unwrap().status,
+            intent_rebase_types::CheckpointStatus::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn test_supersede_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let superseded = service.supersede_checkpoint(checkpoint.checkpoint_id).await;
+        assert!(superseded.is_ok());
+        assert_eq!(
+            superseded.unwrap().status,
+            intent_rebase_types::CheckpointStatus::Superseded
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_checkpoint() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let checkpoint = service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::RebaseStarted,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let invalidated = service
+            .invalidate_checkpoint(checkpoint.checkpoint_id)
+            .await;
+        assert!(invalidated.is_ok());
+        assert_eq!(
+            invalidated.unwrap().status,
+            intent_rebase_types::CheckpointStatus::Invalidated
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_expiration() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create an already-expired checkpoint
+        let mut expired_checkpoint =
+            create_test_checkpoint(intent_id, workflow_id, tenant_id, CheckpointType::Final);
+        expired_checkpoint.expires_at = Some(chrono::Utc::now() - chrono::Duration::hours(1));
+        expired_checkpoint.status = intent_rebase_types::CheckpointStatus::Active;
+
+        repo.create_checkpoint(expired_checkpoint).await.unwrap();
+
+        // Run expiration
+        let count = service.run_expiration().await;
+        assert!(count.is_ok());
+        assert_eq!(count.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_checkpoints_by_type() {
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create checkpoints of different types
+        service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_id,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        service
+            .create_checkpoint(
+                intent_id,
+                2,
+                workflow_id,
+                tenant_id,
+                CheckpointType::PreFlight,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        service
+            .create_checkpoint(
+                intent_id,
+                3,
+                workflow_id,
+                tenant_id,
+                CheckpointType::PreFlight,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let pre_flight_checkpoints = service
+            .list_checkpoints_by_type(workflow_id, tenant_id, CheckpointType::PreFlight)
+            .await;
+        assert!(pre_flight_checkpoints.is_ok());
+        assert_eq!(pre_flight_checkpoints.unwrap().len(), 2);
+
+        let initial_checkpoints = service
+            .list_checkpoints_by_type(workflow_id, tenant_id, CheckpointType::Initial)
+            .await;
+        assert!(initial_checkpoints.is_ok());
+        assert_eq!(initial_checkpoints.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_isolation() {
+        // Checkpoints from different tenants should not leak
+        let repo = Arc::new(InMemoryCheckpointRepository::new());
+        let service = CheckpointService::new(repo.clone());
+
+        let intent_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let tenant_1 = Uuid::new_v4();
+        let tenant_2 = Uuid::new_v4();
+
+        // Create checkpoint for tenant 1
+        service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_1,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Create checkpoint for tenant 2
+        service
+            .create_checkpoint(
+                intent_id,
+                1,
+                workflow_id,
+                tenant_2,
+                CheckpointType::Initial,
+                serde_json::json!({}),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Each tenant should only see their own checkpoints
+        let tenant_1_checkpoints = service
+            .list_checkpoints_by_workflow(workflow_id, tenant_1)
+            .await;
+        assert_eq!(tenant_1_checkpoints.unwrap().len(), 1);
+
+        let tenant_2_checkpoints = service
+            .list_checkpoints_by_workflow(workflow_id, tenant_2)
+            .await;
+        assert_eq!(tenant_2_checkpoints.unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -1163,5 +2006,64 @@ mod tests {
         // Scope changes have no clause_ids, so confidence is 0.5 (below 0.7 threshold),
         // which triggers manual_review
         assert!(risk.manual_review);
+    }
+
+    #[tokio::test]
+    async fn test_parent_version_id_set_on_v2_create() {
+        // Verify that creating v2 sets parent_version_id to v1.id
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        // Create initial intent (v1)
+        let request = create_test_request();
+        let response = service.create_intent(request).await.unwrap();
+        let intent_id = response.intent_id;
+
+        // Get v1 to capture its ID
+        let v1 = service.get_version(intent_id, 1).await.unwrap();
+        let v1_id = v1.id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        let _v2_response = service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Verify v2's parent_version_id points to v1.id
+        let v2 = service.get_version(intent_id, 2).await.unwrap();
+        assert_eq!(v2.parent_version_id, Some(v1_id));
+
+        // Create version 3 to verify chain continues
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v3".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        let _v3_response = service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Verify v3's parent_version_id points to v2.id
+        let v2_for_v3 = service.get_version(intent_id, 2).await.unwrap();
+        let v3 = service.get_version(intent_id, 3).await.unwrap();
+        assert_eq!(v3.parent_version_id, Some(v2_for_v3.id));
+
+        // Verify v1.parent_version_id is still None
+        let v1_after = service.get_version(intent_id, 1).await.unwrap();
+        assert_eq!(v1_after.parent_version_id, None);
     }
 }

@@ -19,10 +19,18 @@ CREATE TABLE IF NOT EXISTS intents (
 );
 
 -- Indexes for common query patterns
-CREATE INDEX idx_intents_tenant_id ON intents(tenant_id);
-CREATE INDEX idx_intents_workflow_id ON intents(workflow_id);
-CREATE INDEX idx_intents_status ON intents(status);
-CREATE INDEX idx_intents_created_at ON intents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intents_tenant_id ON intents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_intents_workflow_id ON intents(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status);
+CREATE INDEX IF NOT EXISTS idx_intents_created_at ON intents(created_at DESC);
+
+-- Post-migration validation notes:
+-- 1. Verify table exists: SELECT COUNT(*) FROM intents;
+-- 2. Verify indexes exist: SELECT indexname FROM pg_indexes WHERE tablename = 'intents';
+-- 3. Verify constraints: SELECT conname FROM pg_constraint WHERE conrelid = 'intents'::regclass;
+
+-- Rollback:
+-- DROP TABLE IF EXISTS intents;
 
 -- Comments
 COMMENT ON TABLE intents IS 'Phase 1: Intent registry - stores intent documents';

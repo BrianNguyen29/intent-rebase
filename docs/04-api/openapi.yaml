@@ -1,32 +1,212 @@
 # Intent Rebase Engine - OpenAPI Specification
-# Phase 1 - Core Control Plane
 #
-# Note: OpenAPI spec is maintained alongside code as endpoints are implemented.
-# HTTP framework choice for Phase 1: lightweight approach - see docs for decision rationale.
+# Note: This spec is the canonical source for implemented HTTP endpoints.
+# HTTP framework: lightweight approach — see docs for decision rationale.
+# Phase coverage: Phase 1 + Phase 3 Batch 1 (see implemented sections below).
 
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: Intent Rebase Engine API
   description: |
-    Phase 1 First Slice - Intent Registry API
+    Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
     
-    Manages intent lifecycle, versioning, and basic CRUD operations.
+    ## Implemented scopes
+    
+    ### Phase 1 — Core Control Plane
+    - Health & observability endpoints
+    - Intent lifecycle (create/read/version)
+    - Intent analysis (validate, diff, rebase-preview)
+    - Dependency graph CRUD
+    
+    ### Phase 3 Batch 1 — Compensation + Orchestration
+    - Side effect capture and query
+    - Compensation action CRUD and approve/waive/execute
+    - DLQ and batch candidate APIs
+    - Policy gate evaluation
+    - Orchestration dashboard and coordination view
+    - Orchestration dry-run planner and batch approve/reapprove/execute
+    - Single-shot orchestration runtime (HTTP + CLI)
+    
+    ## Bounded scope note
+    Phase 3 Batch 1 delivers bounded slices of the compensation engine.
+    Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
     
     ## Implemented (Phase 1)
-    - Create intent with initial version
-    - Create new version of existing intent
-    - Get intent head (current version)
-    - List all versions of an intent (descending order)
-    - Get specific version by version number
-    - Diff computation between two versions (POST /intents/{id}/diff)
-    - Rebase preview (POST /intents/{id}/rebase-preview)
     
-    ## Not Yet Implemented
-    - Rebase apply endpoint (Phase 2)
-    - Checkpoint selection heuristics (Phase 2)
-    - Approval revalidation hooks (Phase 2)
-    - Runtime adapter integration (Phase 2)
+    ### Health & Observability
+    - GET /health — Service health check
+    - GET /ready — Service readiness check
+    - GET /metrics — Prometheus metrics endpoint
+    
+    ### Intent Lifecycle
+    - POST /intents — Create intent with initial version
+    - GET /intents/{intent_id} — Get intent head (current version)
+    - POST /intents/{intent_id}/versions — Create new version
+    - GET /intents/{intent_id}/versions — List all versions (descending order)
+    - GET /intents/{intent_id}/versions/{version_number} — Get specific version
+    
+    ### Intent Analysis
+    - POST /v1/intents/validate — Validate intent payload structure
+    - POST /intents/{intent_id}/diff — Compute diff between two versions
+    - POST /intents/{intent_id}/rebase-preview — Generate rebase preview plan
+    
+    ### Dependency Graph (Phase 1 - CRUD only)
+    - POST /v1/graph/nodes — Create graph node
+    - GET /v1/graph/nodes — List graph nodes (with optional filters)
+    - GET /v1/graph/nodes/{node_id} — Get specific graph node
+    - POST /v1/graph/edges — Create graph edge
+    - GET /v1/graph/edges — List graph edges (with optional filters)
+    - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
+    
+    ### Phase 3 Batch 1 (groundwork + bounded execution slice)
+    - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
+    - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
+    - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
+    - GET /compensation-actions/policy-gate — Tenant-scoped policy gate evaluation (read-only query)
+    - GET /intents/{intent_id}/compensation-policy-gate — Intent-scoped policy gate evaluation (read-only query)
+    - GET /compensation-actions/orchestration-coordination — Tenant-scoped orchestration coordination status (read-only query)
+    - GET /intents/{intent_id}/orchestration-coordination — Intent-scoped orchestration coordination status (read-only query)
+    - POST /compensation-actions/{action_id}/approve — Approve a pending compensation action (bounded slice)
+    - POST /compensation-actions/{action_id}/waive — Waive a pending compensation action (bounded slice)
+    - POST /compensation-actions/{action_id}/execute — Execute an approved compensation action (bounded slice, stub executor)
+
+    ## Phase 3 Batch 1: Compensation Policy Gate Evaluation
+    - **Bounded read-only slice** — no execution, no persistence writes, no policy engine
+    - **GET /compensation-actions/policy-gate?tenant_id=...** — Tenant-scoped evaluation for all tenant actions
+    - **GET /intents/{intent_id}/compensation-policy-gate?tenant_id=...** — Intent-scoped evaluation
+    - **Canonical gate statuses** — exactly: eligible | blocked | manual_review_required
+    - **Risk metadata** — derived from existing fields: strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention
+    - **No new policy engine** — all fields derive from status, attempt_count, max_retries, error_code, feasibility, strategy_type
+    - **Policy metadata** — auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, has_non_retryable_error
+
+    ## Phase 3 Batch 1: Compensation Summary
+    - Rebase preview and apply responses include `compensation_planning` field with read-only compensation planning summary
+    - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
+    - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
+    - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
+    - **Execution policy gate:** Only service-executable combos can execute:
+        - Rollback + Automatic (S1InternalReversible)
+        - CounterAction + SemiAutomatic (S2ExternalReversible)
+        - FollowupNotice + ManualOnly (S3ExternalPartiallyReversible)
+        - Escalation + NotPossible (S4Irreversible)
+      All other feasibility levels or strategy types require human intervention workflows (not in this slice)
+    - **Bounded execution executors (Phase 3 Batch 1):**
+      - **RollbackExecutor:** Real acknowledgment for Rollback+Automatic (S1InternalReversible) path
+        - Success means "rollback action acknowledged" — validated against side effect ledger
+        - Non-Rollback strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-Automatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Missing side effect context fails closed with `SIDE_EFFECT_NOT_FOUND`
+        - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external reversal if current data model cannot support it
+      - **CounterActionExecutor:** Real acknowledgment for CounterAction+SemiAutomatic (S2ExternalReversible) path
+        - Validates side effect class is S2ExternalReversible
+        - Success means "counter-action acknowledged" — validated against side effect ledger
+        - Non-CounterAction strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-SemiAutomatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "Counter-action for {effect_type} targeting {target} acknowledged"
+      - **FollowupNoticeExecutor:** Real acknowledgment for FollowupNotice+ManualOnly (S3ExternalPartiallyReversible) path
+        - Validates side effect class is S3ExternalPartiallyReversible
+        - Success means "followup notice acknowledged" — validated against side effect ledger
+        - Non-FollowupNotice strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-ManualOnly feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "FollowupNotice for {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external resolution if current data model cannot support it
+      - **EscalationExecutor:** Real acknowledgment for Escalation+NotPossible (S4Irreversible) path
+        - Validates side effect class is S4Irreversible
+        - Success means "escalation acknowledged" — validated against side effect ledger
+        - Non-Escalation strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-NotPossible feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "Escalation for {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external resolution if current data model cannot support it
+    - **All executors share common validation:** tenant_id match, intent_id match, side effect existence
+
+    ## Phase 3 Batch 1: Intent Orchestration Dashboard
+    - GET /intents/{intent_id}/orchestration-dashboard — Bounded read-only dashboard endpoint
+    - Returns raw lists of side effects and compensation actions for a single intent within a tenant
+    - Derives bounded summary fields: counts by status, retryable_failed_count, dlq_candidate_count, reapprovable_count, irreversible-effect flag/count, auto-executable candidate count
+    - **This endpoint is READ-ONLY** — does not trigger compensation execution, orchestration engine, or background processing
+    - **Truthful summaries** — all counts are derived from persisted data via existing service query helpers
+    - No batch execution, no orchestration engine, no background processing claims
+
+    ## Phase 3 Batch 1: Orchestration Coordination Status
+    - **Bounded read-only orchestration coordination view** — no execution, no persistence writes, no orchestration engine
+    - **GET /compensation-actions/orchestration-coordination?tenant_id=...** — Tenant-scoped coordination status for all tenant actions
+    - **GET /intents/{intent_id}/orchestration-coordination?tenant_id=...** — Intent-scoped coordination status
+    - **Canonical coordination statuses** — exactly: ready | awaiting_policy | awaiting_manual_review | blocked | terminal
+    - **Per-item records** — each action has coordination_status, coordination_reason, and action details
+    - **Summary counts** — ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count
+    - **No new orchestration engine** — all fields derive from existing CompensationAction fields at query time
+    - **Response includes** — summary + per-item coordination records
+
+    ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
+    - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
+    - **DLQ query endpoint:** GET /compensation-actions/dlq lists derived DLQ candidates
+    - **Derived DLQ condition:** An action is a DLQ candidate when Failed AND (exhausted retry budget OR non-retryable error)
+    - **No DLQ table:** DLQ is a read-only derived condition from existing data
+    - **Retry policy gates (fail closed):**
+      - Only retryable error codes allow reapproval (explicit allowlist: CONNECTION_TIMEOUT, SERVICE_UNAVAILABLE, etc.)
+      - Non-retryable errors (INVALID_CONFIGURATION, PERMISSION_DENIED, etc.) cannot be reapproved
+      - Exhausted retry budget (attempt_count >= max_retries) cannot be reapproved
+      - Default max_retries is 3
+    - **Attempt count is preserved** during reapproval (not reset) for audit trail
+    - **No background workers** - all operations are explicit API calls
+
+    ## Phase 3 Batch 1: Single-Shot Orchestration Runtime (Bounded HTTP + CLI Slice)
+    - **HTTP POST /compensation-actions/runs:** Create and execute a single-shot orchestration run for explicit action IDs
+    - **HTTP GET /compensation-actions/runs/{run_id}:** Get an existing orchestration run by ID
+    - **Bounded single-shot semantics:**
+      - Single-shot: one run = one explicit action list, one auto-decide pass
+      - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
+      - Runtime auto-decides per action: approve | reapprove | execute | skip
+      - Uses existing CompensationActionService methods (does not replace enforcement)
+      - Partial-success: continues on per-item failures, records all outcomes
+    - **Auto-decide logic:**
+      - `Pending` → approve via approve_action
+      - `Failed` (can_be_reapproved) → reapprove via reapprove_action
+        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
+      - Terminal / policy-blocked → skip
+      - Not found → record not_found
+    - **Run status (HTTP 202 Accepted):**
+      - `pending` → run created, awaiting execution
+      - `running` → run is executing
+      - `completed` → all actions succeeded
+      - `completed_with_errors` → some actions failed
+      - `failed` → all actions failed or system error
+    - **CLI sync:** `intent-cli run --action-ids <ids> --tenant-id <id>` for explicit action IDs (single-shot sync)
+    - **No queue polling, no distributed claiming/locking, no scheduler**
+    - **CLI response includes:** run ID, status, per-action results (action_taken, success, reason, resulting_status)
+
+    ## Phase 3 Batch 1: Manual Orchestration + Dry-Run Planner (Bounded Slice)
+    - **Dry-run planner:** POST /compensation-actions/orchestration-dry-run returns per-item proposed action + reason for explicit IDs
+    - **Manual batch approve:** POST /compensation-actions/batch-approve triggers approve for explicit IDs with partial-success semantics
+    - **Manual batch reapprove:** POST /compensation-actions/batch-reapprove triggers reapprove for explicit IDs with partial-success semantics
+    - **Manual batch execute:** POST /compensation-actions/batch-execute triggers execute for explicit IDs with partial-success semantics
+    - **Bounded partial-success semantics:** Even if some items fail, the batch continues and reports per-item outcomes explicitly
+    - **No fail-fast:** All items are processed, results are accumulated and returned together
+    - **No background worker or queue claiming:** All operations are explicit API calls via existing service methods
+    - **Dry-run response includes:** per-item proposed_action (approve | reapprove | execute | no_action) + reason
+    - **Batch command response includes:** per-item success/failure + resulting action or error + summary counts
+
+    ## Phase 2b Bounded Delivery
+    - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
+    - Bounded runtime adapter integration for Temporal-backed signal/replay execution
+    - Pending approval queue/read endpoints and status-only approve/reject actions
+    - Canonical public `risk_tier` field in rebase preview/apply responses
+    - Bounded replay endpoint (`POST /intents/{intent_id}/replay`) — cooperative signal-based replay, not native Temporal reset
+
+    ## Still Open (broader than current bounded slices)
+    - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
+    - Approval revalidation hooks and policy snapshot lifecycle
+    - Event streaming (NATS/Kafka)
     - Full authentication/authorization
+    - Replay with intent version override (Phase 3 deferral)
+    - Replay audit trail and replay status tracking beyond the bounded replay slice (Phase 3 deferral)
+    - Compensation planner: full risk scoring, strategy selection (Batch 1+ scope)
+    - Compensation executor: real rollback/counter-action logic (Batch 1+ scope; stub executor implemented)
+    - Compensation retry logic: max retries, backoff (Batch 1+ scope)
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team
@@ -38,11 +218,17 @@ servers:
   - url: /v1
     description: Version 1 API
 
-tags:
+  tags:
   - name: intents
     description: Intent lifecycle operations
   - name: versions
     description: Intent version management
+  - name: health
+    description: Health and observability endpoints
+  - name: graph
+    description: Dependency graph CRUD operations
+  - name: compensation
+    description: Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
 
 paths:
   /intents:
@@ -372,6 +558,1610 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /intents/{intent_id}/rebase-apply:
+    post:
+      tags:
+        - rebase
+      summary: Apply a rebase directive
+      description: |
+        Executes the current bounded rebase-apply path for an intent version transition.
+
+        **Phase 2b risk-tier policy contract:**
+        The apply decision is controlled by `risk_tier` (the primary public risk field):
+        - LOW risk_tier: automatic, no approval required, no notification
+        - MEDIUM risk_tier: automatic with notification
+        - HIGH/CRITICAL risk_tier: blocked, requires manual approval
+        - Class A (no semantic changes): always no-op regardless of risk_tier
+
+        The `decision_class` (A-E) and `risk_level` (1-5) fields remain available
+        as supporting context for audit and display purposes.
+
+        **Runtime execution semantics:**
+        - Runtime signal delivery is best-effort and does not block the API response.
+        - Temporal replay is currently implemented as cooperative signal-based replay with
+          checkpoint context, not native Temporal reset.
+
+        **HTTP status codes:**
+        - 200: Rebase applied (auto-proceed or no-op)
+        - 202: Rebase blocked, requires manual review (HIGH/CRITICAL risk_tier)
+      operationId: applyRebase
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Rebase applied or determined to be a no-op
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebaseApplyResponse'
+        '202':
+          description: Rebase requires manual review and was not auto-applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebaseApplyResponse'
+        '400':
+          description: Invalid request - bad version ordering or versions from different intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/replay:
+    post:
+      tags:
+        - rebase
+      summary: Initiate a bounded replay operation
+      description: |
+        Phase 2b bounded replay slice: Initiates cooperative signal-based replay
+        using existing runtime/checkpoint seams. This is NOT native Temporal reset.
+
+        **Checkpoint selection strategy (bounded):**
+        - If `checkpoint_id` is provided in request, use that specific checkpoint
+        - Otherwise, use the most recent active checkpoint for the workflow
+
+        **Replay semantics:**
+        - Uses existing `replay_from_checkpoint` runtime adapter seam
+        - Returns bounded outcome with checkpoint alignment details
+        - Does not imply full Phase 2 replay compatibility (event streaming, replay override, etc.)
+
+        **HTTP status codes:**
+        - 200: Replay initiated with checkpoint alignment result
+        - 400: Invalid request (version not found, etc.)
+        - 404: Intent not found
+        - 500: Internal server error
+      operationId: replayIntent
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayRequest'
+      responses:
+        '200':
+          description: Replay initiated with bounded outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+        '400':
+          description: Invalid request - checkpoint not found or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/side-effects:
+    get:
+      tags:
+        - side-effects
+      summary: List side effects for an intent
+      description: |
+        Phase 3 Batch 1 (groundwork): Returns all side effects recorded for the given
+        intent, scoped to the specified tenant. Side effects are ordered by
+        occurred_at descending (newest first).
+
+        This endpoint provides the query API for compensation planning input.
+        The actual compensation planning/execution is not included in this slice.
+      operationId: listSideEffects
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Side effects retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSideEffectsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/orchestration-dashboard:
+    get:
+      tags:
+        - compensation
+      summary: Intent orchestration dashboard (read-only)
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
+        of side effects and compensation actions for a single intent within a tenant.
+
+        **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+        approval workflows, or any mutation. It only queries existing data and
+        computes summary statistics.
+
+        **Truthful summary fields:**
+        - `side_effect_summary.total`: count of all side effects for this intent
+        - `side_effect_summary.irreversible_count`: count of S4Irreversible side effects
+        - `side_effect_summary.auto_compensatable_count`: count of S0/S1 side effects
+        - `compensation_action_summary.status_counts.*`: count by CompensationStatus
+        - `compensation_action_summary.retryable_failed_count`: Failed actions with retryable errors
+        - `compensation_action_summary.dlq_candidate_count`: Failed + exhausted budget OR non-retryable error
+        - `compensation_action_summary.reapprovable_count`: Failed + retryable error + remaining budget
+        - `compensation_action_summary.auto_executable_count`: Approved + Automatic feasibility
+
+        **No batch execution or orchestration engine claims:**
+        This endpoint only aggregates existing persisted data. It does not execute
+        any compensation actions, trigger workflows, or involve background processing.
+      operationId: getOrchestrationDashboard
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration dashboard retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationDashboardResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/compensation-actions:
+    get:
+      tags:
+        - compensation
+      summary: List compensation actions for an intent
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns all compensation actions
+        recorded for the given intent, scoped to the specified tenant. Actions are
+        ordered by generated_at descending (newest first).
+
+        **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+        approval workflows, or any mutation. It only queries existing compensation
+        action records.
+
+        **Planner vs Executor distinction:**
+        - This endpoint returns actual compensation action records stored via the
+          compensation action service/repository
+        - The `compensation_planning` field in rebase-preview/apply responses shows
+          planner-generated skeleton/preview data (not stored records)
+        - Full compensation execution (executor trigger) is Batch 1+ scope
+      operationId: listCompensationActions
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Compensation actions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCompensationActionsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/{action_id}/approve:
+    post:
+      tags:
+        - compensation
+      summary: Approve a pending compensation action
+      description: |
+        Phase 3 Batch 1 (bounded execution slice): Transitions a Pending compensation action
+        to Approved status, enabling it to be executed via POST /compensation-actions/{action_id}/execute.
+
+        **Transition rules:**
+        - Only Pending actions can be approved
+        - Uses optimistic locking via lock_version to prevent concurrent updates
+
+        **Fails closed on illegal transitions:**
+        - Returns 409 Conflict if action is not Pending
+        - Returns 409 Conflict if lock_version doesn't match
+
+        **Executor gate:** Approved actions can be executed via POST /compensation-actions/{action_id}/execute
+      operationId: approveCompensationAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Compensation action ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveCompensationActionBody'
+      responses:
+        '200':
+          description: Compensation action approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationActionResponse'
+        '404':
+          description: Compensation action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Compensation action is not Pending or lock_version mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/{action_id}/waive:
+    post:
+      tags:
+        - compensation
+      summary: Waive a pending compensation action
+      description: |
+        Phase 3 Batch 1 (bounded execution slice): Transitions a Pending compensation action
+        to Waived status, marking it as intentionally skipped.
+
+        **Transition rules:**
+        - Only Pending actions can be waived
+        - Uses optimistic locking via lock_version to prevent concurrent updates
+
+        **Fails closed on illegal transitions:**
+        - Returns 409 Conflict if action is not Pending
+        - Returns 409 Conflict if lock_version doesn't match
+
+        **This slice:** Waived actions are terminal. No reactivation path exists.
+      operationId: waiveCompensationAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Compensation action ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WaiveCompensationActionBody'
+      responses:
+        '200':
+          description: Compensation action waived successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationActionResponse'
+        '404':
+          description: Compensation action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Compensation action is not Pending or lock_version mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/{action_id}/execute:
+    post:
+      tags:
+        - compensation
+      summary: Execute an approved compensation action
+      description: |
+        Phase 3 Batch 1 (bounded execution slice): Executes an Approved compensation action
+        using the bounded RollbackExecutor.
+
+        **Executor gate:** Only Approved actions can execute. This prevents accidental
+        execution of pending or already-processed actions.
+
+        **Execution policy gate:** Only service-executable combos can execute:
+        - Rollback + Automatic feasibility (S1InternalReversible)
+        - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
+        - FollowupNotice + ManualOnly feasibility (S3ExternalPartiallyReversible)
+        - Escalation + NotPossible feasibility (S4Irreversible)
+
+        All four combos are service-executable in this slice. Human-intervention workflows
+        for other feasibility levels or strategy types are not in this slice.
+
+        **Bounded executor semantics (Phase 3 Batch 1):**
+        - Rollback + Automatic: validates side effect context against ledger, returns acknowledgment
+        - CounterAction + SemiAutomatic: bounded execution, returns acknowledgment
+        - FollowupNotice + ManualOnly: bounded execution, returns acknowledgment
+        - Escalation + NotPossible: bounded execution, returns acknowledgment
+        - Missing side effect: fail closed with `SIDE_EFFECT_NOT_FOUND`
+        - Success summary is truthful: does not claim unreversible actions are reversed
+        - Does NOT claim external reversal — current data model does not support actual artifact reversal
+
+        **Fails closed on illegal transitions:**
+        - Returns 409 Conflict if action is not Approved
+        - Returns 409 Conflict if combo is not one of the four service-executable combos
+
+        **This slice:** No retry logic; Failed actions remain Failed.
+      operationId: executeCompensationAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Compensation action ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteCompensationActionBody'
+      responses:
+        '200':
+          description: Compensation action executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationActionResponse'
+        '404':
+          description: Compensation action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Compensation action is not Approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/{action_id}/reapprove:
+    post:
+      tags:
+        - compensation
+      summary: Manually reapprove a failed compensation action
+      description: |
+        Phase 3 Batch 1 (bounded manual retry slice): Transitions a Failed compensation
+        action back to Pending status, enabling it to be approved and executed again.
+
+        **Policy gates (fail closed):**
+        - Action must be in Failed status
+        - Action must have remaining retry budget (attempt_count < max_retries)
+        - Error code must be retryable (not a permanent failure)
+
+        **Fails closed when:**
+        - Action is not in Failed status → 409 Conflict
+        - Retry budget exhausted → 409 Conflict
+        - Error is non-retryable → 409 Conflict
+        - Optimistic lock conflict → 409 Conflict
+
+        **Note:** This does NOT reset the attempt_count. The action retains its
+        failure history. Reapproval just allows another execution attempt within
+        the retry budget.
+      operationId: reapproveCompensationAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Compensation action ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReapproveCompensationActionBody'
+      responses:
+        '200':
+          description: Compensation action reapproved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationActionResponse'
+        '404':
+          description: Compensation action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Compensation action cannot be reapproved (policy gate failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/dlq:
+    get:
+      tags:
+        - compensation
+      summary: List DLQ (Dead Letter Queue) candidates
+      description: |
+        Phase 3 Batch 1 (bounded manual retry slice): Returns all compensation
+        actions that are DLQ candidates.
+
+        **Derived DLQ condition:** An action is a DLQ candidate when:
+        1. Status is Failed AND
+        2. Either:
+           a. attempt_count >= max_retries (exhausted retry budget), OR
+           b. The error code is non-retryable (permanent failure)
+
+        **No DLQ table:** This is a read-only derived query from existing data.
+        DLQ candidates cannot be reapproved - they represent failures that have
+        exhausted automated retry possibilities.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+        Manual intervention is the only path forward for DLQ candidates.
+      operationId: listDlqCandidates
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: DLQ candidates retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDlqCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-candidates:
+    get:
+      tags:
+        - compensation
+      summary: List batch candidates across all categories
+      description: |
+        Phase 3 Batch 1 (bounded read-only batch candidate queue slice): Returns a
+        consolidated view of all actionable compensation categories for batch processing.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Four candidate categories:**
+        1. `pending_approval_candidates` - Actions in Pending status awaiting approval
+        2. `approved_service_executable_candidates` - Approved actions executable by the service (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
+        3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
+        4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
+
+        **No execution, orchestration, or policy gate:**
+        This is a read-only query endpoint. It does not trigger any mutations,
+        execute any actions, or involve background workers.
+
+        **Tenant-scoped:** Results are filtered by the provided tenant_id.
+      operationId: listBatchCandidates
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Batch candidates retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBatchCandidatesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/runs:
+    post:
+      tags:
+        - compensation
+      summary: Create and execute a single-shot orchestration run
+      description: |
+        Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+        Creates a new orchestration run for the given compensation action IDs,
+        persists it in Pending state, and returns HTTP 202 immediately with the
+        run handle. Execution proceeds in the background via execute_existing_run.
+
+        **Bounded single-shot semantics:**
+        - Single-shot: one run = one explicit action list, one auto-decide pass
+        - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
+        - Background execution: run executes asynchronously after response is sent
+        - Runtime auto-decides per action: approve | reapprove | execute | skip
+        - Uses existing CompensationActionService methods (does not replace enforcement)
+        - Partial-success: continues on per-item failures, records all outcomes
+
+        **Auto-decide logic:**
+        - `Pending` → approve via approve_action
+        - `Failed` (can_be_reapproved) → reapprove via reapprove_action
+        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
+        - Terminal / policy-blocked → skip
+        - Not found → record not_found
+
+        **Run status (HTTP 202 Accepted):**
+        - `pending` → run created, awaiting execution
+        - `running` → run is executing
+        - `completed` → all actions succeeded
+        - `completed_with_errors` → some actions failed
+        - `failed` → all actions failed or system error
+
+        **No queue polling, no distributed claiming/locking, no scheduler**
+      operationId: createOrchestrationRun
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrchestrationRunRequest'
+      responses:
+        '202':
+          description: Run accepted and persisted (execution in progress or completed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationRunResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Run not found (when fetching by ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/runs/{run_id}:
+    get:
+      tags:
+        - compensation
+      summary: Get an orchestration run by ID
+      description: |
+        Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
+        Returns the run including its current status, counts, and per-item results.
+      operationId: getOrchestrationRun
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The orchestration run ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to verify ownership
+      responses:
+        '200':
+          description: Run retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationRunResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/orchestration-dry-run:
+    post:
+      tags:
+        - compensation
+      summary: Plan orchestration actions for compensation action IDs (dry-run)
+      description: |
+        Phase 3 Batch 1 (bounded dry-run slice): For each provided compensation_action_id,
+        determines the proposed action (approve | reapprove | execute | no_action) based
+        on the action's current state.
+
+        **This is READ-ONLY** - it does not execute any actions.
+
+        **Action determination logic:**
+        - `approve`: Action is Pending (can transition to Approved)
+        - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
+        - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible)
+        - `no_action`: Action is in a terminal state or cannot perform any valid transition
+
+        **Bounded partial-success semantics:**
+        - If an action_id is not found, it's added to `not_found` and does not cause failure
+        - All found actions are processed, even if some have no_action
+
+        **No background worker or queue claiming:**
+        This is a direct query-based planner that reads current state and proposes actions.
+      operationId: orchestrationDryRun
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestrationDryRunRequest'
+      responses:
+        '200':
+          description: Dry-run plan computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationDryRunResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-approve:
+    post:
+      tags:
+        - compensation
+      summary: Batch approve compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Approves multiple Pending
+        compensation actions with partial-success semantics.
+
+        **Bounded partial-success semantics:**
+        - If an action_id is not found, it's recorded as `not_found` and continues
+        - If an action fails validation, it's recorded as `failed` with error reason
+        - Successful approvals are recorded as `succeeded`
+        - Does NOT fail-fast on first error - all items are processed
+
+        **Transition rules:**
+        - Only Pending actions can be approved
+        - Uses optimistic locking via lock_version
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchApproveCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch approve completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-reapprove:
+    post:
+      tags:
+        - compensation
+      summary: Batch reapprove compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Reapproves multiple Failed
+        compensation actions that are eligible for retry, with partial-success semantics.
+
+        **Bounded partial-success semantics:** Same as batch-approve.
+
+        **Policy gates (fail closed):**
+        - Action must be in Failed status
+        - Action must have remaining retry budget
+        - Error code must be retryable
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchReapproveCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch reapprove completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/batch-execute:
+    post:
+      tags:
+        - compensation
+      summary: Batch execute compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple Approved
+        compensation actions that are auto-executable, with partial-success semantics.
+
+        **Bounded partial-success semantics:** Same as batch-approve.
+
+        **Executor gate:** Only Approved + service-executable combos can execute:
+        - Rollback + Automatic feasibility (S1InternalReversible)
+        - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
+
+        **No background worker or queue claiming:**
+        This is a direct service method that processes actions sequentially.
+      operationId: batchExecuteCompensationActions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrchestrationRequest'
+      responses:
+        '200':
+          description: Batch execute completed with per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrchestrationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/policy-gate:
+    get:
+      tags:
+        - compensation
+      summary: Tenant-scoped policy gate evaluation for compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+        for all compensation actions belonging to the specified tenant.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical gate statuses:**
+        - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
+        - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
+
+        **Gate evaluation is derived from existing surfaces:**
+        - Status, feasibility, attempt_count, max_retries, error_code fields
+        - No new policy engine or external risk surface is queried
+
+        **Response includes:**
+        - Individual action evaluations with gate outcome and reason
+        - Summary counts by gate status
+        - Policy/risk metadata useful for UI display
+      operationId: getCompensationPolicyGate
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Policy gate evaluations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationPolicyGateResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/compensation-policy-gate:
+    get:
+      tags:
+        - compensation
+      summary: Intent-scoped policy gate evaluation for compensation actions
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
+        for all compensation actions belonging to the specified intent.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical gate statuses:**
+        - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
+        - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
+
+        **Gate evaluation is derived from existing surfaces:**
+        - Status, feasibility, attempt_count, max_retries, error_code fields
+        - No new policy engine or external risk surface is queried
+
+        **Response includes:**
+        - Individual action evaluations with gate outcome and reason
+        - Summary counts by gate status
+        - Policy/risk metadata useful for UI display
+      operationId: getIntentCompensationPolicyGate
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Policy gate evaluations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompensationPolicyGateResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-actions/orchestration-coordination:
+    get:
+      tags:
+        - compensation
+      summary: Tenant-scoped orchestration coordination status
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+        coordination status for all compensation actions belonging to the specified tenant.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical coordination statuses:**
+        - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `awaiting_policy`: Action awaits policy approval (Pending status)
+        - `awaiting_manual_review`: Action requires human intervention
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+        - `terminal`: Action has reached terminal state (Executed, Waived)
+
+        **Response includes:**
+        - Per-item coordination records with status, reason, and action details
+        - Summary counts by coordination status
+
+        **Derivation:** Coordination status is derived from existing CompensationAction fields
+        at query time. No new orchestration engine is queried.
+      operationId: getOrchestrationCoordination
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration coordination status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationCoordinationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/orchestration-coordination:
+    get:
+      tags:
+        - compensation
+      summary: Intent-scoped orchestration coordination status
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+        coordination status for all compensation actions belonging to the specified intent.
+
+        **This endpoint is READ-ONLY** - it only queries existing data.
+
+        **Canonical coordination statuses:**
+        - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+        - `awaiting_policy`: Action awaits policy approval (Pending status)
+        - `awaiting_manual_review`: Action requires human intervention
+        - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+        - `terminal`: Action has reached terminal state (Executed, Waived)
+
+        **Response includes:**
+        - Per-item coordination records with status, reason, and action details
+        - Summary counts by coordination status
+
+        **Derivation:** Coordination status is derived from existing CompensationAction fields
+        at query time. No new orchestration engine is queried.
+      operationId: getIntentOrchestrationCoordination
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Orchestration coordination status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestrationCoordinationResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/pending:
+    get:
+      tags:
+        - approvals
+      summary: List pending approval requests
+      description: |
+        Returns all pending approval requests for a given tenant.
+
+        **Phase 2b bounded slice:** This endpoint only lists pending approval requests.
+        Approval requests are created when external rebase-apply hits blocked D/E path.
+      operationId: listPendingApprovalRequests
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to filter pending approval requests
+      responses:
+        '200':
+          description: Pending approval requests retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPendingApprovalRequestsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/{approval_request_id}/approve:
+    post:
+      tags:
+        - approvals
+      summary: Approve an approval request
+      description: |
+        Approves a pending approval request.
+
+        **Phase 2b bounded slice:** Only updates status to approved and emits ApprovalGranted audit event.
+        Does NOT resume or re-trigger apply.
+      operationId: approveApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveApprovalRequestBody'
+      responses:
+        '200':
+          description: Approval request approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestResponse'
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Approval request is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/{approval_request_id}/reject:
+    post:
+      tags:
+        - approvals
+      summary: Reject an approval request
+      description: |
+        Rejects a pending approval request.
+
+        **Phase 2b bounded slice:** Only updates status to rejected and emits ApprovalRevoked audit event.
+        Does NOT resume or re-trigger apply.
+      operationId: rejectApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectApprovalRequestBody'
+      responses:
+        '200':
+          description: Approval request rejected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestResponse'
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Approval request is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      description: Returns service health status
+      operationId: health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags:
+        - health
+      summary: Readiness check
+      description: Returns service readiness status
+      operationId: ready
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+
+  /metrics:
+    get:
+      tags:
+        - health
+      summary: Prometheus metrics
+      description: Returns Prometheus-compatible metrics
+      operationId: metrics
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/intents/validate:
+    post:
+      tags:
+        - intents
+      summary: Validate intent payload
+      description: Validates the structure of an intent payload without creating an intent
+      operationId: validateIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateIntentRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateIntentResponse'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/nodes:
+    post:
+      tags:
+        - graph
+      summary: Create graph node
+      description: Creates a new node in the dependency graph
+      operationId: createGraphNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphNodeRequest'
+      responses:
+        '201':
+          description: Node created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph nodes
+      description: Returns graph nodes with optional filtering
+      operationId: listGraphNodes
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: node_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeType'
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NodeState'
+      responses:
+        '200':
+          description: Nodes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphNodesResponse'
+
+  /v1/graph/nodes/{node_id}:
+    get:
+      tags:
+        - graph
+      summary: Get graph node
+      description: Returns a specific graph node by ID
+      operationId: getGraphNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Node found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphNode'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/edges:
+    post:
+      tags:
+        - graph
+      summary: Create graph edge
+      description: Creates a new edge in the dependency graph
+      operationId: createGraphEdge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphEdgeRequest'
+      responses:
+        '201':
+          description: Edge created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphEdge'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Source or target node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - graph
+      summary: List graph edges
+      description: Returns graph edges with optional filtering
+      operationId: listGraphEdges
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: from_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: to_node_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: edge_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EdgeType'
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGraphEdgesResponse'
+
+  /v1/graph/nodes/{node_id}/edges:
+    get:
+      tags:
+        - graph
+      summary: List edges from node
+      description: Returns all edges originating from a specific node
+      operationId: listEdgesFromNode
+      parameters:
+        - name: node_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Node ID
+      responses:
+        '200':
+          description: Edges retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListEdgesFromNodeResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/graph/artifacts:
+    post:
+      tags:
+        - graph
+      summary: Ingest an artifact with optional side effect capture
+      description: |
+        Phase 3 Batch 1 (groundwork): Creates an Artifact node in the graph and wires
+        DependsOn edges to the specified IntentVersion nodes. When `side_effect_context`
+        is provided with sufficient fields, also records a side effect to the compensation
+        ledger (capture-on-write groundwork).
+
+        **Validation:**
+        - `tenant_id` cannot be nil UUID
+        - `workflow_id` cannot be nil UUID
+        - `label` cannot be empty or whitespace-only
+        - `external_ref.ref_id` cannot be nil UUID
+      operationId: ingestArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactIngestRequest'
+      responses:
+        '201':
+          description: Artifact created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactIngestResponse'
+        '400':
+          description: Invalid request body (nil UUID or empty label)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Referenced IntentVersion node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----
@@ -402,16 +2192,7 @@ components:
       required: [ref_type, ref_id]
       properties:
         ref_type:
-          type: string
-          description: |
-            Type of external reference. Possible values:
-            - intent: References an Intent
-            - intent_version: References an IntentVersion
-            - artifact: References an Artifact
-            - approval: References an Approval
-            - policy_snapshot: References a PolicySnapshot
-            - side_effect: References a SideEffect
-            - checkpoint: References a Checkpoint
+          $ref: '#/components/schemas/ExternalRefType'
         ref_id:
           type: string
           format: uuid
@@ -878,12 +2659,19 @@ components:
         - `available`: Graph data was found and affected items were classified
         - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
         
-        Phase 1 PR #17 keeps apply/checkpoint typed contracts internal to the planner.
-        They are not exposed in this preview response yet.
+        Phase 1 PR #17 kept apply/checkpoint typed contracts internal to the planner.
+        This preview response now additionally exposes the bounded read-only
+        `compensation_planning` summary, while execution contracts remain internal.
 
         When status is `unavailable`, the endpoint remains functional but the affected
         items arrays should not be considered authoritative.
-      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_level]
+
+        **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
+        `risk_level` (1-5) and `decision_class` remain as supporting fields.
+
+        **Phase 3 Batch 1: `compensation_planning` exposes read-only compensation planning summary.**
+        This is a skeleton/preview only — does not indicate execution capability or actual compensation actions.
+      required: [intent_id, from_version, to_version, decision_class, rationale, section_decisions, affected_items, manual_review_recommended, risk_tier, risk_level, compensation_planning]
       properties:
         intent_id:
           type: string
@@ -905,11 +2693,200 @@ components:
           $ref: '#/components/schemas/AffectedItemsPreview'
         manual_review_recommended:
           type: boolean
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+          description: |
+            Phase 2b: Canonical public risk tier (primary public risk field).
+            Maps from DiffRiskAnalysis.severity: Low/Medium/High/Critical.
         risk_level:
           type: integer
           minimum: 1
           maximum: 5
-          description: Risk level (1=lowest, 5=highest)
+          description: Supporting risk level (1=lowest, 5=highest)
+        compensation_planning:
+          $ref: '#/components/schemas/CompensationPlanningSummary'
+          description: |
+            Phase 3 Batch 1: Read-only compensation planning summary.
+            This is planner-generated preview data, NOT executed compensation actions.
+            The `ready` field indicates whether full compensation planning is available;
+            when `false`, the action list is empty and execution is not supported.
+
+    RebaseApplyResponse:
+      type: object
+      description: |
+        Response for the bounded external rebase-apply path.
+
+        D/E outcomes are surfaced as `blocked_manual_review` with HTTP 202.
+        Runtime replay status reflects cooperative runtime signaling, not native Temporal reset.
+
+        **Phase 2b: `risk_tier` is the canonical public risk field (Low/Medium/High/Critical).**
+        `risk_level` (1-5) and `decision_class` remain as supporting fields.
+
+        **Phase 3 Batch 1: `compensation_planning` exposes read-only compensation planning summary.**
+        This is a skeleton/preview only — does not indicate execution capability or actual compensation actions.
+      required:
+        - intent_id
+        - from_version
+        - to_version
+        - decision_class
+        - risk_tier
+        - risk_level
+        - outcome
+        - manual_review_required
+        - notification_required
+        - rationale
+        - runtime_execution_status
+        - signal_sent
+        - replay_attempted
+        - replay_completed
+        - graph_updates_applied
+        - graph_updates_failed
+        - compensation_planning
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          $ref: '#/components/schemas/IntentVersion'
+        to_version:
+          $ref: '#/components/schemas/IntentVersion'
+        decision_class:
+          $ref: '#/components/schemas/DecisionClass'
+        risk_tier:
+          $ref: '#/components/schemas/RiskTier'
+          description: |
+            Phase 2b: Canonical public risk tier (primary public risk field).
+            Maps from DiffRiskAnalysis.severity: Low/Medium/High/Critical.
+        risk_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Supporting risk level (1=lowest, 5=highest)
+        outcome:
+          type: string
+          enum:
+            - no_op
+            - auto_proceeded
+            - auto_proceeded_with_notification
+            - blocked_manual_review
+        manual_review_required:
+          type: boolean
+        notification_required:
+          type: boolean
+        rationale:
+          type: string
+        aligned_checkpoint_id:
+          type: string
+          format: uuid
+          nullable: true
+        checkpoint_alignment_outcome:
+          type: string
+          nullable: true
+          enum:
+            - aligned
+            - closest_match
+            - no_checkpoint_required
+            - no_checkpoint_found
+            - multiple_candidates
+        runtime_execution_status:
+          type: string
+          enum:
+            - not_applicable
+            - skipped_not_ready
+            - degraded
+            - succeeded
+            - succeeded_no_replay
+        signal_sent:
+          type: boolean
+        replay_attempted:
+          type: boolean
+        replay_completed:
+          type: boolean
+        graph_updates_applied:
+          type: integer
+          minimum: 0
+        graph_updates_failed:
+          type: integer
+          minimum: 0
+        compensation_planning:
+          $ref: '#/components/schemas/CompensationPlanningSummary'
+          description: |
+            Phase 3 Batch 1: Read-only compensation planning summary.
+            This is planner-generated preview data, NOT executed compensation actions.
+            The `ready` field indicates whether full compensation planning is available;
+            when `false`, the action list is empty and execution is not supported.
+
+    ReplayRequest:
+      type: object
+      description: |
+        Phase 2b bounded replay slice request.
+        
+        Bounded checkpoint selection strategy:
+        - If `checkpoint_id` is provided, use that specific checkpoint
+        - Otherwise, use the most recent active checkpoint for the workflow
+        
+        Note: This is cooperative signal-based replay, NOT native Temporal reset.
+      required: [to_version]
+      properties:
+        from_version:
+          type: integer
+          nullable: true
+          description: Source version for replay (optional, uses current head if not specified)
+        to_version:
+          type: integer
+          description: Target version for replay
+        checkpoint_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Optional specific checkpoint ID to use for replay
+
+    ReplayResponse:
+      type: object
+      description: |
+        Phase 2b bounded replay slice response.
+        
+        Reflects cooperative signal-based replay semantics using existing
+        runtime/checkpoint seams. This is NOT native Temporal reset.
+      required:
+        - intent_id
+        - from_version
+        - to_version
+        - checkpoint_selection_outcome
+        - runtime_execution_status
+        - signal_sent
+        - replay_attempted
+        - replay_completed
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        from_version:
+          type: integer
+        to_version:
+          type: integer
+        aligned_checkpoint_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Checkpoint ID used for replay (if any)
+        checkpoint_selection_outcome:
+          type: string
+          description: Checkpoint selection outcome label
+        runtime_execution_status:
+          type: string
+          enum:
+            - not_applicable
+            - skipped_not_ready
+            - degraded
+            - succeeded
+            - succeeded_no_replay
+        signal_sent:
+          type: boolean
+        replay_attempted:
+          type: boolean
+        replay_completed:
+          type: boolean
 
     AffectedItemsPreview:
       type: object
@@ -1003,6 +2980,75 @@ components:
         recommended_action:
           type: string
           description: Recommended action for this section
+
+    # ----- Compensation Planning (Phase 3 Batch 1) -----
+    CompensationPlanningSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Public compensation planning summary for API responses.
+
+        This is a read-only summary of compensation planning output from the rebase planner.
+        It exposes the skeleton/preview compensation data without claiming execution support.
+
+        **Distinction from actual compensation actions:**
+        - This summary represents planner-generated potential compensation actions
+          derived from affected items analysis during rebase preview
+        - Actual compensation actions (stored records) are queried via
+          `GET /intents/{intent_id}/compensation-actions` using CompensationActionService
+
+        **Execution readiness:**
+        - `ready: true` indicates full compensation planning is available
+        - `ready: false` (Phase 3 Batch 1) indicates compensation planning is deferred;
+          the action list will be empty and execution is not supported
+      required: [ready, potential_actions, has_irreversible_effects]
+      properties:
+        ready:
+          type: boolean
+          description: |
+            Whether full compensation planning is ready to execute.
+            When false (Phase 3 Batch 1), compensation planning is deferred and
+            the potential_actions list will be empty.
+        potential_actions:
+          type: array
+          description: |
+            Phase 3 Batch 1: This is a skeleton/preview list; actual execution
+            requires Batch 1+ planner implementation.
+          items:
+            $ref: '#/components/schemas/CompensationAction'
+        has_irreversible_effects:
+          type: boolean
+          description: |
+            Whether any irreversible side effects are present in the affected items.
+            When true, manual intervention may be required even for automatic compensation.
+        rationale:
+          type: string
+          nullable: true
+          description: Human-readable rationale for compensation planning decisions.
+
+    CompensationAction:
+      type: object
+      description: |
+        A potential compensation action to mitigate side effects.
+        This is the lightweight planning summary version used in compensation_planning.
+      required: [id, label, description, reversible, priority]
+      properties:
+        id:
+          type: string
+          description: Action identifier
+        label:
+          type: string
+          description: Human-readable label
+        description:
+          type: string
+          description: Description of the action
+        reversible:
+          type: boolean
+          description: Whether this action is reversible
+        priority:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Priority (lower = higher priority)
 
     IntentVersionDiff:
       type: object
@@ -1215,6 +3261,1419 @@ components:
           type: integer
         high_priority_changes:
           type: integer
+
+    # ----- Health & Observability -----
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+          description: Service version
+
+    ReadyResponse:
+      type: object
+      required: [status, ready]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        ready:
+          type: boolean
+        checks:
+          type: array
+          description: Individual readiness checks
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              ready:
+                type: boolean
+              error:
+                type: string
+                nullable: true
+
+    # ----- Intent Validation -----
+    ValidateIntentRequest:
+      type: object
+      required: [payload]
+      properties:
+        payload:
+          $ref: '#/components/schemas/IntentPayload'
+
+    ValidateIntentResponse:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationWarning'
+
+    ValidationError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the invalid field
+        message:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+
+    ValidationWarning:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dot-notation path to the field with a warning
+        message:
+          type: string
+          description: Human-readable warning message
+        code:
+          type: string
+          description: Machine-readable warning code
+
+    # ----- Graph Types -----
+    NodeType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint, Workflow, Generic]
+      description: Type of a graph node
+
+    NodeState:
+      type: string
+      enum: [Active, Stale, Invalid, Archived]
+      description: State of a graph node
+
+    EdgeType:
+      type: string
+      enum: [DependsOn, Produces, Approves, Triggers, Defines, GeneratedFrom, ValidatedBy, GovernedBy, DerivedFrom, StoredIn, Supersedes, Blocks, Compensates]
+      description: Type label for a graph edge
+
+    ExternalRefType:
+      type: string
+      enum: [Intent, IntentVersion, Artifact, Approval, PolicySnapshot, SideEffect, Checkpoint]
+      description: Type of external reference
+
+    GraphNode:
+      type: object
+      required: [id, tenant_id, workflow_id, node_type, label, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        state:
+          $ref: '#/components/schemas/NodeState'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    GraphEdge:
+      type: object
+      required: [id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateGraphNodeRequest:
+      type: object
+      required: [tenant_id, workflow_id, node_type, label]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          nullable: true
+        label:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    CreateGraphEdgeRequest:
+      type: object
+      required: [tenant_id, workflow_id, from_node_id, to_node_id, edge_type]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        from_node_id:
+          type: string
+          format: uuid
+        to_node_id:
+          type: string
+          format: uuid
+        edge_type:
+          $ref: '#/components/schemas/EdgeType'
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    ListGraphNodesResponse:
+      type: object
+      required: [nodes, total]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        total:
+          type: integer
+
+    ListGraphEdgesResponse:
+      type: object
+      required: [edges, total]
+      properties:
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+        total:
+          type: integer
+
+    ListEdgesFromNodeResponse:
+      type: object
+      required: [node_id, edges]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+
+    # ----- Artifact Ingest (Phase 3 Batch 1 groundwork) -----
+    SideEffectClass:
+      type: string
+      enum: [s0_pure_read, s1_internal_reversible, s2_external_reversible, s3_external_partially_reversible, s4_irreversible]
+      description: |
+        Side effect severity class for capture context.
+        - s0_pure_read: Pure read, no side effect
+        - s1_internal_reversible: Internal reversible
+        - s2_external_reversible: External reversible (default)
+        - s3_external_partially_reversible: External partially reversible
+        - s4_irreversible: Irreversible
+
+    SideEffectCaptureContext:
+      type: object
+      description: |
+        Phase 3 Batch 1 (groundwork): Context for optional side effect capture.
+        When an artifact-producing operation has proper intent/version context,
+        this struct carries the information needed to record a side effect.
+
+        **Validation rules** (when side_effect_context is provided):
+        - source_intent_id: required, cannot be nil UUID
+        - source_intent_version: required, must be > 0
+        - effect_type: required, cannot be empty or whitespace-only
+        - target: required, cannot be empty or whitespace-only
+        - effect_class: optional, defaults to s2_external_reversible
+        - idempotency_key: optional, but if provided cannot be empty or whitespace-only
+      properties:
+        source_intent_id:
+          type: string
+          format: uuid
+          description: The intent ID that produced this artifact (cannot be nil)
+        source_intent_version:
+          type: integer
+          description: The intent version at time of artifact production (must be > 0)
+        effect_type:
+          type: string
+          description: The effect type (e.g., "artifact_created", "deployment_triggered"). Cannot be empty or whitespace-only.
+        target:
+          type: string
+          description: The effect target (e.g., artifact URL, deployment ID). Cannot be empty or whitespace-only.
+        effect_class:
+          $ref: '#/components/schemas/SideEffectClass'
+          description: The side effect severity class. Defaults to s2_external_reversible if not specified.
+        idempotency_key:
+          type: string
+          nullable: true
+          description: Optional idempotency key to prevent duplicate side effect records
+
+    ArtifactIngestRequest:
+      type: object
+      required: [tenant_id, workflow_id, external_ref, label]
+      description: |
+        Phase 3 Batch 1 (groundwork): Request to ingest an artifact with optional side effect capture.
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant scope (cannot be nil UUID)
+        workflow_id:
+          type: string
+          format: uuid
+          description: Workflow scope (cannot be nil UUID)
+        external_ref:
+          $ref: '#/components/schemas/ExternalRef'
+          description: External reference to the artifact (ref_id cannot be nil UUID)
+        label:
+          type: string
+          description: Human-readable label for the artifact (cannot be empty or whitespace-only)
+        depends_on_intent_versions:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IntentVersion node IDs this artifact depends on
+        properties:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Optional properties to attach to the artifact node
+        side_effect_context:
+          $ref: '#/components/schemas/SideEffectCaptureContext'
+          nullable: true
+          description: |
+            Phase 3 Batch 1 (groundwork): Optional context for side effect capture.
+            When provided with sufficient fields, enables capture-on-write to the
+            compensation ledger after successful artifact ingest.
+
+    ArtifactIngestResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (groundwork): Response for artifact ingest with side effect capture result.
+      required: [node, edges, side_effect_recorded]
+      properties:
+        node:
+          $ref: '#/components/schemas/GraphNode'
+          description: The created Artifact graph node
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+          description: The created DependsOn edges to IntentVersion nodes
+        side_effect_recorded:
+          type: boolean
+          description: Phase 3 Batch 1 (groundwork): Indicates whether a side effect was recorded
+        side_effect_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The ID of the recorded side effect (if side_effect_recorded is true)
+
+    ListPendingApprovalRequestsResponse:
+      type: object
+      required: [approval_requests, total]
+      properties:
+        approval_requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRequestSummary'
+        total:
+          type: integer
+
+    ApprovalRequestSummary:
+      type: object
+      required: [id, intent_id, intent_version_from, intent_version_to, decision_class, reason, requestor_id, requestor_type, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        intent_version_from:
+          type: integer
+        intent_version_to:
+          type: integer
+        decision_class:
+          type: string
+        reason:
+          type: string
+        requestor_id:
+          type: string
+        requestor_type:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApproveApprovalRequestBody:
+      type: object
+      properties:
+        resolution_notes:
+          type: string
+          nullable: true
+          description: Optional notes from the approver
+
+    RejectApprovalRequestBody:
+      type: object
+      properties:
+        resolution_notes:
+          type: string
+          nullable: true
+          description: Optional notes from the rejector
+
+    ApprovalRequestResponse:
+      type: object
+      required: [id, intent_id, status, resolved_by]
+      properties:
+        id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        resolved_by:
+          type: string
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+          resolution_notes:
+            type: string
+            nullable: true
+
+    # ----- Orchestration Dashboard (Phase 3 Batch 1) -----
+    CompensationActionStatusCounts:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary counts for compensation actions by status.
+      properties:
+        pending:
+          type: integer
+          description: Count of pending compensation actions
+        approved:
+          type: integer
+          description: Count of approved compensation actions
+        executed:
+          type: integer
+          description: Count of executed compensation actions
+        failed:
+          type: integer
+          description: Count of failed compensation actions
+        waived:
+          type: integer
+          description: Count of waived compensation actions
+
+    SideEffectSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary of side effects for an intent.
+      properties:
+        total:
+          type: integer
+          description: Total count of side effects
+        irreversible_count:
+          type: integer
+          description: Count of S4Irreversible side effects
+        auto_compensatable_count:
+          type: integer
+          description: Count of S0/S1 side effects (auto-compensatable)
+
+    CompensationActionSummary:
+      type: object
+      description: |
+        Phase 3 Batch 1: Summary of compensation actions for an intent.
+      properties:
+        total:
+          type: integer
+          description: Total count of compensation actions
+        status_counts:
+          $ref: '#/components/schemas/CompensationActionStatusCounts'
+        retryable_failed_count:
+          type: integer
+          description: Count of Failed actions with retryable errors
+        dlq_candidate_count:
+          type: integer
+          description: Count of DLQ candidates (Failed + exhausted OR non-retryable)
+        reapprovable_count:
+          type: integer
+          description: Count of Failed + retryable error + remaining budget
+        auto_executable_count:
+          type: integer
+          description: Count of Approved + Automatic feasibility
+
+    OrchestrationDashboardResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Response for the intent orchestration
+        dashboard endpoint. Returns a consolidated view of side effects and compensation
+        actions for a single intent within a tenant.
+
+        **This endpoint is READ-ONLY** - does not trigger any mutations.
+        **Truthful summaries** - all counts derived from persisted data.
+      required: [intent_id, tenant_id, side_effects, side_effect_summary, compensation_actions, compensation_action_summary]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        side_effects:
+          type: array
+          items:
+            $ref: '#/components/schemas/SideEffect'
+          description: Raw list of side effects for this intent
+        side_effect_summary:
+          $ref: '#/components/schemas/SideEffectSummary'
+        compensation_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FullCompensationAction'
+          description: Raw list of compensation actions for this intent
+        compensation_action_summary:
+          $ref: '#/components/schemas/CompensationActionSummary'
+
+    # ----- Side Effect and Compensation Action Query (Phase 3 Batch 1) -----
+    SideEffect:
+      type: object
+      description: |
+        Phase 3 Batch 1: A side effect recorded from an artifact-producing operation.
+        Used as input to compensation planning.
+      required: [id, tenant_id, intent_id, intent_version, effect_class, effect_type, target, occurred_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this side effect
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this side effect belongs to
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID that produced this side effect
+        intent_version:
+          type: integer
+          description: Intent version at time of side effect
+        effect_class:
+          $ref: '#/components/schemas/SideEffectClass'
+          description: Severity class of the side effect
+        effect_type:
+          type: string
+          description: The effect type (e.g., "artifact_created", "deployment_triggered")
+        target:
+          type: string
+          description: The effect target (e.g., artifact URL, deployment ID)
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the side effect occurred
+        idempotency_key:
+          type: string
+          nullable: true
+          description: Optional idempotency key to prevent duplicate records
+
+    ListSideEffectsResponse:
+      type: object
+      required: [side_effects, total]
+      properties:
+        side_effects:
+          type: array
+          items:
+            $ref: '#/components/schemas/SideEffect'
+        total:
+          type: integer
+
+    CompensationStatus:
+      type: string
+      enum: [pending, approved, executed, failed, waived]
+      description: Status of a compensation action
+
+    CompensationFeasibility:
+      type: string
+      enum: [automatic, semi_automatic, manual_only, not_possible]
+      description: Feasibility level for compensation
+
+    StrategyType:
+      type: string
+      enum: [rollback, counter_action, followup_notice, quarantine, escalation]
+      description: Compensation strategy type
+
+    RebaseContext:
+      type: object
+      description: Minimal rebase context that triggered compensation planning
+      required: [intent_id, from_version, to_version, workflow_id]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID that was rebased
+        from_version:
+          type: integer
+          description: Source intent version before rebase
+        to_version:
+          type: integer
+          description: Target intent version after rebase
+        workflow_id:
+          type: string
+          format: uuid
+          description: Workflow that initiated the rebase
+
+    ExecutionResult:
+      type: object
+      description: Execution result payload for a compensation action
+      required: [success, summary, completed_at]
+      properties:
+        success:
+          type: boolean
+          description: Whether execution succeeded
+        summary:
+          type: string
+          description: Human-readable summary of what happened
+        error_code:
+          type: string
+          nullable: true
+          description: Error code if execution failed
+        error_detail:
+          type: string
+          nullable: true
+          description: Error detail if execution failed
+        completed_at:
+          type: string
+          format: date-time
+          description: Timestamp when execution completed
+
+    FullCompensationAction:
+      type: object
+      description: |
+        Full compensation action record from the compensation action repository.
+        This is the stored record returned by GET /intents/{intent_id}/compensation-actions.
+      required: [id, tenant_id, side_effect_id, intent_id, trigger_context, feasibility, strategy_type, rationale, status, attempt_count, lock_version, generated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this compensation action
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this compensation action belongs to
+        side_effect_id:
+          type: string
+          format: uuid
+          description: Reference to the side effect this action compensates
+        intent_id:
+          type: string
+          format: uuid
+          description: Reference to the intent this compensation action is scoped to
+        trigger_context:
+          $ref: '#/components/schemas/RebaseContext'
+          description: Minimal rebase context that triggered compensation planning
+        execution_result_payload:
+          $ref: '#/components/schemas/ExecutionResult'
+          nullable: true
+          description: Execution result context captured after executor runs
+        feasibility:
+          $ref: '#/components/schemas/CompensationFeasibility'
+          description: Feasibility of compensating this effect
+        strategy_type:
+          $ref: '#/components/schemas/StrategyType'
+          description: Chosen compensation strategy
+        rationale:
+          type: string
+          description: Human-readable rationale for the chosen strategy
+        status:
+          $ref: '#/components/schemas/CompensationStatus'
+          description: Current status of the compensation action
+        attempt_count:
+          type: integer
+          description: Execution attempt counter for idempotency/retry tracking
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency during status transitions
+        generated_at:
+          type: string
+          format: date-time
+          description: When this action was generated
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was approved
+        approved_by:
+          type: string
+          nullable: true
+          description: Who approved this compensation action
+        waived_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was waived
+        waived_by:
+          type: string
+          nullable: true
+          description: Who waived this compensation action
+        executed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was executed
+        executed_by:
+          type: string
+          nullable: true
+          description: Who executed this compensation action
+        failed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation failed
+
+    ListCompensationActionsResponse:
+      type: object
+      required: [compensation_actions, total]
+      properties:
+        compensation_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FullCompensationAction'
+        total:
+          type: integer
+
+    ApproveCompensationActionBody:
+      type: object
+      description: Phase 3 Batch 1 request body for approving a compensation action
+      required: [lock_version]
+      properties:
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency control
+        approved_by:
+          type: string
+          nullable: true
+          description: Optional actor who approved (for audit purposes)
+
+    WaiveCompensationActionBody:
+      type: object
+      description: Phase 3 Batch 1 request body for waiving a compensation action
+      required: [lock_version]
+      properties:
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency control
+        waived_by:
+          type: string
+          nullable: true
+          description: Optional actor who waived (for audit purposes)
+
+    ExecuteCompensationActionBody:
+      type: object
+      description: Phase 3 Batch 1 request body for executing a compensation action
+      properties:
+        executed_by:
+          type: string
+          nullable: true
+          description: Optional actor who executed (for audit purposes)
+
+    ReapproveCompensationActionBody:
+      type: object
+      description: Phase 3 Batch 1 request body for reapproving a failed compensation action
+      properties:
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency control
+
+    ListDlqCandidatesResponse:
+      type: object
+      description: Phase 3 Batch 1 response for listing DLQ candidates
+      properties:
+        dlq_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: List of DLQ candidate compensation actions
+        total:
+          type: integer
+          description: Total count of DLQ candidates
+
+    BatchCandidatesSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for batch candidate categories
+      properties:
+        pending_approval_count:
+          type: integer
+          description: Count of pending approval candidates
+        approved_service_executable_count:
+          type: integer
+          description: Count of approved service-executable candidates (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
+        retryable_failed_count:
+          type: integer
+          description: Count of retryable failed candidates
+        dlq_count:
+          type: integer
+
+    # ----- Manual Orchestration & Dry-Run Planner (Phase 3 Batch 1) -----
+    OrchestrationDryRunRequest:
+      type: object
+      description: Phase 3 Batch 1 request for dry-run orchestration action planning
+      required: [action_ids]
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to plan for
+
+    OrchestrationDryRunResponse:
+      type: object
+      description: Phase 3 Batch 1 response for dry-run orchestration action planning
+      required: [proposals, not_found, summary]
+      properties:
+        proposals:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestrationDryRunProposal'
+          description: Per-item proposals
+        not_found:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs that were not found
+        summary:
+          $ref: '#/components/schemas/OrchestrationDryRunSummary'
+
+    OrchestrationDryRunProposal:
+      type: object
+      description: Phase 3 Batch 1 proposal for a single compensation action
+      required: [action_id, proposed_action, reason, current_status]
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        proposed_action:
+          type: string
+          enum: [approve, reapprove, execute, no_action]
+          description: The proposed action (approve | reapprove | execute | no_action)
+        reason:
+          type: string
+          description: Human-readable reason for the proposal
+        current_status:
+          type: string
+          description: Current status of the action
+
+    OrchestrationDryRunSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for dry-run results
+      properties:
+        total:
+          type: integer
+          description: Total number of actions processed
+        can_approve:
+          type: integer
+          description: Number of actions that can be approved
+        can_reapprove:
+          type: integer
+          description: Number of actions that can be reapproved
+        can_execute:
+          type: integer
+          description: Number of actions that can be executed
+        no_action:
+          type: integer
+          description: Number of actions with no viable action
+        not_found:
+          type: integer
+          description: Number of actions not found
+
+    BatchOrchestrationRequest:
+      type: object
+      description: Phase 3 Batch 1 request for batch orchestration commands
+      required: [action_ids]
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to process
+        initiated_by:
+          type: string
+          nullable: true
+          description: Optional actor who initiated the batch (for audit purposes)
+
+    BatchOrchestrationResponse:
+      type: object
+      description: Phase 3 Batch 1 response for batch orchestration commands
+      required: [outcomes, not_found, summary]
+      properties:
+        outcomes:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchItemOutcome'
+          description: Per-item outcomes
+        not_found:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs that were not found
+        summary:
+          $ref: '#/components/schemas/BatchOrchestrationSummary'
+
+    BatchItemOutcome:
+      type: object
+      description: Phase 3 Batch 1 outcome for a single compensation action in a batch
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        success:
+          type: boolean
+          description: Whether this item succeeded
+        result:
+          $ref: '#/components/schemas/CompensationActionResponse'
+          nullable: true
+          description: The resulting action (if successful)
+        error:
+          type: string
+          nullable: true
+          description: The error that occurred (if failed)
+
+    BatchOrchestrationSummary:
+      type: object
+      description: Phase 3 Batch 1 summary counts for batch orchestration results
+      properties:
+        total:
+          type: integer
+          description: Total number of actions processed
+        succeeded:
+          type: integer
+          description: Number of actions that succeeded
+        failed:
+          type: integer
+          description: Number of actions that failed
+        not_found:
+          type: integer
+          description: Number of actions not found
+
+    ListBatchCandidatesResponse:
+          description: Count of DLQ candidate actions
+
+    ListBatchCandidatesResponse:
+      type: object
+      description: Phase 3 Batch 1 response for listing batch candidates across all categories
+      properties:
+        pending_approval_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Actions in Pending status awaiting approval
+        approved_service_executable_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Approved actions executable by the service (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
+        retryable_failed_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Failed actions that can be reapproved (retryable error + budget remains)
+        dlq_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompensationActionResponse'
+          description: Failed actions that exhausted retry budget or have non-retryable errors
+        summary:
+          $ref: '#/components/schemas/BatchCandidatesSummary'
+
+    # ----- Single-Shot Orchestration Run (Phase 3 Batch 1) -----
+    CreateOrchestrationRunRequest:
+      type: object
+      description: Phase 3 Batch 1 request for creating a single-shot orchestration run
+      properties:
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of compensation action IDs to process in this run
+        intent_id:
+          type: string
+          format: uuid
+          description: Optional intent scope for this run
+        initiated_by:
+          type: string
+          description: Optional actor who initiated this run (for audit purposes)
+
+    OrchestrationRunResponse:
+      type: object
+      description: Phase 3 Batch 1 response for an orchestration run
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique run identifier
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          description: Optional intent scope
+        action_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Action IDs processed in this run
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - completed_with_errors
+            - failed
+          description: Current run status
+        initiated_by:
+          type: string
+          description: Actor who initiated this run
+        created_at:
+          type: string
+          format: date-time
+          description: When the run was created
+        started_at:
+          type: string
+          format: date-time
+          description: When the run started executing
+        completed_at:
+          type: string
+          format: date-time
+          description: When the run completed
+        succeeded_count:
+          type: integer
+          description: Number of actions that succeeded
+        failed_count:
+          type: integer
+          description: Number of actions that failed
+        skipped_count:
+          type: integer
+          description: Number of actions skipped
+        not_found_count:
+          type: integer
+          description: Number of actions not found
+        total_count:
+          type: integer
+          description: Total number of actions
+        item_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunItemResultResponse'
+          description: Per-action results
+
+    RunItemResultResponse:
+      type: object
+      description: Phase 3 Batch 1 per-item result within a run
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The compensation action ID
+        action_taken:
+          type: string
+          enum:
+            - approve
+            - reapprove
+            - execute
+            - skip
+            - not_found
+          description: The action taken by the runtime
+        success:
+          type: boolean
+          description: Whether the action succeeded
+        reason:
+          type: string
+          description: Human-readable reason for the action taken
+        resulting_status:
+          type: string
+          description: The resulting status of the action
+
+    # ----- Policy Gate Evaluation (Phase 3 Batch 1) -----
+    CompensationPolicyGateResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Response for policy gate evaluation.
+        Returns gate evaluations and risk metadata for compensation actions.
+      required: [tenant_id, evaluations, summary]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Intent ID (set for intent-scoped queries)
+        evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyGateEvaluationResponse'
+          description: Individual action evaluations
+        summary:
+          $ref: '#/components/schemas/PolicyGateSummaryResponse'
+
+    PolicyGateEvaluationResponse:
+      type: object
+      description: Policy gate evaluation for a single action
+      required: [action, gate_status, gate_reason, policy_metadata, risk_metadata]
+      properties:
+        action:
+          $ref: '#/components/schemas/FullCompensationAction'
+        gate_status:
+          type: string
+          enum: [eligible, blocked, manual_review_required]
+          description: Canonical gate status
+        gate_reason:
+          type: string
+          description: Human-readable reason for gate status
+        policy_metadata:
+          $ref: '#/components/schemas/PolicyGateMetadataResponse'
+        risk_metadata:
+          $ref: '#/components/schemas/RiskMetadataResponse'
+
+    PolicyGateMetadataResponse:
+      type: object
+      description: Supporting policy metadata for gate evaluation
+      properties:
+        auto_executable:
+          type: boolean
+          description: Whether action is auto-executable
+        is_dlq_candidate:
+          type: boolean
+          description: Whether action is a DLQ candidate
+        can_reapprove:
+          type: boolean
+          description: Whether action can be reapproved
+        retry_budget_exhausted:
+          type: boolean
+          description: Whether retry budget is exhausted
+        has_non_retryable_error:
+          type: boolean
+          description: Whether action has non-retryable error
+        feasibility:
+          type: string
+          description: Feasibility level
+        strategy_type:
+          type: string
+          description: Strategy type
+        status:
+          type: string
+          description: Current status
+        attempt_count:
+          type: integer
+          description: Number of attempts made
+        max_retries:
+          type: integer
+          description: Maximum retries allowed
+
+    RiskMetadataResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only slice): Risk metadata derived from action state.
+        No new policy engine - all fields derive from existing persisted fields.
+      properties:
+        strategy_severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Severity of the compensation strategy
+        retry_exhaustion_risk:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Risk level for retry exhaustion
+        feasibility_risk:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Risk based on feasibility level
+        error_severity:
+          type: string
+          enum: [none, low, medium, high]
+          description: Error severity if failed
+        retry_budget_remaining:
+          type: integer
+          description: Number of retry attempts remaining
+        error_classification:
+          type: object
+          nullable: true
+          properties:
+            error_code:
+              type: string
+            retryable:
+              type: boolean
+            reason:
+              type: string
+        is_terminal:
+          type: boolean
+          description: Whether action is in terminal state
+        requires_manual_intervention:
+          type: boolean
+          description: Whether manual intervention is required
+
+    PolicyGateSummaryResponse:
+      type: object
+      description: Summary of policy gate evaluations
+      properties:
+        total_actions:
+          type: integer
+          description: Total number of actions evaluated
+        eligible_count:
+          type: integer
+          description: Number of eligible actions
+        blocked_count:
+          type: integer
+          description: Number of blocked actions
+        manual_review_required_count:
+          type: integer
+          description: Number of actions requiring manual review
+        dlq_candidate_count:
+          type: integer
+          description: Number of DLQ candidates
+        pending_approval_count:
+          type: integer
+          description: Number of actions pending approval
+        auto_executable_count:
+          type: integer
+          description: Number of auto-executable actions
+
+    # ----- Orchestration Coordination Status (Phase 3 Batch 1) -----
+    OrchestrationCoordinationResponse:
+      type: object
+      description: |
+        Phase 3 Batch 1 (bounded read-only orchestration coordination view): Response for
+        orchestration coordination status. Returns coordination records and summary for
+        compensation actions.
+      required: [tenant_id, records, summary]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Intent ID (set for intent-scoped queries)
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoordinationRecordResponse'
+          description: Per-item coordination records
+        summary:
+          $ref: '#/components/schemas/CoordinationSummaryResponse'
+
+    CoordinationRecordResponse:
+      type: object
+      description: Coordination record for a single compensation action
+      required: [action, coordination_status, coordination_reason, auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, feasibility, strategy_type, status, attempt_count, max_retries]
+      properties:
+        action:
+          $ref: '#/components/schemas/FullCompensationAction'
+        coordination_status:
+          type: string
+          enum: [ready, awaiting_policy, awaiting_manual_review, blocked, terminal]
+          description: Canonical coordination status
+        coordination_reason:
+          type: string
+          description: Human-readable reason for coordination status
+        auto_executable:
+          type: boolean
+          description: Whether action is auto-executable
+        is_dlq_candidate:
+          type: boolean
+          description: Whether action is a DLQ candidate
+        can_reapprove:
+          type: boolean
+          description: Whether action can be reapproved after failure
+        retry_budget_exhausted:
+          type: boolean
+          description: Whether retry budget is exhausted
+        feasibility:
+          type: string
+          description: Feasibility level
+        strategy_type:
+          type: string
+          description: Strategy type
+        status:
+          type: string
+          description: Current status
+        attempt_count:
+          type: integer
+          description: Number of attempts made
+        max_retries:
+          type: integer
+          description: Maximum retries allowed
+
+    CoordinationSummaryResponse:
+      type: object
+      description: Summary of coordination records
+      properties:
+        total_actions:
+          type: integer
+          description: Total number of actions
+        ready_count:
+          type: integer
+          description: Number of ready actions
+        awaiting_policy_count:
+          type: integer
+          description: Number of actions awaiting policy
+        awaiting_manual_review_count:
+          type: integer
+          description: Number of actions awaiting manual review
+        blocked_count:
+          type: integer
+          description: Number of blocked actions
+        terminal_count:
+          type: integer
+          description: Number of actions in terminal state
+        dlq_candidate_count:
+          type: integer
+          description: Number of DLQ candidates
+        auto_executable_count:
+          type: integer
+          description: Number of auto-executable actions
+
+    CompensationActionResponse:
+      type: object
+      description: Phase 3 Batch 1 response for compensation action mutation (approve/waive/execute)
+      required: [id, tenant_id, intent_id, status, strategy_type, feasibility, rationale, attempt_count, lock_version]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this compensation action
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this compensation action belongs to
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID this compensation action is scoped to
+        status:
+          $ref: '#/components/schemas/CompensationStatus'
+          description: Current status of the compensation action
+        strategy_type:
+          type: string
+          description: Compensation strategy type
+        feasibility:
+          type: string
+          description: Feasibility level for compensation
+        rationale:
+          type: string
+          description: Human-readable rationale for the compensation
+        attempt_count:
+          type: integer
+          description: Execution attempt counter
+        lock_version:
+          type: integer
+          description: Lock version for optimistic concurrency
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was approved
+        approved_by:
+          type: string
+          nullable: true
+          description: Who approved this compensation action
+        waived_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was waived
+        waived_by:
+          type: string
+          nullable: true
+          description: Who waived this compensation action
+        executed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation was executed
+        executed_by:
+          type: string
+          nullable: true
+          description: Who executed this compensation action
+        failed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When compensation failed
+        execution_result_payload:
+          type: object
+          nullable: true
+          description: Execution result context captured after executor runs
 
     Error:
       type: object
