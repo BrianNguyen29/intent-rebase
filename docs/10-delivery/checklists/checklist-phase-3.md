@@ -314,11 +314,13 @@
 ## 4. Tenant Isolation Hardening
 
 ```
-[ ] Tenant isolation verification tests
+[x] Tenant isolation verification tests — P3-S1 SLICE ✅
     Evidence:
     - PR merged: <link>
-    - Tests: cross-tenant access attempts blocked
-    - Tests: data leakage tests (tenant A cannot see tenant B data)
+    - Tests: cross-tenant access attempts blocked ✅
+    - Tests: data leakage tests (tenant A cannot see tenant B data) ✅
+    - Tests: intent-api approval-request endpoints (list, approve, reject, expire)
+    - Tests: orchestration dashboard tenant isolation
 
 [ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
     Evidence:

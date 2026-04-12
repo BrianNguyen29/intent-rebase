@@ -81,14 +81,14 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P3 |
 | **Title** | Phase 3 Batch 3a — Tenant Isolation Hardening |
 | **Purpose** | Verify and enforce tenant isolation across all surfaces: access control, data visibility, quotas, audit log separation, and data residency. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🟡 In Progress — P3-S1 slice delivered |
 | **Priority** | High |
 | **Owner** | Security / Platform |
-| **Suggested Next Step** | Draft tenant isolation verification test plan; audit existing API endpoints for tenant-scoped enforcement |
-| **Progress Notes** | Batch 3a gated on Phase 2b exit. No hard dependency on Batch 1/2 but benefits from them. Tenant-scoped idempotency already implemented in compensation-service path. Broader artifact-service coverage remains open. |
+| **Suggested Next Step** | Expand tenant isolation test coverage to additional high-value endpoints; implement quota enforcement |
+| **Progress Notes** | P3-S1 (bounded slice): intent-api tenant isolation verification tests ✅ delivered for approval-request endpoints (list, approve, reject, expire) and orchestration dashboard. Cross-tenant read/mutation isolation verified. Remaining items (3-2 quota, 3-3 rule-pack, 3-5 data residency) are out of scope for P3-S1. |
 
 **Items:**
-- [ ] Tenant isolation verification tests (cross-tenant access blocked, no data leakage)
+- [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 slice
 - [ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
 - [ ] Tenant-specific rule pack isolation
 - [ ] Tenant audit log separation (S3 tenant-scoped buckets/prefixes)

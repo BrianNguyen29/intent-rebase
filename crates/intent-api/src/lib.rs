@@ -7918,4 +7918,417 @@ mod tests {
         assert_eq!(result2.side_effect_summary.total, 1);
         assert_eq!(result2.side_effects[0].effect_type, "effect_2");
     }
+
+    // =========================================================================
+    // Tenant Isolation Verification Tests (Phase 3 Batch 3a — P3-S1)
+    // =========================================================================
+
+    /// Test that list_pending_approval_requests correctly filters by tenant.
+    /// Tenant A should only see Tenant A's pending approval requests.
+    /// Tenant B should only see Tenant B's pending approval requests.
+    #[tokio::test]
+    async fn test_list_pending_approval_requests_tenant_isolation() {
+        use intent_service::ApprovalRequest;
+
+        let state = create_test_service();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        // Create pending approval requests for tenant A
+        for i in 0..3 {
+            let request = ApprovalRequest::new_pending(
+                intent_id,
+                i as i32,
+                (i + 1) as i32,
+                Uuid::new_v4(),
+                tenant_a,
+                "test-user",
+                "test",
+                "E",
+                &format!("Tenant A request {}", i),
+            );
+            state
+                .approval_request_repo
+                .create_approval_request(request)
+                .await
+                .unwrap();
+        }
+
+        // Create pending approval requests for tenant B
+        for i in 0..2 {
+            let request = ApprovalRequest::new_pending(
+                intent_id,
+                i as i32,
+                (i + 1) as i32,
+                Uuid::new_v4(),
+                tenant_b,
+                "test-user",
+                "test",
+                "D",
+                &format!("Tenant B request {}", i),
+            );
+            state
+                .approval_request_repo
+                .create_approval_request(request)
+                .await
+                .unwrap();
+        }
+
+        // Query as tenant A - should only see A's requests
+        let query_a = ListPendingApprovalRequestsQuery { tenant_id: tenant_a };
+        let result_a = list_pending_approval_requests(
+            State(state.clone()),
+            axum::extract::Query(query_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_a.total, 3);
+        assert_eq!(result_a.approval_requests.len(), 3);
+        // Verify all returned requests belong to tenant A
+        for ar in &result_a.approval_requests {
+            let full_ar = state
+                .approval_request_repo
+                .get_approval_request(ar.id)
+                .await
+                .unwrap();
+            assert_eq!(full_ar.tenant_id, tenant_a);
+        }
+
+        // Query as tenant B - should only see B's requests
+        let query_b = ListPendingApprovalRequestsQuery { tenant_id: tenant_b };
+        let result_b = list_pending_approval_requests(
+            State(state.clone()),
+            axum::extract::Query(query_b),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_b.total, 2);
+        assert_eq!(result_b.approval_requests.len(), 2);
+        // Verify all returned requests belong to tenant B
+        for ar in &result_b.approval_requests {
+            let full_ar = state
+                .approval_request_repo
+                .get_approval_request(ar.id)
+                .await
+                .unwrap();
+            assert_eq!(full_ar.tenant_id, tenant_b);
+        }
+    }
+
+    /// Test that approve_approval_request operates on the correct tenant's request.
+    /// Verifies tenant isolation by ensuring approvals only affect the intended tenant.
+    #[tokio::test]
+    async fn test_approve_approval_request_tenant_isolation() {
+        use intent_service::ApprovalRequest;
+
+        let state = create_test_service();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        // Create pending request for tenant A
+        let request_a = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_a,
+            "test-user",
+            "test",
+            "E",
+            "Tenant A request",
+        );
+        let request_a_id = request_a.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_a)
+            .await
+            .unwrap();
+
+        // Create pending request for tenant B
+        let request_b = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_b,
+            "test-user",
+            "test",
+            "D",
+            "Tenant B request",
+        );
+        let request_b_id = request_b.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_b)
+            .await
+            .unwrap();
+
+        // Approve tenant A's request
+        let body_a = ApproveApprovalRequestBody {
+            resolution_notes: Some("Approved by test".to_string()),
+        };
+        let result_a = approve_approval_request(
+            State(state.clone()),
+            Path(request_a_id),
+            Json(body_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_a.status, "Approved");
+
+        // Verify tenant B's request is NOT affected (still pending)
+        let request_b_state = state
+            .approval_request_repo
+            .get_approval_request(request_b_id)
+            .await
+            .unwrap();
+        assert_eq!(request_b_state.status, ApprovalRequestStatus::Pending);
+
+        // Verify tenant A's request is now Approved
+        let request_a_state = state
+            .approval_request_repo
+            .get_approval_request(request_a_id)
+            .await
+            .unwrap();
+        assert_eq!(request_a_state.status, ApprovalRequestStatus::Approved);
+    }
+
+    /// Test that reject_approval_request operates on the correct tenant's request.
+    /// Verifies tenant isolation by ensuring rejections only affect the intended tenant.
+    #[tokio::test]
+    async fn test_reject_approval_request_tenant_isolation() {
+        use intent_service::ApprovalRequest;
+
+        let state = create_test_service();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        // Create pending request for tenant A
+        let request_a = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_a,
+            "test-user",
+            "test",
+            "E",
+            "Tenant A request",
+        );
+        let request_a_id = request_a.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_a)
+            .await
+            .unwrap();
+
+        // Create pending request for tenant B
+        let request_b = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_b,
+            "test-user",
+            "test",
+            "D",
+            "Tenant B request",
+        );
+        let request_b_id = request_b.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_b)
+            .await
+            .unwrap();
+
+        // Reject tenant A's request
+        let body_a = RejectApprovalRequestBody {
+            resolution_notes: Some("Rejected by test".to_string()),
+        };
+        let result_a = reject_approval_request(
+            State(state.clone()),
+            Path(request_a_id),
+            Json(body_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_a.status, "Rejected");
+
+        // Verify tenant B's request is NOT affected (still pending)
+        let request_b_state = state
+            .approval_request_repo
+            .get_approval_request(request_b_id)
+            .await
+            .unwrap();
+        assert_eq!(request_b_state.status, ApprovalRequestStatus::Pending);
+
+        // Verify tenant A's request is now Rejected
+        let request_a_state = state
+            .approval_request_repo
+            .get_approval_request(request_a_id)
+            .await
+            .unwrap();
+        assert_eq!(request_a_state.status, ApprovalRequestStatus::Rejected);
+    }
+
+    /// Test that expire_approval_request operates on the correct tenant's request.
+    /// Verifies tenant isolation by ensuring expiry only affects the intended tenant.
+    #[tokio::test]
+    async fn test_expire_approval_request_tenant_isolation() {
+        use intent_service::ApprovalRequest;
+
+        let state = create_test_service();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        // Create pending request for tenant A
+        let request_a = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_a,
+            "test-user",
+            "test",
+            "E",
+            "Tenant A request",
+        );
+        let request_a_id = request_a.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_a)
+            .await
+            .unwrap();
+
+        // Create pending request for tenant B
+        let request_b = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_b,
+            "test-user",
+            "test",
+            "D",
+            "Tenant B request",
+        );
+        let request_b_id = request_b.id;
+        state
+            .approval_request_repo
+            .create_approval_request(request_b)
+            .await
+            .unwrap();
+
+        // Expire tenant A's request
+        let body_a = ExpireApprovalRequestBody {
+            reason: Some("Expired by test".to_string()),
+        };
+        let result_a = expire_approval_request(
+            State(state.clone()),
+            Path(request_a_id),
+            Json(body_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_a.status, "Expired");
+
+        // Verify tenant B's request is NOT affected (still pending)
+        let request_b_state = state
+            .approval_request_repo
+            .get_approval_request(request_b_id)
+            .await
+            .unwrap();
+        assert_eq!(request_b_state.status, ApprovalRequestStatus::Pending);
+
+        // Verify tenant A's request is now Expired
+        let request_a_state = state
+            .approval_request_repo
+            .get_approval_request(request_a_id)
+            .await
+            .unwrap();
+        assert_eq!(request_a_state.status, ApprovalRequestStatus::Expired);
+    }
+
+    /// Test that cross-tenant data leakage is prevented in list_pending_approval_requests.
+    /// An empty result for tenant C should not reveal existence of requests for other tenants.
+    #[tokio::test]
+    async fn test_list_pending_approval_requests_no_cross_tenant_leakage() {
+        use intent_service::ApprovalRequest;
+
+        let state = create_test_service();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let tenant_c = Uuid::new_v4(); // Tenant with no approval requests
+        let intent_id = Uuid::new_v4();
+
+        // Create pending requests for tenant A
+        let request_a = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_a,
+            "test-user",
+            "test",
+            "E",
+            "Tenant A request",
+        );
+        state
+            .approval_request_repo
+            .create_approval_request(request_a)
+            .await
+            .unwrap();
+
+        // Create pending requests for tenant B
+        let request_b = ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            Uuid::new_v4(),
+            tenant_b,
+            "test-user",
+            "test",
+            "D",
+            "Tenant B request",
+        );
+        state
+            .approval_request_repo
+            .create_approval_request(request_b)
+            .await
+            .unwrap();
+
+        // Query for tenant C (who has no requests) - should return empty, not leak data
+        let query_c = ListPendingApprovalRequestsQuery { tenant_id: tenant_c };
+        let result_c = list_pending_approval_requests(
+            State(state.clone()),
+            axum::extract::Query(query_c),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_c.total, 0);
+        assert!(result_c.approval_requests.is_empty());
+
+        // Confirm tenant A and B still have their respective requests
+        let query_a = ListPendingApprovalRequestsQuery { tenant_id: tenant_a };
+        let result_a = list_pending_approval_requests(
+            State(state.clone()),
+            axum::extract::Query(query_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_a.total, 1);
+
+        let query_b = ListPendingApprovalRequestsQuery { tenant_id: tenant_b };
+        let result_b = list_pending_approval_requests(
+            State(state),
+            axum::extract::Query(query_b),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result_b.total, 1);
+    }
 }
