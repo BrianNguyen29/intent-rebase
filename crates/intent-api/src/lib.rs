@@ -3,6 +3,8 @@
 //! Phase 1: Exposes intent/version endpoints via axum.
 //! Routes are manually wired to match the OpenAPI spec in docs/04-api/openapi.yaml.
 
+mod trace_context;
+
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -1188,14 +1190,19 @@ async fn rebase_apply(
             .count(),
     };
 
+    // P2-S3 bounded slice: extract trace context for audit propagation
+    let (trace_id, span_id) = trace_context::current_trace_context();
+
     // Record audit event (best-effort, don't fail the response)
     if let Err(e) = state
         .audit_service
-        .record_rebase_applied(
+        .record_rebase_applied_with_trace(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
             audit_payload.clone(),
+            trace_id.clone(),
+            span_id.clone(),
         )
         .await
     {
@@ -1226,11 +1233,13 @@ async fn rebase_apply(
         // Record blocked audit event (best-effort)
         if let Err(e) = state
             .audit_service
-            .record_rebase_apply_blocked(
+            .record_rebase_apply_blocked_with_trace(
                 intent_head.intent.tenant_id,
                 actor_id,
                 intent_id,
                 blocked_payload.clone(),
+                trace_id.clone(),
+                span_id.clone(),
             )
             .await
         {
@@ -1548,13 +1557,18 @@ async fn approve_approval_request(
         resolution_notes: body.resolution_notes.clone(),
     };
 
+    // P2-S3 bounded slice: extract trace context for audit propagation
+    let (trace_id, span_id) = trace_context::current_trace_context();
+
     if let Err(e) = state
         .audit_service
-        .record_approval_granted(
+        .record_approval_granted_with_trace(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            trace_id,
+            span_id,
         )
         .await
     {
@@ -1622,13 +1636,18 @@ async fn reject_approval_request(
         resolution_notes: body.resolution_notes.clone(),
     };
 
+    // P2-S3 bounded slice: extract trace context for audit propagation
+    let (trace_id, span_id) = trace_context::current_trace_context();
+
     if let Err(e) = state
         .audit_service
-        .record_approval_revoked(
+        .record_approval_revoked_with_trace(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            trace_id,
+            span_id,
         )
         .await
     {
@@ -1701,13 +1720,18 @@ async fn expire_approval_request(
         expiry_reason: reason.clone(),
     };
 
+    // P2-S3 bounded slice: extract trace context for audit propagation
+    let (trace_id, span_id) = trace_context::current_trace_context();
+
     if let Err(e) = state
         .audit_service
-        .record_approval_expired(
+        .record_approval_expired_with_trace(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            trace_id,
+            span_id,
         )
         .await
     {
@@ -2079,13 +2103,18 @@ async fn replay_intent(
         ),
     };
 
+    // P2-S3 bounded slice: extract trace context for audit propagation
+    let (trace_id, span_id) = trace_context::current_trace_context();
+
     if let Err(e) = state
         .audit_service
-        .record_replay_initiated(
+        .record_replay_initiated_with_trace(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
             audit_payload.clone(),
+            trace_id,
+            span_id,
         )
         .await
     {

@@ -6,7 +6,9 @@
 
 > **Note:** P2-S2 is a bounded slice covering items 2-1, 2-2, 2-3. Items 2-4, 2-5, 2-6 remain open.
 
-**P2-S1 delivered:** Real metrics instrumentation on existing `/metrics` endpoint via `metrics-exporter-prometheus`. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope.
+**P2-S2 delivered:** Real metrics instrumentation on existing `/metrics` endpoint via `metrics-exporter-prometheus`. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope.
+
+**P2-S3 delivered (bounded distributed tracing slice):** Trace context propagated into audit/event surfaces via existing `trace_id`/`span_id` fields on `AuditEvent`. The `trace_context::current_trace_context()` helper extracts span IDs from the current tracing span for propagation into audit recording calls. Six event types now carry trace context: `RebaseApplied`, `RebaseApplyBlocked`, `ApprovalGranted`, `ApprovalRevoked`, `ApprovalExpired`, `ReplayInitiated`. Full OTLP/cross-service trace propagation remains P2-S4+ scope.
 
 **Instrumented candidate metrics (real code paths, verified by cargo check/test):**
 - `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors` — create_intent handler
