@@ -275,6 +275,19 @@
 ## 3. SRE & Observability
 
 ```
+[~] SRE & Observability — P2-S1 (metrics instrumentation) DELIVERED; remainder P2-S2+ scope
+    Evidence:
+    - PR merged: <link> (P2-S1 bounded slice)
+    - Metrics: intent_rebase.intent.create.total/errors, intent_rebase.version.create.total/errors
+    - Metrics: intent_rebase.rebase.preview.total/errors/duration_seconds
+    - Metrics: intent_rebase.rebase.apply.total/errors/duration_seconds
+    - Metrics: intent_rebase.compensation.actions.total/errors
+    - Metrics: intent_rebase.compensation.execute.total/duration_seconds/success/failure
+    - Metrics: intent_rebase.compensation.planned.total/by_feasibility
+    - Doc: ../../09-operations/04-sre-and-slos.md (SLOs marked provisional; P2-S1 evidence recorded)
+    - Doc: ../09-completion-proposals-tracker.md (P2 status updated to in-progress; P2-S1 evidence recorded)
+    - Note: Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope
+
 [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
     Evidence:
     - PR merged: <link>

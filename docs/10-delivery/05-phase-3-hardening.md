@@ -59,14 +59,22 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
+**Status:** `🔄 P2-S1 delivered (metrics instrumentation bounded slice); P2-S2+ in progress`
+
 | Item | Description | Notes |
 |------|-------------|-------|
-| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | Dashboard: Grafana SLO dashboard |
-| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config; test alerts fire |
-| 2-3 | Error budget tracking dashboard + runbook | |
-| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | OTel trace context across all service boundaries |
-| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk |
-| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Dry-run each runbook |
+| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | P2-S1 metrics instrumented — SLO targets provisional per SRE doc |
+| 2-2 | Alerting rules (warning, critical thresholds) | P2-S2+ scope |
+| 2-3 | Error budget tracking dashboard + runbook | P2-S2+ scope |
+| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | OTel trace context across all service boundaries — P2-S2+ scope |
+| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk — P2-S2+ scope |
+| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | P2-S2+ scope |
+
+**P2-S1 delivered metrics (bounded slice):**
+- `intent_rebase.intent.create.total/errors`, `intent_rebase.version.create.total/errors`
+- `intent_rebase.rebase.preview/apply.total/errors/duration_seconds`
+- `intent_rebase.compensation.actions.total/errors`, `intent_rebase.compensation.execute.total/duration_seconds/success/failure`
+- `intent_rebase.compensation.planned.total/by_feasibility`
 
 ---
 

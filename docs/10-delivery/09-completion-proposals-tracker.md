@@ -58,13 +58,23 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress — Slice S1 (metrics instrumentation) delivered |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. |
+| **Progress Notes** | **P2-S1 DELIVERED:** Real metrics instrumentation on `/metrics` endpoint via existing metrics-exporter-prometheus crate. Candidate metrics cover rebase preview/apply latency and counts, intent/version creation, and compensation action execute/planning. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope. Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. |
+
+**P2-S1 Candidate Metrics (instrumented, real code paths):**
+- `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors`
+- `intent_rebase.version.create.total` / `intent_rebase.version.create.errors`
+- `intent_rebase.rebase.preview.total` / `intent_rebase.rebase.preview.errors` / `intent_rebase.rebase.preview.duration_seconds`
+- `intent_rebase.rebase.apply.total` / `intent_rebase.rebase.apply.errors` / `intent_rebase.rebase.apply.duration_seconds`
+- `intent_rebase.compensation.actions.total` / `intent_rebase.compensation.actions.errors`
+- `intent_rebase.compensation.execute.total` / `intent_rebase.compensation.execute.duration_seconds` / `intent_rebase.compensation.execute.success` / `intent_rebase.compensation.execute.failure`
+- `intent_rebase.compensation.planned.total` / `intent_rebase.compensation.planned.by_feasibility`
 
 **Items:**
+- [x] P2-S1: Metrics instrumentation (bounded slice — real metrics on real code paths) — ✅ delivered
 - [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
 - [ ] Alerting rules (warning, critical thresholds)
 - [ ] Error budget tracking dashboard + runbook
