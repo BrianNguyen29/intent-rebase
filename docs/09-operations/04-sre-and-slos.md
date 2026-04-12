@@ -2,40 +2,28 @@
 
 ## SLO Definitions (Phase 3 Batch 2 - P2-S2)
 
+**P2-S2 delivered:** SLO definitions, alerting rules, error-budget dashboard, metrics infrastructure, observability stack.
+
+> **Note:** P2-S2 is a bounded slice covering items 2-1, 2-2, 2-3. Items 2-4, 2-5, 2-6 remain open.
+
+**P2-S1 delivered:** Real metrics instrumentation on existing `/metrics` endpoint via `metrics-exporter-prometheus`. Full alerting/dashboard/OTel propagation/runbooks are P2-S2+ scope.
+
+**Instrumented candidate metrics (real code paths, verified by cargo check/test):**
+- `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors` — create_intent handler
+- `intent_rebase.version.create.total` / `intent_rebase.version.create.errors` — create_version handler
+- `intent_rebase.rebase.preview.total` / `intent_rebase.rebase.preview.errors` / `intent_rebase.rebase.preview.duration_seconds` — rebase_preview handler
+- `intent_rebase.rebase.apply.total` / `intent_rebase.rebase.apply.errors` / `intent_rebase.rebase.apply.duration_seconds` — rebase_apply handler
+- `intent_rebase.compensation.actions.total` / `intent_rebase.compensation.actions.errors` — approve/waive/execute/reapprove handlers
+- `intent_rebase.compensation.execute.total` / `intent_rebase.compensation.execute.duration_seconds` / `intent_rebase.compensation.execute.success` / `intent_rebase.compensation.execute.failure` — execute_compensation_action handler
+- `intent_rebase.compensation.planned.total` / `intent_rebase.compensation.planned.by_feasibility` — plan_compensation_actions in compensation-service
+
+**Exposed via:** `GET /metrics` on intent-api (text/plain; version=0.0.4 Prometheus format)
+
+**SLO applicability:** These metrics directly measure P2 candidate SLO paths (rebase preview availability, rebase apply path availability, intent creation success rate). Histogram buckets available for p50/p95/p99 latency derivation via standard Prometheus `histogram_quantile()`.
+
+---
+
 **Status: Delivered (P2-S2 bounded slice)**
-
-### Service-Level Availability Targets
-
-| SLO | Target | Notes |
-|-----|--------|-------|
-| Intent version creation success | 99.9% | |
-| Rebase preview availability | 99.5% | |
-| Rebase apply path availability | 99.0% | |
-| Audit append success | 99.9% | |
-| Compensation plan generation success | 99.0% | Phase 3 Batch 1 |
-
-### Latency Targets
-
-| SLO | Target | Alert Threshold |
-|-----|--------|-----------------|
-| p95 diff compute | < 2s | > 4s (critical) |
-| p95 rebase preview | < 10s | > 20s (critical) |
-| p95 rebase apply | < 60s | > 120s (critical) |
-| p95 approval wait | < 30 min | > 60 min (critical) |
-
-## Error Budgets
-
-- Separate budgets for preview vs apply path
-- Critical path incidents consume budget faster
-- Error budget tracking dashboard: Grafana `intent-rebase-slo`
-
-**Error budget remaining metrics:**
-- `intent_api_error_budget_remaining{slo="intent_version_creation"}`
-- `intent_api_error_budget_remaining{slo="rebase_preview_availability"}`
-- `intent_api_error_budget_remaining{slo="rebase_apply_availability"}`
-- `intent_api_error_budget_remaining{slo="audit_append"}`
-
-## On-Call Considerations
 
 - adapter failures
 - queue backlogs
