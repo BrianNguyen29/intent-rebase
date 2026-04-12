@@ -1,0 +1,31 @@
+# Prometheus configuration for Intent Rebase Engine
+# Phase 3 Batch 2 - Observability + SRE (P2-S2 bounded slice)
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "/etc/prometheus/rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Intent API metrics endpoint
+  - job_name: 'intent-api'
+    static_configs:
+      - targets: ['intent-api:8080']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -58,16 +58,16 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress — P2-S2 Bounded Slice Delivered |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. |
+| **Suggested Next Step** | P2-S2 complete (2-1, 2-2, 2-3). Remaining: 2-4 (distributed tracing), 2-5 (benchmarks), 2-6 (runbooks). |
+| **Progress Notes** | P2-S2 bounded slice delivered: SLO definitions, alerting rules, error-budget dashboard, metrics infrastructure, observability docker-compose stack. Items 2-4, 2-5, 2-6 remain open. |
 
 **Items:**
-- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
-- [ ] Alerting rules (warning, critical thresholds)
-- [ ] Error budget tracking dashboard + runbook
+- [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — **P2-S2 Delivered**
+- [x] Alerting rules (warning, critical thresholds) — **P2-S2 Delivered**
+- [x] Error budget tracking dashboard + runbook — **P2-S2 Delivered**
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
 - [ ] Performance benchmarks: rebase latency p50/p95/p99 (target: p95 < 60s for low/medium risk)
 - [ ] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout

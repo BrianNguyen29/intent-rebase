@@ -59,14 +59,18 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-| Item | Description | Notes |
-|------|-------------|-------|
-| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | Dashboard: Grafana SLO dashboard |
-| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config; test alerts fire |
-| 2-3 | Error budget tracking dashboard + runbook | |
-| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | OTel trace context across all service boundaries |
-| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk |
-| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Dry-run each runbook |
+**Status:** `P2-S2 DELIVERED — alerting rules, error-budget dashboard, SLO definitions, metrics infrastructure`
+
+> **Note:** P2-S2 is a bounded slice covering items 2-1, 2-2, 2-3 only. Items 2-4, 2-5, 2-6 remain open.
+
+| Item | Description | Status | Notes |
+|------|-------------|--------|-------|
+| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | ✅ Delivered (P2-S2) | `docs/09-operations/04-sre-and-slos.md`; Grafana `intent-rebase-slo` dashboard |
+| 2-2 | Alerting rules (warning, critical thresholds) | ✅ Delivered (P2-S2) | `infrastructure/local/prometheus/rules.yml`; Alertmanager config |
+| 2-3 | Error budget tracking dashboard + runbook | ✅ Delivered (P2-S2) | Grafana `intent-rebase-error-budget` dashboard; RB6 in `05-runbooks.md` |
+| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | ⬜ Not Started | OTel trace context across all service boundaries |
+| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | ⬜ Not Started | Target: p95 < 60s for low/medium risk |
+| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | ⬜ Not Started | RB7-RB9 delivered for alerting-related scenarios |
 
 ---
 

@@ -1,0 +1,70 @@
+# Alertmanager configuration for Intent Rebase Engine
+# Phase 3 Batch 2 - P2-S2 bounded slice
+
+global:
+  resolve_timeout: 5m
+
+# Route alerts to receivers
+route:
+  group_by: ['alertname', 'slo']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'null'
+  
+  # Routes for critical alerts - immediate notification
+  routes:
+    # Critical severity alerts - page immediately
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+    
+    # Error budget alerts - urgent
+    - match:
+        slo: error_budget
+      receiver: 'error-budget-alerts'
+      priority: 2
+    
+    # Warning severity alerts - inform
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 2m
+
+#抑制规则
+inhibit_rules:
+  # Inhibit warning alerts when a critical alert for the same SLO is firing
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    source_match_re:
+      slo: ".+"
+    target_match_re:
+      slo: ".+"
+
+# Receivers
+receivers:
+  - name: 'null'
+    # No-op receiver - for testing
+
+  - name: 'critical-alerts'
+    # Critical alerts - would integrate with PagerDuty, Slack, etc. in production
+    # For local dev, just log
+    webhook_configs:
+      - url: 'http://localhost:9093/-/alert'
+        send_resolved: true
+
+  - name: 'error-budget-alerts'
+    # Error budget alerts
+    webhook_configs:
+      - url: 'http://localhost:9093/-/alert'
+        send_resolved: true
+
+  - name: 'warning-alerts'
+    # Warning alerts
+    webhook_configs:
+      - url: 'http://localhost:9093/-/alert'
+        send_resolved: true

@@ -1,0 +1,15 @@
+# Grafana datasource configuration for Intent Rebase Engine
+# Phase 3 Batch 2 - P2-S2 bounded slice
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
