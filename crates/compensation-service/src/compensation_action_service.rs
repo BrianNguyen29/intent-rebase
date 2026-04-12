@@ -11,7 +11,6 @@
 //! - **Derived DLQ:** Failed actions with exhausted budget or non-retryable error are DLQ candidates
 //! - No background workers; all operations are explicit API calls
 
-use metrics::counter;
 use std::sync::Arc;
 use uuid::Uuid;
 
