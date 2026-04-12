@@ -84,15 +84,44 @@ info:
     - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
     - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
     - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
-    - **Execution policy gate:** Only service-executable combos can execute: Rollback+Automatic (S1) or CounterAction+SemiAutomatic (S2); Other feasibility levels (ManualOnly, NotPossible) or other strategy types require human intervention workflows (not in this slice)
-    - **Bounded RollbackExecutor (Phase 3 Batch 1):** Real rollback acknowledgment for Rollback+Automatic path
-      - Success means "rollback action acknowledged" — validated against side effect ledger
-      - Non-Rollback strategies (CounterAction, FollowupNotice, Quarantine, Escalation) fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-      - Non-Automatic feasibility (SemiAutomatic, ManualOnly, NotPossible) fail closed with `UNSUPPORTED_FEASIBILITY`
-      - Missing side effect context fails closed with `SIDE_EFFECT_NOT_FOUND`
-      - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
-      - Does NOT claim external reversal if current data model cannot support it
-    - **Stub executor path:** Non-Rollback+Automatic paths return ExecutionResult failure (not success)
+    - **Execution policy gate:** Only service-executable combos can execute:
+        - Rollback + Automatic (S1InternalReversible)
+        - CounterAction + SemiAutomatic (S2ExternalReversible)
+        - FollowupNotice + ManualOnly (S3ExternalPartiallyReversible)
+        - Escalation + NotPossible (S4Irreversible)
+      All other feasibility levels or strategy types require human intervention workflows (not in this slice)
+    - **Bounded execution executors (Phase 3 Batch 1):**
+      - **RollbackExecutor:** Real acknowledgment for Rollback+Automatic (S1InternalReversible) path
+        - Success means "rollback action acknowledged" — validated against side effect ledger
+        - Non-Rollback strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-Automatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Missing side effect context fails closed with `SIDE_EFFECT_NOT_FOUND`
+        - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external reversal if current data model cannot support it
+      - **CounterActionExecutor:** Real acknowledgment for CounterAction+SemiAutomatic (S2ExternalReversible) path
+        - Validates side effect class is S2ExternalReversible
+        - Success means "counter-action acknowledged" — validated against side effect ledger
+        - Non-CounterAction strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-SemiAutomatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "Counter-action for {effect_type} targeting {target} acknowledged"
+      - **FollowupNoticeExecutor:** Real acknowledgment for FollowupNotice+ManualOnly (S3ExternalPartiallyReversible) path
+        - Validates side effect class is S3ExternalPartiallyReversible
+        - Success means "followup notice acknowledged" — validated against side effect ledger
+        - Non-FollowupNotice strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-ManualOnly feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "FollowupNotice for {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external resolution if current data model cannot support it
+      - **EscalationExecutor:** Real acknowledgment for Escalation+NotPossible (S4Irreversible) path
+        - Validates side effect class is S4Irreversible
+        - Success means "escalation acknowledged" — validated against side effect ledger
+        - Non-Escalation strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
+        - Non-NotPossible feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
+        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
+        - Success summary is truthful: "Escalation for {effect_type} targeting {target} acknowledged"
+        - Does NOT claim external resolution if current data model cannot support it
+    - **All executors share common validation:** tenant_id match, intent_id match, side effect existence
 
     ## Phase 3 Batch 1: Intent Orchestration Dashboard
     - GET /intents/{intent_id}/orchestration-dashboard — Bounded read-only dashboard endpoint
@@ -137,7 +166,7 @@ info:
     - **Auto-decide logic:**
       - `Pending` → approve via approve_action
       - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
+        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
       - Terminal / policy-blocked → skip
       - Not found → record not_found
     - **Run status (HTTP 202 Accepted):**
@@ -947,21 +976,24 @@ paths:
         **Execution policy gate:** Only service-executable combos can execute:
         - Rollback + Automatic feasibility (S1InternalReversible)
         - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
-        
-        All other feasibility levels (ManualOnly, NotPossible) or other strategy types
-        require human intervention workflows that are not in this slice.
+        - FollowupNotice + ManualOnly feasibility (S3ExternalPartiallyReversible)
+        - Escalation + NotPossible feasibility (S4Irreversible)
+
+        All four combos are service-executable in this slice. Human-intervention workflows
+        for other feasibility levels or strategy types are not in this slice.
 
         **Bounded executor semantics (Phase 3 Batch 1):**
         - Rollback + Automatic: validates side effect context against ledger, returns acknowledgment
-        - Non-Rollback strategies: fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-Automatic feasibility: fail closed with `UNSUPPORTED_FEASIBILITY`
+        - CounterAction + SemiAutomatic: bounded execution, returns acknowledgment
+        - FollowupNotice + ManualOnly: bounded execution, returns acknowledgment
+        - Escalation + NotPossible: bounded execution, returns acknowledgment
         - Missing side effect: fail closed with `SIDE_EFFECT_NOT_FOUND`
-        - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
+        - Success summary is truthful: does not claim unreversible actions are reversed
         - Does NOT claim external reversal — current data model does not support actual artifact reversal
 
         **Fails closed on illegal transitions:**
         - Returns 409 Conflict if action is not Approved
-        - Returns 409 Conflict if feasibility is not Automatic
+        - Returns 409 Conflict if combo is not one of the four service-executable combos
 
         **This slice:** No retry logic; Failed actions remain Failed.
       operationId: executeCompensationAction
@@ -1126,7 +1158,7 @@ paths:
 
         **Four candidate categories:**
         1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-        2. `approved_service_executable_candidates` - Approved actions executable by the service (Rollback+Automatic or CounterAction+SemiAutomatic)
+        2. `approved_service_executable_candidates` - Approved actions executable by the service (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
         3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
         4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
 
@@ -1180,7 +1212,7 @@ paths:
         **Auto-decide logic:**
         - `Pending` → approve via approve_action
         - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-      - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
+        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
         - Terminal / policy-blocked → skip
         - Not found → record not_found
 
@@ -1292,7 +1324,7 @@ paths:
         **Action determination logic:**
         - `approve`: Action is Pending (can transition to Approved)
         - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
-        - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic)
+        - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible)
         - `no_action`: Action is in a terminal state or cannot perform any valid transition
 
         **Bounded partial-success semantics:**
@@ -4030,7 +4062,7 @@ components:
           description: Count of pending approval candidates
         approved_service_executable_count:
           type: integer
-          description: Count of approved service-executable candidates (Rollback+Automatic or CounterAction+SemiAutomatic)
+          description: Count of approved service-executable candidates (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
         retryable_failed_count:
           type: integer
           description: Count of retryable failed candidates
@@ -4200,7 +4232,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CompensationActionResponse'
-          description: Approved actions executable by the service (Rollback+Automatic or CounterAction+SemiAutomatic)
+          description: Approved actions executable by the service (Rollback+Automatic, CounterAction+SemiAutomatic, FollowupNotice+ManualOnly, or Escalation+NotPossible)
         retryable_failed_candidates:
           type: array
           items:

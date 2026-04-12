@@ -428,10 +428,14 @@ impl CompensationActionService {
     /// **Phase 3 Batch 1 bounded slice:** This method:
     /// 1. Validates the action is in Approved status (fails closed otherwise)
     /// 2. Validates execution policy: `Automatic` feasibility OR
-    ///    (`CounterAction` strategy + `SemiAutomatic` feasibility) can execute in this slice.
+    ///    (`CounterAction` strategy + `SemiAutomatic` feasibility) OR
+    ///    (`FollowupNotice` strategy + `ManualOnly` feasibility) OR
+    ///    (`Escalation` strategy + `NotPossible` feasibility) can execute in this slice.
     ///    All other feasibility/strategy combos fail closed.
     /// 3. Runs the appropriate executor (RollbackExecutor for Rollback+Automatic,
-    ///    CounterActionExecutor for CounterAction+SemiAutomatic) or returns failure
+    ///    CounterActionExecutor for CounterAction+SemiAutomatic,
+    ///    FollowupNoticeExecutor for FollowupNotice+ManualOnly,
+    ///    EscalationExecutor for Escalation+NotPossible) or returns failure
     ///    (for all other strategy/feasibility combos)
     /// 4. Records the result via record_result, which transitions to Executed or Failed
     ///
@@ -439,22 +443,25 @@ impl CompensationActionService {
     /// **Execution policy gate (feasibility + strategy):**
     /// - Automatic feasibility: Rollback strategy can execute (S1InternalReversible)
     /// - SemiAutomatic feasibility: CounterAction strategy can execute (S2ExternalReversible)
+    /// - ManualOnly feasibility: FollowupNotice strategy can execute (S3ExternalPartiallyReversible)
+    /// - NotPossible feasibility: Escalation strategy can execute (S4Irreversible)
     /// - All other combos fail closed with CompensationActionNotExecutable
     ///
     /// **Bounded executor semantics:**
     /// - Rollback + Automatic: validates side effect context, returns acknowledgment
     /// - CounterAction + SemiAutomatic: validates side effect context, returns acknowledgment
+    /// - FollowupNotice + ManualOnly: validates side effect context, returns acknowledgment
+    /// - Escalation + NotPossible: validates side effect context, returns acknowledgment
     /// - All other strategy types: fail closed with UNSUPPORTED_STRATEGY_TYPE
     /// - All other feasibility levels: fail closed with UNSUPPORTED_FEASIBILITY
     /// - Missing side effect: fail closed with SIDE_EFFECT_NOT_FOUND
     ///
-    /// **This slice:** No retry/DLQ/orchestration. FollowupNotice/Quarantine/Escalation
-    /// executors and manual intervention workflows are Batch 1+ scope.
+    /// **This slice:** No retry/DLQ/orchestration. Quarantine executor and manual
+    /// intervention workflows are Batch 1+ scope.
     ///
     /// **Fails closed on policy violations:**
     /// - If action is not Approved, returns CompensationActionNotExecutable error
-    /// - If feasibility is not Automatic (for Rollback) or SemiAutomatic (for CounterAction),
-    ///   returns CompensationActionNotExecutable error
+    /// - If feasibility is not in the allowed set, returns CompensationActionNotExecutable error
     pub async fn execute_action(
         &self,
         action_id: Uuid,
@@ -474,12 +481,16 @@ impl CompensationActionService {
         // Allowed combos:
         //   - Rollback + Automatic (S1InternalReversible)
         //   - CounterAction + SemiAutomatic (S2ExternalReversible)
+        //   - FollowupNotice + ManualOnly (S3ExternalPartiallyReversible)
+        //   - Escalation + NotPossible (S4Irreversible)
         // All other combos require human intervention or are not executable.
         use crate::compensation_action::{CompensationFeasibility, StrategyType};
         let is_allowed_combo = matches!(
             (action.strategy_type, action.feasibility),
             (StrategyType::Rollback, CompensationFeasibility::Automatic)
                 | (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic)
+                | (StrategyType::FollowupNotice, CompensationFeasibility::ManualOnly)
+                | (StrategyType::Escalation, CompensationFeasibility::NotPossible)
         );
         if !is_allowed_combo {
             return Err(IntentRebaseError::CompensationActionNotExecutable(
@@ -497,7 +508,8 @@ impl CompensationActionService {
         let actor_id = executed_by.unwrap_or("compensation-service/system");
 
         // Run the appropriate bounded executor based on strategy type
-        // RollbackExecutor for Rollback+Automatic, CounterActionExecutor for CounterAction+SemiAutomatic
+        // RollbackExecutor for Rollback+Automatic, CounterActionExecutor for CounterAction+SemiAutomatic,
+        // FollowupNoticeExecutor for FollowupNotice+ManualOnly, EscalationExecutor for Escalation+NotPossible
         let executor_result = if let Some(ref side_effect_repo) = self.side_effect_repo {
             match (action.strategy_type, action.feasibility) {
                 (StrategyType::Rollback, CompensationFeasibility::Automatic) => {
@@ -508,6 +520,16 @@ impl CompensationActionService {
                 (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic) => {
                     use crate::compensation_executor::CounterActionExecutor;
                     let executor = CounterActionExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await?
+                }
+                (StrategyType::FollowupNotice, CompensationFeasibility::ManualOnly) => {
+                    use crate::compensation_executor::FollowupNoticeExecutor;
+                    let executor = FollowupNoticeExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await?
+                }
+                (StrategyType::Escalation, CompensationFeasibility::NotPossible) => {
+                    use crate::compensation_executor::EscalationExecutor;
+                    let executor = EscalationExecutor::new(side_effect_repo.clone());
                     executor.execute(&action).await?
                 }
                 _ => {
@@ -533,6 +555,18 @@ impl CompensationActionService {
                     ))
                 }
                 (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic) => {
+                    ExecutionResult::success(&format!(
+                        "Stub: executed {:?} for action {}",
+                        action.strategy_type, action.id
+                    ))
+                }
+                (StrategyType::FollowupNotice, CompensationFeasibility::ManualOnly) => {
+                    ExecutionResult::success(&format!(
+                        "Stub: executed {:?} for action {}",
+                        action.strategy_type, action.id
+                    ))
+                }
+                (StrategyType::Escalation, CompensationFeasibility::NotPossible) => {
                     ExecutionResult::success(&format!(
                         "Stub: executed {:?} for action {}",
                         action.strategy_type, action.id

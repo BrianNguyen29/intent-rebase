@@ -543,7 +543,10 @@ impl CompensationAction {
     /// Returns true if this action can be executed by the compensation service.
     ///
     /// **Phase 3 Batch 1 P7 bounded slice:** In addition to Automatic-only actions,
-    /// this includes CounterAction + SemiAutomatic combos (S2ExternalReversible effects).
+    /// this includes:
+    /// - CounterAction + SemiAutomatic combos (S2ExternalReversible effects)
+    /// - FollowupNotice + ManualOnly combos (S3ExternalPartiallyReversible effects)
+    /// - Escalation + NotPossible combos (S4Irreversible effects)
     ///
     /// All other strategy/feasibility combos require human intervention or are
     /// not executable in this slice.
@@ -553,7 +556,15 @@ impl CompensationAction {
             (StrategyType::Rollback, CompensationFeasibility::Automatic)
                 | (
                     StrategyType::CounterAction,
-                    CompensationFeasibility::SemiAutomatic
+                    CompensationFeasibility::SemiAutomatic,
+                )
+                | (
+                    StrategyType::FollowupNotice,
+                    CompensationFeasibility::ManualOnly,
+                )
+                | (
+                    StrategyType::Escalation,
+                    CompensationFeasibility::NotPossible
                 )
         )
     }
