@@ -40,7 +40,7 @@ pub use compensation_action_service::{
     PolicyGateEvaluation, PolicyGateEvaluationResult, PolicyGateMetadata, PolicyGateStatus,
     PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
 };
-pub use compensation_executor::{CompensationExecutor, StubCompensationExecutor};
+pub use compensation_executor::{CompensationExecutor, CounterActionExecutor, RollbackExecutor, StubCompensationExecutor};
 pub use compensation_planner::{BoundedCompensationPlanner, CompensationPlanner, InMemoryCompensationPlanner};
 pub use orchestration_run::{
     OrchestrationActionDecision, OrchestrationRun, RunItemResult, RunStatus,

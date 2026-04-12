@@ -84,7 +84,7 @@ info:
     - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
     - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
     - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
-    - **Execution policy gate:** Only `Automatic` feasibility can execute; SemiAutomatic/ManualOnly require human intervention workflows (not in this slice); NotPossible cannot be executed at all
+    - **Execution policy gate:** Only service-executable combos can execute: Rollback+Automatic (S1) or CounterAction+SemiAutomatic (S2); Other feasibility levels (ManualOnly, NotPossible) or other strategy types require human intervention workflows (not in this slice)
     - **Bounded RollbackExecutor (Phase 3 Batch 1):** Real rollback acknowledgment for Rollback+Automatic path
       - Success means "rollback action acknowledged" — validated against side effect ledger
       - Non-Rollback strategies (CounterAction, FollowupNotice, Quarantine, Escalation) fail closed with `UNSUPPORTED_STRATEGY_TYPE`
@@ -137,7 +137,7 @@ info:
     - **Auto-decide logic:**
       - `Pending` → approve via approve_action
       - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-      - `Approved` (is_auto_executable) → execute via execute_action
+        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
       - Terminal / policy-blocked → skip
       - Not found → record not_found
     - **Run status (HTTP 202 Accepted):**
@@ -944,11 +944,14 @@ paths:
         **Executor gate:** Only Approved actions can execute. This prevents accidental
         execution of pending or already-processed actions.
 
-        **Execution policy gate:** Only actions with `Automatic` feasibility can execute
-        in this slice. SemiAutomatic and ManualOnly require human intervention workflows
-        that are not in this slice. NotPossible cannot be executed at all.
+        **Execution policy gate:** Only service-executable combos can execute:
+        - Rollback + Automatic feasibility (S1InternalReversible)
+        - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
+        
+        All other feasibility levels (ManualOnly, NotPossible) or other strategy types
+        require human intervention workflows that are not in this slice.
 
-        **Bounded RollbackExecutor semantics (Phase 3 Batch 1):**
+        **Bounded executor semantics (Phase 3 Batch 1):**
         - Rollback + Automatic: validates side effect context against ledger, returns acknowledgment
         - Non-Rollback strategies: fail closed with `UNSUPPORTED_STRATEGY_TYPE`
         - Non-Automatic feasibility: fail closed with `UNSUPPORTED_FEASIBILITY`
@@ -1123,7 +1126,7 @@ paths:
 
         **Four candidate categories:**
         1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-        2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+        2. `approved_service_executable_candidates` - Approved actions executable by the service (Rollback+Automatic or CounterAction+SemiAutomatic)
         3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
         4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
 
@@ -1177,7 +1180,7 @@ paths:
         **Auto-decide logic:**
         - `Pending` → approve via approve_action
         - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-        - `Approved` (is_auto_executable) → execute via execute_action
+      - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
         - Terminal / policy-blocked → skip
         - Not found → record not_found
 
@@ -1289,7 +1292,7 @@ paths:
         **Action determination logic:**
         - `approve`: Action is Pending (can transition to Approved)
         - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
-        - `execute`: Action is Approved AND is_auto_executable() (Automatic feasibility)
+        - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic)
         - `no_action`: Action is in a terminal state or cannot perform any valid transition
 
         **Bounded partial-success semantics:**
@@ -1435,7 +1438,9 @@ paths:
 
         **Bounded partial-success semantics:** Same as batch-approve.
 
-        **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+        **Executor gate:** Only Approved + service-executable combos can execute:
+        - Rollback + Automatic feasibility (S1InternalReversible)
+        - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
 
         **No background worker or queue claiming:**
         This is a direct service method that processes actions sequentially.
@@ -4023,9 +4028,9 @@ components:
         pending_approval_count:
           type: integer
           description: Count of pending approval candidates
-        approved_auto_executable_count:
+        approved_service_executable_count:
           type: integer
-          description: Count of approved auto-executable candidates
+          description: Count of approved service-executable candidates (Rollback+Automatic or CounterAction+SemiAutomatic)
         retryable_failed_count:
           type: integer
           description: Count of retryable failed candidates
@@ -4191,11 +4196,11 @@ components:
           items:
             $ref: '#/components/schemas/CompensationActionResponse'
           description: Actions in Pending status awaiting approval
-        approved_auto_executable_candidates:
+        approved_service_executable_candidates:
           type: array
           items:
             $ref: '#/components/schemas/CompensationActionResponse'
-          description: Approved actions with Automatic feasibility that can be auto-executed
+          description: Approved actions executable by the service (Rollback+Automatic or CounterAction+SemiAutomatic)
         retryable_failed_candidates:
           type: array
           items:

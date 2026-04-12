@@ -170,6 +170,146 @@ impl CompensationExecutor for RollbackExecutor {
 }
 
 // =============================================================================
+// CounterActionExecutor — bounded real executor for CounterAction + SemiAutomatic only
+// =============================================================================
+
+/// Bounded real executor for CounterAction + SemiAutomatic compensation actions.
+///
+/// **Phase 3 Batch 1 P7 bounded slice:**
+/// - Validates action is CounterAction strategy + SemiAutomatic feasibility
+/// - Validates side effect class is S2ExternalReversible
+/// - Fetches side effect context from repository to validate target existence
+/// - Returns truthful acknowledgment (not external reversal claim)
+/// - All other strategy types or feasibility levels fail closed
+///
+/// **Summary semantics:** Counter-action is "acknowledged" not "reversed" — the
+/// current data model cannot guarantee external artifact reversal.
+#[derive(Clone)]
+pub struct CounterActionExecutor {
+    side_effect_repo: Arc<dyn SideEffectRepository>,
+}
+
+impl CounterActionExecutor {
+    /// Create a new CounterActionExecutor with the given side effect repository.
+    pub fn new(side_effect_repo: Arc<dyn SideEffectRepository>) -> Self {
+        Self { side_effect_repo }
+    }
+
+    /// Execute a compensation action with CounterAction + SemiAutomatic semantics.
+    ///
+    /// **Bounded supported path:** Only CounterAction strategy + SemiAutomatic feasibility succeeds.
+    /// All other combinations fail closed.
+    async fn execute_impl(
+        &self,
+        action: &CompensationAction,
+    ) -> Result<ExecutionResult, IntentRebaseError> {
+        use crate::compensation_action::{CompensationFeasibility, StrategyType};
+
+        // Strategy gate: only CounterAction is supported in this slice
+        if action.strategy_type != StrategyType::CounterAction {
+            return Ok(ExecutionResult::failure(
+                &format!(
+                    "Unsupported strategy type: {:?}. Only CounterAction is supported in this slice.",
+                    action.strategy_type
+                ),
+                "UNSUPPORTED_STRATEGY_TYPE",
+                Some(format!(
+                    "Strategy {:?} requires Batch 1+ executor implementation",
+                    action.strategy_type
+                )),
+            ));
+        }
+
+        // Feasibility gate: only SemiAutomatic is supported in this slice
+        if action.feasibility != CompensationFeasibility::SemiAutomatic {
+            return Ok(ExecutionResult::failure(
+                &format!(
+                    "Unsupported feasibility: {:?}. Only SemiAutomatic is supported in this slice.",
+                    action.feasibility
+                ),
+                "UNSUPPORTED_FEASIBILITY",
+                Some(format!(
+                    "Feasibility {:?} requires human intervention or is not executable",
+                    action.feasibility
+                )),
+            ));
+        }
+
+        // Side effect validation: fetch context to ensure target exists
+        let side_effect = match self.side_effect_repo.get(action.side_effect_id).await {
+            Ok(se) => se,
+            Err(e) => {
+                return Ok(ExecutionResult::failure(
+                    &format!(
+                        "Side effect {} not found: cannot validate counter-action target",
+                        action.side_effect_id
+                    ),
+                    "SIDE_EFFECT_NOT_FOUND",
+                    Some(format!("{:?}", e)),
+                ));
+            }
+        };
+
+        // Validate side effect belongs to same tenant/intent as action
+        if side_effect.tenant_id != action.tenant_id {
+            return Ok(ExecutionResult::failure(
+                "Side effect tenant_id mismatch",
+                "TENANT_MISMATCH",
+                Some(format!(
+                    "Action tenant={}, side effect tenant={}",
+                    action.tenant_id, side_effect.tenant_id
+                )),
+            ));
+        }
+
+        if side_effect.intent_id != action.intent_id {
+            return Ok(ExecutionResult::failure(
+                "Side effect intent_id mismatch",
+                "INTENT_MISMATCH",
+                Some(format!(
+                    "Action intent={}, side effect intent={}",
+                    action.intent_id, side_effect.intent_id
+                )),
+            ));
+        }
+
+        // Validate side effect class is S2ExternalReversible (the intended target for counter-actions)
+        if side_effect.effect_class != crate::side_effect::SideEffectClass::S2ExternalReversible {
+            return Ok(ExecutionResult::failure(
+                &format!(
+                    "Invalid side effect class for counter-action: {:?}. Expected S2ExternalReversible.",
+                    side_effect.effect_class
+                ),
+                "INVALID_SIDE_EFFECT_CLASS",
+                Some(format!(
+                    "Counter-action is only valid for S2ExternalReversible effects, got {:?}",
+                    side_effect.effect_class
+                )),
+            ));
+        }
+
+        // Counter-action acknowledgment: validated against side effect ledger.
+        // Does NOT claim external reversal — current data model does not support
+        // actual artifact reversal. Summary is truthful.
+        let summary = format!(
+            "Counter-action for {} targeting {} acknowledged (side_effect_id={}, effect_class={:?})",
+            side_effect.effect_type, side_effect.target, side_effect.id, side_effect.effect_class
+        );
+
+        Ok(ExecutionResult::success(&summary))
+    }
+}
+
+impl CompensationExecutor for CounterActionExecutor {
+    async fn execute(
+        &self,
+        action: &CompensationAction,
+    ) -> Result<ExecutionResult, IntentRebaseError> {
+        self.execute_impl(action).await
+    }
+}
+
+// =============================================================================
 // StubCompensationExecutor — for testing and backward compatibility
 // =============================================================================
 
@@ -680,5 +820,444 @@ mod tests {
         // Should mention effect_type and target
         assert!(result.summary.contains("metadata_write"));
         assert!(result.summary.contains("db-record-123"));
+    }
+
+    // === CounterActionExecutor tests ===
+
+    fn create_s2_side_effect(
+        tenant_id: Uuid,
+        intent_id: Uuid,
+        side_effect_id: Uuid,
+    ) -> SideEffect {
+        SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: SideEffectClass::S2ExternalReversible,
+            effect_type: "pr_opened".to_string(),
+            target: "https://github.com/pulls/123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_success_counter_action_semi_auto() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect.clone()).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Close PR as counter-action",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(
+            result.success,
+            "Expected success but got failure: {:?}",
+            result
+        );
+        assert!(result.error_code.is_none());
+        assert!(result.summary.contains("Counter-action"));
+        assert!(result.summary.contains("pr_opened"));
+        assert!(result.summary.contains("https://github.com/pulls/123"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_rollback_strategy() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Rollback, // Not CounterAction
+            "Rollback compensation",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_STRATEGY_TYPE".to_string())
+        );
+        assert!(result.summary.contains("Rollback"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_automatic_feasibility() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic, // Not SemiAutomatic
+            StrategyType::CounterAction,
+            "Counter-action compensation",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_FEASIBILITY".to_string())
+        );
+        assert!(result.summary.contains("Automatic"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_manual_only_feasibility() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::ManualOnly, // Not SemiAutomatic
+            StrategyType::CounterAction,
+            "Manual counter-action required",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_FEASIBILITY".to_string())
+        );
+        assert!(result.summary.contains("ManualOnly"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_missing_side_effect() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // No side effects created in repo
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter-action missing side effect",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some("SIDE_EFFECT_NOT_FOUND".to_string()));
+        assert!(result.summary.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_tenant_mismatch() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let different_tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            different_tenant_id, // Different tenant than side effect
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter-action with tenant mismatch",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some("TENANT_MISMATCH".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_intent_mismatch() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let different_intent_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(different_intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            different_intent_id, // Different intent than side effect
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter-action with intent mismatch",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some("INTENT_MISMATCH".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_invalid_side_effect_class() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        // Create an S1InternalReversible side effect instead of S2ExternalReversible
+        let side_effect = SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: SideEffectClass::S1InternalReversible,
+            effect_type: "metadata_write".to_string(),
+            target: "db-record-123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter-action on S1 side effect",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("INVALID_SIDE_EFFECT_CLASS".to_string())
+        );
+        assert!(result.summary.contains("S1InternalReversible"));
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_summary_is_truthful() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Close PR as counter-action",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        // Summary should contain "acknowledged" not "reversed" or "completed"
+        assert!(result.summary.contains("acknowledged"));
+        assert!(!result.summary.to_lowercase().contains("reversed"));
+        // Should mention effect_type and target
+        assert!(result.summary.contains("pr_opened"));
+        assert!(result.summary.contains("https://github.com/pulls/123"));
+    }
+
+    // === Unsupported strategy/feasibility combo tests ===
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_followup_notice_strategy() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::FollowupNotice, // Not CounterAction
+            "Followup notice compensation",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_STRATEGY_TYPE".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_quarantine_strategy() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Quarantine, // Not CounterAction
+            "Quarantine compensation",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_STRATEGY_TYPE".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_escalation_strategy() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Escalation, // Not CounterAction
+            "Escalation compensation",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_STRATEGY_TYPE".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_counter_action_executor_fail_on_not_possible_feasibility() {
+        let side_effect_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        let repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect = create_s2_side_effect(tenant_id, intent_id, side_effect_id);
+        repo.create(side_effect).await.unwrap();
+
+        let executor = CounterActionExecutor::new(repo);
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::NotPossible, // Not executable
+            StrategyType::CounterAction,
+            "Cannot counter-act",
+        );
+
+        let result = executor.execute(&action).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some("UNSUPPORTED_FEASIBILITY".to_string())
+        );
+        assert!(result.summary.contains("NotPossible"));
     }
 }

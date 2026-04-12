@@ -539,6 +539,24 @@ impl CompensationAction {
     pub fn is_auto_executable(&self) -> bool {
         self.feasibility == CompensationFeasibility::Automatic
     }
+
+    /// Returns true if this action can be executed by the compensation service.
+    ///
+    /// **Phase 3 Batch 1 P7 bounded slice:** In addition to Automatic-only actions,
+    /// this includes CounterAction + SemiAutomatic combos (S2ExternalReversible effects).
+    ///
+    /// All other strategy/feasibility combos require human intervention or are
+    /// not executable in this slice.
+    pub fn is_service_executable(&self) -> bool {
+        matches!(
+            (self.strategy_type, self.feasibility),
+            (StrategyType::Rollback, CompensationFeasibility::Automatic)
+                | (
+                    StrategyType::CounterAction,
+                    CompensationFeasibility::SemiAutomatic
+                )
+        )
+    }
 }
 
 #[cfg(test)]

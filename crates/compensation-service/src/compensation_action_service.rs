@@ -427,29 +427,34 @@ impl CompensationActionService {
     ///
     /// **Phase 3 Batch 1 bounded slice:** This method:
     /// 1. Validates the action is in Approved status (fails closed otherwise)
-    /// 2. Validates execution policy: only `Automatic` feasibility can execute in this slice
-    ///    (SemiAutomatic/ManualOnly require human intervention not in this slice;
-    ///    NotPossible cannot be executed at all)
-    /// 3. Runs the RollbackExecutor (for Rollback+Automatic path) or returns failure
+    /// 2. Validates execution policy: `Automatic` feasibility OR
+    ///    (`CounterAction` strategy + `SemiAutomatic` feasibility) can execute in this slice.
+    ///    All other feasibility/strategy combos fail closed.
+    /// 3. Runs the appropriate executor (RollbackExecutor for Rollback+Automatic,
+    ///    CounterActionExecutor for CounterAction+SemiAutomatic) or returns failure
     ///    (for all other strategy/feasibility combos)
     /// 4. Records the result via record_result, which transitions to Executed or Failed
     ///
     /// **Executor gate (status):** Only Approved actions can execute.
-    /// **Execution policy gate (feasibility):** Only `Automatic` feasibility can execute.
-    /// This prevents accidental execution of actions requiring manual intervention.
+    /// **Execution policy gate (feasibility + strategy):**
+    /// - Automatic feasibility: Rollback strategy can execute (S1InternalReversible)
+    /// - SemiAutomatic feasibility: CounterAction strategy can execute (S2ExternalReversible)
+    /// - All other combos fail closed with CompensationActionNotExecutable
     ///
-    /// **Bounded RollbackExecutor semantics:**
+    /// **Bounded executor semantics:**
     /// - Rollback + Automatic: validates side effect context, returns acknowledgment
+    /// - CounterAction + SemiAutomatic: validates side effect context, returns acknowledgment
     /// - All other strategy types: fail closed with UNSUPPORTED_STRATEGY_TYPE
     /// - All other feasibility levels: fail closed with UNSUPPORTED_FEASIBILITY
     /// - Missing side effect: fail closed with SIDE_EFFECT_NOT_FOUND
     ///
-    /// **This slice:** No retry/DLQ/orchestration. Real rollback/counter-action logic for
-    /// non-Rollback strategies is Batch 1+ scope.
+    /// **This slice:** No retry/DLQ/orchestration. FollowupNotice/Quarantine/Escalation
+    /// executors and manual intervention workflows are Batch 1+ scope.
     ///
     /// **Fails closed on policy violations:**
     /// - If action is not Approved, returns CompensationActionNotExecutable error
-    /// - If feasibility is not Automatic, returns CompensationActionNotExecutable error
+    /// - If feasibility is not Automatic (for Rollback) or SemiAutomatic (for CounterAction),
+    ///   returns CompensationActionNotExecutable error
     pub async fn execute_action(
         &self,
         action_id: Uuid,
@@ -465,11 +470,18 @@ impl CompensationActionService {
             ));
         }
 
-        // Execution policy gate: only Automatic feasibility can execute in this slice.
-        // SemiAutomatic/ManualOnly require human intervention workflows (not in this slice).
-        // NotPossible cannot be executed at all.
-        use crate::compensation_action::CompensationFeasibility;
-        if action.feasibility != CompensationFeasibility::Automatic {
+        // Execution policy gate: only allowed combos can execute in this slice.
+        // Allowed combos:
+        //   - Rollback + Automatic (S1InternalReversible)
+        //   - CounterAction + SemiAutomatic (S2ExternalReversible)
+        // All other combos require human intervention or are not executable.
+        use crate::compensation_action::{CompensationFeasibility, StrategyType};
+        let is_allowed_combo = matches!(
+            (action.strategy_type, action.feasibility),
+            (StrategyType::Rollback, CompensationFeasibility::Automatic)
+                | (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic)
+        );
+        if !is_allowed_combo {
             return Err(IntentRebaseError::CompensationActionNotExecutable(
                 action_id,
             ));
@@ -484,35 +496,56 @@ impl CompensationActionService {
         let compensation_plan_id = action.id;
         let actor_id = executed_by.unwrap_or("compensation-service/system");
 
-        // Run the bounded RollbackExecutor (inlined here to avoid dyn trait issues)
-        // Fall back to StubCompensationExecutor behavior if no side_effect_repo is configured
+        // Run the appropriate bounded executor based on strategy type
+        // RollbackExecutor for Rollback+Automatic, CounterActionExecutor for CounterAction+SemiAutomatic
         let executor_result = if let Some(ref side_effect_repo) = self.side_effect_repo {
-            use crate::compensation_executor::RollbackExecutor;
-            let executor = RollbackExecutor::new(side_effect_repo.clone());
-            executor.execute(&action).await?
+            match (action.strategy_type, action.feasibility) {
+                (StrategyType::Rollback, CompensationFeasibility::Automatic) => {
+                    use crate::compensation_executor::RollbackExecutor;
+                    let executor = RollbackExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await?
+                }
+                (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic) => {
+                    use crate::compensation_executor::CounterActionExecutor;
+                    let executor = CounterActionExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await?
+                }
+                _ => {
+                    // Should not reach here due to gate above, but fail closed for safety
+                    ExecutionResult::failure(
+                        &format!(
+                            "Unsupported strategy/feasibility combo: {:?} + {:?}",
+                            action.strategy_type, action.feasibility
+                        ),
+                        "UNSUPPORTED_COMBO",
+                        None,
+                    )
+                }
+            }
         } else {
             // Fallback to stub behavior for backward compatibility
-            use crate::compensation_action::{CompensationFeasibility, StrategyType};
-            // For non-Rollback strategy types, return failure (stub behavior)
-            if action.strategy_type != StrategyType::Rollback {
-                ExecutionResult::failure(
-                    &format!("Unsupported strategy type: {:?}", action.strategy_type),
-                    "UNSUPPORTED_STRATEGY_TYPE",
+            // For unsupported strategy types, return failure (stub behavior)
+            match (action.strategy_type, action.feasibility) {
+                (StrategyType::Rollback, CompensationFeasibility::Automatic) => {
+                    ExecutionResult::success(&format!(
+                        "Stub: executed {:?} for action {}",
+                        action.strategy_type, action.id
+                    ))
+                }
+                (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic) => {
+                    ExecutionResult::success(&format!(
+                        "Stub: executed {:?} for action {}",
+                        action.strategy_type, action.id
+                    ))
+                }
+                _ => ExecutionResult::failure(
+                    &format!(
+                        "Unsupported strategy/feasibility combo: {:?} + {:?}",
+                        action.strategy_type, action.feasibility
+                    ),
+                    "UNSUPPORTED_COMBO",
                     None,
-                )
-            } else if action.feasibility != CompensationFeasibility::Automatic {
-                // This case is already caught above, but included for completeness
-                ExecutionResult::failure(
-                    &format!("Unsupported feasibility: {:?}", action.feasibility),
-                    "UNSUPPORTED_FEASIBILITY",
-                    None,
-                )
-            } else {
-                // Stub success for backward compatibility (should not reach here with proper config)
-                ExecutionResult::success(&format!(
-                    "Stub: executed {:?} for action {}",
-                    action.strategy_type, action.id
-                ))
+                ),
             }
         };
 
@@ -761,7 +794,8 @@ impl CompensationActionService {
     ///
     /// **Four candidate categories:**
     /// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-    /// 2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+    /// 2. `approved_service_executable_candidates` - Approved actions executable by the service
+    ///    Phase 3 Batch 1 P7: Includes both Rollback+Automatic and CounterAction+SemiAutomatic
     /// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
     /// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
     ///
@@ -786,10 +820,12 @@ impl CompensationActionService {
         // Category 1: Pending approval candidates (all Pending status)
         let pending_approval_candidates = pending;
 
-        // Category 2: Approved auto-executable candidates
-        let approved_auto_executable_candidates: Vec<CompensationAction> = approved
+        // Category 2: Approved service-executable candidates
+        // Phase 3 Batch 1 P7: Uses is_service_executable() to include both
+        // Rollback+Automatic (S1) and CounterAction+SemiAutomatic (S2) combos.
+        let approved_service_executable_candidates: Vec<CompensationAction> = approved
             .into_iter()
-            .filter(|action| action.is_auto_executable())
+            .filter(|action| action.is_service_executable())
             .collect();
 
         // Category 3: Retryable failed candidates (can be reapproved)
@@ -808,7 +844,7 @@ impl CompensationActionService {
 
         Ok(BatchCandidates {
             pending_approval_candidates,
-            approved_auto_executable_candidates,
+            approved_service_executable_candidates,
             retryable_failed_candidates,
             dlq_candidates,
         })
@@ -827,7 +863,7 @@ impl CompensationActionService {
     /// **Action determination logic:**
     /// - `approve`: Action is Pending (can transition to Approved)
     /// - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
-    /// - `execute`: Action is Approved AND is_auto_executable() (Automatic feasibility)
+    /// - `execute`: Action is Approved AND is_service_executable() (Automatic or SemiAutomatic feasibility)
     /// - `no_action`: Action is in a terminal state or cannot perform any valid transition
     ///
     /// **Bounded partial-success semantics:**
@@ -913,9 +949,11 @@ impl CompensationActionService {
                 }
             }
 
-            // Approved actions can be executed (if auto-executable)
+            // Approved actions can be executed (if service-executable)
             Approved => {
-                if action.is_auto_executable() {
+                // Phase 3 Batch 1 P7: Uses is_service_executable() which includes both
+                // Rollback+Automatic (S1) and CounterAction+SemiAutomatic (S2) combos
+                if action.is_service_executable() {
                     (
                         OrchestrationAction::Execute,
                         format!(
@@ -1153,11 +1191,11 @@ impl CompensationActionService {
     /// Execute batch execute for explicit compensation action IDs.
     ///
     /// Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple
-    /// Approved compensation actions that are auto-executable.
+    /// Approved compensation actions that are service-executable.
     ///
     /// **Bounded partial-success semantics:** Same as batch_approve.
     ///
-    /// **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+    /// **Executor gate:** Only Approved + Service-executable actions can execute.
     ///
     /// **No background worker or queue claiming:** Same as batch_approve.
     pub async fn batch_execute(
@@ -1236,8 +1274,9 @@ impl CompensationActionService {
 pub struct BatchCandidates {
     /// Actions in Pending status awaiting approval
     pub pending_approval_candidates: Vec<CompensationAction>,
-    /// Approved actions with Automatic feasibility that can be auto-executed
-    pub approved_auto_executable_candidates: Vec<CompensationAction>,
+    /// Approved actions that can be executed by the compensation service
+    /// Phase 3 Batch 1 P7: Includes both Rollback+Automatic (S1) and CounterAction+SemiAutomatic (S2)
+    pub approved_service_executable_candidates: Vec<CompensationAction>,
     /// Failed actions that can be reapproved (retryable error + budget remains)
     pub retryable_failed_candidates: Vec<CompensationAction>,
     /// Failed actions that exhausted retry budget or have non-retryable errors
@@ -1439,11 +1478,11 @@ impl CoordinationStatus {
 
             // Approved → check feasibility
             Approved => {
-                if action.is_auto_executable() {
-                    // Automatic feasibility with no blocking → Ready
+                if action.is_service_executable() {
+                    // Rollback+Automatic or CounterAction+SemiAutomatic → Ready
                     CoordinationStatus::Ready
                 } else {
-                    // SemiAutomatic/ManualOnly → AwaitingManualReview
+                    // ManualOnly or other non-service-executable → AwaitingManualReview
                     CoordinationStatus::AwaitingManualReview
                 }
             }
@@ -1729,7 +1768,7 @@ impl CoordinationRecord {
             action: action.clone(),
             coordination_status,
             coordination_reason,
-            auto_executable: action.is_auto_executable(),
+            auto_executable: action.is_service_executable(),
             is_dlq_candidate: action.is_dlq_candidate(),
             can_reapprove: action.can_be_reapproved(),
             retry_budget_exhausted: action.attempt_count >= action.max_retries,
@@ -1975,13 +2014,13 @@ impl CompensationActionService {
             return PolicyGateStatus::Blocked;
         }
 
-        // Approved status - check feasibility
+        // Approved status - check service executability
         if action.status == Approved {
-            // Automatic feasibility = eligible
-            if action.is_auto_executable() {
+            // Rollback+Automatic or CounterAction+SemiAutomatic = service-executable = eligible
+            if action.is_service_executable() {
                 return PolicyGateStatus::Eligible;
             }
-            // SemiAutomatic/ManualOnly = manual review required
+            // ManualOnly = manual review required
             return PolicyGateStatus::ManualReviewRequired;
         }
 
@@ -3462,10 +3501,10 @@ mod tests {
         assert_eq!(batch.pending_approval_candidates.len(), 1);
         assert_eq!(batch.pending_approval_candidates[0].id, pending_created.id);
 
-        // Verify approved auto-executable candidates
-        assert_eq!(batch.approved_auto_executable_candidates.len(), 1);
+        // Verify approved service-executable candidates
+        assert_eq!(batch.approved_service_executable_candidates.len(), 1);
         assert_eq!(
-            batch.approved_auto_executable_candidates[0].id,
+            batch.approved_service_executable_candidates[0].id,
             approved_updated.id
         );
 
@@ -3488,7 +3527,7 @@ mod tests {
         let batch = service.list_batch_candidates(tenant_id).await.unwrap();
 
         assert!(batch.pending_approval_candidates.is_empty());
-        assert!(batch.approved_auto_executable_candidates.is_empty());
+        assert!(batch.approved_service_executable_candidates.is_empty());
         assert!(batch.retryable_failed_candidates.is_empty());
         assert!(batch.dlq_candidates.is_empty());
     }
@@ -3534,14 +3573,53 @@ mod tests {
         pending_action.max_retries = 3;
         let _pending_created = service.create_action(pending_action).await.unwrap();
 
-        // Batch candidates should NOT include SemiAutomatic in approved_auto_executable
+        // Batch candidates should NOT include Rollback+SemiAutomatic in approved_service_executable
         // but SHOULD include the Automatic pending action
         let batch = service.list_batch_candidates(tenant_id).await.unwrap();
-        assert!(batch.approved_auto_executable_candidates.is_empty());
+        assert!(batch.approved_service_executable_candidates.is_empty());
         assert_eq!(batch.pending_approval_candidates.len(), 1);
         assert_eq!(
             batch.pending_approval_candidates[0].feasibility,
             CompensationFeasibility::Automatic
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_batch_candidates_includes_counter_action_semi_auto() {
+        // Phase 3 Batch 1 P7: CounterAction+SemiAutomatic should be included in batch candidates
+        let service = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        // Create a CounterAction+SemiAutomatic action (S2ExternalReversible)
+        let mut counter_action = CompensationAction::new(
+            tenant_id,
+            Uuid::new_v4(),
+            intent_id,
+            rebase_context.clone(),
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter the PR",
+        );
+        counter_action.max_retries = 3;
+        let counter_created = service.create_action(counter_action).await.unwrap();
+        let counter_approved = service
+            .approve_action(counter_created.id, counter_created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Should be Approved AND service-executable
+        assert_eq!(counter_approved.status, CompensationStatus::Approved);
+        assert!(counter_approved.is_service_executable());
+        assert!(!counter_approved.is_auto_executable()); // Not Automatic, but IS service-executable
+
+        // Batch candidates should include CounterAction+SemiAutomatic in approved_service_executable
+        let batch = service.list_batch_candidates(tenant_id).await.unwrap();
+        assert_eq!(batch.approved_service_executable_candidates.len(), 1);
+        assert_eq!(
+            batch.approved_service_executable_candidates[0].id,
+            counter_approved.id
         );
     }
 
@@ -4113,6 +4191,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_coordination_status_ready_counter_action_semi_auto() {
+        // Phase 3 Batch 1 P7: CounterAction+SemiAutomatic (Approved) should be Ready
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Test CounterAction+SemiAutomatic",
+        );
+
+        // Pending + SemiAutomatic = AwaitingPolicy (not yet approved)
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::AwaitingPolicy
+        );
+
+        // Approved + CounterAction + SemiAutomatic = Ready (service-executable)
+        action.status = CompensationStatus::Approved;
+        assert_eq!(
+            CoordinationStatus::from_compensation_action(&action),
+            CoordinationStatus::Ready
+        );
+    }
+
     #[tokio::test]
     async fn test_evaluate_coordination_status_empty_for_tenant() {
         let service = create_test_service();
@@ -4294,10 +4404,39 @@ mod tests {
         let record = CoordinationRecord::from_action(&action);
 
         assert_eq!(record.coordination_status, CoordinationStatus::Ready);
-        assert!(record.auto_executable);
+        assert!(record.auto_executable); // is_service_executable() includes Rollback+Automatic
         assert!(!record.is_dlq_candidate);
         assert_eq!(record.feasibility, CompensationFeasibility::Automatic);
         assert_eq!(record.strategy_type, StrategyType::Rollback);
+        assert_eq!(record.status, CompensationStatus::Approved);
+    }
+
+    #[test]
+    fn test_coordination_record_auto_executable_for_counter_action_semi_auto() {
+        // Phase 3 Batch 1 P7: CounterAction+SemiAutomatic auto_executable=true (is_service_executable)
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+
+        let mut action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Counter PR",
+        );
+        action.status = CompensationStatus::Approved;
+
+        let record = CoordinationRecord::from_action(&action);
+
+        assert_eq!(record.coordination_status, CoordinationStatus::Ready);
+        assert!(record.auto_executable); // is_service_executable() includes CounterAction+SemiAutomatic
+        assert!(!record.is_dlq_candidate);
+        assert_eq!(record.feasibility, CompensationFeasibility::SemiAutomatic);
+        assert_eq!(record.strategy_type, StrategyType::CounterAction);
         assert_eq!(record.status, CompensationStatus::Approved);
     }
 
@@ -4683,5 +4822,245 @@ mod tests {
             .unwrap();
 
         assert_eq!(waived.status, CompensationStatus::Waived);
+    }
+
+    // ============================================================================
+    // CounterAction + SemiAutomatic Tests (Phase 3 Batch 1 P7 bounded slice)
+    // ============================================================================
+
+    fn create_counter_action_semi_auto_test_service(
+    ) -> (CompensationActionService, Arc<crate::side_effect_repo::InMemorySideEffectRepository>) {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let service = CompensationActionService::new_with_side_effect_repo(
+            repo,
+            side_effect_repo.clone(),
+        );
+        (service, side_effect_repo)
+    }
+
+    fn create_counter_action_semi_auto_action(
+        tenant_id: Uuid,
+        side_effect_id: Uuid,
+        intent_id: Uuid,
+    ) -> CompensationAction {
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Close PR as counter-action",
+        )
+    }
+
+    #[tokio::test]
+    async fn test_execute_counter_action_semi_auto_success() {
+        let (service, side_effect_repo) = create_counter_action_semi_auto_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create S2ExternalReversible side effect so executor can find it
+        let side_effect = crate::side_effect::SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: crate::side_effect::SideEffectClass::S2ExternalReversible,
+            effect_type: "pr_opened".to_string(),
+            target: "https://github.com/pulls/123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        side_effect_repo.create(side_effect).await.unwrap();
+
+        // Create CounterAction + SemiAutomatic action
+        let action = create_counter_action_semi_auto_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        // Approve the action
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+        assert_eq!(approved.status, CompensationStatus::Approved);
+
+        // Execute should succeed
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+        assert_eq!(executed.status, CompensationStatus::Executed);
+        assert!(executed.execution_result_payload.is_some());
+        let result = executed.execution_result_payload.unwrap();
+        assert!(result.success);
+        assert!(result.summary.contains("Counter-action"));
+        assert!(result.summary.contains("acknowledged"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_counter_action_semi_auto_fails_on_wrong_strategy() {
+        let (service, _side_effect_repo) = create_counter_action_semi_auto_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create action with Rollback strategy but SemiAutomatic feasibility
+        // This should fail because Rollback only works with Automatic
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Rollback, // Wrong: Rollback needs Automatic
+            "Rollback with SemiAuto",
+        );
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute should fail with CompensationActionNotExecutable error
+        // because Rollback + SemiAutomatic is not a supported combo
+        let result = service.execute_action(approved.id, Some("test-executor")).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), IntentRebaseError::CompensationActionNotExecutable(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_counter_action_semi_auto_fails_on_wrong_feasibility() {
+        let (service, _side_effect_repo) = create_counter_action_semi_auto_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create action with CounterAction strategy but Automatic feasibility
+        // This should fail because CounterAction needs SemiAutomatic
+        let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            CompensationFeasibility::Automatic, // Wrong: CounterAction needs SemiAutomatic
+            StrategyType::CounterAction,
+            "CounterAction with Automatic",
+        );
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute should fail with CompensationActionNotExecutable error
+        // because CounterAction + Automatic is not a supported combo
+        let result = service.execute_action(approved.id, Some("test-executor")).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), IntentRebaseError::CompensationActionNotExecutable(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_counter_action_semi_auto_fails_on_s1_side_effect() {
+        let (service, side_effect_repo) = create_counter_action_semi_auto_test_service();
+
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+
+        // Create S1InternalReversible side effect instead of S2ExternalReversible
+        let side_effect = crate::side_effect::SideEffect {
+            id: side_effect_id,
+            tenant_id,
+            intent_id,
+            intent_version: 1,
+            effect_class: crate::side_effect::SideEffectClass::S1InternalReversible, // Wrong class
+            effect_type: "metadata_write".to_string(),
+            target: "db-record-123".to_string(),
+            occurred_at: chrono::Utc::now(),
+            idempotency_key: None,
+        };
+        side_effect_repo.create(side_effect).await.unwrap();
+
+        let action = create_counter_action_semi_auto_action(tenant_id, side_effect_id, intent_id);
+        let created = service.create_action(action).await.unwrap();
+
+        let approved = service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute should fail because counter-action is only valid for S2ExternalReversible
+        let executed = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await
+            .unwrap();
+        assert_eq!(executed.status, CompensationStatus::Failed);
+        let result = executed.execution_result_payload.unwrap();
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some("INVALID_SIDE_EFFECT_CLASS".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_is_service_executable_for_counter_action_semi_auto() {
+        let rebase_context = RebaseContext::new(Uuid::new_v4(), 1, 2, Uuid::new_v4());
+
+        // CounterAction + SemiAutomatic should be service executable
+        let counter_action = CompensationAction::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            rebase_context.clone(),
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::CounterAction,
+            "Test",
+        );
+        assert!(counter_action.is_service_executable());
+
+        // Rollback + Automatic should also be service executable
+        let rollback_action = CompensationAction::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            rebase_context.clone(),
+            CompensationFeasibility::Automatic,
+            StrategyType::Rollback,
+            "Test",
+        );
+        assert!(rollback_action.is_service_executable());
+
+        // Rollback + SemiAutomatic should NOT be service executable
+        let invalid_combo = CompensationAction::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            rebase_context.clone(),
+            CompensationFeasibility::SemiAutomatic,
+            StrategyType::Rollback,
+            "Test",
+        );
+        assert!(!invalid_combo.is_service_executable());
+
+        // CounterAction + Automatic should NOT be service executable
+        let invalid_combo2 = CompensationAction::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            rebase_context,
+            CompensationFeasibility::Automatic,
+            StrategyType::CounterAction,
+            "Test",
+        );
+        assert!(!invalid_combo2.is_service_executable());
     }
 }

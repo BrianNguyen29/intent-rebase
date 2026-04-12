@@ -2235,12 +2235,12 @@ async fn get_orchestration_dashboard(
             .filter(|action| action.can_be_reapproved())
             .count();
 
-        // Count auto-executable (Approved + Automatic feasibility)
+        // Count service-executable (Approved + service-executable: Rollback+Automatic or CounterAction+SemiAutomatic)
         let auto_executable_count = compensation_actions
             .iter()
             .filter(|action| {
                 action.status == compensation_service::CompensationStatus::Approved
-                    && action.is_auto_executable()
+                    && action.is_service_executable()
             })
             .count();
 
@@ -2466,9 +2466,9 @@ async fn waive_compensation_action(
 /// **Executor gate:** Only Approved actions can execute. This prevents accidental
 /// execution of pending or already-processed actions.
 ///
-/// **Bounded stub executor semantics:**
-/// - The executor is StubCompensationExecutor that always returns success
-/// - Real rollback/counter-action logic is Batch 1+ scope
+/// **Execution policy gate:** Only service-executable combos can execute:
+/// - Rollback + Automatic feasibility (S1InternalReversible)
+/// - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
 ///
 /// **Fails closed on illegal transitions:**
 /// - Returns 409 Conflict if action is not Approved
@@ -2507,8 +2507,8 @@ pub struct ListDlqCandidatesResponse {
 pub struct ListBatchCandidatesResponse {
     /// Actions in Pending status awaiting approval
     pub pending_approval_candidates: Vec<compensation_service::CompensationAction>,
-    /// Approved actions with Automatic feasibility that can be auto-executed
-    pub approved_auto_executable_candidates: Vec<compensation_service::CompensationAction>,
+    /// Approved actions with Service-executable feasibility that can be service-executed
+    pub approved_service_executable_candidates: Vec<compensation_service::CompensationAction>,
     /// Failed actions that can be reapproved (retryable error + budget remains)
     pub retryable_failed_candidates: Vec<compensation_service::CompensationAction>,
     /// Failed actions that exhausted retry budget or have non-retryable errors
@@ -2521,7 +2521,7 @@ pub struct ListBatchCandidatesResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchCandidatesSummary {
     pub pending_approval_count: usize,
-    pub approved_auto_executable_count: usize,
+    pub approved_service_executable_count: usize,
     pub retryable_failed_count: usize,
     pub dlq_count: usize,
 }
@@ -2582,7 +2582,8 @@ pub struct ListBatchCandidatesQuery {
 ///
 /// **Four candidate categories:**
 /// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-/// 2. `approved_auto_executable_candidates` - Approved actions with Automatic feasibility
+    /// 2. `approved_service_executable_candidates` - Approved actions executable by the service
+    ///    Phase 3 Batch 1 P7: Includes both Rollback+Automatic and CounterAction+SemiAutomatic
 /// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
 /// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
 ///
@@ -2603,14 +2604,14 @@ async fn list_batch_candidates(
 
     let summary = BatchCandidatesSummary {
         pending_approval_count: batch.pending_approval_candidates.len(),
-        approved_auto_executable_count: batch.approved_auto_executable_candidates.len(),
+        approved_service_executable_count: batch.approved_service_executable_candidates.len(),
         retryable_failed_count: batch.retryable_failed_candidates.len(),
         dlq_count: batch.dlq_candidates.len(),
     };
 
     Ok(Json(ListBatchCandidatesResponse {
         pending_approval_candidates: batch.pending_approval_candidates,
-        approved_auto_executable_candidates: batch.approved_auto_executable_candidates,
+        approved_service_executable_candidates: batch.approved_service_executable_candidates,
         retryable_failed_candidates: batch.retryable_failed_candidates,
         dlq_candidates: batch.dlq_candidates,
         summary,
@@ -2883,7 +2884,7 @@ fn format_action_decision(d: &compensation_service::OrchestrationActionDecision)
 /// **Auto-decide logic:**
 /// - `Pending` → approve via approve_action
 /// - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-/// - `Approved` (is_auto_executable) → execute via execute_action
+    /// - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
 /// - Terminal / policy-blocked → skip
 /// - Not found → record not_found
 ///
@@ -3592,7 +3593,7 @@ pub struct OrchestrationQuery {
 /// **Action determination logic:**
 /// - `approve`: Action is Pending (can transition to Approved)
 /// - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
-/// - `execute`: Action is Approved AND is_auto_executable() (Automatic feasibility)
+    /// - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic)
 /// - `no_action`: Action is in a terminal state or cannot perform any valid transition
 ///
 /// **Bounded partial-success semantics:**

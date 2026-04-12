@@ -72,7 +72,7 @@ impl OrchestrationRuntime {
     /// 3. For each action_id, queries current state and auto-decides:
     ///    - Pending → approve via approve_action
     ///    - Failed (can_be_reapproved) → reapprove via reapprove_action
-    ///    - Approved (is_auto_executable) → execute via execute_action
+    ///    - Approved (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
     ///    - Terminal / policy-blocked → skip
     ///    - Not found → record not_found
     /// 4. Records per-item results in the run
@@ -225,13 +225,16 @@ impl OrchestrationRuntime {
         }
     }
 
-    /// Handle an Approved action: execute if auto-executable.
+    /// Handle an Approved action: execute if service-executable.
+    ///
+    /// **Phase 3 Batch 1 P7:** Uses `is_service_executable()` which allows both
+    /// Automatic (Rollback) and SemiAutomatic (CounterAction) combos to execute.
     async fn handle_approved_action(
         &self,
         action: CompensationAction,
     ) -> Result<RunItemResult, IntentRebaseError> {
-        // Check if auto-executable
-        if action.is_auto_executable() {
+        // Check if service-executable (includes SemiAutomatic counter-actions)
+        if action.is_service_executable() {
             match self.action_service.execute_action(action.id, None).await {
                 Ok(updated) => Ok(RunItemResult {
                     action_id: action.id,
@@ -249,14 +252,15 @@ impl OrchestrationRuntime {
                 }),
             }
         } else {
-            // Not auto-executable: skip (requires manual execution)
+            // Not service-executable: skip (requires manual execution or unsupported combo)
             Ok(RunItemResult {
                 action_id: action.id,
                 action_taken: OrchestrationActionDecision::Skip,
                 success: true,
                 reason: format!(
-                    "Action requires manual execution ({})",
-                    format_feasibility(action.feasibility)
+                    "Action requires manual execution or is unsupported ({}, {:?})",
+                    format_feasibility(action.feasibility),
+                    action.strategy_type
                 ),
                 resulting_status: format!("{:?}", action.status),
             })
