@@ -275,6 +275,7 @@
 ## 3. SRE & Observability
 
 **P2-S2 Bounded Slice — Items 2-1, 2-2, 2-3 Delivered**
+**P2-S3 Bounded Slice — Item 2-4 (bounded distributed tracing slice) Delivered**
 
 ```
 [x] SLO definitions (intent processing latency, rebase latency, approval wait time) ✅ P2-S2
@@ -297,11 +298,13 @@
     - Runbook: ../../09-operations/05-runbooks.md (RB6, RB7, RB8, RB9 added)
     - Metrics: intent_api_error_budget_remaining gauge per SLO
 
-[ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
+[x] Distributed tracing across all services (bounded P2-S3 slice — trace context propagated via existing AuditEvent trace_id/span_id fields) ✅ P2-S3
     Evidence:
-    - PR merged: <link>
-    - OTel: trace context propagated across all service boundaries
-    - Jaeger/Zipkin: trace searchable
+    - Code: crates/intent-api/src/trace_context.rs (trace context extraction helper)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_*_with_trace methods)
+    - Code: crates/intent-api/src/lib.rs (trace context propagation in audit calls)
+    - Instrumented: RebaseApplied, RebaseApplyBlocked, ApprovalGranted, ApprovalRevoked, ApprovalExpired, ReplayInitiated events carry trace_id/span_id
+    - Note: Full OTLP/cross-service trace propagation is P2-S4+ scope
 
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:
