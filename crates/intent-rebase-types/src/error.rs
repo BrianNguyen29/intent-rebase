@@ -139,4 +139,18 @@ pub enum IntentRebaseError {
     /// Phase 3 P3-S5: Tenant not found by slug
     #[error("tenant not found with slug: {0}")]
     TenantNotFoundBySlug(String),
+
+    /// Phase 3 Batch 3b (P4 bounded slice): Forensic bundle not found
+    #[error("forensic bundle not found: {0}")]
+    ForensicBundleNotFound(Uuid),
+
+    /// Phase 3 Batch 3b (P4 bounded slice): Invalid forensic bundle status transition
+    #[error(
+        "invalid forensic bundle status transition from {from_status} to {to_status}: {reason}"
+    )]
+    InvalidForensicBundleStatusTransition {
+        from_status: String,
+        to_status: String,
+        reason: String,
+    },
 }

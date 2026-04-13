@@ -104,14 +104,14 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P4 |
 | **Title** | Phase 3 Batch 3b — Forensic Replay Bundle |
 | **Purpose** | Deliver forensic bundle capability: bundle model, generation (intent versions + artifacts + audit events + graph state), integrity verification, replay, retention, and export. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (P4 bounded slice delivered) |
 | **Priority** | High |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Finalize forensic bundle model with legal/compliance input; confirm S3 layout |
-| **Progress Notes** | forensic-service scaffold delivered (`forensic-service/` package). Batch 3b gated on Phase 2b exit. |
+| **Suggested Next Step** | Implement bundle generation service (Phase 4 scope) |
+| **Progress Notes** | **P4 bounded slice delivered:** BundleStatus enum with status transition validation, BundleRepository trait with CRUD + status tracking methods, InMemoryBundleRepository implementation, forensic bundle model scaffold extended with status field. forensic-service compiles and tests pass. **This bounded slice scope:** persistence primitives and status tracking only. S3 storage, HTTP API, bundle generation, integrity verification, and replay remain Phase 4 scope. |
 
 **Items:**
-- [ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
+- [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ P4 bounded slice delivered
 - [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
 - [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`)
 - [ ] Bundle integrity verification (hash chain)
