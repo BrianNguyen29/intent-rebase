@@ -338,6 +338,12 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::TenantNotFoundBySlug(_) => {
                 (StatusCode::NOT_FOUND, "TENANT_NOT_FOUND", false)
             }
+            IntentRebaseError::ForensicBundleNotFound(_) => {
+                (StatusCode::NOT_FOUND, "FORENSIC_BUNDLE_NOT_FOUND", false)
+            }
+            IntentRebaseError::InvalidForensicBundleStatusTransition { .. } => {
+                (StatusCode::BAD_REQUEST, "INVALID_BUNDLE_STATUS_TRANSITION", false)
+            }
         };
 
         let body = ApiError {

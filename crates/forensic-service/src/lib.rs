@@ -1,13 +1,15 @@
-//! Forensic Service — Phase 3 Batch 0 scaffold
+//! Forensic Service — Phase 3 Batch 3b (P4 bounded slice)
 //!
 //! This crate is responsible for generating forensic replay bundles
 //! for incident investigation, compliance audits, and legal proceedings.
 //!
-//! **Batch 0 scope (this slice):** type/model scaffolding and minimal module structure only.
-//! **Batch 3 scope:** bundle generation, integrity verification, replay, retention (not yet implemented).
+//! **This bounded slice scope (P4):** BundleStatus tracking, repository trait, in-memory implementation.
+//! **Batch 4 scope:** S3 storage, HTTP API, bundle generation, integrity verification, replay (not yet implemented).
 
 pub mod bundle;
 pub mod bundle_contents;
+pub mod bundle_repo;
 
 pub use bundle::*;
 pub use bundle_contents::*;
+pub use bundle_repo::*;

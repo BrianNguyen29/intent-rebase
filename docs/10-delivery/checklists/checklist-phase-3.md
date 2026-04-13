@@ -384,8 +384,19 @@
 
 ## 5. Forensic Replay Bundle
 
+**P4 Bounded Slice — Items 5-1 Delivered**
+
 ```
-[~] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
+[x] Forensic bundle model + status tracking (P4 bounded slice)
+    Evidence:
+    - Code: crates/forensic-service/src/bundle.rs (BundleStatus enum with Pending/Generating/Ready/Failed)
+    - Code: crates/forensic-service/src/bundle_contents.rs
+    - Code: crates/forensic-service/src/bundle_repo.rs (BundleRepository trait + InMemoryBundleRepository impl)
+    - Code: crates/intent-rebase-types/src/error.rs (ForensicBundleNotFound, InvalidForensicBundleStatusTransition)
+    - Tests: cargo test -p forensic-service --all-features (26 tests pass)
+    - Note: Bounded slice delivers status tracking primitives and in-memory repository only. S3 storage, generation API, integrity verification, and replay are Phase 4 scope.
+
+[ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
     Evidence:
     - Code: crates/forensic-service/src/bundle.rs
     - Code: crates/forensic-service/src/bundle_contents.rs
