@@ -14,7 +14,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
 | [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice P2-S4 delivered) | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | 🔄 In Progress (P3-S3, P3-S4, P3-S5 delivered) | High |
-| [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
+| [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (P4 bounded slice delivered) | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
 | [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | ⬜ Not Started | High |
 | [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ✅ Closed (Phase 3 Batch 1) | Critical |
@@ -170,7 +170,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | [ ] | **Security review: snapshot evidence integrity** — confirm RR-08 fallback snapshot quality is documented and source-tightening is tracked | RR-08: Snapshot Evidence Integrity Under Degraded Event Payloads |
 | [ ] | Security review for all Phase 3 features — sign-off: security-team |  |
 | [ ] | Compliance checklist (SOC2/GDPR if applicable) | |
-| [ ] | Incident response plan documented — doc: `../../14-governance/11-incident-freeze.md`; runbook: `incident-response.md` |  |
+| [x] | **Incident response plan documented** — doc: `../14-governance/14-incident-response-plan.md`; data freeze: `../14-governance/11-incident-freeze.md` | ✅ Delivered |
 | [ ] | Data retention and deletion verified — S3 lifecycle policies enforced | |
 
 ---

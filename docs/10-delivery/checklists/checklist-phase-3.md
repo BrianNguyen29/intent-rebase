@@ -471,30 +471,35 @@
 ## 7. Security Hardening
 
 ```
-[ ] Threat model v2 (updated from Phase 1)
+[x] Threat model v2 (updated from Phase 1)
     Evidence:
-    - PR merged: <link>
-    - Doc: ../../14-governance/06-threat-model-v2.md
+    - Doc: ../14-governance/06-threat-model-v2.md
 
-[ ] Penetration testing completed
+[~] Penetration testing scope defined (bounded planning artifact — pen test not yet executed)
     Evidence:
-    - Report: penetration-test-results.md
-    - All critical/high findings remediated
+    - Doc: ../08-security/06-pen-test-scope.md
+    - Scope: API surfaces, graph, approval, audit, console, WebSocket, NATS, cross-tenant boundaries
+    - Out of scope: social engineering, physical security, source code review, DoS
+    - Note: This is a planning document only. Actual pen testing is Phase 3/4 future work.
 
-[ ] Security review for all Phase 3 features
+[~] Security review for Phase 3 features (bounded — threat model driven)
     Evidence:
-    - Review sign-off: security-team
-    - Findings: none critical/high unmitigated
+    - Doc: ../14-governance/06-threat-model-v2.md (security controls mapping)
+    - Doc: ../08-security/05-compliance-checklist.md (control status tracking)
+    - Note: Full security review gated on pen test results. Threat model review complete.
 
-[ ] Compliance checklist (if applicable: SOC2, GDPR, etc.)
+[x] Compliance checklist (bounded planning artifact — SOC2/GDPR/ISO27001 control tracking)
     Evidence:
-    - Doc: compliance-checklist.md
-    - All items checked
+    - Doc: ../08-security/05-compliance-checklist.md
+    - Scope: SOC2 CC1-CC8, GDPR Art.5/17/30/32/33/35, ISO27001 A.5/A.6/A.8/A.9/A.10/A.12/A.13/A.16/A.18
+    - Note: This is a control-tracking checklist. Certification audit is Phase 4 future work.
 
-[ ] Incident response plan documented
+[x] Incident response plan documented (bounded planning artifact)
     Evidence:
-    - Doc: ../../14-governance/11-incident-freeze.md
-    - Runbook: incident-response.md
+    - Doc: ../14-governance/14-incident-response-plan.md
+    - Scope: SEV1-4, Phases 1-6 (detection through post-incident review), RACI, communication plan
+    - Doc: ../14-governance/11-incident-freeze.md (data freeze procedures — already existing)
+    - Note: Operational runbooks (RB6-RB9) remain in progress per section 3.
 
 [ ] Data retention and deletion verified
     Evidence:
