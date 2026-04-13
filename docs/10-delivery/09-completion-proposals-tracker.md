@@ -149,20 +149,29 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 |-------|-------|
 | **ID** | P6 |
 | **Title** | Phase 3 Batch 4b — Security Hardening |
-| **Purpose** | Complete threat model v2, penetration testing, security review for all Phase 3 features, compliance checklist, incident response plan, and data retention/deletion verification. |
-| **Status** | ⬜ Not Started |
+| **Purpose** | Complete threat model v2, penetration testing, security review for all Phase 3 features, compliance checklist, incident response plan, and data retention/deletion verification — grounded in RR-04..RR-10 residual risks. |
+| **Status** | 🔄 In Progress (threat model v2 delivered; RR-04..RR-10 registered; hardening items remain) |
 | **Priority** | High |
 | **Owner** | Security Team |
-| **Suggested Next Step** | Schedule threat model v2 review; begin penetration testing scope definition |
-| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. **Residual risk register updated** with Phase 2b findings (RR-04–RR-10 in `13-residual-risk-spec.md`). Batch 4b gated on Batch 2 (observability) complete. |
+| **Suggested Next Step** | Scope penetration test to cover RR-04 (event delivery), RR-05 (notification), RR-06 (artifact custody), RR-09 (cross-tenant) as priority targets |
+| **Progress Notes** | **Threat model v2 ✅ delivered** (`06-threat-model-v2.md`). **Residual risk register ✅ updated** with Phase 2b findings (RR-04–RR-10 in `13-residual-risk-spec.md`). RR-04..RR-06, RR-09 are High residual risks requiring monthly review cadence. Batch 4b gated on Batch 2 (observability) complete. |
 
-**Items:**
-- [ ] Threat model v2 (updated from Phase 1) — doc: `../../14-governance/06-threat-model-v2.md`
-- [ ] Penetration testing completed — all critical/high findings remediated
-- [ ] Security review for all Phase 3 features — sign-off: security-team
-- [ ] Compliance checklist (SOC2/GDPR if applicable)
-- [ ] Incident response plan documented — doc: `../../14-governance/11-incident-freeze.md`; runbook: `incident-response.md`
-- [ ] Data retention and deletion verified — S3 lifecycle policies enforced
+**Items — grounded in RR-04..RR-10:**
+
+| Item | Description | Risk Grounding |
+|------|-------------|----------------|
+| [x] | Threat model v2 (updated from Phase 1) — doc: `../../14-governance/06-threat-model-v2.md` | ✅ Delivered — covers RR-04..RR-10 attack surfaces |
+| [ ] | **Penetration testing: event delivery path (JetStream/DLQ)** — verify RR-04 mitigations; confirm no event injection or loss in gap period | RR-04: Event Delivery Failure Detection Latency |
+| [ ] | **Penetration testing: notification delivery path** — verify RR-05 mitigations; confirm operators actually receive alerts | RR-05: Operator Notification Not Actually Delivered |
+| [ ] | **Penetration testing: artifact custody boundary** — verify RR-06 mitigations; confirm quarantine = actual storage isolation | RR-06: Artifact Custody Not Actual (Metadata Only) |
+| [ ] | **Penetration testing: cross-tenant isolation** — verify RR-09 mitigations; active probe for cross-tenant data leakage | RR-09: Cross-Tenant Data Exposure Through Incomplete Enforcement |
+| [ ] | **Penetration testing: trust boundary traversal** — verify RR-10 mitigations; confirm service scaffolds behave as isolated trust domains | RR-10: Moving Trust Boundaries During Phase 3 |
+| [ ] | **Security review: forensic replay bounded semantics** — confirm RR-07 scope is clearly documented in user-facing docs and fails gracefully outside bounds | RR-07: Forensic Replay Bounded to Cooperative Checkpoint Replay |
+| [ ] | **Security review: snapshot evidence integrity** — confirm RR-08 fallback snapshot quality is documented and source-tightening is tracked | RR-08: Snapshot Evidence Integrity Under Degraded Event Payloads |
+| [ ] | Security review for all Phase 3 features — sign-off: security-team |  |
+| [ ] | Compliance checklist (SOC2/GDPR if applicable) | |
+| [ ] | Incident response plan documented — doc: `../../14-governance/11-incident-freeze.md`; runbook: `incident-response.md` |  |
+| [ ] | Data retention and deletion verified — S3 lifecycle policies enforced | |
 
 ---
 

@@ -175,7 +175,10 @@ Mitigations:
 - Automated rotation via secret manager (planned Phase 3)
 
 Residual Score: 5 (Medium)
-Acceptance: Accepted by Security Team Lead, review Jan 2026
+Acceptance: Accepted by Security Team Lead (CISO delegate), review Jan 2026
+Review: Monthly
+Rationale: High residual score warrants close monitoring; 90-day rotation reduces
+           compromise window; automated rotation in Phase 3 further reduces risk
 ```
 
 ### RR-03: Multi-Tenant Resource Quota Circumvention
@@ -215,7 +218,10 @@ Mitigations:
 
 Residual Score: 5 (Medium)
 Acceptance: Pending — gated on JetStream/DLQ production delivery
-Review: Quarterly
+Review: Monthly
+Rationale: Until JetStream/DLQ delivery is production-ready, event loss risk
+           requires monthly reassessment; daily hash-chain verification provides
+           secondary detection but does not substitute for durable transport
 ```
 
 ---
@@ -238,7 +244,10 @@ Mitigations:
 
 Residual Score: 5 (Medium)
 Acceptance: Pending — gated on notification delivery semantics implementation
-Review: Quarterly
+Review: Monthly
+Rationale: Until external delivery semantics are implemented, approval/compensation
+           workflows cannot rely on human notification; monthly review ensures
+           progress tracking toward Phase 3 delivery implementation
 ```
 
 ---
@@ -260,9 +269,11 @@ Mitigations:
 - Artifact-service or equivalent storage boundary (planned Phase 3/4)
 
 Residual Score: 6 (Medium) — logical quarantine separates intent from artifact
-Acceptance: Accepted by Security Team Lead, review Quarterly
+Acceptance: Accepted by Security Team Lead, review Monthly
+Review: Monthly
 Rationale: Logical quarantine sufficient for graph-level integrity; storage custody
-           deferred pending artifact-service implementation
+           deferred pending artifact-service implementation. Monthly review tracks
+           Phase 3/4 progress toward actual custody implementation
 ```
 
 ---
@@ -285,6 +296,7 @@ Mitigations:
 
 Residual Score: 4 (Medium)
 Acceptance: Accepted by Security Team Lead, review Quarterly
+Review: Quarterly
 Rationale: Bounded cooperative replay sufficient for Phase 3 forensic use cases;
            exact runtime reset deferred to Phase 4
 ```
@@ -311,6 +323,7 @@ Mitigations:
 
 Residual Score: 4 (Medium) — fallback snapshots may reduce evidence confidence
 Acceptance: Accepted by Security Team Lead, review Quarterly
+Review: Quarterly
 Rationale: Fallback snapshots acceptable for Phase 3; source tightening before
            high-confidence evidence artifact use
 ```
@@ -337,8 +350,13 @@ Mitigations:
 
 Residual Score: 6 (Medium) — enforcement gaps closed via Phase 3 verification
 Acceptance: Accepted by CISO, review Oct 2026
+Review: Monthly (policy); CISO-granted exception to quarterly review acceptable
+        pending Phase 3 Batch 3a completion — reassess if Batch 3a slips
 Rationale: Verification tests and enforcement layers in Phase 3 Batch 3a;
-           cross-tenant leakage is highest-priority mitigation area
+           cross-tenant leakage is highest-priority mitigation area.
+           Exception granted: Phase 3 Batch 3a delivery is actively in progress
+           and expected to close enforcement gaps before Oct 2026 review date.
+           If Batch 3a slips, review cadence reverts to monthly.
 ```
 
 ---
