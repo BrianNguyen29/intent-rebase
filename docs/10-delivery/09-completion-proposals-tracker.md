@@ -58,11 +58,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress (Slice P2-S4 delivered) |
+| **Status** | 🔄 In Progress (Slice P2-S4 delivered; local baseline numbers captured) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs + CI benchmark job + baseline template) and RB6 rebase-stuck runbook. **Benchmark infrastructure bounded slice delivered:** CI benchmark job wired (`.github/workflows/ci.yml#bench`), criterion reports uploaded as artifacts, baseline template at `docs/11-quality/benchmark-baseline-results.md`. Actual performance targets and production load testing remain gated on full P2 completion. |
+| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs + CI benchmark job + baseline template) and RB6 rebase-stuck runbook. **P2-S5 local baseline numbers captured:** actual `compute_diff_sync` latency measured on local dev hardware (p50 range: 3.78–6.09 µs across 5 benchmark scenarios). Values recorded in `docs/11-quality/benchmark-baseline-results.md`. CI-averaged baseline and production load testing (k6/Artillery) remain gated on P2 full completion. |
 
 **Items:**
 - [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
