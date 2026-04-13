@@ -386,7 +386,7 @@
 
 ## 5. Forensic Replay Bundle
 
-**P4 Bounded Slice — Items 5-1 Delivered**
+**P4 Bounded Slice — Items 5-1, 5-2, 5-5 Delivered**
 
 ```
 [x] Forensic bundle model + status tracking (P4 bounded slice)
@@ -398,25 +398,35 @@
     - Tests: cargo test -p forensic-service --all-features (26 tests pass)
     - Note: Bounded slice delivers status tracking primitives and in-memory repository only. S3 storage, generation API, integrity verification, and replay are Phase 4 scope.
 
-[ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
+[x] Bundle content collection primitives — P4 bounded slice (content collection + integrity hashing)
+    Evidence:
+    - Code: crates/forensic-service/src/bundle_hasher.rs (SHA-256 hashing, BundleIntegrityHash, ContentSectionHash, section hash input types)
+    - Code: crates/forensic-service/src/bundle_generator.rs (BundleGeneratorService, GenerateBundleRequest, BundleGenerationResult)
+    - Tests: cargo test -p forensic-service --all-features (46 tests pass — deterministic hashing, content counts, tamper detection)
+    - Doc: docs/14-governance/10-forensic-bundle.md (updated scope marker)
+    - Note: Bounded slice delivers content collection types (IntentVersionsForHash, ArtifactsForHash, ApprovalsForHash, AuditEventsForHash, PolicySnapshotsForHash) and deterministic SHA-256 integrity hashing. No S3 storage, no generation API, no replay.
+
+[x] Bundle integrity verification (hash chain) — P4 bounded slice
+    Evidence:
+    - Code: crates/forensic-service/src/bundle_hasher.rs (verify_bundle_integrity function, IntegrityVerificationFailure)
+    - Code: crates/forensic-service/src/bundle_generator.rs (BundleGeneratorService::verify_integrity method)
+    - Tests: verify_bundle_integrity passes on clean content, fails on tampered content
+    - Note: Verifies all 5 section hashes (intent_versions, artifacts, approvals, audit_events, policy_snapshots) against recorded integrity hash.
+
+[ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ already done in 5-1
     Evidence:
     - Code: crates/forensic-service/src/bundle.rs
     - Code: crates/forensic-service/src/bundle_contents.rs
     - Schema: infrastructure/migrations/TBD
 
-[ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
+[ ] Bundle generation: collect intent versions, artifacts, audit events, graph state — ✅ partially done (content collection primitives done; actual collection from services is Phase 4)
     Evidence:
-    - S3 layout: forensic-bundles/{tenant}/{bundle_id}/
     - Code: forensic-service bundle builder
 
 [ ] Bundle generation API: `POST /forensic-bundles`
     Evidence:
     - Role: forensic-access
     - Code: intent-api forensic endpoint
-
-[ ] Bundle integrity verification (hash chain)
-    Evidence:
-    - Code: forensic-service integrity verification
 
 [ ] Bundle replay capability (replay bundle to reproduce state)
     Evidence:

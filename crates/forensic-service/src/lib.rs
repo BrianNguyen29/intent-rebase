@@ -10,9 +10,13 @@
 pub mod bundle;
 pub mod bundle_contents;
 pub mod bundle_gen;
+pub mod bundle_hasher;
+pub mod bundle_generator;
 pub mod bundle_repo;
 
 pub use bundle::*;
 pub use bundle_contents::*;
 pub use bundle_gen::*;
+pub use bundle_hasher::*;
+pub use bundle_generator::*;
 pub use bundle_repo::*;
