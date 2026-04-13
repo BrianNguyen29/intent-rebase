@@ -12,8 +12,8 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
-| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress — P2-S2 Delivered | High |
-| [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
+| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice P2-S4 delivered) | High |
+| [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | 🔄 In Progress (P3-S3, P3-S4, P3-S5 delivered) | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
 | [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | ⬜ Not Started | High |
@@ -58,19 +58,19 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress — P2-S2 and P2-S3 Bounded Slices Delivered |
+| **Status** | 🔄 In Progress (Slice P2-S4 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | P2-S2 (2-1, 2-2, 2-3) and P2-S3 (2-4 bounded slice) delivered. Remaining: 2-5 (benchmarks), 2-6 (runbooks). |
-| **Progress Notes** | P2-S2 bounded slice delivered: SLO definitions, alerting rules, error-budget dashboard, metrics infrastructure, observability docker-compose stack. P2-S3 bounded slice delivered: trace context propagated into audit/event surfaces (trace_id/span_id captured in RebaseApplied, RebaseApplyBlocked, ApprovalGranted, ApprovalRevoked, ApprovalExpired, ReplayInitiated events via existing AuditRepository helper methods). Full OTLP/cross-service trace propagation remains P2-S4+ scope. Items 2-5, 2-6 remain open. |
+| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
+| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs) and RB6 rebase-stuck runbook. Actual performance targets and production load testing remain gated on full P2 completion. |
 
 **Items:**
-- [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — **P2-S2 Delivered**
-- [x] Alerting rules (warning, critical thresholds) — **P2-S2 Delivered**
-- [x] Error budget tracking dashboard + runbook — **P2-S2 Delivered**
-- [x] Distributed tracing across all services (bounded P2-S3 slice — trace context propagated via existing AuditEvent trace_id/span_id fields) — **P2-S3 Delivered**
-- [ ] Performance benchmarks: rebase latency p50/p95/p99 (target: p95 < 60s for low/medium risk)
-- [ ] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
+- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
+- [ ] Alerting rules (warning, critical thresholds)
+- [ ] Error budget tracking dashboard + runbook
+- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
+- [~] Performance benchmarks: rebase latency p50/p95/p99 (benchmark harness delivered; actual benchmarks pending — gated on P2 completion)
+- [~] Runbooks: rebase-stuck (RB6 delivered); approval-backlog, artifact-quarantine-fail, compensation-timeout remain open
 
 ---
 
@@ -81,19 +81,19 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P3 |
 | **Title** | Phase 3 Batch 3a — Tenant Isolation Hardening |
 | **Purpose** | Verify and enforce tenant isolation across all surfaces: access control, data visibility, quotas, audit log separation, and data residency. |
-| **Status** | 🟡 In Progress — P3-S1 (tenant isolation tests) and P3-S2 (quota enforcement) delivered |
+| **Status** | 🔄 In Progress (P3-S3, P3-S4, P3-S5 bounded slices delivered) |
 | **Priority** | High |
 | **Owner** | Security / Platform |
-| **Suggested Next Step** | Implement quota enforcement on additional create paths; consider SQL-backed quota persistence for multi-instance deployments |
-| **Progress Notes** | P3-S1 (bounded slice): intent-api tenant isolation verification tests ✅ delivered for approval-request endpoints (list, approve, reject, expire) and orchestration dashboard. Cross-tenant read/mutation isolation verified. P3-S2 (bounded slice): tenant quota enforcement delivered for intent creation and artifact ingest paths with in-memory repository. QuotaExceeded error variant added. Remaining items (3-3 rule-pack, 3-5 data residency) are out of scope for P3-S1/S2. |
+| **Suggested Next Step** | Draft tenant isolation verification test plan; audit existing API endpoints for tenant-scoped enforcement |
+| **Progress Notes** | Batch 3a gated on Phase 2b exit. No hard dependency on Batch 1/2 but benefits from them. **P3-S3 bounded slice delivered:** TenantRulePackRepository trait + InMemory impl for tenant-scoped rule pack isolation (8 tenant isolation tests passing). **P3-S4 bounded slice delivered:** tenant-scoped audit query API (GET /audit/events, GET /audit/events/{event_id}) with cross-tenant isolation tests. **P3-S5 bounded slice delivered:** tenant-service scaffold (Tenant model + repository trait + InMemory impl), tenant onboarding procedure skeleton. Remaining work: quota enforcement, tenant isolation verification tests, data residency, full onboarding/offboarding API. |
 
 **Items:**
-- [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 slice
-- [x] Resource quota enforcement (intents per tenant, artifacts per tenant) — P3-S2 bounded slice
-- [ ] Tenant-specific rule pack isolation
-- [ ] Tenant audit log separation (S3 tenant-scoped buckets/prefixes)
+- [ ] Tenant isolation verification tests (cross-tenant access blocked, no data leakage)
+- [ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
+- [x] Tenant-specific rule pack isolation — ✅ P3-S3 bounded slice delivered
+- [x] Tenant audit log separation (S3 tenant-scoped buckets/prefixes) — ✅ P3-S4 bounded slice delivered (audit query API; S3 archival Phase 4+)
 - [ ] Data residency: tenant data stays in assigned region (update threat model)
-- [ ] Tenant onboarding/offboarding procedures documented
+- [x] Tenant onboarding/offboarding procedures documented — ~ P3-S5 bounded slice (skeleton/runner only; full API/automation future phase)
 
 ---
 

@@ -131,4 +131,12 @@ pub enum IntentRebaseError {
         current: i32,
         limit: i32,
     },
+
+    /// Phase 3 P3-S5: Tenant not found by ID
+    #[error("tenant not found: {0}")]
+    TenantNotFound(Uuid),
+
+    /// Phase 3 P3-S5: Tenant not found by slug
+    #[error("tenant not found with slug: {0}")]
+    TenantNotFoundBySlug(String),
 }

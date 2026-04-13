@@ -10,6 +10,7 @@ members = [
     "crates/rebase-orchestrator",
     "crates/compensation-service",
     "crates/forensic-service",
+    "crates/tenant-service",
     "crates/intent-cli",
 ]
 

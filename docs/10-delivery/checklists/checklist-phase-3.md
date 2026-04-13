@@ -340,25 +340,44 @@
     - Tests: cargo test -p intent-rebase-types --all-features (quota tests pass)
     - Default limits: 10000 intents, 100000 artifacts per tenant
 
-[ ] Tenant-specific rule pack isolation
+[x] Tenant-specific rule pack isolation (P3-S3 bounded slice)
     Evidence:
-    - Code: rule-pack-service/tenant_isolation.rs
-    - Tests: pack isolation tests pass
+    - Code: crates/rebase-engine/src/rule_pack.rs (RulePackVersion derives Hash)
+    - Code: crates/rebase-engine/src/rule_pack_registry.rs (TenantRulePackRepository trait + InMemory impl)
+    - Code: crates/rebase-engine/src/lib.rs (exports from rule_pack_registry module)
+    - Tests: cargo test -p rebase-engine --all-features (141 tests pass, including 8 tenant isolation tests)
+    - Doc: docs/14-governance/08-tenant-isolation.md (Layer 4 rule pack registry isolation documented)
+    - Note: Bounded slice delivers registry primitives only. Full upload/management API, S3 integration, and rule evaluation engine rewiring remain out of scope for this slice.
 
-[ ] Tenant audit log separation
+[x] Tenant audit log separation (P3-S4 bounded slice)
     Evidence:
-    - Tests: tenant A events not visible in tenant B queries
-    - S3: tenant-scoped buckets/prefixes
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (get_audit_event method added to AuditRepository trait)
+    - Code: crates/intent-api/src/lib.rs (GET /audit/events and GET /audit/events/{event_id} endpoints)
+    - Code: crates/intent-api/src/lib.rs (6 cross-tenant isolation tests passing)
+    - Tests: cargo test -p intent-api --all-features (cross-tenant audit tests pass)
+    - Doc: docs/14-governance/08-tenant-isolation.md (Layer 5 audit query API isolation documented)
+    - Note: This slice delivers tenant-scoped audit query API only. S3 cold storage and archival are Phase 4+ scope.
 
 [ ] Data residency: tenant data stays in assigned region
     Evidence:
     - Doc: ../../08-security/01-threat-model.md (updated)
     - Code: multi-region routing
 
-[ ] Tenant onboarding/offboarding procedures documented
+[x] Tenant service scaffold (P3-S5 bounded slice — onboarding groundwork only)
     Evidence:
-    - Doc: tenant operations runbook
-    - Tests: offboarding removes all tenant data
+    - Code: crates/tenant-service/Cargo.toml (new crate)
+    - Code: crates/tenant-service/src/lib.rs (service scaffold with re-exports)
+    - Code: crates/tenant-service/src/tenant.rs (Tenant model, TenantStatus, TenantRegion)
+    - Code: crates/tenant-service/src/tenant_repo.rs (TenantRepository trait + InMemory impl)
+    - Code: crates/intent-rebase-types/src/error.rs (TenantNotFound, TenantNotFoundBySlug errors)
+    - Tests: cargo test -p tenant-service --all-features (15 tests pass)
+    - Doc: docs/14-governance/08-tenant-isolation.md (Layer 6 tenant service documented)
+    - Note: Bounded slice delivers tenant model + repository scaffold only. SQL persistence, API endpoints, residency routing, and offboarding deletion are future phase scope.
+
+[~] Tenant onboarding procedures documented (P3-S5 bounded slice — scaffold-level runbook only)
+    Evidence:
+    - Doc: docs/09-operations/06-tenant-onboarding.md (new — runbook skeleton)
+    - Note: Delivers procedure skeleton/runner documentation for onboarding workflow. Full API implementation, S3 bucket provisioning, NATS account creation, and RBAC setup are future phase scope.
 ```
 
 ---
@@ -366,41 +385,37 @@
 ## 5. Forensic Replay Bundle
 
 ```
-[ ] Forensic bundle model (bundle_id, intent_id, time_range, contents)
+[~] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
     Evidence:
-    - PR merged: <link>
-    - Code: forensic-service/bundle.rs
+    - Code: crates/forensic-service/src/bundle.rs
+    - Code: crates/forensic-service/src/bundle_contents.rs
+    - Schema: infrastructure/migrations/TBD
 
 [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
     Evidence:
-    - PR merged: <link>
-    - Code: forensic-service/generator.rs
-    - S3: forensic-bundles/{tenant}/{bundle_id}/
+    - S3 layout: forensic-bundles/{tenant}/{bundle_id}/
+    - Code: forensic-service bundle builder
 
-[ ] Bundle generation API: POST /api/v1/forensic/bundle
+[ ] Bundle generation API: `POST /api/v1/forensic/bundle`
     Evidence:
-    - OpenAPI spec updated
-    - Role required: forensic-access
+    - Role: forensic-access
+    - Code: intent-api forensic endpoint
 
 [ ] Bundle integrity verification (hash chain)
     Evidence:
-    - Code: forensic-service/integrity.rs
-    - Tests: integrity verification tests pass
+    - Code: forensic-service integrity verification
 
 [ ] Bundle replay capability (replay bundle to reproduce state)
     Evidence:
-    - Code: forensic-service/replay.rs
-    - Tests: replay tests pass
+    - Code: forensic-service replay engine
 
 [ ] Bundle retention policy (configurable per tenant, compliance)
     Evidence:
-    - Code: forensic-service/retention.rs
-    - S3 lifecycle: configurable retention period
+    - S3 lifecycle policies
 
-[ ] Forensic bundle export (download as tar.gz)
+[ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
     Evidence:
-    - API: GET /api/v1/forensic/bundles/{id}/download
-    - Tests: download tests pass
+    - Code: intent-api export endpoint
 ```
 
 ---

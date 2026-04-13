@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// - Major: Breaking changes to rule logic
 /// - Minor: New rules or thresholds, backward compatible
 /// - Patch: Bug fixes, documentation changes
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RulePackVersion(pub String);
 
 impl RulePackVersion {
