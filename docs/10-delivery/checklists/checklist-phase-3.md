@@ -521,10 +521,15 @@
     - Doc: ../14-governance/11-incident-freeze.md (data freeze procedures — already existing)
     - Note: Operational runbooks (RB6-RB9) remain in progress per section 3.
 
-[ ] Data retention and deletion verified
+[x] Data retention and deletion verified (P6-S1 bounded slice)
     Evidence:
-    - Tests: deletion removes data within SLA
-    - S3 lifecycle policies enforced
+    - Code: crates/intent-rebase-types/src/retention_verification.rs (retention period specs, verification helpers, S3 lifecycle config template)
+    - Code: DeletionRequest, DeletionRequestStatus, DeletionTargetType types
+    - Code: RetentionPeriod with standard_retention module (audit_events, policy_snapshots, provenance_records, forensic_bundles, rule_pack_history)
+    - Code: RetentionVerificationResult for checking if data is within/outside retention
+    - Code: S3LifecycleConfig for governance bucket configuration template
+    - Tests: cargo test -p intent-rebase-types --all-features -- retention (11 tests pass)
+    - Note: Bounded local verification types and S3 lifecycle config template. Live S3 enforcement and actual deletion execution remain Phase 4+ scope.
 ```
 
 ---

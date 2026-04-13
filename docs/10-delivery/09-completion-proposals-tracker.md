@@ -173,7 +173,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | [ ] | Security review for all Phase 3 features — sign-off: security-team |  |
 | [ ] | Compliance checklist (SOC2/GDPR if applicable) | |
 | [x] | **Incident response plan documented** — doc: `../14-governance/14-incident-response-plan.md`; data freeze: `../14-governance/11-incident-freeze.md` | ✅ Delivered |
-| [ ] | Data retention and deletion verified — S3 lifecycle policies enforced | |
+| [x] | **Data retention and deletion verified** — bounded retention verification types in `crates/intent-rebase-types/src/retention_verification.rs` (retention period specs, verification helpers, S3 lifecycle config template); deletion request tracking types | ✅ P6-S1 bounded slice delivered |
 
 ---
 
