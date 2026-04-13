@@ -24,3 +24,13 @@
 - % salvageable work preserved
 - mean time to safe rebase preview
 - mean time to apply
+
+## Criterion Benchmark Infrastructure (Bounded Slice)
+
+The `crates/rebase-engine/benches/diff_latency.rs` harness uses [Criterion](https://bheisler.github.io/criterion.rs/book/criterion_rs.html) to measure `compute_diff_sync` latency. This is a **bounded infrastructure slice only** — it verifies the benchmark harness builds and runs.
+
+**CI benchmark job:** `.github/workflows/ci.yml#bench` — runs `cargo bench -p rebase-engine` and uploads criterion HTML reports as artifacts.
+
+**Baseline template:** [benchmark-baseline-results.md](./benchmark-baseline-results.md) — fill in after running benchmarks to capture p50/p95/p99 values.
+
+**Status:** Actual performance targets (p95 < 60s for low/medium risk, etc.) and production load testing remain **gated on P2 completion** (Phase 3 Batch 2 full delivery). See [Phase 3 Checklist: SRE & Observability](../10-delivery/checklists/checklist-phase-3.md#3-sre--observability).
