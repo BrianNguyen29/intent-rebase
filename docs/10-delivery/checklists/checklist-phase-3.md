@@ -446,6 +446,7 @@
 ## 6. Performance Work
 
 **P5-S1 Bounded Slice — Graph traversal benchmark groundwork delivered**
+**P5-S2 Bounded Slice — DB query benchmark groundwork delivered**
 
 ```
 [~] Graph traversal benchmarks (P5-S1 bounded slice — criterion harness delivered; local baseline captured; production optimization gated on P5 full completion)
@@ -455,6 +456,15 @@
     - Local baseline (April 2026): path_chain_20 ~6.6µs, cycle_detection_with_cycle ~390ns, reachable_chain_unlimited_20 ~4.9µs
     - Tests: cargo test -p graph-service --all-features (78 tests pass)
     - Note: Bounded slice delivers harness infrastructure and local baseline numbers. Actual performance targets (traversal < 50ms for 10k node graph), DB query optimization, and production load testing remain gated on P5 full completion.
+
+[~] DB query benchmarks (P5-S2 bounded slice — criterion harness delivered; in-memory baseline; real PostgreSQL benchmarks gated on P5 full completion)
+    Evidence:
+    - Code: crates/intent-service/benches/query_latency.rs (criterion-based, harness=false)
+    - Benchmarks: intent CRUD (create_tx, get, create_version_with_occ, get_versions_by_intent), approval request queries (list_pending_by_intent, list_pending_by_tenant, update_status), policy snapshot queries (list_by_intent, get_latest, get_by_version)
+    - Docs: docs/11-quality/02-evals-and-benchmarks.md (P5-S2 section added)
+    - Docs: docs/11-quality/benchmark-baseline-results.md (DB query section added with TBD baseline template)
+    - Tests: cargo test -p intent-service --all-features (102 tests pass)
+    - Note: Bounded slice delivers harness infrastructure and in-memory baseline numbers. Uses in-memory repositories only — does NOT include actual SQLx/PostgreSQL connection pool overhead. Actual performance targets, production DB connection sizing, and load testing remain gated on P5 full completion.
 
 [ ] Intent diff optimization (caching, parallel computation)
     Evidence:

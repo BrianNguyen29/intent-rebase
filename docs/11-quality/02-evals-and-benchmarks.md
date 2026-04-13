@@ -44,3 +44,22 @@ The `crates/rebase-engine/benches/diff_latency.rs` harness uses [Criterion](http
 **Status:** Graph traversal benchmarks are **bounded groundwork** — they verify the harness infrastructure and capture local baseline numbers. Actual performance targets and production load testing remain gated on P5 completion.
 
 **Baseline template:** [benchmark-baseline-results.md](./benchmark-baseline-results.md)
+
+**DB query benchmark slice (P5 groundwork):** `crates/intent-service/benches/query_latency.rs` measures critical repository operation latency (intent CRUD, approval request queries, policy snapshot queries) using criterion with in-memory fixtures. This is bounded groundwork establishing database query latency baseline numbers before P5 full performance work.
+
+**Scope (bounded P5 groundwork):**
+- Intent CRUD: `create_intent_tx`, `get_intent`, `create_version_with_occ`, `get_versions_by_intent`
+- Approval request queries: `list_pending_by_intent`, `list_pending_by_tenant`, `update_approval_request_status`
+- Policy snapshot queries: `list_by_intent`, `get_latest_by_intent`, `get_by_intent_version`
+
+**Out of scope for this slice:**
+- Real PostgreSQL connection pool benchmarks (requires live DB with connection pool sizing)
+- Production load testing (k6/Artillery)
+- p50/p95/p99 SLA targets (gated on Phase 5 completion)
+
+**CI benchmark job:**
+- `cargo bench -p intent-service --bench query_latency` (DB query latency)
+
+**Status:** DB query benchmarks are **bounded groundwork** — they verify the harness infrastructure and capture local in-memory baseline numbers. Actual performance targets, production database connection sizing, and load testing remain gated on P5 completion.
+
+**Baseline template:** [benchmark-baseline-results.md](./benchmark-baseline-results.md)

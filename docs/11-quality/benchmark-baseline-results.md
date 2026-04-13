@@ -106,9 +106,71 @@ diff_latency_all_sections_change
 
 ---
 
+## DB Query Latency Benchmarks (Local Baseline — April 2026)
+
+These benchmarks measure critical repository operation latency using criterion v0.5.1 with in-memory fixtures.
+**This is a local baseline on developer hardware — NOT production SLA validation.**
+
+> **Note:** This is bounded P5 groundwork. These benchmarks exercise in-memory repository implementations and do NOT include real PostgreSQL connection pool overhead. Actual SQLx query performance benchmarks require a live PostgreSQL instance with proper connection pool sizing.
+
+### Environment
+
+| Field | Value |
+|-------|-------|
+| Rust toolchain | 1.94.0 (4a4ef493e 2026-03-02) |
+| Cargo | 1.94.0 (85eff7c80 2026-01-15) |
+| OS | Linux (local dev machine) |
+| CPU | Local development environment |
+| Date | April 2026 |
+| Criterion version | 0.5.1 |
+| Sample size | 10 samples per benchmark |
+| Measurement | release build, optimized |
+| Repository | In-memory implementations (not actual SQLx/PostgreSQL) |
+
+### Scope (Bounded P5 Groundwork)
+
+| Benchmark | Description |
+|----------|-------------|
+| `intent_create_tx` | Intent creation with initial version (transactional) |
+| `intent_get` | Single intent fetch by ID |
+| `intent_create_version_occ` | Version creation with optimistic concurrency control |
+| `intent_get_versions_by_intent_5` | Fetch all versions for intent (5 versions) |
+| `approval_request_list_pending_by_intent_10` | List pending approval requests by intent (10 requests) |
+| `approval_request_list_pending_by_tenant_20` | List pending approval requests by tenant (20 requests) |
+| `approval_request_update_status` | Update approval request status (approve/reject) |
+| `policy_snapshot_list_by_intent_5` | List policy snapshots by intent (5 snapshots) |
+| `policy_snapshot_get_latest_by_intent_3` | Get latest policy snapshot for intent (3 versions) |
+| `policy_snapshot_get_by_intent_version_5` | Get policy snapshot by intent version (5 versions) |
+
+### Caveats
+
+> **Important:**
+> - In-memory repository benchmarks only — do NOT reflect actual SQLx/PostgreSQL query latency
+> - Real DB benchmarks require live PostgreSQL with connection pool configuration
+> - Production targets and load testing remain Phase 5 scope (P2 + P5 completion required)
+> - Values are criterion mean estimates with 95% confidence intervals — **not** percentile statistics (p50/p95/p99)
+
+### Baseline Values (Pending First Run)
+
+| Benchmark | Mean | CI Low | CI High | Unit | Notes |
+|-----------|------|--------|---------|------|-------|
+| `intent_create_tx` | TBD | TBD | TBD | µs | Run `cargo bench -p intent-service --bench query_latency` |
+| `intent_get` | TBD | TBD | TBD | µs | |
+| `intent_create_version_occ` | TBD | TBD | TBD | µs | |
+| `intent_get_versions_by_intent_5` | TBD | TBD | TBD | µs | |
+| `approval_request_list_pending_by_intent_10` | TBD | TBD | TBD | µs | |
+| `approval_request_list_pending_by_tenant_20` | TBD | TBD | TBD | µs | |
+| `approval_request_update_status` | TBD | TBD | TBD | µs | |
+| `policy_snapshot_list_by_intent_5` | TBD | TBD | TBD | µs | |
+| `policy_snapshot_get_latest_by_intent_3` | TBD | TBD | TBD | µs | |
+| `policy_snapshot_get_by_intent_version_5` | TBD | TBD | TBD | µs | |
+
+---
+
 ## References
 
 - Benchmark harness: `crates/rebase-engine/benches/diff_latency.rs`
+- DB query harness: `crates/intent-service/benches/query_latency.rs`
 - CI benchmark job: `.github/workflows/ci.yml#bench`
 - Phase 3 checklist: `docs/10-delivery/checklists/checklist-phase-3.md#sre--observability`
 - Proposals tracker: `docs/10-delivery/09-completion-proposals-tracker.md#p2`

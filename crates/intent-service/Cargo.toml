@@ -21,3 +21,10 @@ chrono = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "query_latency"
+harness = false
