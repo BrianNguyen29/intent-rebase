@@ -14,7 +14,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
 | [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | ⬜ Not Started | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
-| [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | ⬜ Not Started | High |
+| [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
 | [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | ⬜ Not Started | High |
 | [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ✅ Closed (Phase 3 Batch 1) | Critical |
@@ -104,20 +104,26 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P4 |
 | **Title** | Phase 3 Batch 3b — Forensic Replay Bundle |
 | **Purpose** | Deliver forensic bundle capability: bundle model, generation (intent versions + artifacts + audit events + graph state), integrity verification, replay, retention, and export. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (Phase 3 Batch 3b bounded slice delivered) |
 | **Priority** | High |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Finalize forensic bundle model with legal/compliance input; confirm S3 layout |
-| **Progress Notes** | forensic-service scaffold delivered (`forensic-service/` package). Batch 3b gated on Phase 2b exit. |
+| **Suggested Next Step** | Implement bundle generation API and S3 storage integration |
+| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. |
 
 **Items:**
-- [ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`)
+- [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ Batch 0 scaffold delivered
+- [~] Forensic verification API: `POST /forensic/verify` (bounded request-driven verification) — ✅ Phase 3 Batch 3b bounded slice delivered
 - [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
 - [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`)
 - [ ] Bundle integrity verification (hash chain)
 - [ ] Bundle replay capability (replay bundle to reproduce state)
 - [ ] Bundle retention policy (configurable per tenant, compliance)
 - [ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
+
+**Bounded verification slice (delivered):**
+- Request-driven verification: validates parameters and computes coverage estimates
+- Does NOT claim bundle generation, storage, retrieval, replay, or hash chain integrity
+- Truthful status semantics: `ready`, `incomplete`, `not_supported`
 
 ---
 

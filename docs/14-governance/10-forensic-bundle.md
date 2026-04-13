@@ -1,8 +1,97 @@
 # 10 — Forensic Bundle
 
-**Status:** Proposed  
-**Phase:** Phase 3  
+**Status:** Proposed
+**Phase:** Phase 3
 **Owner:** Security Team
+
+---
+
+## Phase 3 Batch 3b — Bounded Forensic Verification Slice (DELIVERED)
+
+**Bounded scope:** This slice delivers a minimal forensic verification API that
+validates parameters and computes coverage estimates WITHOUT generating actual
+bundles, storing data, or performing replay.
+
+### Delivered (Phase 3 Batch 3b)
+
+- `ForensicVerificationService` trait and `InMemoryForensicVerificationService` implementation
+- Request/Response types: `ForensicVerificationRequest`, `ForensicVerificationResponse`
+- Coverage types: `IntentVersionCoverage`, `ArtifactCoverage`, `AuditEventCoverage`, `PolicySnapshotCoverage`
+- API endpoint: `POST /forensic/verify` (bounded request-driven verification)
+- Integration in `intent-api` with tests
+
+### NOT in This Slice
+
+- Bundle generation (actual data collection) — future phase
+- Bundle storage (S3 or any persistence) — future phase
+- Bundle retrieval (downloading stored bundles) — future phase
+- Bundle replay (reproducing state from a bundle) — future phase
+- Hash chain integrity verification (requires generated bundle) — future phase
+
+### Verification Status Semantics
+
+| Status | Meaning |
+|--------|---------|
+| `ready` | All referenced entities exist and are within time range |
+| `incomplete` | Some entities are missing or time range has gaps |
+| `not_supported` | Verification mode not implemented |
+
+### Request Example
+
+```json
+POST /forensic/verify
+{
+  "tenant_id": "uuid",
+  "intent_id": "uuid",
+  "time_range": {
+    "start": "2025-01-01T00:00:00Z",
+    "end": "2025-01-31T23:59:59Z"
+  },
+  "purpose": "incident_investigation",
+  "include_artifacts": true,
+  "include_audit_events": true,
+  "include_policy_snapshots": true
+}
+```
+
+### Response Example
+
+```json
+{
+  "verification_id": "uuid",
+  "verified_at": "2025-04-13T12:00:00Z",
+  "status": "ready",
+  "status_reason": "All referenced entities exist and are within time range",
+  "tenant_id": "uuid",
+  "intent_id": "uuid",
+  "time_range": { "start": "...", "end": "..." },
+  "purpose": "incident_investigation",
+  "intent_version_coverage": {
+    "intent_exists": true,
+    "intent_id": "uuid",
+    "version_count": 5,
+    "earliest_version": "...",
+    "latest_version": "...",
+    "has_artifact_traceability": true
+  },
+  "artifact_coverage": {
+    "artifact_count": 10,
+    "artifacts_with_provenance": 8,
+    "coverage_complete": false
+  },
+  "audit_event_coverage": {
+    "event_count": 100,
+    "time_range_complete": true,
+    "first_event": "...",
+    "last_event": "..."
+  },
+  "policy_snapshot_coverage": {
+    "snapshot_count": 3,
+    "coverage_complete": true
+  },
+  "estimated_bundle_item_count": 118
+}
+```
 
 ---
 
@@ -87,19 +176,19 @@ class ForensicBundleVerifier:
         manifest_hash = compute_hash(bundle.manifest)
         if manifest_hash != bundle.integrity.manifest_hash:
             return VerificationResult(False, "Manifest hash mismatch")
-        
+
         # 2. Verify each contained file matches recorded hash
         for file in bundle.files:
             recorded_hash = bundle.get_hash(file)
             actual_hash = compute_hash(file)
             if actual_hash != recorded_hash:
                 return VerificationResult(False, f"File hash mismatch: {file.path}")
-        
+
         # 3. Verify cross-references (intent versions exist, artifacts exist)
         for intent_ref in bundle.intent_references:
             if not bundle.contains_intent(intent_ref):
                 return VerificationResult(False, f"Referenced intent not in bundle: {intent_ref}")
-        
+
         return VerificationResult(True, "Bundle integrity verified")
 ```
 

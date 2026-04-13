@@ -180,6 +180,9 @@ pub struct AppState {
     /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
     /// compensation actions via HTTP accepted flow.
     pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
+    /// Phase 3 Batch 3b (bounded slice): Forensic verification service for
+    /// verifying forensic bundle feasibility without generating actual bundles.
+    pub forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     pub start_time: Instant,
 }
 
@@ -3966,6 +3969,246 @@ async fn ingest_artifact(
     ))
 }
 
+// ============================================================================
+// Forensic Verification Handler (Phase 3 Batch 3b bounded slice)
+// ============================================================================
+
+/// Request body for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Verifies forensic bundle feasibility
+/// for the given parameters WITHOUT generating actual bundles or storing data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent ID to verify forensic coverage for
+    pub intent_id: Uuid,
+    /// Time range to verify
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of the verification
+    #[serde(default)]
+    pub purpose: forensic_service::VerificationPurpose,
+    /// Whether to verify artifact coverage
+    #[serde(default = "default_include_artifacts")]
+    pub include_artifacts: bool,
+    /// Whether to verify audit event coverage
+    #[serde(default = "default_include_audit_events")]
+    pub include_audit_events: bool,
+    /// Whether to verify policy snapshot coverage
+    #[serde(default = "default_include_policy_snapshots")]
+    pub include_policy_snapshots: bool,
+}
+
+fn default_include_artifacts() -> bool {
+    true
+}
+
+fn default_include_audit_events() -> bool {
+    true
+}
+
+fn default_include_policy_snapshots() -> bool {
+    true
+}
+
+/// Time range for forensic verification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationTimeRange {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Reports what a forensic bundle WOULD contain
+/// if generated with the given parameters. This is verification/reporting ONLY.
+///
+/// **Truthful semantics:**
+/// - `status: "ready"` means all referenced entities exist and are within time range
+/// - `status: "incomplete"` means some entities are missing or time range has gaps
+/// - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+///
+/// **NOT claimed:**
+/// - Actual bundle generation (no data is collected)
+/// - Bundle storage (no S3 or persistence writes)
+/// - Bundle retrieval (no stored bundle download)
+/// - Bundle replay (no state reproduction)
+/// - Hash chain integrity (requires generated bundle)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationResponse {
+    /// Unique identifier for this verification
+    pub verification_id: Uuid,
+    /// When verification was performed
+    pub verified_at: chrono::DateTime<chrono::Utc>,
+    /// Verification status
+    pub status: forensic_service::VerificationStatus,
+    /// Human-readable status reason
+    pub status_reason: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Time range that was verified
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of verification
+    pub purpose: forensic_service::VerificationPurpose,
+    /// Intent version coverage
+    pub intent_version_coverage: ForensicIntentVersionCoverage,
+    /// Artifact coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_coverage: Option<ForensicArtifactCoverage>,
+    /// Audit event coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_event_coverage: Option<ForensicAuditEventCoverage>,
+    /// Policy snapshot coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_snapshot_coverage: Option<ForensicPolicySnapshotCoverage>,
+    /// Estimated total items that would be in a full bundle
+    pub estimated_bundle_item_count: usize,
+}
+
+/// Intent version coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicIntentVersionCoverage {
+    /// Whether intent exists
+    pub intent_exists: bool,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Number of versions within the time range
+    pub version_count: usize,
+    /// Earliest version timestamp within range
+    pub earliest_version: Option<chrono::DateTime<chrono::Utc>>,
+    /// Latest version timestamp within range
+    pub latest_version: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether all versions have artifact traceability
+    pub has_artifact_traceability: bool,
+}
+
+/// Artifact coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicArtifactCoverage {
+    /// Number of artifacts found for the intent
+    pub artifact_count: usize,
+    /// Number of artifacts with complete provenance chain
+    pub artifacts_with_provenance: usize,
+    /// Whether artifact coverage is complete
+    pub coverage_complete: bool,
+}
+
+/// Audit event coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicAuditEventCoverage {
+    /// Number of audit events found for the tenant in time range
+    pub event_count: usize,
+    /// Whether the time range has full coverage (no gaps)
+    pub time_range_complete: bool,
+    /// First event timestamp in range
+    pub first_event: Option<chrono::DateTime<chrono::Utc>>,
+    /// Last event timestamp in range
+    pub last_event: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Policy snapshot coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicPolicySnapshotCoverage {
+    /// Number of policy snapshots found for the intent
+    pub snapshot_count: usize,
+    /// Whether snapshots cover all versions
+    pub coverage_complete: bool,
+}
+
+impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificationResponse {
+    fn from(resp: forensic_service::ForensicVerificationResponse) -> Self {
+        Self {
+            verification_id: resp.verification_id,
+            verified_at: resp.verified_at,
+            status: resp.status,
+            status_reason: resp.status_reason,
+            tenant_id: resp.tenant_id,
+            intent_id: resp.intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: resp.time_range.start,
+                end: resp.time_range.end,
+            },
+            purpose: resp.purpose,
+            intent_version_coverage: ForensicIntentVersionCoverage {
+                intent_exists: resp.intent_version_coverage.intent_exists,
+                intent_id: resp.intent_version_coverage.intent_id,
+                version_count: resp.intent_version_coverage.version_count,
+                earliest_version: resp.intent_version_coverage.earliest_version,
+                latest_version: resp.intent_version_coverage.latest_version,
+                has_artifact_traceability: resp.intent_version_coverage
+                    .has_artifact_traceability,
+            },
+            artifact_coverage: resp.artifact_coverage.map(|ac| ForensicArtifactCoverage {
+                artifact_count: ac.artifact_count,
+                artifacts_with_provenance: ac.artifacts_with_provenance,
+                coverage_complete: ac.coverage_complete,
+            }),
+            audit_event_coverage: resp.audit_event_coverage.map(|aec| ForensicAuditEventCoverage {
+                event_count: aec.event_count,
+                time_range_complete: aec.time_range_complete,
+                first_event: aec.first_event,
+                last_event: aec.last_event,
+            }),
+            policy_snapshot_coverage: resp
+                .policy_snapshot_coverage
+                .map(|psc| ForensicPolicySnapshotCoverage {
+                    snapshot_count: psc.snapshot_count,
+                    coverage_complete: psc.coverage_complete,
+                }),
+            estimated_bundle_item_count: resp.estimated_bundle_item_count,
+        }
+    }
+}
+
+/// POST /forensic/verify - Verify forensic bundle feasibility
+///
+/// Phase 3 Batch 3b (bounded slice): Verifies whether a forensic bundle can be
+/// generated for the given parameters WITHOUT generating actual bundles.
+///
+/// **Bounded request-driven verification:**
+/// - Accepts verification parameters (intent_id, time_range, purpose)
+/// - Validates entity existence and coverage
+/// - Reports what a bundle WOULD contain (counts, not actual data)
+/// - Does NOT generate bundles, store data, or perform replay
+///
+/// **Truthful status semantics:**
+/// - `ready`: All referenced entities exist and are within time range
+/// - `incomplete`: Some entities are missing or time range has gaps
+/// - `not_supported`: Verification mode not implemented
+///
+/// **NOT claimed:**
+/// - Bundle generation (actual data collection)
+/// - Bundle storage (S3 or any persistence)
+/// - Bundle retrieval (downloading stored bundles)
+/// - Bundle replay (reproducing state from a bundle)
+/// - Hash chain integrity verification (requires generated bundle)
+async fn verify_forensic_bundle(
+    State(state): State<AppState>,
+    Json(request): Json<ForensicVerificationRequest>,
+) -> Result<Json<ForensicVerificationResponse>, ApiErrorResponse> {
+    let service_request = forensic_service::ForensicVerificationRequest {
+        tenant_id: request.tenant_id,
+        intent_id: request.intent_id,
+        time_range: forensic_service::VerificationTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
+    };
+
+    let response = state
+        .forensic_service
+        .verify(service_request)
+        .await;
+
+    Ok(Json(ForensicVerificationResponse::from(response)))
+}
+
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -3983,6 +4226,7 @@ pub fn build_router(
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
 ) -> Router {
     let state = AppState {
         service,
@@ -3995,6 +4239,7 @@ pub fn build_router(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
+        forensic_service,
         start_time: Instant::now(),
     };
 
@@ -4147,6 +4392,8 @@ pub fn build_router(
             "/policy-snapshots/intent/{intent_id}",
             get(list_policy_snapshots),
         )
+        // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/verify", post(verify_forensic_bundle))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -4205,6 +4452,7 @@ pub fn build_router_with_sql_audit_and_approval(
     orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -4226,6 +4474,7 @@ pub fn build_router_with_sql_audit_and_approval(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
+        forensic_service,
     )
 }
 
@@ -4273,6 +4522,8 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic verification service for tests
+        let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
         AppState {
             service,
             graph_service: graph_svc,
@@ -4284,6 +4535,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_service: forensic_svc,
             start_time: Instant::now(),
         }
     }
@@ -4873,6 +5125,8 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
             start_time: Instant::now(),
         };
 
@@ -5077,6 +5331,8 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
             start_time: Instant::now(),
         };
 
@@ -6228,6 +6484,8 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: Some(publisher),
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
             start_time: Instant::now(),
         }
     }
@@ -6371,6 +6629,8 @@ mod tests {
             approval_repo,
             policy_snapshot_repo,
             event_publisher,
+            Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -6449,6 +6709,8 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
             start_time: Instant::now(),
         };
 
@@ -7300,6 +7562,8 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
             start_time: Instant::now(),
         }
     }
@@ -7917,5 +8181,177 @@ mod tests {
 
         assert_eq!(result2.side_effect_summary.total, 1);
         assert_eq!(result2.side_effects[0].effect_type, "effect_2");
+    }
+
+    // === Forensic Verification Tests ===
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_returns_ready_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = verify_forensic_bundle(State(state), Json(request))
+            .await
+            .expect("Should return verification result");
+
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
+            },
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
+
+        let request: ForensicVerificationRequest =
+            serde_json::from_str(json).expect("Should deserialize");
+
+        assert_eq!(
+            request.purpose,
+            forensic_service::VerificationPurpose::ComplianceAudit
+        );
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_response_serialization() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let result = verify_forensic_bundle(State(state), Json(request))
+            .await
+            .expect("Should return verification result");
+
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"ready\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        // artifact_coverage should be present since include_artifacts=true
+        assert!(json.contains("\"artifact_coverage\""));
+        // policy_snapshot_coverage should be None since include_policy_snapshots=false
+        assert!(!json.contains("\"policy_snapshot_coverage\""));
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_with_incomplete_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: false,
+            include_audit_events: false,
+            include_policy_snapshots: false,
+        };
+
+        let result = verify_forensic_bundle(State(state), Json(request))
+            .await
+            .expect("Should return verification result");
+
+        // In-memory service returns ready by default
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
+        // But with no coverage data since all includes are false
+        assert_eq!(result.estimated_bundle_item_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_forensic_verification_purpose_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::IncidentInvestigation)
+                .unwrap(),
+            "\"incident_investigation\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::ComplianceAudit)
+                .unwrap(),
+            "\"compliance_audit\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::Legal)
+                .unwrap(),
+            "\"legal\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_verification_status_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Ready).unwrap(),
+            "\"ready\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Incomplete).unwrap(),
+            "\"incomplete\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::NotSupported).unwrap(),
+            "\"not_supported\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_intent_version_coverage_serialization() {
+        let coverage = ForensicIntentVersionCoverage {
+            intent_exists: true,
+            intent_id: Uuid::new_v4(),
+            version_count: 5,
+            earliest_version: Some(chrono::Utc::now()),
+            latest_version: Some(chrono::Utc::now()),
+            has_artifact_traceability: true,
+        };
+
+        let json = serde_json::to_string(&coverage).expect("Should serialize");
+        assert!(json.contains("\"intent_exists\":true"));
+        assert!(json.contains("\"version_count\":5"));
+        assert!(json.contains("\"has_artifact_traceability\":true"));
     }
 }

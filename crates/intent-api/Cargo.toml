@@ -10,6 +10,7 @@ repository.workspace = true
 intent-service = { path = "../intent-service" }
 graph-service = { path = "../graph-service" }
 compensation-service = { path = "../compensation-service" }
+forensic-service = { path = "../forensic-service" }
 intent-rebase-types = { path = "../intent-rebase-types" }
 rebase-engine = { path = "../rebase-engine" }
 rebase-orchestrator = { path = "../rebase-orchestrator" }

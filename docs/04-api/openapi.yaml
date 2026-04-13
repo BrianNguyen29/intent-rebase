@@ -2,22 +2,22 @@
 #
 # Note: This spec is the canonical source for implemented HTTP endpoints.
 # HTTP framework: lightweight approach — see docs for decision rationale.
-# Phase coverage: Phase 1 + Phase 3 Batch 1 (see implemented sections below).
+# Phase coverage: Phase 1 + Phase 3 Batch 1 + Phase 3 Batch 3b bounded slices (see implemented sections below).
 
 openapi: 3.1.0
 info:
   title: Intent Rebase Engine API
   description: |
     Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
-    
+
     ## Implemented scopes
-    
+
     ### Phase 1 — Core Control Plane
     - Health & observability endpoints
     - Intent lifecycle (create/read/version)
     - Intent analysis (validate, diff, rebase-preview)
     - Dependency graph CRUD
-    
+
     ### Phase 3 Batch 1 — Compensation + Orchestration
     - Side effect capture and query
     - Compensation action CRUD and approve/waive/execute
@@ -26,30 +26,35 @@ info:
     - Orchestration dashboard and coordination view
     - Orchestration dry-run planner and batch approve/reapprove/execute
     - Single-shot orchestration runtime (HTTP + CLI)
-    
+
+    ### Phase 3 Batch 3b — Forensic Replay Verification (bounded slice)
+    - Request-driven forensic bundle feasibility verification
+    - Coverage estimates for intent versions, artifacts, audit events, and policy snapshots
+    - Read-only verification/reporting only (no generation, storage, download, or replay)
+
     ## Bounded scope note
     Phase 3 Batch 1 delivers bounded slices of the compensation engine.
     Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
-    
+
     ## Implemented (Phase 1)
-    
+
     ### Health & Observability
     - GET /health — Service health check
     - GET /ready — Service readiness check
     - GET /metrics — Prometheus metrics endpoint
-    
+
     ### Intent Lifecycle
     - POST /intents — Create intent with initial version
     - GET /intents/{intent_id} — Get intent head (current version)
     - POST /intents/{intent_id}/versions — Create new version
     - GET /intents/{intent_id}/versions — List all versions (descending order)
     - GET /intents/{intent_id}/versions/{version_number} — Get specific version
-    
+
     ### Intent Analysis
     - POST /v1/intents/validate — Validate intent payload structure
     - POST /intents/{intent_id}/diff — Compute diff between two versions
     - POST /intents/{intent_id}/rebase-preview — Generate rebase preview plan
-    
+
     ### Dependency Graph (Phase 1 - CRUD only)
     - POST /v1/graph/nodes — Create graph node
     - GET /v1/graph/nodes — List graph nodes (with optional filters)
@@ -57,7 +62,7 @@ info:
     - POST /v1/graph/edges — Create graph edge
     - GET /v1/graph/edges — List graph edges (with optional filters)
     - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
-    
+
     ### Phase 3 Batch 1 (groundwork + bounded execution slice)
     - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
     - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
@@ -197,6 +202,29 @@ info:
     - Canonical public `risk_tier` field in rebase preview/apply responses
     - Bounded replay endpoint (`POST /intents/{intent_id}/replay`) — cooperative signal-based replay, not native Temporal reset
 
+    ## Phase 3 Batch 3b: Forensic Replay Verification (Bounded Slice)
+    - **POST /forensic/verify** — Request-driven verification of forensic bundle feasibility
+    - **Bounded request-driven verification semantics:**
+      - Accepts verification parameters (intent_id, time_range, purpose)
+      - Validates entity existence and coverage
+      - Reports what a bundle WOULD contain (counts, not actual data)
+    - **Truthful status semantics:**
+      - `ready`: All referenced entities exist and are within time range
+      - `incomplete`: Some entities are missing or time range has gaps
+      - `not_supported`: Verification mode not implemented
+      - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+    - **NOT claimed:**
+      - Bundle generation (actual data collection)
+      - Bundle storage (S3 or any persistence)
+      - Bundle retrieval (downloading stored bundles)
+      - Bundle replay (reproducing state from a bundle)
+      - Hash chain integrity verification (requires generated bundle)
+    - **Verification coverage includes (request-driven, no storage):**
+      - Intent version coverage: intent_exists, version_count, time range, artifact traceability
+      - Artifact coverage: artifact_count, provenance completeness (when requested)
+      - Audit event coverage: event_count, time range coverage (when requested)
+      - Policy snapshot coverage: snapshot_count, version coverage (when requested)
+
     ## Still Open (broader than current bounded slices)
     - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
     - Approval revalidation hooks and policy snapshot lifecycle
@@ -229,6 +257,8 @@ servers:
     description: Dependency graph CRUD operations
   - name: compensation
     description: Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
+  - name: forensic
+    description: Forensic verification endpoints (Phase 3 Batch 3b bounded slice)
 
 paths:
   /intents:
@@ -502,12 +532,12 @@ paths:
         The `affected_items.status` field indicates whether classification succeeded:
         - `available`: Graph data found and items classified
         - `unavailable`: Graph node not found or service unavailable
-        
+
         **Phase 1 PR #17: Apply/checkpoint groundwork (internal typed contracts, not executed):**
         Rebase engine internals now use typed readiness contracts for checkpoint selection,
         approval revalidation, and compensation planning, but those deferred fields are
         not exposed in the Phase 1 preview response yet.
-        
+
         **Apply endpoint NOT implemented in Phase 1** — POST /intents/{id}/rebase-apply deferred to Phase 2.
 
         **Reliability:** The endpoint remains functional even when graph coverage is incomplete.
@@ -2162,6 +2192,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /forensic/verify:
+    post:
+      tags:
+        - forensic
+      summary: Verify forensic bundle feasibility
+      description: |
+        Phase 3 Batch 3b (bounded slice): Verifies whether a forensic bundle can be
+        generated for the given parameters WITHOUT generating actual bundles.
+
+        **Bounded request-driven verification:**
+        - Accepts verification parameters (intent_id, time_range, purpose)
+        - Validates entity existence and coverage
+        - Reports what a bundle WOULD contain (counts, not actual data)
+        - Does NOT generate bundles, store data, or perform replay
+
+        **Truthful status semantics:**
+        - `ready`: All referenced entities exist and are within time range
+        - `incomplete`: Some entities are missing or time range has gaps
+        - `not_supported`: Verification mode not implemented
+        - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+
+        **NOT claimed:**
+        - Bundle generation (actual data collection)
+        - Bundle storage (S3 or any persistence)
+        - Bundle retrieval (downloading stored bundles)
+        - Bundle replay (reproducing state from a bundle)
+        - Hash chain integrity verification (requires generated bundle)
+      operationId: verifyForensicBundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicVerificationRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicVerificationResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----
@@ -2653,12 +2737,12 @@ components:
       type: object
       description: |
         Phase 1 PR #16: Graph-integrated rebase plan response.
-        
+
         Exposes planner summary fields plus graph-integrated affected items when available.
         The `affected_items.status` field indicates whether graph classification succeeded:
         - `available`: Graph data was found and affected items were classified
         - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
-        
+
         Phase 1 PR #17 kept apply/checkpoint typed contracts internal to the planner.
         This preview response now additionally exposes the bounded read-only
         `compensation_planning` summary, while execution contracts remain internal.
@@ -2820,11 +2904,11 @@ components:
       type: object
       description: |
         Phase 2b bounded replay slice request.
-        
+
         Bounded checkpoint selection strategy:
         - If `checkpoint_id` is provided, use that specific checkpoint
         - Otherwise, use the most recent active checkpoint for the workflow
-        
+
         Note: This is cooperative signal-based replay, NOT native Temporal reset.
       required: [to_version]
       properties:
@@ -2845,7 +2929,7 @@ components:
       type: object
       description: |
         Phase 2b bounded replay slice response.
-        
+
         Reflects cooperative signal-based replay semantics using existing
         runtime/checkpoint seams. This is NOT native Temporal reset.
       required:
@@ -2892,12 +2976,12 @@ components:
       type: object
       description: |
         Graph-integrated affected items preview (Phase 1 PR #16).
-        
+
         Contains classified affected items from the dependency graph when available.
         The `status` field indicates data availability:
         - `available`: Graph classification succeeded
         - `unavailable`: Graph node not found or graph service unavailable
-        
+
         Note: Compensation action generation is a Phase 2 feature (see `deferred.compensation`).
       required: [status]
       properties:
@@ -4674,6 +4758,145 @@ components:
           type: object
           nullable: true
           description: Execution result context captured after executor runs
+
+    # ----- Forensic Verification Schemas (Phase 3 Batch 3b) -----
+    ForensicVerificationRequest:
+      type: object
+      required: [tenant_id, intent_id, time_range]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID for multi-tenancy isolation
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to verify forensic coverage for
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: Start of time range
+            end:
+              type: string
+              format: date-time
+              description: End of time range
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+          default: incident_investigation
+          description: Purpose of the verification
+        include_artifacts:
+          type: boolean
+          default: true
+          description: Whether to verify artifact coverage
+        include_audit_events:
+          type: boolean
+          default: true
+          description: Whether to verify audit event coverage
+        include_policy_snapshots:
+          type: boolean
+          default: true
+          description: Whether to verify policy snapshot coverage
+
+    ForensicVerificationResponse:
+      type: object
+      properties:
+        verification_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this verification
+        verified_at:
+          type: string
+          format: date-time
+          description: When verification was performed
+        status:
+          type: string
+          enum: [ready, incomplete, not_supported]
+          description: Verification status
+        status_reason:
+          type: string
+          description: Human-readable status reason
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+        intent_version_coverage:
+          type: object
+          properties:
+            intent_exists:
+              type: boolean
+            intent_id:
+              type: string
+              format: uuid
+            version_count:
+              type: integer
+            earliest_version:
+              type: string
+              format: date-time
+              nullable: true
+            latest_version:
+              type: string
+              format: date-time
+              nullable: true
+            has_artifact_traceability:
+              type: boolean
+        artifact_coverage:
+          type: object
+          nullable: true
+          properties:
+            artifact_count:
+              type: integer
+            artifacts_with_provenance:
+              type: integer
+            coverage_complete:
+              type: boolean
+        audit_event_coverage:
+          type: object
+          nullable: true
+          properties:
+            event_count:
+              type: integer
+            time_range_complete:
+              type: boolean
+            first_event:
+              type: string
+              format: date-time
+              nullable: true
+            last_event:
+              type: string
+              format: date-time
+              nullable: true
+        policy_snapshot_coverage:
+          type: object
+          nullable: true
+          properties:
+            snapshot_count:
+              type: integer
+            coverage_complete:
+              type: boolean
+        estimated_bundle_item_count:
+          type: integer
+          description: Estimated total items that would be in a full bundle
 
     Error:
       type: object
