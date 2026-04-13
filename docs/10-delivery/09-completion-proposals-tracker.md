@@ -62,14 +62,14 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs) and RB6 rebase-stuck runbook. Actual performance targets and production load testing remain gated on full P2 completion. |
+| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs + CI benchmark job + baseline template) and RB6 rebase-stuck runbook. **Benchmark infrastructure bounded slice delivered:** CI benchmark job wired (`.github/workflows/ci.yml#bench`), criterion reports uploaded as artifacts, baseline template at `docs/11-quality/benchmark-baseline-results.md`. Actual performance targets and production load testing remain gated on full P2 completion. |
 
 **Items:**
 - [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
 - [ ] Alerting rules (warning, critical thresholds)
 - [ ] Error budget tracking dashboard + runbook
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
-- [~] Performance benchmarks: rebase latency p50/p95/p99 (benchmark harness delivered; actual benchmarks pending — gated on P2 completion)
+- [~] Performance benchmarks: rebase latency p50/p95/p99 — **bounded slice delivered:** benchmark harness infrastructure (CI job + criterion reports + baseline template). Actual targets and production load testing remain gated on P2 full completion.
 - [~] Runbooks: rebase-stuck (RB6 delivered); approval-backlog, artifact-quarantine-fail, compensation-timeout remain open
 
 ---
