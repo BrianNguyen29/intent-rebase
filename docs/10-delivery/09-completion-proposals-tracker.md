@@ -104,19 +104,20 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P4 |
 | **Title** | Phase 3 Batch 3b — Forensic Replay Bundle |
 | **Purpose** | Deliver forensic bundle capability: bundle model, generation (intent versions + artifacts + audit events + graph state), integrity verification, replay, retention, and export. |
-| **Status** | 🔄 In Progress (P4 bounded slice delivered — content collection + integrity hashing) |
+| **Status** | 🔄 In Progress (P4 bounded slice delivered — content collection + integrity hashing + bounded replay verification) |
 | **Priority** | High |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Implement bundle generation service (Phase 4 scope — collection from actual services, S3 storage, API) |
-| **Progress Notes** | **P4 bounded slice delivered:** BundleStatus enum with status transition validation, BundleRepository trait with CRUD + status tracking methods, InMemoryBundleRepository implementation, forensic bundle model scaffold extended with status field. **Content collection + integrity hashing (P4 bounded slice):** bundle_hasher.rs (SHA-256 hashing, BundleIntegrityHash, section hash input types, verify_bundle_integrity), bundle_generator.rs (BundleGeneratorService, GenerateBundleRequest, BundleGenerationResult). 46 tests pass (deterministic hashing, content counts, tamper detection). **This bounded slice scope:** persistence primitives, status tracking, and content collection types with deterministic integrity hashing only. S3 storage, HTTP API, actual content collection from services, and replay remain Phase 4 scope. |
+| **Suggested Next Step** | Implement bundle generation service (Phase 4 scope — collection from actual services, S3 storage, API, full replay runtime) |
+| **Progress Notes** | **P4 bounded slice delivered:** BundleStatus enum with status transition validation, BundleRepository trait with CRUD + status tracking methods, InMemoryBundleRepository implementation, forensic bundle model scaffold extended with status field. **Content collection + integrity hashing (P4 bounded slice):** bundle_hasher.rs (SHA-256 hashing, BundleIntegrityHash, section hash input types, verify_bundle_integrity), bundle_generator.rs (BundleGeneratorService, GenerateBundleRequest, BundleGenerationResult). 46 tests pass (deterministic hashing, content counts, tamper detection). **Bounded replay verification (P4 bounded slice):** bundle_replay.rs (BundleReplayService, VerifyBundleReplayRequest, VerifyBundleReplayResponse, ReplayVerificationReport, ReplaySectionResult). 66 tests pass total in forensic-service. **This bounded slice scope:** persistence primitives, status tracking, content collection types with deterministic integrity hashing, and bounded replay verification surface (read-only integrity verification and reconstruction report). S3 storage, HTTP API, actual content collection from services, and full runtime replay remain Phase 4 scope. |
 
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ P4 bounded slice delivered
 - [x] Bundle content collection primitives + integrity hashing — ✅ P4 bounded slice delivered
 - [x] Bundle integrity verification (hash chain) — ✅ P4 bounded slice delivered (verify_bundle_integrity for all 5 sections)
+- [x] Bounded replay verification surface (read-only integrity verification + reconstruction report) — ✅ P4 bounded slice delivered
 - [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state — Phase 4 scope
 - [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`) — Phase 4 scope
-- [ ] Bundle replay capability (replay bundle to reproduce state) — Phase 4 scope
+- [ ] Full bundle replay capability (replay bundle to reproduce state in runtime) — Phase 4 scope
 - [ ] Bundle retention policy (configurable per tenant, compliance) — Phase 4 scope
 - [ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download` — Phase 4 scope
 
