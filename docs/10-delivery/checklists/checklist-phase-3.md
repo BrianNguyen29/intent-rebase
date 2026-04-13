@@ -436,9 +436,14 @@
     Evidence:
     - S3 lifecycle policies
 
-[ ] Forensic bundle export: `GET /forensic-bundles/{bundle_id}/download`
+[x] Forensic bundle export: `GET /forensic-bundles/{bundle_id}/download` — P4 bounded slice
     Evidence:
-    - Code: intent-api export endpoint
+    - Code: crates/forensic-service/src/bundle_gen.rs (download_bundle method)
+    - Code: crates/intent-api/src/lib.rs (download_forensic_bundle handler)
+    - Code: crates/intent-api/src/lib.rs (DownloadForensicBundleQuery, wired route)
+    - Tests: cargo test -p intent-api --all-features (4 new tests: download_success, not_found, wrong_tenant, pretty_json)
+    - OpenAPI: docs/04-api/openapi.yaml (GET /forensic-bundles/{bundle_id}/download endpoint + schemas)
+    - Note: Bounded local/exportable download path - returns bundle manifest as downloadable JSON. No S3 integration. No content collection. Not a full production storage pipeline.
 ```
 
 ---

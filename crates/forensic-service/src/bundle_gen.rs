@@ -42,6 +42,8 @@ pub enum BundleGenError {
         to: BundleStatus,
         reason: String,
     },
+    /// Serialization error (e.g., JSON encoding failure)
+    Serialization(String),
     /// Repository-level error
     Repository(IntentRebaseError),
 }
@@ -274,6 +276,23 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             .list_by_tenant_and_status(tenant_id, status)
             .await
             .map_err(BundleGenError::Repository)
+    }
+
+    /// Download a bundle as serialized JSON bytes.
+    ///
+    /// Returns the bundle manifest serialized to JSON format, suitable for
+    /// local storage or download. The JSON can be used to reconstruct the
+    /// bundle or verify its contents.
+    ///
+    /// **Bounded slice scope:** Returns the bundle manifest only (no actual
+    /// content collection). S3 storage and retrieval are Phase 4 scope.
+    pub async fn download_bundle(
+        &self,
+        bundle_id: Uuid,
+    ) -> Result<Vec<u8>, BundleGenError> {
+        let bundle = self.get_bundle(bundle_id).await?;
+        serde_json::to_vec_pretty(&bundle)
+            .map_err(|e| BundleGenError::Serialization(format!("JSON serialization failed: {}", e)))
     }
 }
 

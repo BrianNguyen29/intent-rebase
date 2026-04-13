@@ -4143,6 +4143,9 @@ async fn create_forensic_bundle(
             forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
                 ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
             }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("initiate failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::Repository(err) => {
                 ApiErrorResponse(err)
             }
@@ -4174,6 +4177,9 @@ async fn get_forensic_bundle(
         .map_err(|e| match e {
             forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
                 ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
             }
             forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
                 ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
@@ -4209,6 +4215,9 @@ async fn list_forensic_bundles(
             forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
                 ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
             }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("list bundles failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
                 ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
             }
@@ -4222,14 +4231,51 @@ async fn list_forensic_bundles(
     Ok(Json(ListForensicBundlesResponse { bundles, total }))
 }
 
+/// Query parameters for transitioning a forensic bundle
+#[derive(Debug, Deserialize)]
+pub struct TransitionBundleQuery {
+    pub tenant_id: Uuid,
+}
+
 /// POST /forensic-bundles/{bundle_id}/transition-to-generating - Transition bundle to Generating
 ///
 /// Phase 3 Batch 3b (P4 bounded slice): Transitions a Pending bundle to Generating.
 /// This is a placeholder for actual content collection (Phase 4 scope).
+///
+/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
 async fn transition_bundle_to_generating(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
 ) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    // Verify bundle exists and tenant ownership before transition
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
     state
         .forensic_bundle_service
         .transition_to_generating(bundle_id)
@@ -4248,6 +4294,9 @@ async fn transition_bundle_to_generating(
                 to_status: format!("{:?}", to),
                 reason,
             }),
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::Repository(err) => {
                 ApiErrorResponse(err)
             }
@@ -4258,10 +4307,41 @@ async fn transition_bundle_to_generating(
 ///
 /// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Ready.
 /// This is a placeholder for actual bundle assembly (Phase 4 scope).
+///
+/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
 async fn transition_bundle_to_ready(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
 ) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    // Verify bundle exists and tenant ownership before transition
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
     state
         .forensic_bundle_service
         .transition_to_ready(bundle_id)
@@ -4280,6 +4360,9 @@ async fn transition_bundle_to_ready(
                 to_status: format!("{:?}", to),
                 reason,
             }),
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::Repository(err) => {
                 ApiErrorResponse(err)
             }
@@ -4289,10 +4372,41 @@ async fn transition_bundle_to_ready(
 /// POST /forensic-bundles/{bundle_id}/transition-to-failed - Transition bundle to Failed
 ///
 /// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Failed.
+///
+/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
 async fn transition_bundle_to_failed(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
 ) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    // Verify bundle exists and tenant ownership before transition
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
     state
         .forensic_bundle_service
         .transition_to_failed(bundle_id)
@@ -4311,6 +4425,9 @@ async fn transition_bundle_to_failed(
                 to_status: format!("{:?}", to),
                 reason,
             }),
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::Repository(err) => {
                 ApiErrorResponse(err)
             }
@@ -4325,10 +4442,41 @@ async fn transition_bundle_to_failed(
 ///
 /// **Bounded slice:** This simulates the full generation flow. Actual content
 /// collection and S3 storage are Phase 4 scope.
+///
+/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
 async fn complete_forensic_bundle(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
 ) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    // Verify bundle exists and tenant ownership before transition
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
     state
         .forensic_bundle_service
         .complete_bundle_creation(bundle_id)
@@ -4347,10 +4495,94 @@ async fn complete_forensic_bundle(
                 to_status: format!("{:?}", to),
                 reason,
             }),
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("complete failed: {}", msg).into()))
+            }
             forensic_service::bundle_gen::BundleGenError::Repository(err) => {
                 ApiErrorResponse(err)
             }
         })
+}
+
+/// Query parameters for downloading a forensic bundle
+#[derive(Debug, Deserialize)]
+pub struct DownloadForensicBundleQuery {
+    pub tenant_id: Uuid,
+}
+
+/// GET /forensic-bundles/{bundle_id}/download - Download a forensic bundle as JSON
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Downloads a forensic bundle as a JSON file.
+/// Returns the bundle manifest serialized to JSON format with Content-Disposition
+/// header set for download.
+///
+/// **Bounded slice scope:**
+/// - Returns bundle manifest as downloadable JSON (no actual content files)
+/// - No S3 storage integration - bundle is returned directly from repository
+/// - No content collection - manifest only
+///
+/// **Truthful description:**
+/// - This is a local/exportable bundle download path
+/// - Not a full S3/production storage pipeline
+async fn download_forensic_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<DownloadForensicBundleQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiErrorResponse> {
+    // Get the bundle first to verify it exists and check tenant ownership
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!("download failed: {}", msg).into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
+    // Serialize the bundle directly (avoiding double-fetch since we already have it)
+    let bundle_bytes = serde_json::to_vec_pretty(&bundle)
+        .map_err(|e| {
+            ApiErrorResponse(IntentRebaseError::Internal(format!("JSON serialization failed: {}", e).into()))
+        })?;
+
+    // Generate filename based on bundle metadata
+    let filename = format!(
+        "forensic-bundle-{}-{}.json",
+        bundle.bundle_id,
+        bundle.created_at.format("%Y%m%d-%H%M%S")
+    );
+
+    // Return as downloadable JSON response
+    Ok(axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(axum::body::Body::from(bundle_bytes))
+        .unwrap_or_else(|_| {
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        }))
 }
 
 /// Build the Phase 1 router with CORS enabled
@@ -4561,6 +4793,11 @@ pub fn build_router(
         .route(
             "/forensic-bundles/{bundle_id}/complete",
             post(complete_forensic_bundle),
+        )
+        // GET download - bounded export/download slice (Phase 3 Batch 3b P4 bounded slice)
+        .route(
+            "/forensic-bundles/{bundle_id}/download",
+            get(download_forensic_bundle),
         )
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -8651,5 +8888,178 @@ mod tests {
         assert!(get_result_a.is_ok());
         let retrieved = get_result_a.unwrap();
         assert_eq!(retrieved.payload, secret_event.payload);
+    }
+
+    // =========================================================================
+    // Forensic Bundle Download Tests (Phase 3 Batch 3b P4 bounded slice)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_success() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create a forensic bundle
+        let create_request = CreateForensicBundleRequest {
+            tenant_id,
+            time_range: forensic_service::BundleTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::IncidentInvestigation,
+            created_by: "test-user".to_string(),
+        };
+
+        let create_response = create_forensic_bundle(
+            State(state.clone()),
+            Json(create_request),
+        )
+        .await
+        .expect("Bundle creation should succeed");
+
+        assert_eq!(create_response.0, StatusCode::CREATED);
+        let bundle_id = create_response.1.bundle.bundle_id;
+
+        // Complete the bundle to get to Ready status
+        complete_forensic_bundle(
+            State(state.clone()),
+            Path(bundle_id),
+            axum::extract::Query(TransitionBundleQuery { tenant_id }),
+        )
+        .await
+        .expect("Bundle completion should succeed");
+
+        // Download the bundle
+        let query = DownloadForensicBundleQuery { tenant_id };
+        let response = download_forensic_bundle(
+            State(state),
+            Path(bundle_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Bundle download should succeed");
+
+        let (parts, body) = response.into_response().into_parts();
+        assert_eq!(parts.status, StatusCode::OK);
+        assert_eq!(
+            parts.headers.get("content-type").unwrap(),
+            "application/json"
+        );
+        let content_disposition = parts.headers.get("content-disposition").unwrap();
+        assert!(content_disposition.to_str().unwrap().contains("attachment"));
+        assert!(content_disposition.to_str().unwrap().contains("forensic-bundle-"));
+
+        // Verify the downloaded content is valid JSON
+        let body_bytes = axum::body::to_bytes(body, 1024 * 1024)
+            .await
+            .expect("Should read body");
+        let downloaded_bundle: forensic_service::ForensicBundle =
+            serde_json::from_slice(&body_bytes).expect("Should deserialize as ForensicBundle");
+        assert_eq!(downloaded_bundle.bundle_id, bundle_id);
+        assert_eq!(downloaded_bundle.tenant_id, tenant_id);
+    }
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_not_found() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let nonexistent_bundle_id = Uuid::new_v4();
+
+        let query = DownloadForensicBundleQuery { tenant_id };
+        let result = download_forensic_bundle(
+            State(state),
+            Path(nonexistent_bundle_id),
+            axum::extract::Query(query),
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_wrong_tenant() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let wrong_tenant_id = Uuid::new_v4();
+
+        // Create a bundle for tenant_id
+        let create_request = CreateForensicBundleRequest {
+            tenant_id,
+            time_range: forensic_service::BundleTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::ComplianceAudit,
+            created_by: "test-user".to_string(),
+        };
+
+        let create_response = create_forensic_bundle(
+            State(state.clone()),
+            Json(create_request),
+        )
+        .await
+        .expect("Bundle creation should succeed");
+
+        let bundle_id = create_response.1.bundle.bundle_id;
+
+        // Try to download with wrong tenant
+        let query = DownloadForensicBundleQuery {
+            tenant_id: wrong_tenant_id,
+        };
+        let result = download_forensic_bundle(
+            State(state),
+            Path(bundle_id),
+            axum::extract::Query(query),
+        )
+        .await;
+
+        // Should return error (fail-not-found pattern)
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_returns_pretty_json() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create a forensic bundle
+        let create_request = CreateForensicBundleRequest {
+            tenant_id,
+            time_range: forensic_service::BundleTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::Legal,
+            created_by: "legal-team".to_string(),
+        };
+
+        let create_response = create_forensic_bundle(
+            State(state.clone()),
+            Json(create_request),
+        )
+        .await
+        .expect("Bundle creation should succeed");
+
+        let bundle_id = create_response.1.bundle.bundle_id;
+
+        // Download the bundle
+        let query = DownloadForensicBundleQuery { tenant_id };
+        let response = download_forensic_bundle(
+            State(state),
+            Path(bundle_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Bundle download should succeed");
+
+        let (_parts, body) = response.into_response().into_parts();
+
+        // Verify pretty formatting (should contain newlines and indentation)
+        let body_bytes = axum::body::to_bytes(body, 1024 * 1024)
+            .await
+            .expect("Should read body");
+        let body_str = String::from_utf8(body_bytes.to_vec()).expect("Should be valid UTF-8");
+        // Pretty-printed JSON should contain at least one newline
+        assert!(body_str.contains('\n'), "Pretty JSON should contain newlines");
     }
 }
