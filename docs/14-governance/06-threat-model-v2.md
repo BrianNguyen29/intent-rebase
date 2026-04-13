@@ -209,7 +209,17 @@ This is an update from the Phase 1 threat model (v1).
 
 ## Residual Risks
 
-See [13 — Residual Risk Specification](./13-residual-risk-spec.md) for tracking of accepted risks.
+The Phase 2b residual risk register has been populated with entries RR-04 through RR-10, sourced from the [08 — Phase 2b Security Findings Input](../10-delivery/08-phase-2b-security-findings-input.md). Key risks carried forward into Phase 3 include:
+
+- **RR-04:** Event delivery failure detection latency (JetStream/DLQ not yet production-ready)
+- **RR-05:** Operator notification not actually delivered (external delivery semantics pending)
+- **RR-06:** Artifact custody is metadata-only (actual storage movement deferred)
+- **RR-07:** Forensic replay bounded to cooperative checkpoint (not full runtime reset)
+- **RR-08:** Snapshot evidence integrity under degraded event payloads
+- **RR-09:** Cross-tenant data exposure through incomplete enforcement (P3 Batch 3a priority)
+- **RR-10:** Moving trust boundaries during Phase 3 early state
+
+See [13 — Residual Risk Specification](./13-residual-risk-spec.md) for full tracking of accepted risks.
 
 ---
 

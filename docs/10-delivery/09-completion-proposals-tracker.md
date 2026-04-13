@@ -154,7 +154,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | Security Team |
 | **Suggested Next Step** | Schedule threat model v2 review; begin penetration testing scope definition |
-| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. Batch 4b gated on Batch 2 (observability) complete. |
+| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. **Residual risk register updated** with Phase 2b findings (RR-04–RR-10 in `13-residual-risk-spec.md`). Batch 4b gated on Batch 2 (observability) complete. |
 
 **Items:**
 - [ ] Threat model v2 (updated from Phase 1) — doc: `../../14-governance/06-threat-model-v2.md`
