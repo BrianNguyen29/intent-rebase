@@ -113,11 +113,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ P4 bounded slice delivered
 - [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
-- [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`)
+- [ ] Bundle generation API: `POST /forensic-bundles` (role: `forensic-access`)
 - [ ] Bundle integrity verification (hash chain)
 - [ ] Bundle replay capability (replay bundle to reproduce state)
 - [ ] Bundle retention policy (configurable per tenant, compliance)
-- [ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
+- [ ] Forensic bundle export: `GET /forensic-bundles/{id}/download`
 
 ---
 

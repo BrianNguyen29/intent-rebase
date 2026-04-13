@@ -409,7 +409,7 @@
     - S3 layout: forensic-bundles/{tenant}/{bundle_id}/
     - Code: forensic-service bundle builder
 
-[ ] Bundle generation API: `POST /api/v1/forensic/bundle`
+[ ] Bundle generation API: `POST /forensic-bundles`
     Evidence:
     - Role: forensic-access
     - Code: intent-api forensic endpoint
@@ -426,7 +426,7 @@
     Evidence:
     - S3 lifecycle policies
 
-[ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
+[ ] Forensic bundle export: `GET /forensic-bundles/{bundle_id}/download`
     Evidence:
     - Code: intent-api export endpoint
 ```

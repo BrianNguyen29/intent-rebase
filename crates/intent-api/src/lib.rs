@@ -11,6 +11,11 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use forensic_service::{
+    bundle::{BundlePurpose, BundleTimeRange, ForensicBundle},
+    bundle_gen::{BundleGenerationService, CreateBundleRequest as GenCreateBundleRequest},
+    bundle_repo::InMemoryBundleRepository,
+};
 use graph_service::GraphService;
 use intent_rebase_types::{
     AffectedItemsPreview, CreateGraphEdgeRequest, CreateGraphNodeRequest, CreateIntentRequest,
@@ -180,6 +185,10 @@ pub struct AppState {
     /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
     /// compensation actions via HTTP accepted flow.
     pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
+    /// Phase 3 Batch 3b (P4 bounded slice): Forensic bundle generation service.
+    /// Manages bundle lifecycle (Pending -> Generating -> Ready/Failed).
+    /// S3 storage, actual content collection, integrity verification are Phase 4 scope.
+    pub forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
     pub start_time: Instant,
 }
 
@@ -4062,6 +4071,288 @@ async fn get_audit_event(
         .map_err(ApiErrorResponse)
 }
 
+// ============================================================================
+// Forensic Bundle Handlers (Phase 3 Batch 3b bounded slice)
+// ============================================================================
+
+/// Request body for creating a forensic bundle
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateForensicBundleRequest {
+    pub tenant_id: Uuid,
+    pub time_range: BundleTimeRange,
+    pub purpose: BundlePurpose,
+    pub created_by: String,
+}
+
+/// Response for forensic bundle creation
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateForensicBundleResponse {
+    pub bundle: ForensicBundle,
+    pub message: String,
+}
+
+/// Response for listing forensic bundles
+#[derive(Debug, Clone, Serialize)]
+pub struct ListForensicBundlesResponse {
+    pub bundles: Vec<ForensicBundle>,
+    pub total: usize,
+}
+
+/// Query parameters for listing forensic bundles
+#[derive(Debug, Deserialize)]
+pub struct ListForensicBundlesQuery {
+    pub tenant_id: Uuid,
+    pub limit: Option<usize>,
+}
+
+/// Query parameters for getting a forensic bundle
+#[derive(Debug, Deserialize)]
+pub struct GetForensicBundleQuery {
+    pub tenant_id: Uuid,
+}
+
+/// POST /forensic-bundles - Create a new forensic bundle
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Creates a new forensic bundle manifest
+/// with Pending status. The bundle generation service manages the lifecycle
+/// (Pending -> Generating -> Ready/Failed).
+///
+/// **Bounded slice scope:**
+/// - Creates bundle manifest with Pending status
+/// - Status transitions via explicit transition endpoints
+/// - S3 storage, actual content collection, integrity verification are Phase 4
+async fn create_forensic_bundle(
+    State(state): State<AppState>,
+    Json(request): Json<CreateForensicBundleRequest>,
+) -> Result<(StatusCode, Json<CreateForensicBundleResponse>), ApiErrorResponse> {
+    let gen_request = GenCreateBundleRequest {
+        tenant_id: request.tenant_id,
+        time_range: request.time_range,
+        purpose: request.purpose,
+        created_by: request.created_by,
+    };
+
+    let response = state
+        .forensic_bundle_service
+        .initiate_bundle(gen_request)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(_) => {
+                ApiErrorResponse(IntentRebaseError::Internal("unexpected not found".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateForensicBundleResponse {
+            bundle: response.bundle,
+            message: response.message,
+        }),
+    ))
+}
+
+/// GET /forensic-bundles/{bundle_id} - Get a forensic bundle by ID
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Returns a single forensic bundle
+/// by its ID, scoped to the specified tenant. Returns 404 if bundle not found
+/// or if the bundle belongs to a different tenant (fail-not-found pattern).
+async fn get_forensic_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<GetForensicBundleQuery>,
+) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    let bundle = state
+        .forensic_bundle_service
+        .get_bundle(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    // Verify tenant ownership (fail-not-found pattern)
+    if bundle.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::ForensicBundleNotFound(bundle_id),
+        ));
+    }
+
+    Ok(Json(bundle))
+}
+
+/// GET /forensic-bundles - List forensic bundles for a tenant
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Returns all forensic bundles
+/// for the specified tenant, ordered by created_at descending.
+async fn list_forensic_bundles(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListForensicBundlesQuery>,
+) -> Result<Json<ListForensicBundlesResponse>, ApiErrorResponse> {
+    let bundles = state
+        .forensic_bundle_service
+        .list_bundles(query.tenant_id, query.limit)
+        .await
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
+                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
+            }
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })?;
+
+    let total = bundles.len();
+
+    Ok(Json(ListForensicBundlesResponse { bundles, total }))
+}
+
+/// POST /forensic-bundles/{bundle_id}/transition-to-generating - Transition bundle to Generating
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Pending bundle to Generating.
+/// This is a placeholder for actual content collection (Phase 4 scope).
+async fn transition_bundle_to_generating(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    state
+        .forensic_bundle_service
+        .transition_to_generating(bundle_id)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
+                from,
+                to,
+                reason,
+            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", from),
+                to_status: format!("{:?}", to),
+                reason,
+            }),
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })
+}
+
+/// POST /forensic-bundles/{bundle_id}/transition-to-ready - Transition bundle to Ready
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Ready.
+/// This is a placeholder for actual bundle assembly (Phase 4 scope).
+async fn transition_bundle_to_ready(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    state
+        .forensic_bundle_service
+        .transition_to_ready(bundle_id)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
+                from,
+                to,
+                reason,
+            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", from),
+                to_status: format!("{:?}", to),
+                reason,
+            }),
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })
+}
+
+/// POST /forensic-bundles/{bundle_id}/transition-to-failed - Transition bundle to Failed
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Failed.
+async fn transition_bundle_to_failed(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    state
+        .forensic_bundle_service
+        .transition_to_failed(bundle_id)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
+                from,
+                to,
+                reason,
+            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", from),
+                to_status: format!("{:?}", to),
+                reason,
+            }),
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })
+}
+
+/// POST /forensic-bundles/{bundle_id}/complete - Complete bundle creation
+///
+/// Phase 3 Batch 3b (P4 bounded slice): Transitions a bundle through the full
+/// Pending -> Generating -> Ready lifecycle. This is a convenience method for
+/// testing the complete flow.
+///
+/// **Bounded slice:** This simulates the full generation flow. Actual content
+/// collection and S3 storage are Phase 4 scope.
+async fn complete_forensic_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<Uuid>,
+) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
+    state
+        .forensic_bundle_service
+        .complete_bundle_creation(bundle_id)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
+                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
+                from,
+                to,
+                reason,
+            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", from),
+                to_status: format!("{:?}", to),
+                reason,
+            }),
+            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
+                ApiErrorResponse(err)
+            }
+        })
+}
+
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -4079,6 +4370,7 @@ pub fn build_router(
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
 ) -> Router {
     let state = AppState {
         service,
@@ -4091,6 +4383,7 @@ pub fn build_router(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
+        forensic_bundle_service,
         start_time: Instant::now(),
     };
 
@@ -4249,6 +4542,26 @@ pub fn build_router(
             "/audit/events/{event_id}",
             get(get_audit_event),
         )
+        // Forensic bundle endpoints (Phase 3 Batch 3b bounded slice)
+        .route("/forensic-bundles", post(create_forensic_bundle))
+        .route("/forensic-bundles/{bundle_id}", get(get_forensic_bundle))
+        .route("/forensic-bundles", get(list_forensic_bundles))
+        .route(
+            "/forensic-bundles/{bundle_id}/transition-to-generating",
+            post(transition_bundle_to_generating),
+        )
+        .route(
+            "/forensic-bundles/{bundle_id}/transition-to-ready",
+            post(transition_bundle_to_ready),
+        )
+        .route(
+            "/forensic-bundles/{bundle_id}/transition-to-failed",
+            post(transition_bundle_to_failed),
+        )
+        .route(
+            "/forensic-bundles/{bundle_id}/complete",
+            post(complete_forensic_bundle),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -4307,6 +4620,7 @@ pub fn build_router_with_sql_audit_and_approval(
     orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -4328,6 +4642,7 @@ pub fn build_router_with_sql_audit_and_approval(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
+        forensic_bundle_service,
     )
 }
 
@@ -4375,6 +4690,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle repository and service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -4386,6 +4706,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         }
     }
@@ -4963,6 +5284,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -4979,6 +5305,7 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         };
 
@@ -5168,6 +5495,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -5184,6 +5516,7 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         };
 
@@ -6331,6 +6664,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -6344,6 +6682,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: Some(publisher),
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         }
     }
@@ -6475,6 +6814,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
 
         let _router: axum::Router = build_router(
             service,
@@ -6487,6 +6831,7 @@ mod tests {
             approval_repo,
             policy_snapshot_repo,
             event_publisher,
+            forensic_bundle_svc,
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -6552,6 +6897,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -6565,6 +6915,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         };
 
@@ -7405,6 +7756,11 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
+        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
+            forensic_bundle_repo,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -7416,6 +7772,7 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         }
     }
