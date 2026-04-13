@@ -306,12 +306,12 @@
     - Instrumented: RebaseApplied, RebaseApplyBlocked, ApprovalGranted, ApprovalRevoked, ApprovalExpired, ReplayInitiated events carry trace_id/span_id
     - Note: Full OTLP/cross-service trace propagation is P2-S4+ scope
 
-[~] Performance benchmarks: rebase latency p50/p95/p99 (benchmark harness infrastructure delivered; actual targets pending — gated on P2 completion)
+[~] Performance benchmarks: rebase latency p50/p95/p99 (local baseline captured; CI-averaged targets and load testing gated on P2 completion)
     Evidence:
     - CI job: .github/workflows/ci.yml#bench (runs cargo bench -p rebase-engine, uploads criterion reports as artifacts)
     - Harness: crates/rebase-engine/benches/diff_latency.rs (criterion-based, harness=false)
-    - Baseline template: docs/11-quality/benchmark-baseline-results.md
-    - Note: This slice delivers benchmark infrastructure only. Actual p50/p95/p99 targets and production load testing remain gated on P2 completion (Phase 3 Batch 2 full delivery).
+    - Baseline results: docs/11-quality/benchmark-baseline-results.md (local baseline measured April 2026: p50 range 3.78–6.09 µs)
+    - Note: This slice delivers benchmark harness infrastructure and local baseline numbers. Actual CI-averaged p50/p95/p99 targets and production load testing (k6/Artillery) remain gated on P2 full completion.
 
 [ ] Runbooks for common failure scenarios
     Evidence:
