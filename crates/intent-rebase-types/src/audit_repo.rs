@@ -25,6 +25,14 @@ pub trait AuditRepository: Send + Sync {
     /// Persist an audit event
     async fn create_audit_event(&self, event: AuditEvent) -> Result<(), IntentRebaseError>;
 
+    /// Get a single audit event by ID (tenant-scoped).
+    /// Returns Err(ArtifactNotFound) if event doesn't exist or belongs to a different tenant.
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError>;
+
     /// List audit events by intent (ordered by occurred_at descending)
     async fn list_by_intent(
         &self,
@@ -489,6 +497,25 @@ impl AuditRepository for InMemoryAuditRepository {
         Ok(())
     }
 
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError> {
+        let events = self.events.read().await;
+        let event = events
+            .get(&event_id)
+            .cloned()
+            .ok_or(IntentRebaseError::ArtifactNotFound(event_id))?;
+
+        // Tenant isolation: ensure the event belongs to the requesting tenant
+        if event.tenant_id != tenant_id {
+            return Err(IntentRebaseError::ArtifactNotFound(event_id));
+        }
+
+        Ok(event)
+    }
+
     async fn list_by_intent(
         &self,
         intent_id: Uuid,
@@ -608,6 +635,31 @@ impl SqlxAuditRepository {
 impl AuditRepository for SqlxAuditRepository {
     async fn create_audit_event(&self, event: AuditEvent) -> Result<(), IntentRebaseError> {
         self.insert_event(&event).await
+    }
+
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+                payload, trace_id, span_id, occurred_at
+            FROM audit_events
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(event_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("get audit event: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_event(r),
+            None => Err(IntentRebaseError::ArtifactNotFound(event_id)),
+        }
     }
 
     async fn list_by_intent(

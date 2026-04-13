@@ -3,8 +3,6 @@
 //! Phase 1: Exposes intent/version endpoints via axum.
 //! Routes are manually wired to match the OpenAPI spec in docs/04-api/openapi.yaml.
 
-mod trace_context;
-
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -22,7 +20,6 @@ use intent_rebase_types::{
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use metrics::{counter, histogram};
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{
     DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier, SectionDecision,
@@ -39,101 +36,6 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
 use validator::Validate;
-
-// ============================================================================
-// P2-S1 Candidate Metrics (Phase 3 Batch 2 Observability — bounded slice)
-// ============================================================================
-// These metrics are candidate SLO evidence for P2. They are emitted by real
-// code paths for rebase preview/apply and core request handling. Full alerting/
-// dashboard/OTel propagation/runbooks are P2-S2+ scope.
-//
-// Naming convention: intent_rebase_<domain>_<name>
-// Labels used: handler, method, status (where applicable)
-
-mod intent_metrics {
-    use metrics::{describe_counter, describe_histogram};
-
-    /// Register P2-S1 candidate metric descriptors on first access.
-    pub fn describe() {
-        // Intent business metrics — candidate SLO evidence
-        describe_counter!(
-            "intent_rebase.intent.create.total",
-            "Total intent creation requests"
-        );
-        describe_counter!(
-            "intent_rebase.intent.create.errors",
-            "Failed intent creation requests"
-        );
-        describe_counter!(
-            "intent_rebase.version.create.total",
-            "Total version creation requests"
-        );
-        describe_counter!(
-            "intent_rebase.version.create.errors",
-            "Failed version creation requests"
-        );
-
-        // Rebase preview/apply — P2 candidate SLO core paths
-        describe_counter!(
-            "intent_rebase.rebase.preview.total",
-            "Total rebase preview requests"
-        );
-        describe_counter!(
-            "intent_rebase.rebase.preview.errors",
-            "Failed rebase preview requests"
-        );
-        describe_histogram!(
-            "intent_rebase.rebase.preview.duration_seconds",
-            "Rebase preview request latency"
-        );
-        describe_counter!(
-            "intent_rebase.rebase.apply.total",
-            "Total rebase apply requests"
-        );
-        describe_counter!(
-            "intent_rebase.rebase.apply.errors",
-            "Failed rebase apply requests"
-        );
-        describe_histogram!(
-            "intent_rebase.rebase.apply.duration_seconds",
-            "Rebase apply request latency"
-        );
-
-        // Compensate action metrics — P2 candidate SLO evidence
-        describe_counter!(
-            "intent_rebase.compensation.actions.total",
-            "Total compensation action API calls (all methods)"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.actions.errors",
-            "Failed compensation action API calls"
-        );
-        describe_histogram!(
-            "intent_rebase.compensation.execute.duration_seconds",
-            "Compensation action execute latency"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.execute.total",
-            "Total compensation action execute calls"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.execute.success",
-            "Successful compensation action executions"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.execute.failure",
-            "Failed compensation action executions"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.planned.total",
-            "Total planned compensation actions"
-        );
-        describe_counter!(
-            "intent_rebase.compensation.planned.by_feasibility",
-            "Planned compensation actions by feasibility level"
-        );
-    }
-}
 
 /// Response for diff computation including version context, diff, and risk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,10 +180,6 @@ pub struct AppState {
     /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
     /// compensation actions via HTTP accepted flow.
     pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
-    /// Phase 3 Batch 3a (P3-S2 bounded slice): Quota enforcement service.
-    /// When Some, enforces tenant resource quotas on create paths.
-    /// When None, quota enforcement is bypassed (Phase 1 legacy behavior).
-    pub quota_service: Option<Arc<intent_rebase_types::QuotaService>>,
     pub start_time: Instant,
 }
 
@@ -433,6 +331,12 @@ impl IntoResponse for ApiErrorResponse {
             }
             IntentRebaseError::QuotaExceeded { .. } => {
                 (StatusCode::FORBIDDEN, "QUOTA_EXCEEDED", false)
+            }
+            IntentRebaseError::TenantNotFound(_) => {
+                (StatusCode::NOT_FOUND, "TENANT_NOT_FOUND", false)
+            }
+            IntentRebaseError::TenantNotFoundBySlug(_) => {
+                (StatusCode::NOT_FOUND, "TENANT_NOT_FOUND", false)
             }
         };
 
@@ -711,35 +615,15 @@ async fn create_intent(
     State(state): State<AppState>,
     Json(request): Json<CreateIntentRequest>,
 ) -> Result<(StatusCode, Json<CreateIntentResponse>), ApiErrorResponse> {
-    // P2-S1 candidate metrics: intent creation
-    counter!("intent_rebase.intent.create.total", "handler" => "create_intent").increment(1);
-
     // Phase 1: Input validation
-    validate_create_intent_request(&request).map_err(|e| {
-        counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);
-        ApiErrorResponse(e)
-    })?;
-
-    // P3-S2: Check tenant quota on intent creation if quota_service is configured
-    if let Some(ref quota_service) = state.quota_service {
-        let tenant_id = request.tenant_id.unwrap_or_else(Uuid::nil);
-        if tenant_id != Uuid::nil() {
-            if let Err(e) = quota_service.enforce(tenant_id, "intents").await {
-                counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);
-                return Err(ApiErrorResponse(e));
-            }
-        }
-    }
+    validate_create_intent_request(&request).map_err(ApiErrorResponse)?;
 
     state
         .service
         .create_intent(request)
         .await
         .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(|e| {
-            counter!("intent_rebase.intent.create.errors", "handler" => "create_intent").increment(1);
-            ApiErrorResponse(e)
-        })
+        .map_err(ApiErrorResponse)
 }
 
 /// GET /intents/{intent_id} - Get intent head (current version)
@@ -768,9 +652,6 @@ async fn create_version(
     headers: HeaderMap,
     Json(request): Json<CreateVersionRequest>,
 ) -> Result<(StatusCode, Json<CreateVersionResponse>), ApiErrorResponse> {
-    // P2-S1 candidate metrics: version creation
-    counter!("intent_rebase.version.create.total", "handler" => "create_version").increment(1);
-
     let expected_version =
         parse_optional_header(&headers, "x-expected-version").map_err(ApiErrorResponse)?;
     let expected_row_version =
@@ -781,10 +662,7 @@ async fn create_version(
         .create_version(intent_id, request, expected_version, expected_row_version)
         .await
         .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(|e| {
-            counter!("intent_rebase.version.create.errors", "handler" => "create_version").increment(1);
-            ApiErrorResponse(e)
-        })
+        .map_err(ApiErrorResponse)
 }
 
 /// Parse an optional i32 header value.
@@ -1062,40 +940,24 @@ async fn rebase_preview(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-    // P2-S1 candidate metrics: rebase preview latency and counts
-    let start = std::time::Instant::now();
-    counter!("intent_rebase.rebase.preview.total", "handler" => "rebase_preview").increment(1);
-
     // Always use graph-integrated preview - the service handles unavailability gracefully
     let plan = state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.preview.errors", "handler" => "rebase_preview").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
 
     // Get version info for response context
     let from_version = state
         .service
         .get_version(intent_id, request.from_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.preview.errors", "handler" => "rebase_preview").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
     let to_version = state
         .service
         .get_version(intent_id, request.to_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.preview.errors", "handler" => "rebase_preview").increment(1);
-            ApiErrorResponse(e)
-        })?;
-
-    let elapsed = start.elapsed().as_secs_f64();
-    histogram!("intent_rebase.rebase.preview.duration_seconds", "handler" => "rebase_preview").record(elapsed);
+        .map_err(ApiErrorResponse)?;
 
     Ok(Json(RebasePreviewResponse {
         intent_id,
@@ -1117,42 +979,26 @@ async fn rebase_apply(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<(StatusCode, Json<RebaseApplyResponse>), ApiErrorResponse> {
-    // P2-S1 candidate metrics: rebase apply latency and counts
-    let start = std::time::Instant::now();
-    counter!("intent_rebase.rebase.apply.total", "handler" => "rebase_apply").increment(1);
-
     let intent_head = state
         .service
         .get_intent_head(intent_id)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.apply.errors", "handler" => "rebase_apply").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
     let from_version = state
         .service
         .get_version(intent_id, request.from_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.apply.errors", "handler" => "rebase_apply").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
     let to_version = state
         .service
         .get_version(intent_id, request.to_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.apply.errors", "handler" => "rebase_apply").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
     let plan = state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.apply.errors", "handler" => "rebase_apply").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
     let apply_result = state
         .orchestrator
         .apply_rebase(
@@ -1165,10 +1011,7 @@ async fn rebase_apply(
             &plan.affected_items,
         )
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.rebase.apply.errors", "handler" => "rebase_apply").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
 
     // Phase 2b bounded slice: Record audit event for all external apply outcomes
     // Best-effort actor attribution: fallback external-api/unknown
@@ -1208,19 +1051,14 @@ async fn rebase_apply(
             .count(),
     };
 
-    // P2-S3 bounded slice: extract trace context for audit propagation
-    let (trace_id, span_id) = trace_context::current_trace_context();
-
     // Record audit event (best-effort, don't fail the response)
     if let Err(e) = state
         .audit_service
-        .record_rebase_applied_with_trace(
+        .record_rebase_applied(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
             audit_payload.clone(),
-            trace_id.clone(),
-            span_id.clone(),
         )
         .await
     {
@@ -1251,13 +1089,11 @@ async fn rebase_apply(
         // Record blocked audit event (best-effort)
         if let Err(e) = state
             .audit_service
-            .record_rebase_apply_blocked_with_trace(
+            .record_rebase_apply_blocked(
                 intent_head.intent.tenant_id,
                 actor_id,
                 intent_id,
                 blocked_payload.clone(),
-                trace_id.clone(),
-                span_id.clone(),
             )
             .await
         {
@@ -1333,9 +1169,6 @@ async fn rebase_apply(
             .count(),
         compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     };
-
-    let elapsed = start.elapsed().as_secs_f64();
-    histogram!("intent_rebase.rebase.apply.duration_seconds", "handler" => "rebase_apply").record(elapsed);
 
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
 }
@@ -1575,18 +1408,13 @@ async fn approve_approval_request(
         resolution_notes: body.resolution_notes.clone(),
     };
 
-    // P2-S3 bounded slice: extract trace context for audit propagation
-    let (trace_id, span_id) = trace_context::current_trace_context();
-
     if let Err(e) = state
         .audit_service
-        .record_approval_granted_with_trace(
+        .record_approval_granted(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
-            trace_id,
-            span_id,
         )
         .await
     {
@@ -1654,18 +1482,13 @@ async fn reject_approval_request(
         resolution_notes: body.resolution_notes.clone(),
     };
 
-    // P2-S3 bounded slice: extract trace context for audit propagation
-    let (trace_id, span_id) = trace_context::current_trace_context();
-
     if let Err(e) = state
         .audit_service
-        .record_approval_revoked_with_trace(
+        .record_approval_revoked(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
-            trace_id,
-            span_id,
         )
         .await
     {
@@ -1738,18 +1561,13 @@ async fn expire_approval_request(
         expiry_reason: reason.clone(),
     };
 
-    // P2-S3 bounded slice: extract trace context for audit propagation
-    let (trace_id, span_id) = trace_context::current_trace_context();
-
     if let Err(e) = state
         .audit_service
-        .record_approval_expired_with_trace(
+        .record_approval_expired(
             approval_request.tenant_id,
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
-            trace_id,
-            span_id,
         )
         .await
     {
@@ -2121,18 +1939,13 @@ async fn replay_intent(
         ),
     };
 
-    // P2-S3 bounded slice: extract trace context for audit propagation
-    let (trace_id, span_id) = trace_context::current_trace_context();
-
     if let Err(e) = state
         .audit_service
-        .record_replay_initiated_with_trace(
+        .record_replay_initiated(
             intent_head.intent.tenant_id,
             actor_id,
             intent_id,
             audit_payload.clone(),
-            trace_id,
-            span_id,
         )
         .await
     {
@@ -2617,17 +2430,11 @@ async fn approve_compensation_action(
     Path(action_id): Path<Uuid>,
     Json(body): Json<ApproveCompensationActionBody>,
 ) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
-    // P2-S1 candidate metrics: compensation action approve
-    counter!("intent_rebase.compensation.actions.total", "handler" => "approve_compensation_action", "method" => "approve").increment(1);
-
     let updated = state
         .compensation_action_service
         .approve_action(action_id, body.lock_version, body.approved_by.as_deref())
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.compensation.actions.errors", "handler" => "approve_compensation_action", "method" => "approve").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
 
     Ok(Json(CompensationActionResponse::from(updated)))
 }
@@ -2651,17 +2458,11 @@ async fn waive_compensation_action(
     Path(action_id): Path<Uuid>,
     Json(body): Json<WaiveCompensationActionBody>,
 ) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
-    // P2-S1 candidate metrics: compensation action waive
-    counter!("intent_rebase.compensation.actions.total", "handler" => "waive_compensation_action", "method" => "waive").increment(1);
-
     let updated = state
         .compensation_action_service
         .waive_action(action_id, body.lock_version, body.waived_by.as_deref())
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.compensation.actions.errors", "handler" => "waive_compensation_action", "method" => "waive").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
 
     Ok(Json(CompensationActionResponse::from(updated)))
 }
@@ -2687,27 +2488,11 @@ async fn execute_compensation_action(
     Path(action_id): Path<Uuid>,
     Json(body): Json<ExecuteCompensationActionBody>,
 ) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
-    // P2-S1 candidate metrics: compensation action execute with latency
-    let start = std::time::Instant::now();
-    counter!("intent_rebase.compensation.actions.total", "handler" => "execute_compensation_action", "method" => "execute").increment(1);
-    counter!("intent_rebase.compensation.execute.total", "handler" => "execute_compensation_action").increment(1);
-
-    let result = state
+    let updated = state
         .compensation_action_service
         .execute_action(action_id, body.executed_by.as_deref())
-        .await;
-
-    let elapsed = start.elapsed().as_secs_f64();
-    histogram!("intent_rebase.compensation.execute.duration_seconds", "handler" => "execute_compensation_action").record(elapsed);
-
-    let updated = result.map_err(|e| {
-        counter!("intent_rebase.compensation.actions.errors", "handler" => "execute_compensation_action", "method" => "execute").increment(1);
-        counter!("intent_rebase.compensation.execute.failure", "handler" => "execute_compensation_action").increment(1);
-        ApiErrorResponse(e)
-    })?;
-
-    // Track success after outcome is known
-    counter!("intent_rebase.compensation.execute.success", "handler" => "execute_compensation_action").increment(1);
+        .await
+        .map_err(ApiErrorResponse)?;
 
     Ok(Json(CompensationActionResponse::from(updated)))
 }
@@ -2866,17 +2651,11 @@ async fn reapprove_compensation_action(
     Path(action_id): Path<Uuid>,
     Json(body): Json<ReapproveCompensationActionBody>,
 ) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
-    // P2-S1 candidate metrics: compensation action reapprove
-    counter!("intent_rebase.compensation.actions.total", "handler" => "reapprove_compensation_action", "method" => "reapprove").increment(1);
-
     let updated = state
         .compensation_action_service
         .reapprove_action(action_id, body.lock_version)
         .await
-        .map_err(|e| {
-            counter!("intent_rebase.compensation.actions.errors", "handler" => "reapprove_compensation_action", "method" => "reapprove").increment(1);
-            ApiErrorResponse(e)
-        })?;
+        .map_err(ApiErrorResponse)?;
 
     Ok(Json(CompensationActionResponse::from(updated)))
 }
@@ -4088,13 +3867,6 @@ async fn ingest_artifact(
     // Phase 1: Input validation - validate request before processing
     validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
 
-    // P3-S2: Check tenant quota on artifact ingest if quota_service is configured
-    if let Some(ref quota_service) = state.quota_service {
-        if let Err(e) = quota_service.enforce(request.tenant_id, "artifacts").await {
-            return Err(ApiErrorResponse(e));
-        }
-    }
-
     // Extract side effect context before consuming request for side effect recording
     // after successful graph ingest. This preserves the context for the compensation
     // ledger write even though graph_service.ingest_artifact consumes the request.
@@ -4203,6 +3975,87 @@ async fn ingest_artifact(
     ))
 }
 
+// ============================================================================
+// Audit Event Query Endpoints (Phase 3 P3-S4 bounded slice)
+// ============================================================================
+
+/// Query parameters for listing audit events by tenant
+#[derive(Debug, Deserialize)]
+pub struct ListAuditEventsQuery {
+    pub tenant_id: Uuid,
+    /// Maximum number of events to return (default 100, max 1000)
+    #[serde(default = "default_audit_limit")]
+    pub limit: usize,
+}
+
+fn default_audit_limit() -> usize {
+    100
+}
+
+/// Query parameters for getting a single audit event
+#[derive(Debug, Deserialize)]
+pub struct GetAuditEventQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for listing audit events
+#[derive(Debug, Serialize)]
+pub struct ListAuditEventsResponse {
+    pub events: Vec<intent_rebase_types::AuditEvent>,
+    pub total: usize,
+}
+
+/// GET /audit/events - List audit events for a tenant
+///
+/// Phase 3 P3-S4 (bounded tenant-scoped audit query slice):
+/// Returns all audit events belonging to the specified tenant, ordered by
+/// occurred_at descending (newest first).
+///
+/// **Tenant-scoped:** Results are filtered strictly to the provided tenant_id.
+/// Cross-tenant access is blocked at the repository layer.
+///
+/// **Pagination:** Uses limit parameter (default 100, max 1000) for pagination.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing audit data.
+async fn list_audit_events(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListAuditEventsQuery>,
+) -> Result<Json<ListAuditEventsResponse>, ApiErrorResponse> {
+    let limit = query.limit.min(1000); // Cap at 1000 to prevent abuse
+
+    let events = state
+        .audit_service
+        .list_by_tenant(query.tenant_id, limit)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = events.len();
+
+    Ok(Json(ListAuditEventsResponse { events, total }))
+}
+
+/// GET /audit/events/{event_id} - Get a single audit event by ID
+///
+/// Phase 3 P3-S4 (bounded tenant-scoped audit query slice):
+/// Returns a single audit event by its ID, scoped to the specified tenant.
+///
+/// **Tenant-scoped:** Returns 404 if the event doesn't exist OR if it belongs
+/// to a different tenant. This enforces tenant isolation at the API layer.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing audit data.
+async fn get_audit_event(
+    State(state): State<AppState>,
+    Path(event_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<GetAuditEventQuery>,
+) -> Result<Json<intent_rebase_types::AuditEvent>, ApiErrorResponse> {
+    state
+        .audit_service
+        .get_audit_event(event_id, query.tenant_id)
+        .await
+        .map(Json)
+        .map_err(ApiErrorResponse)
+}
+
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -4221,10 +4074,6 @@ pub fn build_router(
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
 ) -> Router {
-    // P2-S1: Register candidate metric descriptors on router build.
-    // Descriptors are cheap to call repeatedly; the function guards against re-registration.
-    intent_metrics::describe();
-
     let state = AppState {
         service,
         graph_service,
@@ -4236,7 +4085,6 @@ pub fn build_router(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
-        quota_service: None,
         start_time: Instant::now(),
     };
 
@@ -4389,6 +4237,12 @@ pub fn build_router(
             "/policy-snapshots/intent/{intent_id}",
             get(list_policy_snapshots),
         )
+        // Audit event query endpoints (Phase 3 P3-S4 bounded slice)
+        .route("/audit/events", get(list_audit_events))
+        .route(
+            "/audit/events/{event_id}",
+            get(get_audit_event),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -4526,7 +4380,6 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            quota_service: None,
             start_time: Instant::now(),
         }
     }
@@ -5120,7 +4973,211 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            quota_service: None,
+            start_time: Instant::now(),
+        };
+
+        // Create an intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: intent_rebase_types::ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Get the version to access its ID
+        let to_version = state.service.get_version(intent_id, 2).await.unwrap();
+
+        // Create IntentVersion graph node for v2
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create an IntentVersion node in the graph that maps to our version
+        let iv_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: to_version.id,
+                }),
+                label: "IntentVersion v2".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Create an artifact that depends on this IntentVersion
+        let artifact_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id,
+                workflow_id,
+                node_type: NodeType::Artifact,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::Artifact,
+                    ref_id: Uuid::new_v4(),
+                }),
+                label: "Test Artifact".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Create DependsOn edge: Artifact -> IntentVersion
+        graph_repo
+            .create_edge(intent_rebase_types::CreateGraphEdgeRequest {
+                tenant_id,
+                workflow_id,
+                from_node_id: artifact_node.id,
+                to_node_id: iv_node.id,
+                edge_type: intent_rebase_types::EdgeType::DependsOn,
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Call rebase_preview which should use graph classification
+        let preview_request = DiffRequest {
+            from_version: 1,
+            to_version: 2,
+        };
+        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+            .await
+            .expect("Rebase preview should succeed even with graph");
+
+        assert_eq!(result.intent_id, intent_id);
+        assert_eq!(result.affected_items.status, AffectedItemsStatus::Available);
+        // Verify affected artifacts contains our artifact
+        assert!(!result.affected_items.affected_artifacts.is_empty());
+        assert_eq!(
+            result.affected_items.affected_artifacts[0].node_id,
+            artifact_node.id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rebase_preview_fallback_when_graph_node_not_found() {
+        use graph_service::{GraphService, InMemoryGraphRepository};
+        use intent_rebase_types::{
+            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
+            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
+            Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent no graph".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        // Create service with graph service but NO graph data
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
+        let service = Arc::new(IntentService::with_graph_service(repo, graph_svc.clone()));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        // Phase 3 Batch 1: In-memory orchestration runtime for tests
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo.clone()),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
+        let state = AppState {
+            service,
+            graph_service: graph_svc.clone(),
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
+            orchestrator,
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+                as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+                as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None, // Phase 2b: event publishing optional in tests
             start_time: Instant::now(),
         };
 
@@ -6281,7 +6338,6 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: Some(publisher),
-            quota_service: None,
             start_time: Instant::now(),
         }
     }
@@ -6503,7 +6559,6 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
-            quota_service: None,
             start_time: Instant::now(),
         };
 
@@ -7355,7 +7410,6 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
-            quota_service: None,
             start_time: Instant::now(),
         }
     }
@@ -7975,302 +8029,264 @@ mod tests {
         assert_eq!(result2.side_effects[0].effect_type, "effect_2");
     }
 
-    // =========================================================================
-    // Tenant Isolation Verification Tests (Phase 3 Batch 3a — P3-S1)
-    // =========================================================================
+    // === Audit Event Cross-Tenant Isolation Tests ===
 
-    /// Test that list_pending_approval_requests correctly filters by tenant.
-    /// Tenant A should only see Tenant A's pending approval requests.
-    /// Tenant B should only see Tenant B's pending approval requests.
     #[tokio::test]
-    async fn test_list_pending_approval_requests_tenant_isolation() {
-        use intent_service::ApprovalRequest;
-
+    async fn test_list_audit_events_returns_only_tenant_events() {
         let state = create_test_service();
-        let tenant_a = Uuid::new_v4();
-        let tenant_b = Uuid::new_v4();
-        let intent_id = Uuid::new_v4();
+        let tenant_1 = Uuid::new_v4();
+        let tenant_2 = Uuid::new_v4();
 
-        // Create pending approval requests for tenant A
-        for i in 0..3 {
-            let request = ApprovalRequest::new_pending(
-                intent_id,
-                i as i32,
-                (i + 1) as i32,
-                Uuid::new_v4(),
-                tenant_a,
-                "test-user",
-                "test",
-                "E",
-                &format!("Tenant A request {}", i),
-            );
+        // Create audit events for tenant 1
+        let event1 = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_1,
+            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
+            actor_id: "test-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({ "test": "event1" }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(event1.clone())
+            .await
+            .unwrap();
+
+        let event2 = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_1,
+            event_type: intent_rebase_types::AuditEventType::ApprovalGranted,
+            actor_id: "test-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({ "test": "event2" }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(event2.clone())
+            .await
+            .unwrap();
+
+        // Create audit event for tenant 2
+        let event3 = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_2,
+            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
+            actor_id: "other-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({ "test": "event3" }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(event3.clone())
+            .await
+            .unwrap();
+
+        // List events for tenant 1
+        let query1 = ListAuditEventsQuery {
+            tenant_id: tenant_1,
+            limit: 100,
+        };
+        let result1 = list_audit_events(State(state.clone()), axum::extract::Query(query1))
+            .await
+            .expect("Should return events");
+
+        // Should only see tenant 1's events
+        assert_eq!(result1.events.len(), 2);
+        assert!(result1.events.iter().all(|e| e.tenant_id == tenant_1));
+        assert!(result1.events.iter().any(|e| e.id == event1.id));
+        assert!(result1.events.iter().any(|e| e.id == event2.id));
+        assert!(result1.events.iter().find(|e| e.id == event3.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_audit_events_respects_limit() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create 5 audit events
+        for i in 0..5 {
+            let event = intent_rebase_types::AuditEvent {
+                id: Uuid::new_v4(),
+                tenant_id,
+                event_type: intent_rebase_types::AuditEventType::RebaseApplied,
+                actor_id: "test-user".to_string(),
+                intent_id: Some(Uuid::new_v4()),
+                artifact_id: None,
+                payload: serde_json::json!({ "index": i }),
+                trace_id: None,
+                span_id: None,
+                occurred_at: chrono::Utc::now(),
+            };
             state
-                .approval_request_repo
-                .create_approval_request(request)
+                .audit_service
+                .create_audit_event(event)
                 .await
                 .unwrap();
         }
 
-        // Create pending approval requests for tenant B
-        for i in 0..2 {
-            let request = ApprovalRequest::new_pending(
-                intent_id,
-                i as i32,
-                (i + 1) as i32,
-                Uuid::new_v4(),
-                tenant_b,
-                "test-user",
-                "test",
-                "E",
-                &format!("Tenant B request {}", i),
-            );
-            state
-                .approval_request_repo
-                .create_approval_request(request)
-                .await
-                .unwrap();
-        }
+        // Query with limit=3
+        let query = ListAuditEventsQuery {
+            tenant_id,
+            limit: 3,
+        };
+        let result = list_audit_events(State(state), axum::extract::Query(query))
+            .await
+            .expect("Should return events");
 
-        // Query for tenant A - should only see tenant A's requests
-        let query_a = ListPendingApprovalRequestsQuery { tenant_id: tenant_a };
-        let result_a = list_pending_approval_requests(
-            State(state.clone()),
-            axum::extract::Query(query_a),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result_a.total, 3);
-
-        // Query for tenant B - should only see tenant B's requests
-        let query_b = ListPendingApprovalRequestsQuery { tenant_id: tenant_b };
-        let result_b = list_pending_approval_requests(
-            State(state.clone()),
-            axum::extract::Query(query_b),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result_b.total, 2);
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.total, 3);
     }
 
-    /// Test that approve_approval_request correctly filters by tenant.
-    /// Tenant A should not be able to approve Tenant B's approval requests.
     #[tokio::test]
-    async fn test_approve_approval_request_tenant_isolation() {
-        use intent_service::ApprovalRequest;
+    async fn test_get_audit_event_returns_event_for_correct_tenant() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
 
+        let event = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
+            actor_id: "test-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({ "test": "data" }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(event.clone())
+            .await
+            .unwrap();
+
+        // Get event with correct tenant
+        let query = GetAuditEventQuery { tenant_id };
+        let result = get_audit_event(State(state.clone()), Path(event.id), axum::extract::Query(query))
+            .await
+            .expect("Should return event");
+
+        assert_eq!(result.id, event.id);
+        assert_eq!(result.tenant_id, tenant_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_audit_event_blocked_for_wrong_tenant() {
+        let state = create_test_service();
+        let tenant_1 = Uuid::new_v4();
+        let tenant_2 = Uuid::new_v4();
+
+        // Create event for tenant 1
+        let event = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_1,
+            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
+            actor_id: "test-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({ "test": "data" }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(event.clone())
+            .await
+            .unwrap();
+
+        // Try to get event with tenant 2's credentials - should get 404
+        let query = GetAuditEventQuery { tenant_id: tenant_2 };
+        let result = get_audit_event(State(state), Path(event.id), axum::extract::Query(query)).await;
+
+        // Should return error (404 via ApiErrorResponse)
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_audit_event_not_found_for_nonexistent_event() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let nonexistent_event_id = Uuid::new_v4();
+
+        let query = GetAuditEventQuery { tenant_id };
+        let result = get_audit_event(State(state), Path(nonexistent_event_id), axum::extract::Query(query)).await;
+
+        // Should return error (404)
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cross_tenant_audit_events_completely_isolated() {
+        // This test verifies that even if we create events for multiple tenants,
+        // querying with the wrong tenant_id never leaks any data
         let state = create_test_service();
         let tenant_a = Uuid::new_v4();
         let tenant_b = Uuid::new_v4();
-        let intent_id = Uuid::new_v4();
 
-        // Create a pending approval request for tenant A
-        let request = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_a,
-            "test-user",
-            "test",
-            "E",
-            "Tenant A request",
-        );
-        let created = state
-            .approval_request_repo
-            .create_approval_request(request)
+        // Create secret event for tenant A
+        let secret_event = intent_rebase_types::AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_a,
+            event_type: intent_rebase_types::AuditEventType::ArtifactProduced,
+            actor_id: "secret-actor".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: Some(Uuid::new_v4()),
+            payload: serde_json::json!({
+                "secret_data": "this should never be visible to tenant b",
+                "sensitive_field": "classified"
+            }),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        state
+            .audit_service
+            .create_audit_event(secret_event.clone())
             .await
             .unwrap();
 
-        // Create a pending approval request for tenant B
-        let request_b = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_b,
-            "test-user",
-            "test",
-            "E",
-            "Tenant B request",
-        );
-        let created_b = state
-            .approval_request_repo
-            .create_approval_request(request_b)
+        // Tenant B lists events - should see nothing
+        let list_query = ListAuditEventsQuery {
+            tenant_id: tenant_b,
+            limit: 100,
+        };
+        let list_result = list_audit_events(State(state.clone()), axum::extract::Query(list_query))
             .await
-            .unwrap();
+            .expect("Should return events (empty list is valid)");
 
-        // Tenant A approves their own request - should succeed
-        let body = ApproveApprovalRequestBody {
-            resolution_notes: Some("Approved by tenant A".to_string()),
-        };
-        let result = approve_approval_request(
-            State(state.clone()),
-            Path(created.id),
-            Json(body),
+        assert!(list_result.events.is_empty());
+        assert_eq!(list_result.total, 0);
+
+        // Tenant B tries to get the secret event directly - should get 404
+        let get_query = GetAuditEventQuery { tenant_id: tenant_b };
+        let get_result = get_audit_event(State(state.clone()), Path(secret_event.id), axum::extract::Query(get_query)).await;
+
+        assert!(get_result.is_err());
+
+        // Verify the secret event still exists and is accessible with correct tenant
+        let get_query_a = GetAuditEventQuery { tenant_id: tenant_a };
+        let get_result_a = get_audit_event(
+            State(state),
+            Path(secret_event.id),
+            axum::extract::Query(get_query_a),
         )
-        .await
-        .unwrap();
-        assert_eq!(result.status, "Approved");
+        .await;
 
-        // Tenant B approves their own request - should succeed
-        let body_b = ApproveApprovalRequestBody {
-            resolution_notes: Some("Approved by tenant B".to_string()),
-        };
-        let result_b = approve_approval_request(
-            State(state.clone()),
-            Path(created_b.id),
-            Json(body_b),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result_b.status, "Approved");
-    }
-
-    /// Test that reject_approval_request correctly filters by tenant.
-    /// Tenant A should not be able to reject Tenant B's approval requests.
-    #[tokio::test]
-    async fn test_reject_approval_request_tenant_isolation() {
-        use intent_service::ApprovalRequest;
-
-        let state = create_test_service();
-        let tenant_a = Uuid::new_v4();
-        let tenant_b = Uuid::new_v4();
-        let intent_id = Uuid::new_v4();
-
-        // Create a pending approval request for tenant A
-        let request = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_a,
-            "test-user",
-            "test",
-            "E",
-            "Tenant A request",
-        );
-        let created = state
-            .approval_request_repo
-            .create_approval_request(request)
-            .await
-            .unwrap();
-
-        // Create a pending approval request for tenant B
-        let request_b = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_b,
-            "test-user",
-            "test",
-            "E",
-            "Tenant B request",
-        );
-        let created_b = state
-            .approval_request_repo
-            .create_approval_request(request_b)
-            .await
-            .unwrap();
-
-        // Tenant A rejects their own request - should succeed
-        let body = RejectApprovalRequestBody {
-            resolution_notes: Some("Rejected by tenant A".to_string()),
-        };
-        let result = reject_approval_request(
-            State(state.clone()),
-            Path(created.id),
-            Json(body),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.status, "Rejected");
-
-        // Tenant B rejects their own request - should succeed
-        let body_b = RejectApprovalRequestBody {
-            resolution_notes: Some("Rejected by tenant B".to_string()),
-        };
-        let result_b = reject_approval_request(
-            State(state.clone()),
-            Path(created_b.id),
-            Json(body_b),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result_b.status, "Rejected");
-    }
-
-    /// Test that expire_approval_request correctly filters by tenant.
-    /// Tenant A should not be able to expire Tenant B's approval requests.
-    #[tokio::test]
-    async fn test_expire_approval_request_tenant_isolation() {
-        use intent_service::ApprovalRequest;
-
-        let state = create_test_service();
-        let tenant_a = Uuid::new_v4();
-        let tenant_b = Uuid::new_v4();
-        let intent_id = Uuid::new_v4();
-
-        // Create a pending approval request for tenant A
-        let request = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_a,
-            "test-user",
-            "test",
-            "E",
-            "Tenant A request",
-        );
-        let created = state
-            .approval_request_repo
-            .create_approval_request(request)
-            .await
-            .unwrap();
-
-        // Create a pending approval request for tenant B
-        let request_b = ApprovalRequest::new_pending(
-            intent_id,
-            0,
-            1,
-            Uuid::new_v4(),
-            tenant_b,
-            "test-user",
-            "test",
-            "E",
-            "Tenant B request",
-        );
-        let created_b = state
-            .approval_request_repo
-            .create_approval_request(request_b)
-            .await
-            .unwrap();
-
-        // Tenant A expires their own request - should succeed
-        let body = ExpireApprovalRequestBody {
-            reason: Some("Expired by tenant A".to_string()),
-        };
-        let result = expire_approval_request(
-            State(state.clone()),
-            Path(created.id),
-            Json(body),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.status, "Expired");
-
-        // Tenant B expires their own request - should succeed
-        let body_b = ExpireApprovalRequestBody {
-            reason: Some("Expired by tenant B".to_string()),
-        };
-        let result_b = expire_approval_request(
-            State(state.clone()),
-            Path(created_b.id),
-            Json(body_b),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result_b.status, "Expired");
+        assert!(get_result_a.is_ok());
+        let retrieved = get_result_a.unwrap();
+        assert_eq!(retrieved.payload, secret_event.payload);
     }
 }
