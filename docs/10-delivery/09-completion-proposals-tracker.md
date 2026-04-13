@@ -128,14 +128,15 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P5 |
 | **Title** | Phase 3 Batch 4a — Performance Work |
 | **Purpose** | Optimize intent diff, graph traversal, and database queries; configure connection pooling; run load tests to validate Phase 3 production readiness. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (P5-S1 graph benchmark groundwork delivered) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
 | **Suggested Next Step** | Profile current intent diff and graph traversal paths; identify top bottlenecks before Batch 4 begins |
-| **Progress Notes** | Batch 4a gated on Batch 2 (observability) complete and full stack available. Load testing requires complete system. |
+| **Progress Notes** | Batch 4a gated on Batch 2 (observability) complete and full stack available. **P5-S1 bounded slice delivered:** criterion benchmark harness for graph-service traversal/cycle-detection paths (`crates/graph-service/benches/graph_ops.rs`), capturing local baseline numbers (path_chain_20: ~6.6µs, cycle_detection_with_cycle: ~390ns). Load testing and production optimization claims remain gated on P5 full completion. |
 
 **Items:**
 - [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms
+- [~] **Graph traversal benchmarks** — ✅ **P5-S1 bounded slice delivered:** criterion harness with deterministic fixtures (chain-20, diamond, cycle graphs). Local baseline captured. Production optimization gated on P5 full completion.
 - [ ] Graph traversal optimization (indexing, query optimization) — benchmark target: traversal < 50ms for 10k node graph
 - [ ] Database query optimization (indexes, query plans) — `EXPLAIN ANALYZE` on critical queries
 - [ ] Connection pooling (Postgres, NATS) — no connection exhaustion under load

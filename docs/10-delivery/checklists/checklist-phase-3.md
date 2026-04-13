@@ -435,7 +435,17 @@
 
 ## 6. Performance Work
 
+**P5-S1 Bounded Slice — Graph traversal benchmark groundwork delivered**
+
 ```
+[~] Graph traversal benchmarks (P5-S1 bounded slice — criterion harness delivered; local baseline captured; production optimization gated on P5 full completion)
+    Evidence:
+    - Code: crates/graph-service/benches/graph_ops.rs (criterion-based, harness=false)
+    - Benchmarks: find_reachable (chain-20, chain-50, diamond), find_path (chain-20, diamond, no-route), detect_cycles (chain, with-cycle)
+    - Local baseline (April 2026): path_chain_20 ~6.6µs, cycle_detection_with_cycle ~390ns, reachable_chain_unlimited_20 ~4.9µs
+    - Tests: cargo test -p graph-service --all-features (78 tests pass)
+    - Note: Bounded slice delivers harness infrastructure and local baseline numbers. Actual performance targets (traversal < 50ms for 10k node graph), DB query optimization, and production load testing remain gated on P5 full completion.
+
 [ ] Intent diff optimization (caching, parallel computation)
     Evidence:
     - PR merged: <link>
