@@ -130,8 +130,9 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 **Slice 6 scope (bounded/truthful):**
 - Graph traversal: in-memory repository benchmarks (BFS, path finding, cycle detection across small/medium/large graphs) ✅
 - Intent-api sync path: diff compute, validation, intent service create ✅
+- Intent-api HTTP server: real HTTP requests against live axum server with in-memory repos ✅
 - Intent-service DB: live benchmark against Postgres; p50 25ms create, 1.6ms version, <1ms get/list ✅
-- **NOT in scope:** SQL-backed graph benchmarks, full HTTP server benchmarks, concurrent DB benchmarks, load testing
+- **NOT in scope:** SQL-backed graph benchmarks, concurrent DB benchmarks, load testing
 
 ### Batch 2 remaining work (not yet delivered)
 
@@ -141,7 +142,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
 | 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
 | 2-5 (remainder) | Graph traversal and DB query benchmarks | Graph traversal and DB benchmarks — both delivered |
-| 2-5 (remainder) | HTTP/API benchmarks and load testing | Not started — requires full stack |
+| 2-5 (remainder) | HTTP/API benchmarks | ✅ Delivered (real HTTP with in-memory repos); full production load testing remains future scope |
 | 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | Slice 5 delivers 1h burn-rate stat panels; multi-window alerting rules remain future scope |
 | 2-7 (remainder) | Budget depletion forecasting / 30-day budget panel | Future scope after single-window burn-rate panels are validated |
 

@@ -84,9 +84,9 @@
 
 ---
 
-## Benchmark Results — Intent API (http-handlers sync path)
+## Benchmark Results — Intent API (http-handlers sync path + HTTP server)
 
-**Scope:** Synchronous processing paths in intent-api handlers. No HTTP server overhead, no database queries.
+**Scope:** Synchronous processing paths in intent-api handlers AND full HTTP server benchmarks with real requests. HTTP server benchmarks use in-memory repositories.
 
 **Benchmark harness:** `crates/intent-api/benches/http_handlers.rs` (criterion)
 
@@ -102,13 +102,20 @@
 | `validation/invalid_empty_summary` | Validation overhead for invalid (empty summary) |
 | `validation/invalid_nil_workflow` | Validation overhead for invalid (nil workflow) |
 | `intent_service_create/create_intent` | IntentService.create_intent call |
+| `http_server/create_intent` | Full HTTP POST /intents with real routing and serialization |
+| `http_server/health_check` | Full HTTP GET /health |
+| `http_server/ready_check` | Full HTTP GET /ready |
+| `http_server/validate_intent` | Full HTTP POST /v1/intents/validate |
 
 **Observations:**
 - Sync compute path benchmarks measure processing overhead without HTTP server
-- Full HTTP server benchmarks require live server + load testing infrastructure
+- HTTP server benchmarks measure end-to-end latency including routing, serialization, and handler processing
+- HTTP server benchmarks use in-memory repositories (no Postgres)
+- Observed HTTP server latencies: health/ready ~270µs, create_intent ~370µs, validate_intent ~390µs
 
 **Limitations:**
-- No full HTTP server benchmarks (requires running server + load generator)
+- HTTP server benchmarks use in-memory repositories (not live Postgres)
+- No full production load testing with realistic traffic patterns
 - No database-backed handler benchmarks (requires live Postgres)
 - No graph-service integration benchmarks (requires full stack)
 
@@ -157,8 +164,8 @@ DATABASE_URL="postgres://user:pass@localhost/intent_rebase" cargo bench -p inten
 | rebase-engine | Sync diff + plan | ✅ Delivered | Batch 2 Slice 4 |
 | graph-service | Graph traversal | ✅ Delivered | BFS, path finding, cycle detection |
 | intent-api | HTTP handler sync path | ✅ Delivered | Diff compute, validation |
+| intent-api | HTTP server benchmarks | ✅ Delivered | Real HTTP requests with in-memory repos |
 | intent-service | DB operations | ✅ Live benchmark run | p50 25ms create, 1.6ms version, <1ms get/list |
-| HTTP server | Full HTTP benchmarks | ⬜ Not started | Requires running server |
 | Full stack | Load testing | ⬜ Not started | Requires complete system |
 
 **Limitations across all benchmarks:**

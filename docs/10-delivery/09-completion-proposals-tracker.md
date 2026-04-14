@@ -75,11 +75,12 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Error budget tracking panels (preview + apply 1h burn-rate stat panels) — Batch 2 Slice 5
 - [x] Graph traversal benchmark harness (BFS, path finding, cycle detection across small/medium/large graphs) — Batch 2 Slice 6
 - [x] Intent-api sync path benchmark harness (diff compute, validation, intent service create) — Batch 2 Slice 6
+- [x] Intent-api HTTP server benchmark harness (real HTTP requests with in-memory repos) — Batch 2 Slice 6
 - [x] Intent-service DB benchmark harness (live run complete — p50 25ms create, 1.6ms version, <1ms get/list) — Batch 2 Slice 6
 - [ ] Multi-window burn-rate alerting (1h/6h/3d)
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
 - [ ] Full OTEL trace context propagation across all service boundaries
-- [ ] Full HTTP server benchmarks and load testing
+- [ ] Full production load testing
 
 ---
 
