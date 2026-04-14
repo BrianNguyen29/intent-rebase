@@ -733,6 +733,7 @@ mod tests {
             purpose,
             BundleContents::default(),
             "test-user",
+            None,
         )
     }
 

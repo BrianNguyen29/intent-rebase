@@ -396,6 +396,21 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::RollbackRecordNotFound(_) => {
                 (StatusCode::NOT_FOUND, "ROLLBACK_RECORD_NOT_FOUND", false)
             }
+            IntentRebaseError::QuotaExceeded { .. } => {
+                (StatusCode::FORBIDDEN, "QUOTA_EXCEEDED", false)
+            }
+            IntentRebaseError::TenantNotFound(_) => {
+                (StatusCode::NOT_FOUND, "TENANT_NOT_FOUND", false)
+            }
+            IntentRebaseError::TenantNotFoundBySlug(_) => {
+                (StatusCode::NOT_FOUND, "TENANT_NOT_FOUND", false)
+            }
+            IntentRebaseError::ForensicBundleNotFound(_) => {
+                (StatusCode::NOT_FOUND, "FORENSIC_BUNDLE_NOT_FOUND", false)
+            }
+            IntentRebaseError::InvalidForensicBundleStatusTransition { .. } => {
+                (StatusCode::CONFLICT, "INVALID_BUNDLE_STATUS_TRANSITION", false)
+            }
         };
 
         let body = ApiError {
@@ -5283,6 +5298,7 @@ mod tests {
 
         // Create an intent first
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5345,6 +5361,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5471,6 +5488,7 @@ mod tests {
 
         // Create an intent first
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5536,6 +5554,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -5710,6 +5729,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5921,6 +5941,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -5987,6 +6008,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -6052,6 +6074,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::nil(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -6117,6 +6140,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -6182,6 +6206,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -6388,6 +6413,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -6454,6 +6480,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -6522,6 +6549,7 @@ mod tests {
         };
 
         let request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![],
             payload: IntentPayload {
@@ -6595,6 +6623,7 @@ mod tests {
 
         // Create an intent
         let create_request = CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),
@@ -7150,7 +7179,7 @@ mod tests {
     #[tokio::test]
     async fn test_noop_event_publisher_skips() {
         // Test that NoOpEventPublisher skips all events (always returns Skipped)
-        use intent_rebase_types::EventPublisher;
+        use intent_rebase_types::{EventPublisher, TraceContext};
         let publisher = Arc::new(intent_rebase_types::NoOpEventPublisher::new());
         let tenant_id = Uuid::new_v4();
         let payload = serde_json::json!({ "test": true });
@@ -7158,7 +7187,7 @@ mod tests {
             intent_rebase_types::EventSubject::from_audit_event(tenant_id, "RebaseApplied");
 
         // NoOpEventPublisher should skip (return Skipped)
-        let result = publisher.publish(&subject, &payload).await;
+        let result = publisher.publish(&subject, &payload, TraceContext::default()).await;
         match result {
             intent_rebase_types::PublishResult::Skipped { reason } => {
                 assert!(reason.contains("disabled"));

@@ -89,6 +89,7 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             request.purpose,
             BundleContents::default(), // Placeholder until Phase 4 content collection
             &request.created_by,
+            None,
         );
 
         let created = self.repo.create(bundle).await.map_err(BundleGenError::Repository)?;

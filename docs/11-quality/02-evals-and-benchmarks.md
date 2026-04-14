@@ -25,7 +25,6 @@
 - mean time to safe rebase preview
 - mean time to apply
 
-<<<<<<< HEAD
 ---
 
 ## Benchmark Results — Batch 2 Slice 4 (rebase-engine sync)
@@ -214,4 +213,3 @@ The `crates/rebase-engine/benches/diff_latency.rs` harness uses [Criterion](http
 **Status:** DB query benchmarks are **bounded groundwork** — they verify the harness infrastructure and capture local in-memory baseline numbers. Actual performance targets, production database connection sizing, and load testing remain gated on P5 completion.
 
 **Baseline template:** [benchmark-baseline-results.md](./benchmark-baseline-results.md)
->>>>>>> origin/main
