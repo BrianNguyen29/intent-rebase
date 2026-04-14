@@ -591,11 +591,12 @@
     - Code: connection pool configured
     - Benchmark: no connection exhaustion under load
 
-[ ] Load testing: simulate Phase 3 production load
-    Evidence:
-    - Load test results: 10x normal load sustained
-    - No SLO violations under load
-    - Report: load-test-results.md
+[x] Load testing: simulate Phase 3 production load
+    - Harness: crates/intent-api/tests/load_test.rs
+    - Run: cargo test -p intent-api --features load-test --test load_test -- --nocapture
+    - Results: docs/11-quality/load-test-results.md
+    - All 3 load levels PASS (10x normal: p95 41ms, 0% errors)
+    - Limitation: in-memory repos only, no live Postgres
 ```
 
 ---
