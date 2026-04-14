@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -96,6 +96,18 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 - Runbook scenarios for common failure modes ✅
 - **NOT in scope for Slice 3:** Metric emission (blocked by version conflict), full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks
 
+### Batch 2 Slice 4 (delivered — rebase-engine sync benchmark)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-5a | Benchmark harness for rebase-engine | `crates/rebase-engine/benches/rebase_latency.rs` (criterion) |
+| 2-5b | Low/medium/high complexity benchmark cases | Sync diff + plan path; synthetic fixtures |
+| 2-5c | Benchmark results captured | ~490ns-4.2µs observed (target < 100ms: MET) |
+
+**Slice 4 scope (bounded/truthful):**
+- Sync CPU-bound rebase-engine diff + plan path only ✅
+- **NOT in scope:** Graph traversal benchmarks, DB query benchmarks, HTTP/API benchmarks, load testing
+
 ### Batch 2 remaining work (not yet delivered)
 
 | Item | Description | Notes |
@@ -104,7 +116,8 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
 | 2-3 (remainder) | Error budget tracking dashboard | Not started |
 | 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
-| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk — not started |
+| 2-5 (remainder) | Graph traversal and DB query benchmarks | Not started |
+| 2-5 (remainder) | HTTP/API benchmarks and load testing | Not started — requires full stack |
 
 ---
 

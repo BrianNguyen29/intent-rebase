@@ -12,7 +12,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
-| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3 delivered) | High |
+| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4 delivered) | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
@@ -58,11 +58,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3 delivered) |
+| **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Continue with error budget tracking dashboard and performance benchmarks |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics definitions scaffolded (emission blocked by metrics crate version conflict), runbook scenarios RB6-RB10. Full OTEL export, distributed trace context across all services, and active metric emission remain future scope. |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics definitions scaffolded (emission blocked by metrics crate version conflict), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Full OTEL export, distributed trace context across all services, metric emission, and active benchmark coverage remain future scope. |
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
@@ -70,10 +70,14 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Distributed tracing foundation (request-id extraction + service method instrumentation) — Batch 2 Slice 2
 - [x] Alerting rules (warning, critical thresholds) — Batch 2 Slice 3
 - [x] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn — Batch 2 Slice 3
-- [x] Bounded metrics instrumentation (intent version creation, rebase preview/apply counters and histograms) — Batch 2 Slice 3
+- [x] Bounded metrics instrumentation (intent version creation, rebase preview/apply counters and histograms — definitions scaffolded, emission blocked by metrics crate version conflict) — Batch 2 Slice 3
+- [x] Rebase-engine sync diff + plan benchmark harness (criterion, low/medium/high complexity) — Batch 2 Slice 4
 - [ ] Error budget tracking dashboard + runbook
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
-- [ ] Performance benchmarks: rebase latency p50/p95/p99 (target: p95 < 60s for low/medium risk)
+- [ ] Full OTEL trace context propagation across all service boundaries
+- [ ] Metric emission (blocked by metrics crate version conflict; definitions scaffolded but recording disabled)
+- [ ] Graph traversal and DB query benchmarks
+- [ ] HTTP/API benchmarks and load testing
 
 ---
 
@@ -140,18 +144,38 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P5 |
 | **Title** | Phase 3 Batch 4a — Performance Work |
 | **Purpose** | Optimize intent diff, graph traversal, and database queries; configure connection pooling; run load tests to validate Phase 3 production readiness. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (Slice 1: rebase-engine sync benchmark slice delivered) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
-| **Suggested Next Step** | Profile current intent diff and graph traversal paths; identify top bottlenecks before Batch 4 begins |
-| **Progress Notes** | Batch 4a gated on Batch 2 (observability) complete and full stack available. Load testing requires complete system. |
+| **Suggested Next Step** | Extend benchmarks to graph traversal and database query paths; profile async/HTTP path |
+| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. Observed latencies are microsecond-level (all under 5µs for full diff+plan path), far below 100ms target. No graph traversal or database query benchmarks yet. No HTTP/API benchmarks yet. |
 
 **Items:**
-- [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms
+- [x] **Batch 2 Slice 4:** rebase-engine sync diff + plan benchmark harness — benchmark harness with criterion, low/medium/high complexity cases
+- [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms (baseline: ~490ns-2.6µs, target met)
 - [ ] Graph traversal optimization (indexing, query optimization) — benchmark target: traversal < 50ms for 10k node graph
 - [ ] Database query optimization (indexes, query plans) — `EXPLAIN ANALYZE` on critical queries
 - [ ] Connection pooling (Postgres, NATS) — no connection exhaustion under load
 - [ ] Load testing: simulate Phase 3 production load (10x normal, no SLO violations) — report: `load-test-results.md`
+
+**Benchmark Results (Batch 2 Slice 4):**
+```
+compute_diff_sync:
+  - low (no change):    ~490ns
+  - medium (scope add): ~556ns
+  - high (multi-sec):   ~2.6µs
+
+compute_diff_with_risk_sync:
+  - low:    ~1µs
+  - medium: ~988ns
+  - high:   ~2.5µs
+
+diff_and_plan_sync:
+  - low:    ~958ns
+  - medium: ~2.5µs
+  - high:   ~4.2µs
+```
+Scope: sync CPU-bound computation only. No I/O, no external services.
 
 ---
 

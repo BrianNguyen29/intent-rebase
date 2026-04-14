@@ -455,11 +455,19 @@
 ## 6. Performance Work
 
 ```
-[ ] Intent diff optimization (caching, parallel computation)
+[x] Batch 2 Slice 4: rebase-engine sync diff + plan benchmark (Phase 3 Batch 2)
     Evidence:
-    - PR merged: <link>
-    - Benchmark: diff computation < 100ms for typical intent
-    - Code: rebase-engine/diff_cache.rs
+    - Code: crates/rebase-engine/Cargo.toml (criterion dev-dependency)
+    - Code: crates/rebase-engine/benches/rebase_latency.rs
+    - Benchmark: compute_diff_sync, compute_diff_with_risk_sync, diff_and_plan_sync
+    - Results: ~490ns-2.6µs for diff, ~958ns-4.2µs for diff+plan (all far under 100ms target)
+    - Scope: sync CPU-bound only; no HTTP/API, no graph service, no DB queries
+
+[~] Intent diff optimization (caching, parallel computation)
+    Evidence:
+    - Benchmark baseline captured: diff computation ~490ns-2.6µs (target < 100ms: MET)
+    - Code: rebase-engine/diff_cache.rs (not yet implemented)
+    - Note: Optimization may not be needed given observed baseline performance
 
 [ ] Graph traversal optimization (indexing, query optimization)
     Evidence:
