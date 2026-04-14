@@ -1,0 +1,30 @@
+# Prometheus configuration for local development
+# Batch 2 Slice 3 — alerting rules foundation (local dev only)
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once; change to 'refresh_interval' to reload rules at runtime
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # intent-api metrics endpoint
+  - job_name: "intent-api"
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+    metrics_path: "/metrics"
+    scrape_interval: 10s

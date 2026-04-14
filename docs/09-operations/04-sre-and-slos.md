@@ -1,9 +1,10 @@
 # SRE and SLOs
 
-> **Status (Batch 2 Slice 1 + Slice 2):** This document describes provisional SLO targets and a Grafana dashboard scaffold (Slice 1), plus a bounded tracing foundation (Slice 2).
+> **Status (Batch 2 Slice 1 + Slice 2 + Slice 3):** This document describes provisional SLO targets and a Grafana dashboard scaffold (Slice 1), bounded tracing foundation (Slice 2), and bounded alerting rules + runbook foundation (Slice 3).
 > These targets are **not yet SRE-approved** and **no production telemetry is connected**.
-> Batch 2 Slice 1 delivers the **SLO foundation only** — SLO definitions documented, dashboard scaffold written, alerting rules and error budget tracking are out of scope for this slice.
+> Batch 2 Slice 1 delivers the **SLO foundation only** — SLO definitions documented, dashboard scaffold written.
 > Batch 2 Slice 2 delivers **tracing foundation only** — request-id extraction middleware and service method instrumentation; no full OTEL export or distributed trace across all boundaries.
+> Batch 2 Slice 3 delivers **alerting rules + runbook foundation** — Alertmanager config, Prometheus alerting rules, Grafana provisioning, and runbook scenarios for common failure modes. Metric emission is **blocked by a metrics crate version conflict** (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23); metric definitions are scaffolded but not actively recorded. Full metrics coverage across all flows is NOT claimed.
 
 ---
 
@@ -43,7 +44,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 
 ---
 
-## Batch 2 Slice 1 + Slice 2 — What Is and Is Not Implemented
+## Batch 2 Slice 1 + Slice 2 + Slice 3 — What Is and Is Not Implemented
 
 ### ✅ Delivered (Slice 1)
 
@@ -55,25 +56,41 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 - **Request-ID extraction middleware** — extracts `X-Request-ID` header or generates UUID; stores in request extensions for downstream correlation
 - **Service method instrumentation** — `#[tracing::instrument]` on key intent-service, rebase-engine, and compensation-service methods
 
+### ✅ Delivered (Slice 3 — alerting rules + runbook foundation)
+
+- **Alerting rules** — Prometheus alerting rules in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` targeting availability and latency SLOs
+- **Alertmanager config** — `infrastructure/local/alertmanager/alertmanager.yml` with placeholder receivers (local dev only)
+- **Grafana provisioning** — `infrastructure/local/grafana/provisioning/` with datasource and dashboard provisioning
+- **Metrics instrumentation** — metric definitions scaffolded in intent-api:
+  - `intent_api_intent_version_created_total` (counter with status label)
+  - `intent_api_rebase_preview_requests_total` (counter with status label)
+  - `intent_api_rebase_apply_requests_total` (counter with status label)
+  - `intent_api_diff_compute_duration_seconds` (histogram)
+  - `intent_api_rebase_preview_duration_seconds` (histogram with graph_size label)
+  - `intent_api_rebase_apply_duration_seconds` (histogram with risk_class label)
+  - ⚠️ **Metric emission is blocked** — metric definitions are registered but recording is disabled due to a metrics crate version conflict (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23). The alerting rules reference these metrics, but they will not be actively emitted until the version conflict is resolved.
+- **Runbook scenarios** — see `05-runbooks.md` for RB6-RB10 covering: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn
+
 ### ⬜ Not Yet Implemented
 
-- **Alerting rules** — no Alertmanager config, no warning/critical thresholds wired to alerts
+- **Metric emission** — metric definitions are scaffolded but recording is disabled due to a metrics crate version conflict (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23); alerting rules reference these metrics but they will not be actively emitted until the conflict is resolved
+- **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented even if emission were unblocked
 - **Error budget tracking dashboard** — no burn-rate query or budget tracking panels
 - **Distributed tracing** — no full OTEL instrumentation, no trace context propagation across all service boundaries (Slice 2 delivers foundation only)
 - **Performance benchmarks** — no rebase latency p50/p95/p99 measurements
-- **Runbooks** — no runbooks for rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
+- **Production alerting** — Slice 3 delivers local dev infrastructure only; production Alertmanager configuration is future scope
 
 ---
 
 ## On-Call Considerations (Reference)
 
-These are documented for future runbook development — no alerting infrastructure exists yet.
+These are documented for future runbook development — alerting infrastructure exists locally via Slice 3 but production deployment requires SRE confirmation.
 
-- Adapter failures
-- Queue backlogs
-- Stuck compensations
-- Approval stale not triggering
-- Audit append failures
+- Adapter failures — see RB3 (Runtime adapter failing apply)
+- Queue backlogs — see RB2 (Queue lag high)
+- Stuck compensations — see RB9 (Compensation timeout)
+- Approval stale not triggering — see RB7 (Approval backlog)
+- Audit append failures — see RB4 (Audit sink unavailable)
 
 ---
 

@@ -1,0 +1,169 @@
+# Prometheus alerting rules for Intent Rebase Engine
+# Batch 2 Slice 3 — bounded alerting rules (local dev only)
+# Not production-ready — requires SRE confirmation before production deployment
+#
+# These rules target metrics defined in 06-slo-dashboard.md
+# Metrics must be instrumented in intent-api before these rules can fire.
+
+groups:
+  # ============================================================
+  # Availability Alerts — aligned to SLO targets from 04-sre-and-slos.md
+  # ============================================================
+  - name: intent_api_availability
+    interval: 30s
+    rules:
+      # Intent version creation success rate below 99.9% SLO target
+      - alert: IntentVersionCreationLowSuccessRate
+        expr: |
+          sum(rate(intent_api_intent_version_created_total{status="success"}[5m]))
+          /
+          sum(rate(intent_api_intent_version_created_total[5m])) * 100 < 99.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "Intent version creation success rate below warning threshold"
+          description: "Success rate is {{ $value | printf \"%.2f\" }}% (threshold: 99.0%). SLO target is 99.9%."
+
+      # Rebase preview availability below 99.5% SLO target
+      - alert: RebasePreviewLowAvailability
+        expr: |
+          sum(rate(intent_api_rebase_preview_requests_total{status="success"}[5m]))
+          /
+          sum(rate(intent_api_rebase_preview_requests_total[5m])) * 100 < 99.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "Rebase preview availability below warning threshold"
+          description: "Preview availability is {{ $value | printf \"%.2f\" }}% (threshold: 99.0%). SLO target is 99.5%."
+
+      # Rebase apply path availability below 99.0% SLO target
+      - alert: RebaseApplyLowAvailability
+        expr: |
+          sum(rate(intent_api_rebase_apply_requests_total{status="success"}[5m]))
+          /
+          sum(rate(intent_api_rebase_apply_requests_total[5m])) * 100 < 98.5
+        for: 5m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "Rebase apply path availability below critical threshold"
+          description: "Apply availability is {{ $value | printf \"%.2f\" }}% (threshold: 98.5%). SLO target is 99.0%."
+
+  # ============================================================
+  # Latency Alerts — aligned to latency SLOs from 04-sre-and-slos.md
+  # ============================================================
+  - name: intent_api_latency
+    interval: 30s
+    rules:
+      # Diff compute p95 latency above 2s SLO target
+      - alert: DiffComputeHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(intent_api_diff_compute_duration_seconds_bucket[5m])) by (le)
+          ) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "Diff compute p95 latency above SLO target"
+          description: "p95 diff compute latency is {{ $value | printf \"%.2f\" }}s (SLO target: 2s)."
+
+      # Rebase preview p95 latency above 10s SLO target (medium graph)
+      - alert: RebasePreviewHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(intent_api_rebase_preview_duration_seconds_bucket{graph_size="medium"}[5m])) by (le)
+          ) > 10.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "Rebase preview p95 latency above SLO target"
+          description: "p95 preview latency (medium graph) is {{ $value | printf \"%.2f\" }}s (SLO target: 10s)."
+
+      # Rebase apply p95 latency above 60s SLO target (low/medium risk)
+      - alert: RebaseApplyHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(intent_api_rebase_apply_duration_seconds_bucket{risk_class=~"low|medium"}[5m])) by (le)
+          ) > 60.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "Rebase apply p95 latency above SLO target"
+          description: "p95 apply latency (low/medium risk) is {{ $value | printf \"%.2f\" }}s (SLO target: 60s)."
+
+  # ============================================================
+  # Compensation Engine Alerts — Phase 3 Batch 1 scope
+  # ============================================================
+  - name: intent_api_compensation
+    interval: 30s
+    rules:
+      # Compensation execution success rate below 99.0% SLO target
+      - alert: CompensationExecutionLowSuccessRate
+        expr: |
+          sum(rate(intent_api_compensation_execution_total{status="success"}[5m]))
+          /
+          sum(rate(intent_api_compensation_execution_total[5m])) * 100 < 95.0
+        for: 5m
+        labels:
+          severity: warning
+          slo: compensation
+        annotations:
+          summary: "Compensation execution success rate below warning threshold"
+          description: "Compensation success rate is {{ $value | printf \"%.2f\" }}% (threshold: 95.0%). SLO target is 99.0%."
+
+      # DLQ candidate count elevated
+      - alert: CompensationDLQCandidatesElevated
+        expr: |
+          sum(intent_api_compensation_dlq_candidate_count) > 5
+        for: 5m
+        labels:
+          severity: critical
+          slo: compensation
+        annotations:
+          summary: "Compensation DLQ candidates above critical threshold"
+          description: "DLQ candidate count is {{ $value }} (threshold: 5). Immediate attention required."
+
+  # ============================================================
+  # Error Budget Alerts — burn-rate based (simplified for local dev)
+  # ============================================================
+  - name: intent_api_error_budget
+    interval: 60s
+    rules:
+      # Fast burn rate alert for preview path (1h window consuming > 50% of 1h budget)
+      - alert: PreviewPathFastBurn
+        expr: |
+          sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[1h]))
+          /
+          sum(rate(intent_api_rebase_preview_requests_total[1h])) > 0.005
+        for: 10m
+        labels:
+          severity: warning
+          budget: preview
+        annotations:
+          summary: "Preview path error budget burning fast"
+          description: "Preview path error rate is {{ $value | printf \"%.3f\" }}% over 1h window (budget threshold: 0.5%)."
+
+      # Fast burn rate alert for apply path (1h window consuming > 50% of 1h budget)
+      - alert: ApplyPathFastBurn
+        expr: |
+          sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[1h]))
+          /
+          sum(rate(intent_api_rebase_apply_requests_total[1h])) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          budget: apply
+        annotations:
+          summary: "Apply path error budget burning fast"
+          description: "Apply path error rate is {{ $value | printf \"%.3f\" }}% over 1h window (budget threshold: 1.0%)."

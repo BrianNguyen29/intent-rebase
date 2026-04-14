@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -68,7 +68,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-1a | SLO definitions documented | `docs/09-operations/04-sre-and-slos.md` — provisional targets, awaiting SRE confirmation |
 | 2-1b | Grafana dashboard scaffold | `docs/09-operations/06-slo-dashboard.md` — 16 panels, all referencing metrics that require instrumentation |
 
-### Batch 2 Slice 2 (this delivery — bounded tracing foundation)
+### Batch 2 Slice 2 (delivered — bounded tracing foundation)
 
 | Item | Description | Notes |
 |------|-------------|-------|
@@ -80,16 +80,31 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 - `#[tracing::instrument]` on key service methods ✅
 - **NOT in scope for Slice 2:** Full OTEL exporter, trace context propagation across all service boundaries, OpenTelemetry SDK integration
 
+### Batch 2 Slice 3 (delivered — alerting rules + runbook foundation)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-2a | Alerting rules | `infrastructure/local/prometheus/rules/intent_api_alerts.yml` — warning/critical thresholds for availability and latency SLOs |
+| 2-2b | Alertmanager config | `infrastructure/local/alertmanager/alertmanager.yml` — placeholder receivers for local dev only |
+| 2-3 | Error budget runbook | `docs/09-operations/05-runbooks.md` RB10 — error budget burn rate runbook |
+| 2-6 | Runbooks | `docs/09-operations/05-runbooks.md` RB6-RB10 — rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn |
+| Metrics | Bounded metrics instrumentation (scaffolded, emission blocked) | `intent_api_intent_version_created_total`, `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_diff_compute_duration_seconds`, `intent_api_rebase_preview_duration_seconds`, `intent_api_rebase_apply_duration_seconds` — metric definitions scaffolded in intent-api but recording disabled due to metrics crate version conflict |
+
+**Slice 3 scope (bounded/truthful):**
+- Local dev alerting infrastructure (Prometheus, Alertmanager, Grafana) ✅
+- Bounded metrics instrumentation (definitions scaffolded, emission blocked by metrics crate version conflict) ✅
+- Runbook scenarios for common failure modes ✅
+- **NOT in scope for Slice 3:** Metric emission (blocked by version conflict), full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks
+
 ### Batch 2 remaining work (not yet delivered)
 
 | Item | Description | Notes |
 |------|-------------|-------|
 | 2-1 (remainder) | SLO definitions — SRE approval gate | External SRE sign-off still open |
-| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config — not started |
-| 2-3 | Error budget tracking dashboard + runbook | Not started |
+| 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
+| 2-3 (remainder) | Error budget tracking dashboard | Not started |
 | 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
 | 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk — not started |
-| 2-6 | Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Not started |
 
 ---
 

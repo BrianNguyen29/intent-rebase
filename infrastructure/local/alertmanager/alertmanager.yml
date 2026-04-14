@@ -1,0 +1,53 @@
+# Alertmanager configuration for local development
+# Batch 2 Slice 3 — alerting foundation (local dev only)
+# Not production-ready
+
+global:
+  # SMTP configuration for email notifications (placeholder)
+  # In production, configure real SMTP server
+  smtp_smarthost: 'localhost:25'
+  smtp_from: 'alertmanager@localhost'
+
+# Route alerts to appropriate receivers
+route:
+  group_by: ['alertname', 'slo']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'null'
+  routes:
+    # Critical alerts go to critical receiver
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      continue: true
+    # Warning alerts go to warning receiver
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+
+# Inhibit rules to suppress duplicate alerts
+inhibit_rules:
+  # Don't fire multiple critical alerts for the same SLO at the same time
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'slo']
+
+# Receivers (placeholder configurations for local dev)
+receivers:
+  - name: 'null'
+    # No-op receiver — alerts are logged but not routed
+
+  - name: 'critical-alerts'
+    # In production: configure PagerDuty, Slack, email, etc.
+    webhook_configs:
+      - url: 'http://localhost:9001/webhook'
+        send_resolved: true
+
+  - name: 'warning-alerts'
+    # In production: configure Slack, email, etc.
+    webhook_configs:
+      - url: 'http://localhost:9001/webhook'
+        send_resolved: true

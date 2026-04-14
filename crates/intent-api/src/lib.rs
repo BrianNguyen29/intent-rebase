@@ -37,6 +37,69 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
 use validator::Validate;
 
+// ============================================================================
+// Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
+// ============================================================================
+//
+// These metrics are aligned to the SLO targets documented in 04-sre-and-slos.md
+// and the dashboard scaffold in 06-slo-dashboard.md.
+//
+// NOT YET IMPLEMENTED for all flows — this is a bounded slice delivering
+// instrumentation for core intent operations only. Full coverage across all
+// artifact-producing operations and compensation flows remains future scope.
+//
+// Metrics are recorded using the metrics_exporter_prometheus handle which is
+// installed by the /metrics endpoint. The PrometheusBuilder handles the
+// exporter setup and metric registration.
+//
+// Note: Due to metrics crate version conflicts (metrics-exporter-prometheus 0.12.2
+// uses metrics 0.21.1 while workspace specifies metrics 0.23), direct macro
+// calls have API incompatibilities. The metrics are defined but not actively
+// recorded in this slice. Future work should resolve the version conflict
+// or use a compatible metrics API.
+//
+// Metrics referenced by Prometheus rules:
+// - intent_api_intent_version_created_total{status="success|error"}
+// - intent_api_rebase_preview_requests_total{status="success|error"}
+// - intent_api_rebase_apply_requests_total{status="success|error"}
+// - intent_api_diff_compute_duration_seconds
+// - intent_api_rebase_preview_duration_seconds
+// - intent_api_rebase_apply_duration_seconds
+
+/// Record intent version creation outcome
+fn record_intent_version_created(_status: &'static str) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+    // The counter metric is registered by the PrometheusBuilder but cannot be
+    // incremented via the 0.23 macro API due to incompatibility with 0.21.1
+    // types used by metrics-exporter-prometheus.
+    // See: infrastructure/local/prometheus/rules/intent_api_alerts.yml
+}
+
+/// Record rebase preview request outcome
+fn record_rebase_preview_request(_status: &'static str) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+}
+
+/// Record rebase apply request outcome
+fn record_rebase_apply_request(_status: &'static str) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+}
+
+/// Record diff compute duration
+fn record_diff_compute_duration(_duration_secs: f64) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+}
+
+/// Record rebase preview duration
+fn record_rebase_preview_duration(_duration_secs: f64, _graph_size: &'static str) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+}
+
+/// Record rebase apply duration
+fn record_rebase_apply_duration(_duration_secs: f64, _risk_class: &'static str) {
+    // Note: Metrics recording disabled due to metrics crate version conflict.
+}
+
 /// Response for diff computation including version context, diff, and risk
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffResponse {
@@ -614,14 +677,21 @@ async fn create_intent(
     Json(request): Json<CreateIntentRequest>,
 ) -> Result<(StatusCode, Json<CreateIntentResponse>), ApiErrorResponse> {
     // Phase 1: Input validation
-    validate_create_intent_request(&request).map_err(ApiErrorResponse)?;
+    if let Err(e) = validate_create_intent_request(&request) {
+        record_intent_version_created("error");
+        return Err(ApiErrorResponse(e));
+    }
 
-    state
-        .service
-        .create_intent(request)
-        .await
-        .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(ApiErrorResponse)
+    match state.service.create_intent(request).await {
+        Ok(r) => {
+            record_intent_version_created("success");
+            Ok((StatusCode::CREATED, Json(r)))
+        }
+        Err(e) => {
+            record_intent_version_created("error");
+            Err(ApiErrorResponse(e))
+        }
+    }
 }
 
 /// GET /intents/{intent_id} - Get intent head (current version)
@@ -650,17 +720,35 @@ async fn create_version(
     headers: HeaderMap,
     Json(request): Json<CreateVersionRequest>,
 ) -> Result<(StatusCode, Json<CreateVersionResponse>), ApiErrorResponse> {
-    let expected_version =
-        parse_optional_header(&headers, "x-expected-version").map_err(ApiErrorResponse)?;
-    let expected_row_version =
-        parse_optional_header(&headers, "x-expected-row-version").map_err(ApiErrorResponse)?;
+    let expected_version = match parse_optional_header(&headers, "x-expected-version") {
+        Ok(v) => v,
+        Err(e) => {
+            record_intent_version_created("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let expected_row_version = match parse_optional_header(&headers, "x-expected-row-version") {
+        Ok(v) => v,
+        Err(e) => {
+            record_intent_version_created("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
 
-    state
+    match state
         .service
         .create_version(intent_id, request, expected_version, expected_row_version)
         .await
-        .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(ApiErrorResponse)
+    {
+        Ok(r) => {
+            record_intent_version_created("success");
+            Ok((StatusCode::CREATED, Json(r)))
+        }
+        Err(e) => {
+            record_intent_version_created("error");
+            Err(ApiErrorResponse(e))
+        }
+    }
 }
 
 /// Parse an optional i32 header value.
@@ -789,19 +877,25 @@ async fn compute_diff(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<DiffResponse>, ApiErrorResponse> {
-    let (from_version, to_version, diff, risk) = state
+    let start = std::time::Instant::now();
+    let result = state
         .service
         .compute_diff(intent_id, request.from_version, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+        .await;
 
-    Ok(Json(DiffResponse {
-        intent_id,
-        from_version,
-        to_version,
-        diff,
-        risk,
-    }))
+    let duration = start.elapsed().as_secs_f64();
+    record_diff_compute_duration(duration);
+
+    match result {
+        Ok((from_version, to_version, diff, risk)) => Ok(Json(DiffResponse {
+            intent_id,
+            from_version,
+            to_version,
+            diff,
+            risk,
+        })),
+        Err(e) => Err(ApiErrorResponse(e)),
+    }
 }
 
 // /// POST /intents/{intent_id}/rebase-preview - Generate rebase preview plan
@@ -938,24 +1032,58 @@ async fn rebase_preview(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+    let start = std::time::Instant::now();
+
     // Always use graph-integrated preview - the service handles unavailability gracefully
-    let plan = state
+    let plan_result = state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+        .await;
+
+    let plan = match plan_result {
+        Ok(p) => p,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
 
     // Get version info for response context
-    let from_version = state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let to_version = state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Record latency with graph_size label (use "unknown" if affected_items unavailable)
+    let graph_size = match &plan.affected_items.status {
+        intent_rebase_types::AffectedItemsStatus::Available => {
+            let total = plan.affected_items.affected_artifacts.len()
+                + plan.affected_items.affected_approvals.len()
+                + plan.affected_items.side_effects.len();
+            if total < 10 {
+                "small"
+            } else if total < 100 {
+                "medium"
+            } else {
+                "large"
+            }
+        }
+        _ => "unknown",
+    };
+
+    let duration = start.elapsed().as_secs_f64();
+    record_rebase_preview_duration(duration, graph_size);
+    record_rebase_preview_request("success");
 
     Ok(Json(RebasePreviewResponse {
         intent_id,
@@ -977,27 +1105,41 @@ async fn rebase_apply(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<(StatusCode, Json<RebaseApplyResponse>), ApiErrorResponse> {
-    let intent_head = state
-        .service
-        .get_intent_head(intent_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let from_version = state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let to_version = state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let plan = state
+    let start = std::time::Instant::now();
+
+    let intent_head = match state.service.get_intent_head(intent_id).await {
+        Ok(h) => h,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let plan = match state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
         .await
-        .map_err(ApiErrorResponse)?;
-    let apply_result = state
+    {
+        Ok(p) => p,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let apply_result = match state
         .orchestrator
         .apply_rebase(
             intent_id,
@@ -1009,7 +1151,23 @@ async fn rebase_apply(
             &plan.affected_items,
         )
         .await
-        .map_err(ApiErrorResponse)?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Record latency with risk_class label
+    let risk_class = match plan.risk_tier {
+        RiskTier::Low => "low",
+        RiskTier::Medium => "medium",
+        RiskTier::High => "high",
+        RiskTier::Critical => "critical",
+    };
+    let duration = start.elapsed().as_secs_f64();
+    record_rebase_apply_duration(duration, risk_class);
 
     // Phase 2b bounded slice: Record audit event for all external apply outcomes
     // Best-effort actor attribution: fallback external-api/unknown
@@ -1168,6 +1326,7 @@ async fn rebase_apply(
         compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     };
 
+    record_rebase_apply_request("success");
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
 }
 
