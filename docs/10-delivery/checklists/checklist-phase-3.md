@@ -329,6 +329,18 @@
     - Tests: cargo test -p intent-rebase-types (41 tests pass)
     - Note: Bounded to in-process audit/event boundaries. Cross-process propagation via Temporal gRPC, sqlx connection context, or NATS headers remains future scope.
 
+[x] Phase 3 bounded Temporal adapter tracing slice (local span correlation around Temporal gRPC calls)
+    Evidence:
+    - Code: crates/runtime-adapter/src/temporal_adapter.rs (#[tracing::instrument] on connect, get_checkpoints, send_rebase_signal, map_intent_to_checkpoint, replay_from_checkpoint, is_adapter_ready)
+    - Note: Bounded to local tracing span correlation — adds trace spans with relevant fields (intent_id, workflow_id, checkpoint_id, etc.) around Temporal adapter method calls. Does NOT implement gRPC metadata/traceparent injection into Temporal wire protocol; cross-process trace propagation via Temporal gRPC remains future scope.
+
+[x] Phase 3 bounded sqlx tracing slice (local span correlation around high-value sqlx repository transactions)
+    Evidence:
+    - Code: crates/intent-service/src/sqlx_repository.rs (explicit transaction spans using tracing::info_span and tracing::Instrument on create_intent_tx, create_version_with_occ)
+    - Code: crates/intent-service/src/sqlx_repository.rs (create_intent_tx wrapped in sqlx_repo.create_intent_tx span with intent_id field)
+    - Code: crates/intent-service/src/sqlx_repository.rs (create_version_with_occ wrapped in sqlx_repo.create_version_occ span with intent_id field)
+    - Note: Bounded to local tracing span correlation — adds trace spans with intent_id around sqlx transaction operations (create_intent_tx, create_version_with_occ). The sqlx `tracing` feature was attempted but conflicts with workspace dependency resolution (intent-rebase-types also depends on sqlx without that feature), so explicit spans are used instead. This provides local query/span correlation without Postgres-side trace comments or wire-level propagation. Does NOT implement cross-process trace propagation via sqlx connection context; that remains future scope.
+
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:
     - Benchmark results: not started

@@ -66,7 +66,13 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 - **Trace context in audit events** — `AuditEvent` now carries `trace_id` and `span_id` fields populated when an active trace exists
 - **Trace context in published event envelopes** — `EventEnvelope` and `PublishedEvent` now carry `trace_id` and `span_id`
 - **Database columns exist** — `audit_events` table already has `trace_id` and `span_id` columns
-- **Bounded scope** — trace context capture is implemented for in-process audit/event boundaries; cross-process propagation via Temporal gRPC, sqlx connection context, or NATS headers remains future scope
+- **Bounded scope** — trace context capture is implemented for in-process audit/event boundaries; cross-process propagation via Temporal gRPC metadata/traceparent injection, sqlx connection context, or NATS headers remains future scope
+
+### ✅ Delivered (Phase 3 Batch 2 Slice 8 — bounded Temporal adapter tracing)
+
+- **Local span correlation around Temporal adapter methods** — `#[tracing::instrument]` on `connect`, `get_checkpoints`, `send_rebase_signal`, `map_intent_to_checkpoint`, `replay_from_checkpoint`, `is_adapter_ready`
+- **Span fields** — relevant context captured per method (intent_id, workflow_id, checkpoint_id, namespace, target_url, etc.)
+- **Bounded scope** — this delivers local tracing span correlation only; gRPC metadata/traceparent injection into Temporal wire protocol is NOT implemented; cross-process trace propagation via Temporal gRPC remains future scope
 
 ### ✅ Delivered (Slice 3 — alerting rules + runbook foundation)
 
@@ -87,7 +93,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 
 - **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented
 - **Error budget tracking dashboard** — Slice 5 delivers preview + apply 1h burn-rate stat panels; Slice 7 delivers 6h and 3d burn-rate panels and multi-window alerting rules; budget depletion forecasting and 30-day budget tracking remain future scope
-- **Cross-process trace propagation** — Slice 2 delivers bounded in-process OTEL propagation (optional OTLP export, W3C trace-context headers, background task span propagation); full distributed trace across service boundaries remains future scope
+- **Cross-process trace propagation** — Slice 2 delivers bounded in-process OTEL propagation (optional OTLP export, W3C trace-context headers, background task span propagation); Slice 8 delivers bounded Temporal adapter local span correlation; full distributed trace across service boundaries via Temporal gRPC metadata/traceparent injection, sqlx connection context, or NATS headers remains future scope
 - **Performance benchmarks** — no rebase latency p50/p95/p99 measurements
 - **Production alerting** — Slice 3 + Slice 7 deliver local dev infrastructure only; production Alertmanager configuration is future scope; SRE approval for production deployment is still open
 

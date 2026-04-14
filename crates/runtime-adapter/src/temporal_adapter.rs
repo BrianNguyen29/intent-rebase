@@ -69,13 +69,24 @@ pub struct TemporalAdapter {
 }
 
 impl TemporalAdapter {
+    #[tracing::instrument(
+        name = "temporal.connect",
+        skip(config),
+        fields(
+            target_url = %config.target_url,
+            namespace = %config.namespace
+        )
+    )]
     pub async fn connect(config: TemporalAdapterConfig) -> AdapterResult<Self> {
         config.validate()?;
 
         let url = config
             .target_url
             .parse::<Url>()
-            .map_err(|e| AdapterError::NotReady(format!("Invalid Temporal URL: {e}")))?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, "Invalid Temporal URL");
+                AdapterError::NotReady(format!("Invalid Temporal URL: {e}"))
+            })?;
 
         let connection = Connection::connect(
             ConnectionOptions::new(url)
@@ -83,14 +94,21 @@ impl TemporalAdapter {
                 .build(),
         )
         .await
-        .map_err(|e| AdapterError::NotReady(format!("Failed to connect to Temporal: {e}")))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to connect to Temporal");
+            AdapterError::NotReady(format!("Failed to connect to Temporal: {e}"))
+        })?;
 
         let client = Client::new(
             connection,
             ClientOptions::new(config.namespace.clone()).build(),
         )
-        .map_err(|e| AdapterError::Internal(format!("Failed to build Temporal client: {e}")))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to build Temporal client");
+            AdapterError::Internal(format!("Failed to build Temporal client: {e}"))
+        })?;
 
+        tracing::info!(namespace = %config.namespace, "Connected to Temporal");
         Ok(Self { client, config })
     }
 
@@ -218,6 +236,14 @@ impl TemporalAdapter {
 
 #[async_trait]
 impl RuntimeAdapter for TemporalAdapter {
+    #[tracing::instrument(
+        name = "temporal.get_checkpoints",
+        skip(self),
+        fields(
+            workflow_query = %self.config.workflow_query,
+            max_checkpoints = self.config.max_checkpoints
+        )
+    )]
     async fn get_checkpoints(&self) -> AdapterResult<Vec<CheckpointCandidate>> {
         let mut stream = self.client.list_workflows(
             self.config.workflow_query.clone(),
@@ -229,19 +255,29 @@ impl RuntimeAdapter for TemporalAdapter {
         let mut checkpoints = Vec::new();
         while let Some(result) = stream.next().await {
             let execution = result.map_err(|e| {
+                tracing::warn!(error = %e, "Failed to list Temporal workflow");
                 AdapterError::Internal(format!("Failed to list Temporal workflows: {e}"))
             })?;
             checkpoints.push(Self::checkpoint_candidate_from_execution(execution));
         }
 
+        tracing::info!(count = checkpoints.len(), "Listed Temporal workflows");
         Ok(checkpoints)
     }
 
+    #[tracing::instrument(
+        name = "temporal.send_rebase_signal",
+        skip(self, signal),
+        fields(
+            intent_id = %signal.intent_id,
+            signal_type = %signal.signal_type
+        )
+    )]
     async fn send_rebase_signal(&self, signal: RebaseSignal) -> AdapterResult<()> {
         let workflow_id = Self::workflow_id_from_signal(&signal)?;
         let handle = self
             .client
-            .get_workflow_handle::<UntypedWorkflow>(workflow_id);
+            .get_workflow_handle::<UntypedWorkflow>(workflow_id.clone());
         let payload_converter = PayloadConverter::serde_json();
         let raw_signal = RawValue::from_value(&signal, &payload_converter);
 
@@ -253,12 +289,24 @@ impl RuntimeAdapter for TemporalAdapter {
             )
             .await
             .map_err(|e| {
+                tracing::warn!(workflow_id = %workflow_id, error = %e, "Failed to send Temporal rebase signal");
                 AdapterError::RebaseSignalFailed(format!(
                     "Failed to send Temporal rebase signal: {e}"
                 ))
-            })
+            })?;
+
+        tracing::info!(workflow_id = %workflow_id, "Temporal rebase signal sent");
+        Ok(())
     }
 
+    #[tracing::instrument(
+        name = "temporal.map_intent_to_checkpoint",
+        skip(self),
+        fields(
+            intent_id = %intent.id,
+            workflow_id = %intent.workflow_id
+        )
+    )]
     async fn map_intent_to_checkpoint(
         &self,
         intent: IntentRef,
@@ -270,6 +318,12 @@ impl RuntimeAdapter for TemporalAdapter {
             .describe(WorkflowDescribeOptions::default())
             .await
             .map_err(|e| {
+                tracing::warn!(
+                    workflow_id = %intent.workflow_id,
+                    intent_id = %intent.id,
+                    error = %e,
+                    "Failed to describe Temporal workflow"
+                );
                 AdapterError::IntentMappingFailed(format!(
                     "Failed to describe Temporal workflow {} for intent {}: {e}",
                     intent.workflow_id, intent.id
@@ -280,25 +334,45 @@ impl RuntimeAdapter for TemporalAdapter {
             .raw_description
             .workflow_execution_info
             .ok_or_else(|| {
+                tracing::warn!(
+                    intent_id = %intent.id,
+                    "Temporal describe response missing workflow execution info"
+                );
                 AdapterError::IntentMappingFailed(format!(
                     "Temporal describe response for intent {} did not include workflow execution info",
                     intent.id
                 ))
             })?;
 
-        Self::describe_checkpoint_candidate(
+        let candidate = Self::describe_checkpoint_candidate(
             &intent,
             temporalio_client::WorkflowExecution::new(workflow_info),
         )
         .map_err(|e| match e {
             AdapterError::CheckpointNotFound(message)
             | AdapterError::IntentMappingFailed(message) => {
+                tracing::warn!(intent_id = %intent.id, error = %message, "Checkpoint candidate not found");
                 AdapterError::IntentMappingFailed(message)
             }
             other => AdapterError::IntentMappingFailed(other.to_string()),
-        })
+        })?;
+
+        tracing::info!(
+            intent_id = %intent.id,
+            checkpoint_id = %candidate.id,
+            "Mapped intent to Temporal checkpoint"
+        );
+        Ok(candidate)
     }
 
+    #[tracing::instrument(
+        name = "temporal.replay_from_checkpoint",
+        skip(self),
+        fields(
+            intent_id = %intent.id,
+            checkpoint_id = %checkpoint.id
+        )
+    )]
     async fn replay_from_checkpoint(
         &self,
         checkpoint: Checkpoint,
@@ -306,6 +380,12 @@ impl RuntimeAdapter for TemporalAdapter {
     ) -> AdapterResult<()> {
         let replay_signal = Self::replay_signal(&intent, &checkpoint);
         self.send_rebase_signal(replay_signal).await.map_err(|e| {
+            tracing::error!(
+                intent_id = %intent.id,
+                checkpoint_id = %checkpoint.id,
+                error = %e,
+                "Failed to trigger cooperative Temporal replay"
+            );
             AdapterError::ReplayFailed(format!(
                 "Failed to trigger cooperative Temporal replay for checkpoint {} and intent {}: {}",
                 checkpoint.id, intent.id, e
@@ -313,6 +393,10 @@ impl RuntimeAdapter for TemporalAdapter {
         })
     }
 
+    #[tracing::instrument(
+        name = "temporal.is_adapter_ready",
+        skip(self)
+    )]
     async fn is_adapter_ready(&self) -> AdapterResult<AdapterStatus> {
         let mut service = self.client.connection().health_service();
         service
@@ -320,8 +404,14 @@ impl RuntimeAdapter for TemporalAdapter {
                 service: String::new(),
             }))
             .await
-            .map(|_| AdapterStatus::Ready)
-            .map_err(|e| AdapterError::NotReady(format!("Temporal health check failed: {e}")))
+            .map(|_| {
+                tracing::debug!("Temporal adapter health check passed");
+                AdapterStatus::Ready
+            })
+            .map_err(|e| {
+                tracing::warn!(error = %e, "Temporal health check failed");
+                AdapterError::NotReady(format!("Temporal health check failed: {e}"))
+            })
     }
 }
 
