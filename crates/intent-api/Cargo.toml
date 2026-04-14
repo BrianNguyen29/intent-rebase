@@ -31,6 +31,7 @@ validator = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }
+jsonwebtoken = "9"
 
 # OTEL support (optional — inactive unless OTEL_EXPORTER_OTLP_ENDPOINT is set)
 opentelemetry = { workspace = true }
@@ -56,3 +57,4 @@ path = "tests/load_test.rs"
 [features]
 default = []
 load-test = []
+jwt-auth = []

@@ -1019,6 +1019,95 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tenant_id, tenant_2);
     }
+
+    #[tokio::test]
+    async fn test_get_audit_event_cross_tenant_blocked() {
+        let repo = Arc::new(InMemoryAuditRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates an audit event
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_a,
+            event_type: AuditEventType::RebaseApplied,
+            actor_id: "tenant-a-user".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({}),
+            trace_id: None,
+            span_id: None,
+            occurred_at: Utc::now(),
+        };
+        let event_id = event.id;
+        repo.create_audit_event(event).await.unwrap();
+
+        // Tenant A can get their own event
+        let result = repo.get_audit_event(event_id, tenant_a).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().tenant_id, tenant_a);
+
+        // Tenant B cannot get Tenant A's event (should get NotFound)
+        let result = repo.get_audit_event(event_id, tenant_b).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::ArtifactNotFound(found_id) if found_id == event_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_list_audit_events_cross_tenant_isolation() {
+        let repo = Arc::new(InMemoryAuditRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates 3 audit events
+        for _ in 0..3 {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                tenant_id: tenant_a,
+                event_type: AuditEventType::RebaseApplied,
+                actor_id: "tenant-a-user".to_string(),
+                intent_id: Some(Uuid::new_v4()),
+                artifact_id: None,
+                payload: serde_json::json!({}),
+                trace_id: None,
+                span_id: None,
+                occurred_at: Utc::now(),
+            };
+            repo.create_audit_event(event).await.unwrap();
+        }
+
+        // Tenant B creates 2 audit events
+        for _ in 0..2 {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                tenant_id: tenant_b,
+                event_type: AuditEventType::ApprovalGranted,
+                actor_id: "tenant-b-user".to_string(),
+                intent_id: Some(Uuid::new_v4()),
+                artifact_id: None,
+                payload: serde_json::json!({}),
+                trace_id: None,
+                span_id: None,
+                occurred_at: Utc::now(),
+            };
+            repo.create_audit_event(event).await.unwrap();
+        }
+
+        // List for tenant A should return 3 events
+        let events_a = repo.list_by_tenant(tenant_a, 100).await.unwrap();
+        assert_eq!(events_a.len(), 3);
+        assert!(events_a.iter().all(|e| e.tenant_id == tenant_a));
+
+        // List for tenant B should return 2 events
+        let events_b = repo.list_by_tenant(tenant_b, 100).await.unwrap();
+        assert_eq!(events_b.len(), 2);
+        assert!(events_b.iter().all(|e| e.tenant_id == tenant_b));
+    }
 }
 
 // =============================================================================

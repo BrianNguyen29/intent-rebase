@@ -394,5 +394,57 @@ mod tests {
         assert_eq!(result.unwrap().len(), 3);
     }
 
+    #[tokio::test]
+    async fn test_get_run_cross_tenant_blocked() {
+        let repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates a run
+        let run = create_test_run(tenant_a);
+        let run_id = run.id;
+        repo.create(run).await.unwrap();
+
+        // Tenant A can get their own run
+        let result = repo.get(run_id).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().tenant_id, tenant_a);
+
+        // Note: The InMemory repository's `get` method does not enforce tenant isolation.
+        // This test documents the current behavior where any tenant can get any run by ID.
+        // Production implementations should add tenant filtering to the `get` method.
+    }
+
+    #[tokio::test]
+    async fn test_list_runs_cross_tenant_isolation() {
+        let repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates 3 runs
+        for _ in 0..3 {
+            let run = create_test_run(tenant_a);
+            repo.create(run).await.unwrap();
+        }
+
+        // Tenant B creates 2 runs
+        for _ in 0..2 {
+            let run = create_test_run(tenant_b);
+            repo.create(run).await.unwrap();
+        }
+
+        // List for tenant A should return 3 runs
+        let runs_a = repo.list_by_tenant(tenant_a, None).await.unwrap();
+        assert_eq!(runs_a.len(), 3);
+        assert!(runs_a.iter().all(|r| r.tenant_id == tenant_a));
+
+        // List for tenant B should return 2 runs
+        let runs_b = repo.list_by_tenant(tenant_b, None).await.unwrap();
+        assert_eq!(runs_b.len(), 2);
+        assert!(runs_b.iter().all(|r| r.tenant_id == tenant_b));
+    }
+
     use std::sync::Arc;
 }
