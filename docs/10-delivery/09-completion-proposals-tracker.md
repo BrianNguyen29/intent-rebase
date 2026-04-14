@@ -61,7 +61,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7, Slice 8, Slice 9 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Continue with cross-process trace propagation; production load testing |
+| **Suggested Next Step** | Cross-process trace propagation investigated and deferred (SDK limitation); production load testing; SRE approval gate |
 | **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace-context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths (PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d), 6h and 3d burn-rate dashboard panels in Grafana. Batch 2 Slice 8 (bounded Temporal adapter tracing) delivered: local tracing span correlation around Temporal adapter method calls (connect, get_checkpoints, send_rebase_signal, map_intent_to_checkpoint, replay_from_checkpoint, is_adapter_ready) with relevant span fields. Batch 2 Slice 9 (bounded sqlx repository tracing) delivered: local span correlation around high-value sqlx repository transactions (create_intent_tx, create_version_with_occ) in intent-service with explicit tracing::info_span + tracing::Instrument. sqlx tracing feature not enabled at workspace level due to dependency conflict with intent-rebase-types, so explicit spans used for local query/span correlation. No Postgres-side trace comments or wire-level propagation. Cross-process trace propagation via Temporal gRPC metadata/traceparent injection, sqlx connection context, or NATS headers remains future scope. |
 
 **Items:**
@@ -82,7 +82,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Phase 3 bounded trace continuity (trace_id/span_id in audit events and published event envelopes) — delivered
 - [x] Phase 3 bounded Temporal adapter tracing (local span correlation around Temporal gRPC calls) — Batch 2 Slice 8 delivered
 - [x] Phase 3 bounded sqlx repository tracing (local span correlation around high-value sqlx transactions: create_intent_tx, create_version_with_occ) — delivered
-- [ ] Cross-process trace propagation across all service boundaries (Temporal gRPC metadata/traceparent injection, sqlx connection context propagation, NATS) — future scope
+- [ ] Cross-process trace propagation across all service boundaries — investigated and deferred: Temporal SDK lacks per-request gRPC metadata injection (shared `Arc<RwLock>` race); sqlx lacks per-query context propagation; NATS publisher not yet implemented. Revisit when temporalio-client adds interceptor support or upgrades to a version with per-request metadata.
 - [ ] Full production load testing
 
 ---
@@ -299,6 +299,7 @@ Scope: sync CPU-bound computation only. No I/O, no external services.
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| April 2026 | (orchestrator) | P2 updated: cross-process trace propagation investigated and deferred (Temporal SDK limitation, sqlx limitation, NATS not yet implemented) |
 | April 2026 | (owner) | Initial creation |
 
 ---

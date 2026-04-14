@@ -62,6 +62,24 @@ impl Default for TemporalAdapterConfig {
 }
 
 /// Real Temporal-backed adapter for runtime operations.
+///
+/// # Trace Propagation Limitation
+///
+/// Per-request gRPC trace metadata propagation (W3C `traceparent` / `tracestate`
+/// injection into outbound Temporal gRPC calls) is **not supported** with the
+/// current SDK version (`temporalio-client` 0.2.0).
+///
+/// - `Connection::set_headers()` mutates shared `Arc<RwLock<ClientHeaders>>`,
+///   which is racy under concurrent use — using it would leak trace context
+///   between concurrent requests.
+/// - `WorkflowSignalOptions::header` sets Temporal workflow-level proto
+///   headers, not gRPC transport metadata.
+/// - `service_override` is a raw gRPC service interface that could theoretically
+///   intercept requests, but is too invasive for this scope.
+///
+/// Local tracing span correlation is provided via `#[tracing::instrument]` on
+/// all adapter methods. This limitation is tracked as a future-scope item.
+
 #[derive(Clone)]
 pub struct TemporalAdapter {
     client: Client,
