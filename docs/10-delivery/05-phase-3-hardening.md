@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered, Slice 7 (multi-window burn-rate alerting) delivered`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -119,6 +119,24 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 - Preview + apply 1-hour burn rate stat panels backed by metrics emitted in Slice 3 ✅
 - **NOT in scope:** Multi-window burn-rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
 
+### Batch 2 Slice 7 (delivered — multi-window burn-rate alerting)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-7c | Preview path 1h burn-rate alert | `PreviewPathBurnRate1h` — 1h window, threshold 0.5%, for 10m |
+| 2-7d | Apply path 1h burn-rate alert | `ApplyPathBurnRate1h` — 1h window, threshold 1.0%, for 10m |
+| 2-7e | Preview path 6h burn-rate alert | `PreviewPathBurnRate6h` — 6h window, threshold 0.6%, for 30m |
+| 2-7f | Apply path 6h burn-rate alert | `ApplyPathBurnRate6h` — 6h window, threshold 1.2%, for 30m |
+| 2-7g | Preview path 3d burn-rate alert | `PreviewPathBurnRate3d` — 3d window, threshold 0.8%, for 2h |
+| 2-7h | Apply path 3d burn-rate alert | `ApplyPathBurnRate3d` — 3d window, threshold 1.6%, for 2h |
+| 2-7i | 6h burn-rate stat panels | Preview + apply path 6h burn-rate panels in Grafana dashboard |
+| 2-7j | 3d burn-rate stat panels | Preview + apply path 3d burn-rate panels in Grafana dashboard |
+
+**Slice 7 scope (bounded/truthful):**
+- Multi-window burn-rate alerting rules (1h/6h/3d) for preview and apply paths ✅
+- 6h and 3d burn-rate dashboard panels ✅
+- **NOT in scope:** Budget depletion forecasting, 30-day budget tracking panel, SLO composite panels, production Alertmanager deployment, SRE-approved production rollout
+
 ### Batch 2 Slice 6 (delivered — graph + HTTP + DB benchmark harnesses)
 
 | Item | Description | Notes |
@@ -143,7 +161,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
 | 2-5 (remainder) | Graph traversal and DB query benchmarks | Graph traversal and DB benchmarks — both delivered |
 | 2-5 (remainder) | HTTP/API benchmarks | ✅ Delivered (real HTTP with in-memory repos); full production load testing remains future scope |
-| 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | Slice 5 delivers 1h burn-rate stat panels; multi-window alerting rules remain future scope |
+| 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | ✅ Delivered (Slice 7); 1h/6h/3d windows for preview and apply paths |
 | 2-7 (remainder) | Budget depletion forecasting / 30-day budget panel | Future scope after single-window burn-rate panels are validated |
 
 ---

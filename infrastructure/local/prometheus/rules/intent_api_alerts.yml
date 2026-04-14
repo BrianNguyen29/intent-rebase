@@ -135,13 +135,17 @@ groups:
           description: "DLQ candidate count is {{ $value }} (threshold: 5). Immediate attention required."
 
   # ============================================================
-  # Error Budget Alerts — burn-rate based (simplified for local dev)
+  # Error Budget Alerts — multi-window burn-rate based (local dev)
+  # Truthful scope: local dev alerting only; production rollout requires SRE confirmation
+  # Windows: 1h (fast detection), 6h (sustained), 3d (chronic)
+  # Thresholds chosen to detect genuine budget departure above monthly rate
   # ============================================================
   - name: intent_api_error_budget
     interval: 60s
     rules:
-      # Fast burn rate alert for preview path (1h window consuming > 50% of 1h budget)
-      - alert: PreviewPathFastBurn
+      # ---- 1h windows (fast burn — existing, replaced threshold with cleaner formulation) ----
+      # Preview path 1h window burning > 0.5% error rate (sustained = exhausts monthly budget in ~12h)
+      - alert: PreviewPathBurnRate1h
         expr: |
           sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[1h]))
           /
@@ -150,12 +154,13 @@ groups:
         labels:
           severity: warning
           budget: preview
+          window: "1h"
         annotations:
-          summary: "Preview path error budget burning fast"
-          description: "Preview path error rate is {{ $value | printf \"%.3f\" }}% over 1h window (budget threshold: 0.5%)."
+          summary: "Preview path 1h burn rate elevated"
+          description: "Preview 1h error rate is {{ $value | printf \"%.3f\" }}% (threshold: 0.5%). At this rate monthly budget depletes in ~12h."
 
-      # Fast burn rate alert for apply path (1h window consuming > 50% of 1h budget)
-      - alert: ApplyPathFastBurn
+      # Apply path 1h window burning > 1.0% error rate
+      - alert: ApplyPathBurnRate1h
         expr: |
           sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[1h]))
           /
@@ -164,6 +169,69 @@ groups:
         labels:
           severity: warning
           budget: apply
+          window: "1h"
         annotations:
-          summary: "Apply path error budget burning fast"
-          description: "Apply path error rate is {{ $value | printf \"%.3f\" }}% over 1h window (budget threshold: 1.0%)."
+          summary: "Apply path 1h burn rate elevated"
+          description: "Apply 1h error rate is {{ $value | printf \"%.3f\" }}% (threshold: 1.0%). At this rate monthly budget depletes in ~12h."
+
+      # ---- 6h windows (sustained burn — new) ----
+      # Preview path 6h window burning > 0.6% (catches sustained elevation above monthly rate)
+      - alert: PreviewPathBurnRate6h
+        expr: |
+          sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[6h]))
+          /
+          sum(rate(intent_api_rebase_preview_requests_total[6h])) > 0.006
+        for: 30m
+        labels:
+          severity: warning
+          budget: preview
+          window: "6h"
+        annotations:
+          summary: "Preview path 6h burn rate elevated — sustained error elevation"
+          description: "Preview 6h error rate is {{ $value | printf \"%.3f\" }}% (threshold: 0.6%). Sustained elevation may indicate systemic issue."
+
+      # Apply path 6h window burning > 1.2%
+      - alert: ApplyPathBurnRate6h
+        expr: |
+          sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[6h]))
+          /
+          sum(rate(intent_api_rebase_apply_requests_total[6h])) > 0.012
+        for: 30m
+        labels:
+          severity: warning
+          budget: apply
+          window: "6h"
+        annotations:
+          summary: "Apply path 6h burn rate elevated — sustained error elevation"
+          description: "Apply 6h error rate is {{ $value | printf \"%.3f\" }}% (threshold: 1.2%). Sustained elevation may indicate systemic issue."
+
+      # ---- 3d windows (chronic burn — new) ----
+      # Preview path 3d window burning > 0.8% (catches chronic degraded quality)
+      - alert: PreviewPathBurnRate3d
+        expr: |
+          sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[3d]))
+          /
+          sum(rate(intent_api_rebase_preview_requests_total[3d])) > 0.008
+        for: 2h
+        labels:
+          severity: warning
+          budget: preview
+          window: "3d"
+        annotations:
+          summary: "Preview path 3d burn rate elevated — chronic degradation"
+          description: "Preview 3d error rate is {{ $value | printf \"%.3f\" }}% (threshold: 0.8%). Chronic elevation indicates sustained quality degradation."
+
+      # Apply path 3d window burning > 1.6%
+      - alert: ApplyPathBurnRate3d
+        expr: |
+          sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[3d]))
+          /
+          sum(rate(intent_api_rebase_apply_requests_total[3d])) > 0.016
+        for: 2h
+        labels:
+          severity: warning
+          budget: apply
+          window: "3d"
+        annotations:
+          summary: "Apply path 3d burn rate elevated — chronic degradation"
+          description: "Apply 3d error rate is {{ $value | printf \"%.3f\" }}% (threshold: 1.6%). Chronic elevation indicates sustained quality degradation."

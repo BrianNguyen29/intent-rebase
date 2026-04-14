@@ -1,6 +1,6 @@
 # SLO Dashboard — Grafana Scaffold
 
-> **Status (Batch 2 Slice 1 + Slice 5):** Dashboard scaffold (Slice 1). Slice 5 adds an error-budget tracking row (preview + apply 1h burn-rate stat panels) backed by the metrics emitted in Slice 3 (intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total with status label).
+> **Status (Batch 2 Slice 1 + Slice 5 + Slice 7):** Dashboard scaffold (Slice 1). Slice 5 adds an error-budget tracking row (preview + apply 1h burn-rate stat panels) backed by the metrics emitted in Slice 3 (intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total with status label). Slice 7 adds 6h and 3d burn-rate panels and multi-window burn-rate alerting rules.
 > Panel queries reference metric names that require instrumentation to exist before they can return data.
 > Alerting rules and distributed tracing are out of scope for this slice.
 
@@ -147,27 +147,56 @@
 
 ---
 
-### Row 6 — Error Budget Tracking (Batch 2 Slice 5)
+### Row 6 — Error Budget Tracking (Batch 2 Slice 5 + Slice 7)
 
-These panels consume the metrics emitted by Batch 2 Slice 3 to display 1-hour burn rate for the preview and apply paths.
+These panels consume the metrics emitted by Batch 2 Slice 3 to display burn rate for the preview and apply paths across multiple time windows.
 
 #### Panel 17: Preview Path Error Budget Burn (1h)
 - **Metric:** `intent_api_rebase_preview_requests_total` (counter with `status` label)
 - **Query:** `sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[1h])) / sum(rate(intent_api_rebase_preview_requests_total[1h]))`
 - **Type:** Stat / gauge
-- **Thresholds:** < 0.1 (10%) green / 0.1–0.3 (10–30%) yellow / > 0.3 (30%) red
-- **Notes:** Tracks 1-hour burn rate against the preview path error budget (0.1% of 43,200 min = 43.2 min/month). Aligned with `PreviewPathFastBurn` alert in `intent_api_alerts.yml`.
+- **Thresholds:** < 0.2% (0.002) green / 0.2–0.6% yellow / > 0.6% (0.006) red
+- **Notes:** Tracks 1-hour burn rate against the preview path error budget (0.1% of 43,200 min = 43.2 min/month). Aligned with `PreviewPathBurnRate1h` alert in `intent_api_alerts.yml`.
 
 #### Panel 18: Apply Path Error Budget Burn (1h)
 - **Metric:** `intent_api_rebase_apply_requests_total` (counter with `status` label)
 - **Query:** `sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[1h])) / sum(rate(intent_api_rebase_apply_requests_total[1h]))`
 - **Type:** Stat / gauge
-- **Thresholds:** < 0.1 (10%) green / 0.1–0.3 (10–30%) yellow / > 0.3 (30%) red
-- **Notes:** Tracks 1-hour burn rate against the apply path error budget (0.5% of 43,200 min = 216 min/month). Aligned with `ApplyPathFastBurn` alert in `intent_api_alerts.yml`.
+- **Thresholds:** < 0.4% (0.004) green / 0.4–1.2% yellow / > 1.2% (0.012) red
+- **Notes:** Tracks 1-hour burn rate against the apply path error budget (0.5% of 43,200 min = 216 min/month). Aligned with `ApplyPathBurnRate1h` alert in `intent_api_alerts.yml`.
 
-**Slice 5 scope (bounded/truthful):**
-- Preview + apply 1-hour burn rate stat panels backed by existing metrics ✅
-- **NOT in scope:** Multi-window burn rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
+#### Panel 19: Preview Path Error Budget Burn (6h)
+- **Metric:** `intent_api_rebase_preview_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[6h])) / sum(rate(intent_api_rebase_preview_requests_total[6h]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.2% (0.002) green / 0.2–0.6% yellow / > 0.6% (0.006) red
+- **Notes:** Tracks 6-hour burn rate for sustained error elevation detection. Aligned with `PreviewPathBurnRate6h` alert in `intent_api_alerts.yml`.
+
+#### Panel 20: Apply Path Error Budget Burn (6h)
+- **Metric:** `intent_api_rebase_apply_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[6h])) / sum(rate(intent_api_rebase_apply_requests_total[6h]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.4% (0.004) green / 0.4–1.2% yellow / > 1.2% (0.012) red
+- **Notes:** Tracks 6-hour burn rate for sustained error elevation detection. Aligned with `ApplyPathBurnRate6h` alert in `intent_api_alerts.yml`.
+
+#### Panel 21: Preview Path Error Budget Burn (3d)
+- **Metric:** `intent_api_rebase_preview_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[3d])) / sum(rate(intent_api_rebase_preview_requests_total[3d]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.3% (0.003) green / 0.3–0.8% yellow / > 0.8% (0.008) red
+- **Notes:** Tracks 3-day burn rate for chronic degradation detection. Aligned with `PreviewPathBurnRate3d` alert in `intent_api_alerts.yml`.
+
+#### Panel 22: Apply Path Error Budget Burn (3d)
+- **Metric:** `intent_api_rebase_apply_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[3d])) / sum(rate(intent_api_rebase_apply_requests_total[3d]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.6% (0.006) green / 0.6–1.6% yellow / > 1.6% (0.016) red
+- **Notes:** Tracks 3-day burn rate for chronic degradation detection. Aligned with `ApplyPathBurnRate3d` alert in `intent_api_alerts.yml`.
+
+**Slice 7 scope (bounded/truthful):**
+- Multi-window burn-rate panels (1h/6h/3d) for preview and apply paths ✅
+- Multi-window burn-rate alerting rules (1h/6h/3d) for preview and apply paths ✅
+- **NOT in scope:** Budget depletion forecasting, 30-day budget tracking panel, SLO composite panels, production Alertmanager
 
 ---
 

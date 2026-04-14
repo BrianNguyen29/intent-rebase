@@ -438,8 +438,8 @@
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.3 },
-              { "color": "green", "value": 0.1 }
+              { "color": "yellow", "value": 0.006 },
+              { "color": "green", "value": 0.002 }
             ]
           },
           "unit": "percentunit"
@@ -469,7 +469,7 @@
       ],
       "title": "Preview Path Error Budget Burn (1h)",
       "type": "stat",
-      "description": "1-hour burn rate for preview path. Budget: 0.1% (43.2 min/month). Alert fires at > 0.3 (30% of budget burned in 1h window). Metric: intent_api_rebase_preview_requests_total"
+      "description": "1-hour burn rate for preview path. Budget: 0.1% (43.2 min/month). Alert fires at > 0.005 (0.5%). At this rate monthly budget depletes in ~12h. Multi-window alerting (1h/6h/3d) now delivered. Metric: intent_api_rebase_preview_requests_total"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -481,8 +481,8 @@
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.3 },
-              { "color": "green", "value": 0.1 }
+              { "color": "yellow", "value": 0.012 },
+              { "color": "green", "value": 0.004 }
             ]
           },
           "unit": "percentunit"
@@ -512,19 +512,207 @@
       ],
       "title": "Apply Path Error Budget Burn (1h)",
       "type": "stat",
-      "description": "1-hour burn rate for apply path. Budget: 0.5% (216 min/month). Alert fires at > 0.3 (30% of budget burned in 1h window). Metric: intent_api_rebase_apply_requests_total"
+      "description": "1-hour burn rate for apply path. Budget: 0.5% (216 min/month). Alert fires at > 0.01 (1.0%). At this rate monthly budget depletes in ~12h. Multi-window alerting (1h/6h/3d) now delivered. Metric: intent_api_rebase_apply_requests_total"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 16,
+      "panels": [],
+      "title": "Error Budget Tracking — Sustained Burn (6h)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.006 },
+              { "color": "green", "value": 0.002 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 22 },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_preview_requests_total{status!=\"success\"}[6h])) / sum(rate(intent_api_rebase_preview_requests_total[6h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Preview Path Error Budget Burn (6h)",
+      "type": "stat",
+      "description": "6-hour burn rate for preview path. Threshold: 0.6% (sustained above monthly rate). Catches systemic sustained elevation. Alert: PreviewPathBurnRate6h. Metric: intent_api_rebase_preview_requests_total"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.012 },
+              { "color": "green", "value": 0.004 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 22 },
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_apply_requests_total{status!=\"success\"}[6h])) / sum(rate(intent_api_rebase_apply_requests_total[6h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Apply Path Error Budget Burn (6h)",
+      "type": "stat",
+      "description": "6-hour burn rate for apply path. Threshold: 1.2% (sustained above monthly rate). Catches systemic sustained elevation. Alert: ApplyPathBurnRate6h. Metric: intent_api_rebase_apply_requests_total"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 19,
+      "panels": [],
+      "title": "Error Budget Tracking — Chronic Burn (3d)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.008 },
+              { "color": "green", "value": 0.003 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 28 },
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_preview_requests_total{status!=\"success\"}[3d])) / sum(rate(intent_api_rebase_preview_requests_total[3d]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Preview Path Error Budget Burn (3d)",
+      "type": "stat",
+      "description": "3-day burn rate for preview path. Threshold: 0.8% (catches chronic degradation). Catches sustained quality issues over multi-day windows. Alert: PreviewPathBurnRate3d. Metric: intent_api_rebase_preview_requests_total"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.016 },
+              { "color": "green", "value": 0.006 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 28 },
+      "id": 21,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_apply_requests_total{status!=\"success\"}[3d])) / sum(rate(intent_api_rebase_apply_requests_total[3d]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Apply Path Error Budget Burn (3d)",
+      "type": "stat",
+      "description": "3-day burn rate for apply path. Threshold: 1.6% (catches chronic degradation). Catches sustained quality issues over multi-day windows. Alert: ApplyPathBurnRate3d. Metric: intent_api_rebase_apply_requests_total"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["intent-rebase", "slo", "batch-2-slice-3", "batch-2-slice-5"],
+  "tags": ["intent-rebase", "slo", "batch-2-slice-3", "batch-2-slice-5", "batch-2-slice-7"],
   "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "Intent Rebase — SLO Overview",
   "uid": "intent-rebase-slo",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

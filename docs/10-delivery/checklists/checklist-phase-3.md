@@ -300,11 +300,12 @@
     - Runbooks: RB6 (rebase-stuck), RB7 (approval-backlog), RB8 (artifact-quarantine-fail), RB9 (compensation-timeout), RB10 (error-budget-burn)
     - Doc: docs/09-operations/05-runbooks.md (On-Call Quick Reference table)
 
-[x] Error budget tracking dashboard + runbook — Batch 2 Slice 5
+[x] Error budget tracking dashboard + runbook — Batch 2 Slice 5 + Slice 7
     Evidence:
-    - Doc: ../../09-operations/06-slo-dashboard.md (Row 6 — Error Budget Tracking: Panel 17 preview path burn rate, Panel 18 apply path burn rate)
-    - Code: infrastructure/local/grafana/provisioning/dashboards/slo-overview.json (version 2, new "Error Budget Tracking" row with panels 17–18)
-    - Note: Bounded to 1h burn-rate stat panels for preview and apply paths; multi-window alerting, budget depletion forecasting, and 30-day budget tracking remain future scope
+    - Doc: ../../09-operations/06-slo-dashboard.md (Row 6 — Error Budget Tracking: Panels 17–18 (1h), Panels 19–20 (6h), Panels 21–22 (3d))
+    - Code: infrastructure/local/grafana/provisioning/dashboards/slo-overview.json (version 3, new 6h and 3d burn-rate panels)
+    - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (6 new multi-window burn-rate alerting rules: PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d)
+    - Note: Bounded to 1h/6h/3d burn-rate stat panels and multi-window alerting for preview and apply paths; budget depletion forecasting, 30-day budget tracking, and production Alertmanager deployment remain future scope
 
 [~] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded foundation)
     Evidence:
