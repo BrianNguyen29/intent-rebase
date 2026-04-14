@@ -24,6 +24,7 @@
 
 pub mod bundle;
 pub mod bundle_contents;
+pub mod collector;
 pub mod export;
 pub mod verification;
 pub mod bundle_gen;
@@ -31,9 +32,11 @@ pub mod bundle_hasher;
 pub mod bundle_generator;
 pub mod bundle_repo;
 pub mod bundle_replay;
+pub mod real_collector;
 
 pub use bundle::*;
 pub use bundle_contents::*;
+pub use collector::*;
 pub use export::*;
 pub use verification::*;
 pub use bundle_gen::*;
@@ -41,3 +44,4 @@ pub use bundle_hasher::*;
 pub use bundle_generator::*;
 pub use bundle_repo::*;
 pub use bundle_replay::*;
+pub use real_collector::*;
