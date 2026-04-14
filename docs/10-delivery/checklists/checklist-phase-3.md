@@ -464,16 +464,16 @@
     - Results: ~490ns-2.6µs for diff, ~958ns-4.2µs for diff+plan (all far under 100ms target)
     - Scope: sync CPU-bound only; no HTTP/API, no graph service, no DB queries
 
-[x] Batch 2 Slice 6: graph-service + intent-api + intent-service DB benchmark harnesses
+[x] Batch 2 Slice 6: graph-service + intent-api + intent-service DB benchmark harnesses (live run)
     Evidence:
     - Code: crates/graph-service/Cargo.toml (criterion dev-dependency)
     - Code: crates/graph-service/benches/graph_traversal.rs (BFS, path finding, cycle detection)
     - Code: crates/intent-api/Cargo.toml (criterion dev-dependency)
     - Code: crates/intent-api/benches/http_handlers.rs (diff compute, validation, intent service create)
     - Code: crates/intent-service/Cargo.toml (criterion dev-dependency)
-    - Code: crates/intent-service/benches/db_operations.rs (env-gated, requires DATABASE_URL)
-    - Results: graph traversal all sizes pass; intent-api sync path passes; DB benchmark env-gated
-    - Scope: in-memory graph benchmarks; sync HTTP handler path; env-gated DB benchmarks
+    - Code: crates/intent-service/benches/db_operations.rs (live run with DATABASE_URL)
+    - Results: graph traversal all sizes pass; intent-api sync path passes; DB benchmarks live (p50: 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions)
+    - Scope: in-memory graph benchmarks; sync HTTP handler path; live DB benchmarks against Postgres
 
 [~] Intent diff optimization (caching, parallel computation)
     Evidence:

@@ -18,8 +18,8 @@
 //! DATABASE_URL="postgres://user:pass@localhost/intent_rebase" cargo bench -p intent-service --bench db_operations -- --noplot
 //! ```
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use intent_service::SqlxIntentRepository;
+use criterion::{criterion_group, criterion_main, Criterion};
+use intent_service::{SqlxIntentRepository, IntentRepository};
 use intent_rebase_types::{
     ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, IntentPayload,
     IntentObjective, IntentScope, IntentConstraints, AcceptanceCriteria, IntentAuthority,
@@ -102,6 +102,10 @@ fn create_version_request() -> CreateVersionRequest {
         change_reason: "Benchmark version".to_string(),
         change_channel: ChangeChannel::UserEdit,
         payload: create_test_payload("Benchmark intent v2"),
+        created_by: ActorRef {
+            actor_type: "benchmark".to_string(),
+            actor_id: "benchmark".to_string(),
+        },
     }
 }
 
@@ -269,6 +273,10 @@ fn bench_db_list_versions(c: &mut Criterion) {
                 change_reason: format!("Benchmark version {}", i + 2),
                 change_channel: ChangeChannel::UserEdit,
                 payload: create_test_payload(&format!("Benchmark intent v{}", i + 2)),
+                created_by: ActorRef {
+                    actor_type: "benchmark".to_string(),
+                    actor_id: "benchmark".to_string(),
+                },
             };
             repo.create_version_with_occ(id, request, i + 1, i + 1)
                 .await

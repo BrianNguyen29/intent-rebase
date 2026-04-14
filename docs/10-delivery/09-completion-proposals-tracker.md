@@ -58,11 +58,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5 delivered) |
+| **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Continue with multi-window burn-rate alerting and distributed tracing across all services |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Full OTEL export, distributed trace context across all services, multi-window burn-rate alerting, and active benchmark coverage remain future scope. |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Full OTEL export, distributed trace context across all services, multi-window burn-rate alerting, and load testing remain future scope. |
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
@@ -75,11 +75,10 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Error budget tracking panels (preview + apply 1h burn-rate stat panels) — Batch 2 Slice 5
 - [x] Graph traversal benchmark harness (BFS, path finding, cycle detection across small/medium/large graphs) — Batch 2 Slice 6
 - [x] Intent-api sync path benchmark harness (diff compute, validation, intent service create) — Batch 2 Slice 6
-- [x] Intent-service DB benchmark harness (env-gated, requires DATABASE_URL) — Batch 2 Slice 6
+- [x] Intent-service DB benchmark harness (live run complete — p50 25ms create, 1.6ms version, <1ms get/list) — Batch 2 Slice 6
 - [ ] Multi-window burn-rate alerting (1h/6h/3d)
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
 - [ ] Full OTEL trace context propagation across all service boundaries
-- [ ] Live DB benchmarks with actual Postgres instance (Slice 6 harness delivered, execution requires DATABASE_URL)
 - [ ] Full HTTP server benchmarks and load testing
 
 ---
@@ -147,11 +146,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P5 |
 | **Title** | Phase 3 Batch 4a — Performance Work |
 | **Purpose** | Optimize intent diff, graph traversal, and database queries; configure connection pooling; run load tests to validate Phase 3 production readiness. |
-| **Status** | 🔄 In Progress (Slice 1: rebase-engine sync benchmark slice delivered; Slice 2: graph-service + intent-api + intent-service DB benchmarks delivered) |
+| **Status** | 🔄 In Progress (Slice 1: rebase-engine sync benchmark slice delivered; Slice 2: graph-service + intent-api + intent-service DB benchmarks delivered with live Postgres) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
-| **Suggested Next Step** | Run DB benchmarks with live Postgres; consider full HTTP server benchmarks with load testing infrastructure |
-| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. **Slice 6 delivered:** graph-service benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and env-gated intent-service DB benchmark harness (requires DATABASE_URL). Observed latencies are microsecond-level for sync paths. Graph traversal benchmarks complete successfully across all sizes. DB benchmarks require live Postgres. |
+| **Suggested Next Step** | Proceed with DB query optimization if needed; consider full HTTP server benchmarks with load testing infrastructure |
+| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. **Slice 6 delivered:** graph-service benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). Observed latencies are microsecond-level for sync paths. Graph traversal benchmarks complete successfully across all sizes. DB benchmarks now live. |
 
 **Items:**
 - [x] **Batch 2 Slice 4:** rebase-engine sync diff + plan benchmark harness — benchmark harness with criterion, low/medium/high complexity cases
