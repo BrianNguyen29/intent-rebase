@@ -1984,6 +1984,45 @@ pub fn init_tracing() {
         .init();
 }
 
+// ============================================================================
+// Request-ID Extraction Middleware (Phase 3 Batch 2 Slice 2 — tracing foundation)
+// ============================================================================
+
+/// Request ID stored in request extensions by the request_id_middleware.
+#[derive(Clone)]
+pub struct RequestId(pub String);
+
+/// Middleware that extracts or generates a request ID for tracing correlation.
+///
+/// Phase 3 Batch 2 Slice 2 (bounded tracing foundation):
+/// - Extracts `X-Request-ID` header if present
+/// - Generates a new UUID if not present
+/// - Stores the request ID in request extensions for downstream use
+/// - Does NOT propagate to response headers (Phase 3 Batch 2 remainder scope)
+/// - Does NOT wire to OpenTelemetry export (future OTEL integration scope)
+///
+/// This enables basic request correlation for log tracing across service boundaries
+/// where explicit request-id propagation is implemented.
+pub async fn request_id_middleware(
+    mut request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Extract or generate request ID
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // Store in extensions for downstream access
+    request.extensions_mut().insert(RequestId(request_id));
+
+    // Continue with the request
+    next.run(request).await
+}
+
 /// Health check response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
@@ -4585,6 +4624,7 @@ pub fn build_router(
         .route("/forensic/export", post(export_forensic_archive))
         .with_state(state)
         .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(request_id_middleware))
         .layer(TraceLayer::new_for_http())
 }
 

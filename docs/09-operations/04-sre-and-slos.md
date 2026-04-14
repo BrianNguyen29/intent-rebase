@@ -1,8 +1,9 @@
 # SRE and SLOs
 
-> **Status (Batch 2 Slice 1):** This document describes provisional SLO targets and a Grafana dashboard scaffold.
+> **Status (Batch 2 Slice 1 + Slice 2):** This document describes provisional SLO targets and a Grafana dashboard scaffold (Slice 1), plus a bounded tracing foundation (Slice 2).
 > These targets are **not yet SRE-approved** and **no production telemetry is connected**.
-> Batch 2 Slice 1 delivers the **foundation only** — SLO definitions documented, dashboard scaffold written, alerting rules and error budget tracking are out of scope for this slice.
+> Batch 2 Slice 1 delivers the **SLO foundation only** — SLO definitions documented, dashboard scaffold written, alerting rules and error budget tracking are out of scope for this slice.
+> Batch 2 Slice 2 delivers **tracing foundation only** — request-id extraction middleware and service method instrumentation; no full OTEL export or distributed trace across all boundaries.
 
 ---
 
@@ -42,18 +43,23 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 
 ---
 
-## Batch 2 Slice 1 — What Is and Is Not Implemented
+## Batch 2 Slice 1 + Slice 2 — What Is and Is Not Implemented
 
 ### ✅ Delivered (Slice 1)
 
 - **SLO definitions documented** — all candidate targets above are written with enough specificity to drive Grafana panel queries
 - **Grafana dashboard scaffold** — see `06-slo-dashboard.md` for panel layout, metric names, and query structure
 
+### ✅ Delivered (Slice 2 — bounded tracing foundation)
+
+- **Request-ID extraction middleware** — extracts `X-Request-ID` header or generates UUID; stores in request extensions for downstream correlation
+- **Service method instrumentation** — `#[tracing::instrument]` on key intent-service, rebase-engine, and compensation-service methods
+
 ### ⬜ Not Yet Implemented
 
 - **Alerting rules** — no Alertmanager config, no warning/critical thresholds wired to alerts
 - **Error budget tracking dashboard** — no burn-rate query or budget tracking panels
-- **Distributed tracing** — no OTel instrumentation, no trace context across service boundaries
+- **Distributed tracing** — no full OTEL instrumentation, no trace context propagation across all service boundaries (Slice 2 delivers foundation only)
 - **Performance benchmarks** — no rebase latency p50/p95/p99 measurements
 - **Runbooks** — no runbooks for rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
 

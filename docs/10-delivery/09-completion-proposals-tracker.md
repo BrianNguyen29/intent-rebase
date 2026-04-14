@@ -58,17 +58,19 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (Slice 1 delivered, Slice 2 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. |
+| **Suggested Next Step** | Continue with alerting rules and error budget tracking |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Full OTEL export and distributed trace context across all services remains future scope. |
 
 **Items:**
-- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
+- [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
+- [x] Grafana dashboard scaffold — Batch 2 Slice 1
+- [x] Distributed tracing foundation (request-id extraction + service method instrumentation) — Batch 2 Slice 2
 - [ ] Alerting rules (warning, critical thresholds)
 - [ ] Error budget tracking dashboard + runbook
-- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
+- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
 - [ ] Performance benchmarks: rebase latency p50/p95/p99 (target: p95 < 60s for low/medium risk)
 - [ ] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
 

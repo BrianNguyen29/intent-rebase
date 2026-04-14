@@ -291,10 +291,14 @@
     - Error budget dashboard — not started
     - Error budget runbook — not started
 
-[ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
+[~] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded foundation)
     Evidence:
-    - OTel trace context — not started
-    - No trace instrumentation across service boundaries yet
+    - Code: crates/intent-api/src/lib.rs (request_id_middleware + RequestId extraction)
+    - Code: crates/intent-api/src/lib.rs (request_id_middleware wired in build_router)
+    - Code: crates/intent-service/src/lib.rs (#[tracing::instrument] on create_intent, create_version, get_intent_head, compute_diff, compute_rebase_preview, compute_rebase_preview_with_graph)
+    - Code: crates/rebase-engine/src/lib.rs (#[tracing::instrument] on compute_diff_sync, compute_diff_with_risk_sync)
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (#[tracing::instrument] on execute_run, process_single_action, handle_pending_action, handle_approved_action, handle_failed_action)
+    - Note: This is a **tracing foundation only** — no full OTEL export, no full distributed trace across all boundaries
 
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:
