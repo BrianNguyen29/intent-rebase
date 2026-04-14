@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -118,6 +118,20 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 **Slice 5 scope (bounded/truthful):**
 - Preview + apply 1-hour burn rate stat panels backed by metrics emitted in Slice 3 ✅
 - **NOT in scope:** Multi-window burn-rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
+
+### Batch 2 Slice 6 (delivered — graph + HTTP + DB benchmark harnesses)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-8a | Graph-service traversal benchmark | `crates/graph-service/benches/graph_traversal.rs` — BFS, path finding, cycle detection |
+| 2-8b | Intent-api sync path benchmark | `crates/intent-api/benches/http_handlers.rs` — diff compute, validation |
+| 2-8c | Intent-service DB benchmark harness | `crates/intent-service/benches/db_operations.rs` — env-gated, requires DATABASE_URL |
+
+**Slice 6 scope (bounded/truthful):**
+- Graph traversal: in-memory repository benchmarks (BFS, path finding, cycle detection across small/medium/large graphs) ✅
+- Intent-api sync path: diff compute, validation, intent service create ✅
+- Intent-service DB: env-gated harness requiring DATABASE_URL ✅
+- **NOT in scope:** SQL-backed graph benchmarks, full HTTP server benchmarks, concurrent DB benchmarks, load testing
 
 ### Batch 2 remaining work (not yet delivered)
 

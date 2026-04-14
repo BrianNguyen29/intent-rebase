@@ -34,3 +34,10 @@ sqlx = { workspace = true }
 
 [dev-dependencies]
 runtime-adapter = { path = "../runtime-adapter" }
+criterion = { version = "0.5", features = ["html_reports"] }
+axum = { workspace = true }
+tokio = { workspace = true }
+
+[[bench]]
+name = "http_handlers"
+harness = false
