@@ -9,6 +9,8 @@
 //! - **Bounded consumers**: Phase 2b adds a minimal in-memory consumer abstraction for testing
 //!   the event→checkpoint path. Full consumer infrastructure (NATS subscription, DLQ, startup wiring)
 //!   is Phase 3.
+//! - **Bounded trace continuity**: Phase 3 adds trace_id/span_id to `EventEnvelope` and
+//!   `PublishedEvent` for in-process trace correlation. Cross-process propagation is future scope.
 //!
 //! ## Subject Naming Convention (Phase 2b bounded slice)
 //!
@@ -33,10 +35,13 @@
 //! - Dead-letter queue (DLQ) for failed event processing
 //! - Full consumer startup wiring and lifecycle management
 //! - Consumer groups and parallel processing
+//! - W3C trace-context injection into outbound NATS messages
 
 use async_trait::async_trait;
 use serde::Serialize;
 use uuid::Uuid;
+
+use super::TraceContext;
 
 /// Phase 2b: Subject naming convention for published events.
 ///
@@ -75,6 +80,7 @@ impl EventSubject {
 /// Payload envelope for published events.
 ///
 /// Phase 2b: Wraps the audit event payload with metadata for tracing/replay.
+/// Phase 3: Added trace_id/span_id for bounded trace continuity.
 #[derive(Debug, Clone, Serialize)]
 pub struct EventEnvelope<T: Serialize> {
     /// Subject this event was published to
@@ -85,18 +91,27 @@ pub struct EventEnvelope<T: Serialize> {
     pub published_at: chrono::DateTime<chrono::Utc>,
     /// Sequence number for ordering (monotonic per subject)
     pub sequence: u64,
+    /// Trace context for correlation (Phase 3 bounded trace continuity slice)
+    pub trace_id: Option<String>,
+    /// Span context for correlation (Phase 3 bounded trace continuity slice)
+    pub span_id: Option<String>,
     /// The actual event payload
     pub payload: T,
 }
 
 impl<T: Serialize> EventEnvelope<T> {
     /// Create a new envelope (sequence is assigned by publisher)
-    pub fn new(subject: String, schema_version: &'static str, payload: T) -> Self {
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts `TraceContext` to carry
+    /// trace_id/span_id into the published envelope.
+    pub fn new(subject: String, schema_version: &'static str, payload: T, trace_context: TraceContext) -> Self {
         Self {
             subject,
             schema_version,
             published_at: chrono::Utc::now(),
             sequence: 0, // Publisher assigns actual sequence
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             payload,
         }
     }
@@ -126,8 +141,12 @@ pub trait EventPublisher: Send + Sync {
     /// Phase 2b: This is fail-open. Errors are logged and `PublishResult::Skipped`
     /// is returned, but the caller continues normally.
     ///
+    /// Phase 3 bounded trace continuity slice: `trace_context` is captured in the
+    /// published event record for correlation. Pass `TraceContext::default()` if
+    /// no trace context is available.
+    ///
     /// Returns `PublishResult` indicating success or skip-with-reason.
-    async fn publish(&self, subject: &EventSubject, payload: &serde_json::Value) -> PublishResult;
+    async fn publish(&self, subject: &EventSubject, payload: &serde_json::Value, trace_context: TraceContext) -> PublishResult;
 
     /// Check if the publisher is ready (connection established, etc.)
     ///
@@ -165,7 +184,7 @@ impl Default for NoOpEventPublisher {
 
 #[async_trait]
 impl EventPublisher for NoOpEventPublisher {
-    async fn publish(&self, subject: &EventSubject, _payload: &serde_json::Value) -> PublishResult {
+    async fn publish(&self, subject: &EventSubject, _payload: &serde_json::Value, _trace_context: TraceContext) -> PublishResult {
         tracing::debug!(
             "NoOpEventPublisher: dropping event for subject '{}' (event streaming disabled)",
             subject.subject
@@ -213,11 +232,17 @@ pub struct InMemoryEventPublisher {
 }
 
 /// A published event record for test verification
+///
+/// Phase 3 bounded trace continuity slice: includes trace_id and span_id.
 #[derive(Debug, Clone)]
 pub struct PublishedEvent {
     pub subject: String,
     pub schema_version: String,
     pub sequence: u64,
+    /// Trace ID for correlation (Phase 3 bounded trace continuity slice)
+    pub trace_id: Option<String>,
+    /// Span ID for correlation (Phase 3 bounded trace continuity slice)
+    pub span_id: Option<String>,
     pub payload: serde_json::Value,
     pub published_at: chrono::DateTime<chrono::Utc>,
 }
@@ -305,7 +330,7 @@ impl Default for InMemoryEventPublisher {
 
 #[async_trait]
 impl EventPublisher for InMemoryEventPublisher {
-    async fn publish(&self, subject: &EventSubject, payload: &serde_json::Value) -> PublishResult {
+    async fn publish(&self, subject: &EventSubject, payload: &serde_json::Value, trace_context: TraceContext) -> PublishResult {
         // Check fail flag (for testing error handling)
         if self.fail_publish.load(std::sync::atomic::Ordering::SeqCst) {
             return PublishResult::Skipped {
@@ -323,6 +348,8 @@ impl EventPublisher for InMemoryEventPublisher {
             subject: subject.subject.clone(),
             schema_version: subject.schema_version.to_string(),
             sequence: seq,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             payload: payload.clone(),
             published_at: chrono::Utc::now(),
         };
@@ -542,7 +569,7 @@ mod tests {
         let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
         let payload = serde_json::json!({ "test": true });
 
-        let result = publisher.publish(&subject, &payload).await;
+        let result = publisher.publish(&subject, &payload, TraceContext::default()).await;
         match result {
             PublishResult::Skipped { reason } => {
                 assert!(reason.contains("disabled"));
@@ -560,8 +587,12 @@ mod tests {
             "to_version": 2,
             "decision_class": "B"
         });
+        let trace_ctx = TraceContext::new(
+            Some("0af7651916cd43dd8448eb211c80319c".to_string()),
+            Some("b7ad6b7169203331".to_string()),
+        );
 
-        let result = publisher.publish(&subject, &payload).await;
+        let result = publisher.publish(&subject, &payload, trace_ctx.clone()).await;
         match result {
             PublishResult::Published {
                 subject: s,
@@ -578,6 +609,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].sequence, 1);
         assert_eq!(events[0].schema_version, "v1");
+        // Verify trace context was captured
+        assert_eq!(events[0].trace_id, trace_ctx.trace_id);
+        assert_eq!(events[0].span_id, trace_ctx.span_id);
     }
 
     #[tokio::test]
@@ -588,7 +622,7 @@ mod tests {
         // Publish 3 events
         for i in 1..=3 {
             let payload = serde_json::json!({ "index": i });
-            publisher.publish(&subject, &payload).await;
+            publisher.publish(&subject, &payload, TraceContext::default()).await;
         }
 
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -605,9 +639,9 @@ mod tests {
         let subject1 = EventSubject::from_audit_event(tenant_id, "RebaseApplied");
         let subject2 = EventSubject::from_audit_event(tenant_id, "ApprovalGranted");
 
-        publisher.publish(&subject1, &serde_json::json!({})).await;
-        publisher.publish(&subject2, &serde_json::json!({})).await;
-        publisher.publish(&subject1, &serde_json::json!({})).await;
+        publisher.publish(&subject1, &serde_json::json!({}), TraceContext::default()).await;
+        publisher.publish(&subject2, &serde_json::json!({}), TraceContext::default()).await;
+        publisher.publish(&subject1, &serde_json::json!({}), TraceContext::default()).await;
 
         assert_eq!(publisher.count_for_subject(&subject1.subject).await, 2);
         assert_eq!(publisher.count_for_subject(&subject2.subject).await, 1);
@@ -619,7 +653,7 @@ mod tests {
         let publisher = Arc::new(InMemoryEventPublisher::new());
         let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
 
-        publisher.publish(&subject, &serde_json::json!({})).await;
+        publisher.publish(&subject, &serde_json::json!({}), TraceContext::default()).await;
         assert!(publisher.has_events().await);
 
         publisher.clear().await;
@@ -628,7 +662,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inmemory_publisher_not_ready() {
-        let publisher = Arc::new(InMemoryEventPublisher::not_ready());
+        let publisher = InMemoryEventPublisher::not_ready();
         assert!(!publisher.is_ready());
     }
 
@@ -662,7 +696,7 @@ mod tests {
         });
 
         // Publish event
-        publisher.publish(&subject, &payload).await;
+        publisher.publish(&subject, &payload, TraceContext::default()).await;
 
         // Get published event and consume it
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -697,7 +731,7 @@ mod tests {
         // Publish 3 events
         for i in 1..=3 {
             let payload = serde_json::json!({ "index": i });
-            publisher.publish(&subject, &payload).await;
+            publisher.publish(&subject, &payload, TraceContext::default()).await;
         }
 
         // Get all events and consume them
@@ -719,8 +753,8 @@ mod tests {
         let consumer = Arc::new(InMemoryEventConsumer::new());
 
         let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
-        publisher.publish(&subject, &serde_json::json!({})).await;
-        publisher.publish(&subject, &serde_json::json!({})).await;
+        publisher.publish(&subject, &serde_json::json!({}), TraceContext::default()).await;
+        publisher.publish(&subject, &serde_json::json!({}), TraceContext::default()).await;
 
         let events = publisher.get_events_for_subject(&subject.subject).await;
         consumer.consume(&events[0]).await;
@@ -736,7 +770,7 @@ mod tests {
         let consumer = Arc::new(InMemoryEventConsumer::new());
 
         let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
-        publisher.publish(&subject, &serde_json::json!({})).await;
+        publisher.publish(&subject, &serde_json::json!({}), TraceContext::default()).await;
 
         let events = publisher.get_events_for_subject(&subject.subject).await;
         consumer.consume(&events[0]).await;
@@ -754,7 +788,7 @@ mod tests {
         consumer.set_fail_consume(true);
 
         let subject = EventSubject::from_audit_event(Uuid::new_v4(), "RebaseApplied");
-        publisher.publish(&subject, &serde_json::json!({})).await;
+        publisher.publish(&subject, &serde_json::json!({}), TraceContext::default()).await;
 
         let events = publisher.get_events_for_subject(&subject.subject).await;
         let result = consumer.consume(&events[0]).await;
@@ -781,9 +815,13 @@ mod tests {
             "decision_class": "B",
             "outcome": "auto_proceeded"
         });
+        let trace_ctx = TraceContext::new(
+            Some("0af7651916cd43dd8448eb211c80319c".to_string()),
+            Some("b7ad6b7169203331".to_string()),
+        );
 
         // Publish
-        let publish_result = publisher.publish(&subject, &payload).await;
+        let publish_result = publisher.publish(&subject, &payload, trace_ctx.clone()).await;
         assert!(matches!(publish_result, PublishResult::Published { .. }));
 
         // Consume

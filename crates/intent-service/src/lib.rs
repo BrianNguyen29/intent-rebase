@@ -15,7 +15,8 @@ use intent_rebase_types::{
     AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload, AuditRepository,
     ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
     CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
-    IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
+    IntentVersion, ListVersionsResponse, NodeType,
+    get_current_trace_context, VersionStatus,
 };
 use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
@@ -429,6 +430,7 @@ impl IntentService {
                             &self.system_actor_id,
                             intent_id,
                             audit_payload,
+                            get_current_trace_context(),
                         )
                         .await;
                 }

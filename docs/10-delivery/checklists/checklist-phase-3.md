@@ -320,6 +320,15 @@
     - Code: crates/compensation-service/src/orchestration_runtime.rs (#[tracing::instrument] on execute_run, process_single_action, handle_pending_action, handle_approved_action, handle_failed_action)
     - Note: This delivers **bounded in-process OTEL propagation** — optional OTLP export (when env var is set), W3C trace-context extraction from inbound requests, traceparent/tracestate in responses, and background task span propagation. Cross-process trace propagation remains future scope.
 
+[x] Phase 3 bounded trace continuity slice (trace_id/span_id in audit events and published event envelopes)
+    Evidence:
+    - Code: crates/intent-rebase-types/src/trace_context.rs (TraceContext struct with trace_id/span_id, get_current_trace_context helper)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_* helper methods now accept TraceContext parameter)
+    - Code: crates/intent-rebase-types/src/event_publisher.rs (EventEnvelope and PublishedEvent now carry trace_id/span_id)
+    - Code: crates/intent-rebase-types/Cargo.toml (opentelemetry dependency added for trace context types)
+    - Tests: cargo test -p intent-rebase-types (41 tests pass)
+    - Note: Bounded to in-process audit/event boundaries. Cross-process propagation via Temporal gRPC, sqlx connection context, or NATS headers remains future scope.
+
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:
     - Benchmark results: not started

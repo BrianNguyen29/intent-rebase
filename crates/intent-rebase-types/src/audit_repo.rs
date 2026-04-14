@@ -9,7 +9,7 @@ use super::{
     ApprovalRevokedAuditPayload, AuditEvent, AuditEventType,
     CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
     CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
-    RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, ReplayAuditPayload,
+    RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, ReplayAuditPayload, TraceContext,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -40,12 +40,17 @@ pub trait AuditRepository: Send + Sync {
     ) -> Result<Vec<AuditEvent>, IntentRebaseError>;
 
     /// Record a RebaseApplied audit event (helper method with default implementation)
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext` to carry
+    /// trace_id/span_id from the active span into the audit event. Pass `TraceContext::default()`
+    /// if no trace context is available.
     async fn record_rebase_applied(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: RebaseApplyAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -57,20 +62,23 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
     }
 
     /// Record a RebaseApplyBlocked audit event (helper method with default implementation)
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_rebase_apply_blocked(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: RebaseApplyBlockedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -82,20 +90,23 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
     }
 
     /// Record an ApprovalGranted audit event (Phase 2b bounded slice)
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_approval_granted(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: ApprovalGrantedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -107,20 +118,23 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
     }
 
     /// Record an ApprovalRevoked audit event (Phase 2b bounded slice)
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_approval_revoked(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: ApprovalRevokedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -132,8 +146,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -141,12 +155,15 @@ pub trait AuditRepository: Send + Sync {
 
     /// Record an ApprovalCancelled audit event (Phase 2b bounded slice)
     /// This is emitted when pending approval requests are cancelled due to intent version change
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_approval_cancelled(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: ApprovalCancelledAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -158,8 +175,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -167,12 +184,15 @@ pub trait AuditRepository: Send + Sync {
 
     /// Record an ApprovalExpired audit event (Phase 2b bounded expiry slice)
     /// This is emitted when a pending approval request is manually marked as expired.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_approval_expired(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: ApprovalExpiredAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -184,8 +204,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -194,12 +214,15 @@ pub trait AuditRepository: Send + Sync {
     /// Record a ReplayInitiated audit event (Phase 2b bounded replay slice)
     /// This is emitted when a replay operation is initiated via the public replay endpoint.
     /// Note: This is bounded cooperative signal-based replay, NOT native Temporal reset.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_replay_initiated(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: ReplayAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -211,8 +234,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -221,6 +244,8 @@ pub trait AuditRepository: Send + Sync {
     /// Record an ArtifactInvalidated audit event (Phase 2b bounded slice)
     /// This is emitted when artifacts are invalidated due to intent change.
     /// Note: This is bounded metadata/status only. Real S3 quarantine move is Phase 3.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_artifact_invalidated(
         &self,
         tenant_id: Uuid,
@@ -228,6 +253,7 @@ pub trait AuditRepository: Send + Sync {
         intent_id: Uuid,
         artifact_id: Uuid,
         payload: super::ArtifactInvalidatedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -239,8 +265,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -251,12 +277,15 @@ pub trait AuditRepository: Send + Sync {
     /// Emitted when a compensation action is created/planned.
     /// Note: This uses the action's own ID as the compensation_plan_id since
     /// the CompensationActionService does not have a separate planning phase.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_compensation_planned(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: CompensationPlannedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -268,8 +297,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -278,12 +307,15 @@ pub trait AuditRepository: Send + Sync {
     /// Record a CompensationStarted audit event (Phase 3 Batch 0 scaffold)
     ///
     /// Emitted when compensation execution begins.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_compensation_started(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: CompensationStartedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -295,8 +327,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -305,12 +337,15 @@ pub trait AuditRepository: Send + Sync {
     /// Record a CompensationCompleted audit event (Phase 3 Batch 0 scaffold)
     ///
     /// Emitted when compensation execution completes successfully.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_compensation_completed(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: CompensationCompletedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -322,8 +357,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -332,12 +367,15 @@ pub trait AuditRepository: Send + Sync {
     /// Record a CompensationFailed audit event (Phase 3 Batch 0 scaffold)
     ///
     /// Emitted when compensation execution fails.
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
     async fn record_compensation_failed(
         &self,
         tenant_id: Uuid,
         actor_id: &str,
         intent_id: Uuid,
         payload: CompensationFailedAuditPayload,
+        trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -349,8 +387,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: None,
-            span_id: None,
+            trace_id: trace_context.trace_id,
+            span_id: trace_context.span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -698,9 +736,13 @@ mod tests {
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let payload = create_test_payload();
+        let trace_ctx = TraceContext::new(
+            Some("0af7651916cd43dd8448eb211c80319c".to_string()),
+            Some("b7ad6b7169203331".to_string()),
+        );
 
         let result = repo
-            .record_rebase_applied(tenant_id, "test-user", intent_id, payload)
+            .record_rebase_applied(tenant_id, "test-user", intent_id, payload, trace_ctx.clone())
             .await;
 
         assert!(result.is_ok());
@@ -708,10 +750,14 @@ mod tests {
         // Verify event was stored
         let events = repo.list_by_intent(intent_id, tenant_id).await.unwrap();
         assert_eq!(events.len(), 1);
+        let event = &events[0];
         assert!(matches!(
-            events[0].event_type,
+            event.event_type,
             AuditEventType::RebaseApplied
         ));
+        // Verify trace context was captured
+        assert_eq!(event.trace_id, trace_ctx.trace_id);
+        assert_eq!(event.span_id, trace_ctx.span_id);
     }
 
     #[tokio::test]
@@ -731,7 +777,7 @@ mod tests {
         };
 
         let result = repo
-            .record_rebase_apply_blocked(tenant_id, "test-user", intent_id, payload)
+            .record_rebase_apply_blocked(tenant_id, "test-user", intent_id, payload, TraceContext::default())
             .await;
 
         assert!(result.is_ok());

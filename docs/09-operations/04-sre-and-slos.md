@@ -61,6 +61,13 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 - **W3C trace-context propagation** — extracts `traceparent` and `tracestate` headers from inbound requests; adds traceparent/tracestate to responses
 - **Background task span propagation** — spawned background work inherits current span context via `tracing::Instrument`
 
+### ✅ Delivered (Phase 3 Slice — bounded trace continuity for audit/events)
+
+- **Trace context in audit events** — `AuditEvent` now carries `trace_id` and `span_id` fields populated when an active trace exists
+- **Trace context in published event envelopes** — `EventEnvelope` and `PublishedEvent` now carry `trace_id` and `span_id`
+- **Database columns exist** — `audit_events` table already has `trace_id` and `span_id` columns
+- **Bounded scope** — trace context capture is implemented for in-process audit/event boundaries; cross-process propagation via Temporal gRPC, sqlx connection context, or NATS headers remains future scope
+
 ### ✅ Delivered (Slice 3 — alerting rules + runbook foundation)
 
 - **Alerting rules** — Prometheus alerting rules in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` targeting availability and latency SLOs

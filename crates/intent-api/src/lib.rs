@@ -18,6 +18,7 @@ use intent_rebase_types::{
     CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, DiffRequest, EdgeType,
     GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
     ListVersionsResponse, NodeType, PolicySnapshot, ValidateIntentResponse,
+    get_current_trace_context,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -1211,6 +1212,7 @@ async fn rebase_apply(
             actor_id,
             intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1246,6 +1248,7 @@ async fn rebase_apply(
                 actor_id,
                 intent_id,
                 blocked_payload.clone(),
+                get_current_trace_context(),
             )
             .await
         {
@@ -1395,7 +1398,7 @@ async fn publish_audit_event(
     };
 
     let subject = intent_rebase_types::EventSubject::from_audit_event(tenant_id, event_type);
-    match publisher.publish(&subject, payload).await {
+    match publisher.publish(&subject, payload, get_current_trace_context()).await {
         intent_rebase_types::PublishResult::Published {
             subject: s,
             sequence,
@@ -1568,6 +1571,7 @@ async fn approve_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1642,6 +1646,7 @@ async fn reject_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1721,6 +1726,7 @@ async fn expire_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -2099,6 +2105,7 @@ async fn replay_intent(
             actor_id,
             intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
