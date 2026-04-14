@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 3 exit gate khi tất cả items checked và có evidence.
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED, BATCH 3b BOUNDED VERIFICATION SLICE DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Batch 3b currently includes bounded forensic verification via `POST /forensic/verify`; bundle generation/storage/download/replay remain future scope. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED, BATCH 3b BOUNDED VERIFICATION + EXPORT SLICES DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Batch 3b currently includes bounded forensic verification via `POST /forensic/verify` and bounded in-memory export metadata generation via `POST /forensic/export`; bundle generation from real services, storage, download-from-storage, and replay remain future scope. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.
 **Phase:** Phase 3
 **Target Duration:** 6–10 tuần
 
@@ -414,9 +414,21 @@
     Evidence:
     - S3 lifecycle policies
 
-[ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
+[x] Forensic archive export API: `POST /forensic/export` (Phase 3 Batch 3b bounded slice)
     Evidence:
-    - Code: intent-api export endpoint
+    - Code: crates/forensic-service/src/export.rs (ForensicArchiveGenerator, types)
+    - Code: crates/forensic-service/src/lib.rs (module exports)
+    - Code: crates/intent-api/src/lib.rs (handler, DTOs, route wiring)
+    - Tests: cargo test -p forensic-service --all-features (export tests)
+    - Tests: cargo test -p intent-api --all-features (export endpoint tests)
+    - Doc: docs/04-api/openapi.yaml (forensic export path + schemas)
+    - Doc: docs/14-governance/10-forensic-bundle.md (bounded export documentation)
+    - Doc: docs/10-delivery/09-completion-proposals-tracker.md (P4 export status)
+    - Note: Bounded in-memory archive generation only. Does NOT claim persisted bundles, S3 storage, async jobs, or download-from-storage.
+
+[ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
+    Evidence:
+    - Code: intent-api stored export/download endpoint
 ```
 
 ---

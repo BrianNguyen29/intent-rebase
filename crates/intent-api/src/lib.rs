@@ -183,6 +183,10 @@ pub struct AppState {
     /// Phase 3 Batch 3b (bounded slice): Forensic verification service for
     /// verifying forensic bundle feasibility without generating actual bundles.
     pub forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    /// Phase 3 Batch 3b (bounded slice): Forensic archive generator for
+    /// in-memory archive generation with scaffolded data. Does NOT query
+    /// real services or persist data.
+    pub forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     pub start_time: Instant,
 }
 
@@ -4162,6 +4166,117 @@ impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificati
     }
 }
 
+// === Forensic Export Types ===
+
+/// Request body for forensic archive export
+///
+/// **Phase 3 Batch 3b (bounded slice):** Triggers in-memory archive generation
+/// from the given parameters. The archive contains scaffolded/fictional data
+/// representing what a real bundle would contain.
+///
+/// **Truthful semantics:**
+/// - Generated archive is entirely in-memory with scaffolded entries
+/// - Does NOT query actual services for real intent versions, artifacts, etc.
+/// - `item_count` reflects the configured generator counts, not actual data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent ID to generate archive for
+    pub intent_id: Uuid,
+    /// Time range to include in archive
+    pub time_range: ForensicExportTimeRange,
+    /// Purpose of the archive
+    #[serde(default)]
+    pub purpose: forensic_service::ExportPurpose,
+    /// Whether to include artifact entries
+    #[serde(default = "default_export_include_artifacts")]
+    pub include_artifacts: bool,
+    /// Whether to include audit event entries
+    #[serde(default = "default_export_include_audit_events")]
+    pub include_audit_events: bool,
+    /// Whether to include policy snapshot entries
+    #[serde(default = "default_export_include_policy_snapshots")]
+    pub include_policy_snapshots: bool,
+}
+
+fn default_export_include_artifacts() -> bool {
+    true
+}
+
+fn default_export_include_audit_events() -> bool {
+    true
+}
+
+fn default_export_include_policy_snapshots() -> bool {
+    true
+}
+
+/// Time range for forensic export
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportTimeRange {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for forensic archive export
+///
+/// **Phase 3 Batch 3b (bounded slice):** Returns archive metadata and size
+/// for the generated in-memory archive. The actual archive content is NOT
+/// embedded in this response — it is generated on-demand.
+///
+/// **Truthful semantics:**
+/// - `archive_id` is a unique identifier for the generated archive
+/// - `generated_at` timestamps when generation was triggered
+/// - `item_count` is the count of scaffolded entries generated
+/// - `archive_size_bytes` reflects the JSON-serialized size of the archive
+///
+/// **NOT claimed:**
+/// - Actual bundle generation from real services
+/// - Bundle storage (S3 or any persistence)
+/// - Async job orchestration
+/// - Real replay engine
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportResponse {
+    /// Unique identifier for this archive
+    pub archive_id: Uuid,
+    /// When archive was generated
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Export status
+    pub status: forensic_service::ExportStatus,
+    /// Human-readable status reason
+    pub status_reason: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Time range covered
+    pub time_range: ForensicExportTimeRange,
+    /// Purpose of archive
+    pub purpose: forensic_service::ExportPurpose,
+    /// Summary of archive contents
+    pub contents: ForensicExportContentsSummary,
+    /// Total item count
+    pub item_count: usize,
+    /// Content type (application/json)
+    pub content_type: String,
+    /// Archive size in bytes
+    pub archive_size_bytes: usize,
+}
+
+/// Summary of contents in an export archive
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportContentsSummary {
+    /// Number of intent version entries
+    pub intent_versions: usize,
+    /// Number of artifact entries
+    pub artifacts: usize,
+    /// Number of audit event entries
+    pub audit_events: usize,
+    /// Number of policy snapshot entries
+    pub policy_snapshots: usize,
+}
+
 /// POST /forensic/verify - Verify forensic bundle feasibility
 ///
 /// Phase 3 Batch 3b (bounded slice): Verifies whether a forensic bundle can be
@@ -4209,6 +4324,76 @@ async fn verify_forensic_bundle(
     Ok(Json(ForensicVerificationResponse::from(response)))
 }
 
+/// POST /forensic/export - Generate forensic archive metadata
+///
+/// Phase 3 Batch 3b (bounded slice): Generates an in-memory forensic archive
+/// from the given parameters. The archive contains scaffolded/fictional data
+/// representing what a real bundle would contain.
+///
+/// **Bounded in-memory archive generation:**
+/// - Accepts export parameters (intent_id, time_range, purpose)
+/// - Generates scaffolded entries entirely in-memory (no real service queries)
+/// - Returns archive metadata including size, content type, and item count
+/// - Does NOT stream archive bytes in this bounded slice; response is metadata only
+///
+/// **Truthful semantics:**
+/// - `archive_id` is a unique identifier for the generated archive
+/// - `generated_at` timestamps when generation was triggered
+/// - `item_count` reflects the count of scaffolded entries generated
+/// - `archive_size_bytes` reflects the JSON-serialized size
+///
+/// **NOT claimed:**
+/// - Actual bundle generation from real services (intent service, graph service, etc.)
+/// - Bundle storage (S3 or any persistence layer)
+/// - Async job orchestration for bundle generation
+/// - Real replay engine (state reproduction from bundle)
+/// - Hash chain integrity verification
+async fn export_forensic_archive(
+    State(state): State<AppState>,
+    Json(request): Json<ForensicExportRequest>,
+) -> Result<Json<ForensicExportResponse>, ApiErrorResponse> {
+    let service_request = forensic_service::ForensicExportRequest {
+        tenant_id: request.tenant_id,
+        intent_id: request.intent_id,
+        time_range: forensic_service::ExportTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
+    };
+
+    let response = state
+        .forensic_archive_generator
+        .generate(service_request)
+        .await;
+
+    Ok(Json(ForensicExportResponse {
+        archive_id: response.archive_id,
+        generated_at: response.generated_at,
+        status: response.status,
+        status_reason: response.status_reason,
+        tenant_id: response.tenant_id,
+        intent_id: response.intent_id,
+        time_range: ForensicExportTimeRange {
+            start: response.time_range.start,
+            end: response.time_range.end,
+        },
+        purpose: response.purpose,
+        contents: ForensicExportContentsSummary {
+            intent_versions: response.contents.intent_versions,
+            artifacts: response.contents.artifacts,
+            audit_events: response.contents.audit_events,
+            policy_snapshots: response.contents.policy_snapshots,
+        },
+        item_count: response.item_count,
+        content_type: response.content_type,
+        archive_size_bytes: response.archive_size_bytes,
+    }))
+}
+
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -4227,6 +4412,7 @@ pub fn build_router(
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
 ) -> Router {
     let state = AppState {
         service,
@@ -4240,6 +4426,7 @@ pub fn build_router(
         policy_snapshot_repo,
         event_publisher,
         forensic_service,
+        forensic_archive_generator,
         start_time: Instant::now(),
     };
 
@@ -4394,6 +4581,8 @@ pub fn build_router(
         )
         // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
         .route("/forensic/verify", post(verify_forensic_bundle))
+        // Forensic archive export endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/export", post(export_forensic_archive))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -4453,6 +4642,7 @@ pub fn build_router_with_sql_audit_and_approval(
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -4475,6 +4665,7 @@ pub fn build_router_with_sql_audit_and_approval(
         policy_snapshot_repo,
         event_publisher,
         forensic_service,
+        forensic_archive_generator,
     )
 }
 
@@ -4524,6 +4715,14 @@ mod tests {
         ));
         // Phase 3 Batch 3b: In-memory forensic verification service for tests
         let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
+        // Phase 3 Batch 3b: In-memory forensic archive generator for tests
+        let forensic_archive_gen = Arc::new(
+            forensic_service::InMemoryForensicArchiveGenerator::new()
+                .with_intent_version_count(5)
+                .with_artifact_count(10)
+                .with_audit_event_count(100)
+                .with_policy_snapshot_count(3),
+        );
         AppState {
             service,
             graph_service: graph_svc,
@@ -4536,6 +4735,7 @@ mod tests {
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
             forensic_service: forensic_svc,
+            forensic_archive_generator: forensic_archive_gen,
             start_time: Instant::now(),
         }
     }
@@ -5127,6 +5327,9 @@ mod tests {
             event_publisher: None, // Phase 2b: event publishing optional in tests
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -5333,6 +5536,9 @@ mod tests {
             event_publisher: None, // Phase 2b: event publishing optional in tests
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -6486,6 +6692,9 @@ mod tests {
             event_publisher: Some(publisher),
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         }
     }
@@ -6631,6 +6840,8 @@ mod tests {
             event_publisher,
             Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new())
+                as Arc<dyn forensic_service::ForensicArchiveGenerator>,
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -6711,6 +6922,9 @@ mod tests {
             event_publisher: None,
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -7564,6 +7778,9 @@ mod tests {
             event_publisher: None,
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
                 as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         }
     }
@@ -8353,5 +8570,201 @@ mod tests {
         assert!(json.contains("\"intent_exists\":true"));
         assert!(json.contains("\"version_count\":5"));
         assert!(json.contains("\"has_artifact_traceability\":true"));
+    }
+
+    // === Forensic Export Tests ===
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_returns_generated_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        assert_eq!(result.status, forensic_service::ExportStatus::Generated);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
+        // Item count = 5 (intent versions) + 10 (artifacts) + 100 (audit events) + 3 (policy snapshots)
+        assert_eq!(result.item_count, 118);
+        assert_eq!(result.content_type, "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
+            },
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
+
+        let request: ForensicExportRequest =
+            serde_json::from_str(json).expect("Should deserialize");
+
+        assert_eq!(
+            request.purpose,
+            forensic_service::ExportPurpose::ComplianceAudit
+        );
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_response_serialization() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"generated\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        assert!(json.contains("\"content_type\":\"application/json\""));
+        // item_count = 5 + 10 + 100 = 115 (no policy snapshots)
+        assert!(json.contains("\"item_count\":115"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_status_reason_truthful() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Status reason should be truthful about in-memory generation
+        assert!(result.status_reason.contains("in-memory") || result.status_reason.contains("scaffolded"));
+        assert!(!result.status_reason.contains("S3"));
+        assert!(!result.status_reason.contains("persisted"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_empty_counts() {
+        // Use a generator with zero counts to test empty archive scenario
+        let generator = Arc::new(
+            forensic_service::InMemoryForensicArchiveGenerator::new()
+        ) as Arc<dyn forensic_service::ForensicArchiveGenerator>;
+
+        let state = AppState {
+            service: Arc::new(IntentService::new(Arc::new(
+                intent_service::InMemoryIntentRepository::new(),
+            ))),
+            graph_service: Arc::new(GraphService::new(Arc::new(
+                graph_service::InMemoryGraphRepository::new(),
+            ))),
+            orchestrator: Arc::new(RebaseOrchestrator::new(
+                Arc::new(intent_service::InMemoryCheckpointRepository::new()),
+                Arc::new(GraphService::new(Arc::new(
+                    graph_service::InMemoryGraphRepository::new(),
+                ))),
+                Arc::new(MockAdapter::ready()),
+            )),
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(
+                intent_service::InMemoryApprovalRequestRepository::new(),
+            ) as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(
+                intent_service::InMemoryPolicySnapshotRepository::new(),
+            ) as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None,
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(
+                Arc::new(compensation_service::InMemorySideEffectRepository::new()),
+            )),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(
+                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+                ),
+            ),
+            orchestration_runtime: Arc::new(compensation_service::OrchestrationRuntime::new(
+                Arc::new(compensation_service::CompensationActionService::new(
+                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+                )),
+                Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new()),
+            )),
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new()),
+            forensic_archive_generator: generator,
+            start_time: Instant::now(),
+        };
+
+        let request = ForensicExportRequest {
+            tenant_id: Uuid::new_v4(),
+            intent_id: Uuid::new_v4(),
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::ComplianceAudit,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Zero counts should produce zero items
+        assert_eq!(result.item_count, 0);
+        assert_eq!(result.contents.intent_versions, 0);
+        assert_eq!(result.contents.artifacts, 0);
+        assert_eq!(result.contents.audit_events, 0);
+        assert_eq!(result.contents.policy_snapshots, 0);
     }
 }

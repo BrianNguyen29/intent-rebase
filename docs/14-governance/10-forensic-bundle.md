@@ -6,27 +6,39 @@
 
 ---
 
-## Phase 3 Batch 3b — Bounded Forensic Verification Slice (DELIVERED)
+## Phase 3 Batch 3b — Bounded Forensic Verification + Export Slice (DELIVERED)
 
-**Bounded scope:** This slice delivers a minimal forensic verification API that
-validates parameters and computes coverage estimates WITHOUT generating actual
-bundles, storing data, or performing replay.
+**Bounded scope:** This slice delivers:
+1. Forensic verification API that validates parameters and computes coverage estimates WITHOUT generating actual bundles
+2. Forensic archive export API that generates in-memory archives with scaffolded data for download
+
+Both APIs are bounded: no actual bundle generation, storage, or replay.
 
 ### Delivered (Phase 3 Batch 3b)
 
+#### Verification API
 - `ForensicVerificationService` trait and `InMemoryForensicVerificationService` implementation
 - Request/Response types: `ForensicVerificationRequest`, `ForensicVerificationResponse`
 - Coverage types: `IntentVersionCoverage`, `ArtifactCoverage`, `AuditEventCoverage`, `PolicySnapshotCoverage`
 - API endpoint: `POST /forensic/verify` (bounded request-driven verification)
 - Integration in `intent-api` with tests
 
+#### Export API
+- `ForensicArchiveGenerator` trait and `InMemoryForensicArchiveGenerator` implementation
+- Request/Response types: `ForensicExportRequest`, `ForensicExportResponse`
+- Archive entry types: `IntentVersion`, `Artifact`, `AuditEvent`, `PolicySnapshot`, `BundleManifest`
+- API endpoint: `POST /forensic/export` (bounded in-memory archive generation)
+- Archive contains scaffolded/fictional entries representing what a real bundle would contain
+- Integration in `intent-api` with tests
+
 ### NOT in This Slice
 
-- Bundle generation (actual data collection) — future phase
+- Actual bundle generation (data collection from intent service, graph service, audit repository) — future phase
 - Bundle storage (S3 or any persistence) — future phase
 - Bundle retrieval (downloading stored bundles) — future phase
 - Bundle replay (reproducing state from a bundle) — future phase
 - Hash chain integrity verification (requires generated bundle) — future phase
+- Async job orchestration for bundle generation — future phase
 
 ### Verification Status Semantics
 
@@ -35,6 +47,13 @@ bundles, storing data, or performing replay.
 | `ready` | All referenced entities exist and are within time range |
 | `incomplete` | Some entities are missing or time range has gaps |
 | `not_supported` | Verification mode not implemented |
+
+### Export Status Semantics
+
+| Status | Meaning |
+|--------|---------|
+| `generated` | Archive was successfully generated in-memory |
+| `failed` | Archive generation failed |
 
 ### Request Example
 

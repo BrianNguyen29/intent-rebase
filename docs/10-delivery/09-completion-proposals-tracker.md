@@ -112,18 +112,21 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ Batch 0 scaffold delivered
-- [~] Forensic verification API: `POST /forensic/verify` (bounded request-driven verification) — ✅ Phase 3 Batch 3b bounded slice delivered
-- [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state
+- [x] Forensic verification API: `POST /forensic/verify` (bounded request-driven verification) — ✅ Phase 3 Batch 3b bounded slice delivered
+- [x] Forensic archive export API: `POST /forensic/export` (bounded in-memory generation with scaffolded data) — ✅ Phase 3 Batch 3b bounded slice delivered
+- [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state from real services
 - [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`)
 - [ ] Bundle integrity verification (hash chain)
 - [ ] Bundle replay capability (replay bundle to reproduce state)
 - [ ] Bundle retention policy (configurable per tenant, compliance)
-- [ ] Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download`
+- [ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
 
-**Bounded verification slice (delivered):**
-- Request-driven verification: validates parameters and computes coverage estimates
-- Does NOT claim bundle generation, storage, retrieval, replay, or hash chain integrity
-- Truthful status semantics: `ready`, `incomplete`, `not_supported`
+**Bounded verification + export slices (delivered):**
+- Verification: request-driven verification validates parameters and computes coverage estimates
+- Export: in-memory archive generation with scaffolded entries representing what a real bundle would contain
+- Does NOT claim: actual bundle generation from services, S3 storage, async jobs, replay engine, or hash chain integrity
+- Truthful status semantics for verification: `ready`, `incomplete`, `not_supported`
+- Truthful status semantics for export: `generated`, `failed`
 
 ---
 

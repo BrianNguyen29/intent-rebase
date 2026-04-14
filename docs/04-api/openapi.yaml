@@ -204,18 +204,25 @@ info:
 
     ## Phase 3 Batch 3b: Forensic Replay Verification (Bounded Slice)
     - **POST /forensic/verify** — Request-driven verification of forensic bundle feasibility
+    - **POST /forensic/export** — In-memory forensic archive metadata generation (scaffolded data)
     - **Bounded request-driven verification semantics:**
       - Accepts verification parameters (intent_id, time_range, purpose)
       - Validates entity existence and coverage
       - Reports what a bundle WOULD contain (counts, not actual data)
+    - **Bounded in-memory archive export semantics:**
+      - Accepts export parameters (intent_id, time_range, purpose)
+      - Generates scaffolded/fictional entries entirely in-memory
+      - Returns archive metadata: archive_id, item_count, archive_size_bytes, content_type
+      - Archive content is scaffolded representation only — NOT actual service data
     - **Truthful status semantics:**
       - `ready`: All referenced entities exist and are within time range
       - `incomplete`: Some entities are missing or time range has gaps
       - `not_supported`: Verification mode not implemented
-      - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+      - `generated`: Archive was successfully generated in-memory
     - **NOT claimed:**
-      - Bundle generation (actual data collection)
-      - Bundle storage (S3 or any persistence)
+      - Bundle generation (actual data collection from intent/graph/audit services)
+      - Bundle storage (S3 or any persistence layer)
+      - Async job orchestration for bundle generation
       - Bundle retrieval (downloading stored bundles)
       - Bundle replay (reproducing state from a bundle)
       - Hash chain integrity verification (requires generated bundle)
@@ -224,6 +231,11 @@ info:
       - Artifact coverage: artifact_count, provenance completeness (when requested)
       - Audit event coverage: event_count, time range coverage (when requested)
       - Policy snapshot coverage: snapshot_count, version coverage (when requested)
+    - **Export coverage includes (in-memory generation, scaffolded data):**
+      - Intent version entries: scaffolded entries with version_number, status, timestamps
+      - Artifact entries: scaffolded entries with artifact_id, artifact_type, provenance chain
+      - Audit event entries: scaffolded entries with event_type, actor, occurred_at
+      - Policy snapshot entries: scaffolded entries with snapshot_version, policy_content
 
     ## Still Open (broader than current bounded slices)
     - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
@@ -2233,6 +2245,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ForensicVerificationResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic/export:
+    post:
+      tags:
+        - forensic
+      summary: Generate forensic archive for download
+      description: |
+        Phase 3 Batch 3b (bounded slice): Generates an in-memory forensic archive
+        from the given parameters. The archive contains scaffolded/fictional data
+        representing what a real bundle would contain.
+
+        **Bounded in-memory archive generation:**
+        - Accepts export parameters (intent_id, time_range, purpose)
+        - Generates scaffolded entries entirely in-memory (no real service queries)
+        - Returns archive metadata including size, content type, and item count
+        - Returns archive metadata only in this bounded slice (no archive byte streaming)
+
+        **Truthful semantics:**
+        - `archive_id` is a unique identifier for the generated archive
+        - `generated_at` timestamps when generation was triggered
+        - `item_count` reflects the count of scaffolded entries generated
+        - `archive_size_bytes` reflects the JSON-serialized size
+        - Entries contain scaffolded data (NOT actual intent versions, artifacts, etc.)
+
+        **NOT claimed:**
+        - Actual bundle generation from real services (intent service, graph service, etc.)
+        - Bundle storage (S3 or any persistence layer)
+        - Async job orchestration for bundle generation
+        - Real replay engine (state reproduction from bundle)
+        - Hash chain integrity verification
+      operationId: exportForensicArchive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicExportRequest'
+      responses:
+        '200':
+          description: Export archive metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicExportResponse'
         '400':
           description: Invalid request body
           content:
@@ -4897,6 +4965,112 @@ components:
         estimated_bundle_item_count:
           type: integer
           description: Estimated total items that would be in a full bundle
+
+    # ----- Forensic Export Schemas (Phase 3 Batch 3b - bounded in-memory slice) -----
+    ForensicExportRequest:
+      type: object
+      required: [tenant_id, intent_id, time_range]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID for multi-tenancy isolation
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to generate archive for
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: Start of time range
+            end:
+              type: string
+              format: date-time
+              description: End of time range
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+          default: incident_investigation
+          description: Purpose of the archive
+        include_artifacts:
+          type: boolean
+          default: true
+          description: Whether to include artifact entries
+        include_audit_events:
+          type: boolean
+          default: true
+          description: Whether to include audit event entries
+        include_policy_snapshots:
+          type: boolean
+          default: true
+          description: Whether to include policy snapshot entries
+
+    ForensicExportResponse:
+      type: object
+      properties:
+        archive_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this archive
+        generated_at:
+          type: string
+          format: date-time
+          description: When archive was generated
+        status:
+          type: string
+          enum: [generated, failed]
+          description: Export status
+        status_reason:
+          type: string
+          description: Human-readable status reason
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+        contents:
+          type: object
+          properties:
+            intent_versions:
+              type: integer
+              description: Number of intent version entries
+            artifacts:
+              type: integer
+              description: Number of artifact entries
+            audit_events:
+              type: integer
+              description: Number of audit event entries
+            policy_snapshots:
+              type: integer
+              description: Number of policy snapshot entries
+        item_count:
+          type: integer
+          description: Total item count in archive
+        content_type:
+          type: string
+          description: Content type (application/json)
+        archive_size_bytes:
+          type: integer
+          description: Archive size in bytes
 
     Error:
       type: object
