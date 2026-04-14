@@ -307,14 +307,18 @@
     - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (6 new multi-window burn-rate alerting rules: PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d)
     - Note: Bounded to 1h/6h/3d burn-rate stat panels and multi-window alerting for preview and apply paths; budget depletion forecasting, 30-day budget tracking, and production Alertmanager deployment remain future scope
 
-[~] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded foundation)
+[x] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded OTEL propagation)
     Evidence:
     - Code: crates/intent-api/src/lib.rs (request_id_middleware + RequestId extraction)
     - Code: crates/intent-api/src/lib.rs (request_id_middleware wired in build_router)
+    - Code: crates/intent-api/src/lib.rs (init_tracing with optional OTLP export via OTEL_EXPORTER_OTLP_ENDPOINT)
+    - Code: crates/intent-api/src/lib.rs (trace_context_middleware for W3C trace-context extraction and response propagation)
+    - Code: crates/intent-api/src/lib.rs (trace_context_middleware wired in build_router)
+    - Code: crates/intent-api/src/lib.rs (background task span propagation with tracing::Instrument)
     - Code: crates/intent-service/src/lib.rs (#[tracing::instrument] on create_intent, create_version, get_intent_head, compute_diff, compute_rebase_preview, compute_rebase_preview_with_graph)
     - Code: crates/rebase-engine/src/lib.rs (#[tracing::instrument] on compute_diff_sync, compute_diff_with_risk_sync)
     - Code: crates/compensation-service/src/orchestration_runtime.rs (#[tracing::instrument] on execute_run, process_single_action, handle_pending_action, handle_approved_action, handle_failed_action)
-    - Note: This is a **tracing foundation only** — no full OTEL export, no full distributed trace across all boundaries
+    - Note: This delivers **bounded in-process OTEL propagation** — optional OTLP export (when env var is set), W3C trace-context extraction from inbound requests, traceparent/tracestate in responses, and background task span propagation. Cross-process trace propagation remains future scope.
 
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:

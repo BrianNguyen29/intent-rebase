@@ -68,17 +68,23 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-1a | SLO definitions documented | `docs/09-operations/04-sre-and-slos.md` — provisional targets, awaiting SRE confirmation |
 | 2-1b | Grafana dashboard scaffold | `docs/09-operations/06-slo-dashboard.md` — 16 panels, all referencing metrics that require instrumentation |
 
-### Batch 2 Slice 2 (delivered — bounded tracing foundation)
+### Batch 2 Slice 2 (delivered — bounded OTEL propagation)
 
 | Item | Description | Notes |
 |------|-------------|-------|
 | 2-4a | HTTP request-id extraction middleware | Extracts `X-Request-ID` header or generates UUID; stores in request extensions for downstream correlation |
 | 2-4b | Service method instrumentation | `#[tracing::instrument]` on key intent-service, rebase-engine, and compensation-service methods |
+| 2-4c | Optional OTLP export | OTLP export activated when `OTEL_EXPORTER_OTLP_ENDPOINT` env var is set; JSON logging fallback otherwise |
+| 2-4d | W3C trace-context propagation | Extracts `traceparent`/`tracestate` from inbound requests; adds to responses |
+| 2-4e | Background task span propagation | Spawned background work inherits current span context via `tracing::Instrument` |
 
 **Slice 2 scope (bounded/truthful):**
 - Request-id extraction middleware in intent-api HTTP layer ✅
 - `#[tracing::instrument]` on key service methods ✅
-- **NOT in scope for Slice 2:** Full OTEL exporter, trace context propagation across all service boundaries, OpenTelemetry SDK integration
+- Optional OTLP export (activated via env var) ✅
+- W3C trace-context extraction and propagation (in-process only) ✅
+- Background task span propagation ✅
+- **NOT in scope for Slice 2:** Cross-process trace propagation, full distributed trace across service boundaries
 
 ### Batch 2 Slice 3 (delivered — alerting rules + runbook foundation)
 

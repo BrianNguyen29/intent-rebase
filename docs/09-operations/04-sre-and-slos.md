@@ -3,7 +3,7 @@
 > **Status (Batch 2 Slice 1 + Slice 2 + Slice 3 + Slice 5 + Slice 7):** This document describes provisional SLO targets and a Grafana dashboard scaffold (Slice 1), bounded tracing foundation (Slice 2), bounded alerting rules + runbook foundation (Slice 3), error budget tracking panels (Slice 5), and multi-window burn-rate alerting rules (Slice 7).
 > These targets are **not yet SRE-approved** and **no production telemetry is connected**.
 > Batch 2 Slice 1 delivers the **SLO foundation only** — SLO definitions documented, dashboard scaffold written.
-> Batch 2 Slice 2 delivers **tracing foundation only** — request-id extraction middleware and service method instrumentation; no full OTEL export or distributed trace across all boundaries.
+> Batch 2 Slice 2 delivers **bounded OTEL propagation** — optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace-context extraction from inbound requests, traceparent/tracestate response headers, and span propagation into spawned background work. Cross-process trace propagation beyond this service remains future scope.
 > Batch 2 Slice 3 delivers **alerting rules + runbook foundation** — Alertmanager config, Prometheus alerting rules, Grafana provisioning, and runbook scenarios for common failure modes. Metric emission is active (metrics-exporter-prometheus 0.18.1 with metrics 0.24); metric definitions are scaffolded and actively recorded. Full metrics coverage across all flows is NOT claimed.
 > Batch 2 Slice 5 delivers **error budget tracking panels** — preview and apply path 1-hour burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total.
 > Batch 2 Slice 7 delivers **multi-window burn-rate alerting** — Prometheus alerting rules covering 1h/6h/3d windows for preview and apply paths. Grafana dashboard updated with 6h and 3d burn-rate panels. Budget depletion forecasting and 30-day budget tracking remain future scope.
@@ -53,10 +53,13 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 - **SLO definitions documented** — all candidate targets above are written with enough specificity to drive Grafana panel queries
 - **Grafana dashboard scaffold** — see `06-slo-dashboard.md` for panel layout, metric names, and query structure
 
-### ✅ Delivered (Slice 2 — bounded tracing foundation)
+### ✅ Delivered (Slice 2 — bounded OTEL propagation)
 
 - **Request-ID extraction middleware** — extracts `X-Request-ID` header or generates UUID; stores in request extensions for downstream correlation
 - **Service method instrumentation** — `#[tracing::instrument]` on key intent-service, rebase-engine, and compensation-service methods
+- **Optional OTLP export** — OTLP tracing enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` env var is set; JSON logging fallback when not set
+- **W3C trace-context propagation** — extracts `traceparent` and `tracestate` headers from inbound requests; adds traceparent/tracestate to responses
+- **Background task span propagation** — spawned background work inherits current span context via `tracing::Instrument`
 
 ### ✅ Delivered (Slice 3 — alerting rules + runbook foundation)
 
@@ -77,7 +80,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 
 - **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented
 - **Error budget tracking dashboard** — Slice 5 delivers preview + apply 1h burn-rate stat panels; Slice 7 delivers 6h and 3d burn-rate panels and multi-window alerting rules; budget depletion forecasting and 30-day budget tracking remain future scope
-- **Distributed tracing** — no full OTEL instrumentation, no trace context propagation across all service boundaries (Slice 2 delivers foundation only)
+- **Cross-process trace propagation** — Slice 2 delivers bounded in-process OTEL propagation (optional OTLP export, W3C trace-context headers, background task span propagation); full distributed trace across service boundaries remains future scope
 - **Performance benchmarks** — no rebase latency p50/p95/p99 measurements
 - **Production alerting** — Slice 3 + Slice 7 deliver local dev infrastructure only; production Alertmanager configuration is future scope; SRE approval for production deployment is still open
 

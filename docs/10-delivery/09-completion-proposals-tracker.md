@@ -61,13 +61,13 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7 delivered) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Continue with distributed tracing across all services; production load testing |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths (PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d), 6h and 3d burn-rate dashboard panels in Grafana. Full OTEL export, distributed trace context across all services, budget depletion forecasting, 30-day budget panel, and load testing remain future scope. |
+| **Suggested Next Step** | Continue with cross-process trace propagation; production load testing |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace-context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths (PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d), 6h and 3d burn-rate dashboard panels in Grafana. Cross-process trace propagation, budget depletion forecasting, 30-day budget panel, and load testing remain future scope. |
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
 - [x] Grafana dashboard scaffold — Batch 2 Slice 1
-- [x] Distributed tracing foundation (request-id extraction + service method instrumentation) — Batch 2 Slice 2
+- [x] Bounded OTEL propagation (request-id extraction + service method instrumentation + optional OTLP export + W3C trace-context + background task span propagation) — Batch 2 Slice 2
 - [x] Alerting rules (warning, critical thresholds) — Batch 2 Slice 3
 - [x] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn — Batch 2 Slice 3
 - [x] Bounded metrics instrumentation (intent version creation, rebase preview/apply counters and histograms — definitions scaffolded, emission now active with metrics-exporter-prometheus 0.18.1 + metrics 0.24) — Batch 2 Slice 3
@@ -76,10 +76,10 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Graph traversal benchmark harness (BFS, path finding, cycle detection across small/medium/large graphs) — Batch 2 Slice 6
 - [x] Intent-api sync path benchmark harness (diff compute, validation, intent service create) — Batch 2 Slice 6
 - [x] Intent-api HTTP server benchmark harness (real HTTP requests with in-memory repos) — Batch 2 Slice 6
-- [x] Intent-service DB benchmark harness (live run complete — p50 25ms create, 1.6ms version, <1ms get/list) — Batch 2 Slice 6
+- [x] Intent-service DB benchmark harness (live run complete — p50 25ms create, 1.6ms version, <1ms get_intent/get_versions_by_intent against live Postgres) — Batch 2 Slice 6
 - [x] Multi-window burn-rate alerting (1h/6h/3d) — Batch 2 Slice 7
-- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
-- [ ] Full OTEL trace context propagation across all service boundaries
+- [x] Bounded in-process OTEL propagation (optional OTLP export + W3C trace-context + background task span) — Batch 2 Slice 2 (delivered)
+- [ ] Cross-process trace propagation across all service boundaries — future scope
 - [ ] Full production load testing
 
 ---

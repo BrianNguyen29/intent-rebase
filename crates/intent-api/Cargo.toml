@@ -32,6 +32,12 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }
 
+# OTEL support (optional — inactive unless OTEL_EXPORTER_OTLP_ENDPOINT is set)
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+tracing-opentelemetry = "0.25"
+
 [dev-dependencies]
 runtime-adapter = { path = "../runtime-adapter" }
 criterion = { version = "0.5", features = ["html_reports"] }
