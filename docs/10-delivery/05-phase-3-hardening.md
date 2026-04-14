@@ -59,14 +59,29 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered`
+
+### Batch 2 Slice 1 (this delivery)
+
 | Item | Description | Notes |
 |------|-------------|-------|
-| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | Dashboard: Grafana SLO dashboard |
-| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config; test alerts fire |
-| 2-3 | Error budget tracking dashboard + runbook | |
-| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | OTel trace context across all service boundaries |
-| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk |
-| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Dry-run each runbook |
+| 2-1a | SLO definitions documented | `docs/09-operations/04-sre-and-slos.md` — provisional targets, awaiting SRE confirmation |
+| 2-1b | Grafana dashboard scaffold | `docs/09-operations/06-slo-dashboard.md` — 16 panels, all referencing metrics that require instrumentation |
+
+### Batch 2 remaining work (not yet delivered)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-1 (remainder) | SLO definitions — SRE approval gate | External SRE sign-off still open |
+| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config — not started |
+| 2-3 | Error budget tracking dashboard + runbook | Not started |
+| 2-4 | Distributed tracing across all services | OTel trace context — not started |
+| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk — not started |
+| 2-6 | Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Not started |
+
+---
+
+## Batch 3 — Tenant Isolation + Forensic (Gated: Phase 2b Complete)
 
 ---
 

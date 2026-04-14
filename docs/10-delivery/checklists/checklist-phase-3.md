@@ -275,38 +275,35 @@
 ## 3. SRE & Observability
 
 ```
-[ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
+[~] SLO definitions (intent processing latency, rebase latency, approval wait time)
     Evidence:
-    - PR merged: <link>
-    - Doc: ../../09-operations/04-sre-and-slos.md (updated)
-    - Dashboard: Grafana SLO dashboard
+    - Doc: ../../09-operations/04-sre-and-slos.md (updated — Batch 2 Slice 1)
+    - Note: Provisional targets explicitly marked not SRE-approved; SRE confirmation still open
+    - Doc: ../../09-operations/06-slo-dashboard.md (Grafana dashboard scaffold — 16 panels)
 
 [ ] Alerting rules (warning, critical thresholds)
     Evidence:
-    - PR merged: <link>
-    - Alert rules: alertmanager.yml or equivalent
-    - Tests: alerting tests pass (send test alerts)
+    - Alertmanager config — not started
+    - No warning/critical thresholds wired to alerts yet
 
-[ ] Error budget tracking
+[ ] Error budget tracking dashboard + runbook
     Evidence:
-    - Dashboard: error budget dashboard
-    - Runbook: error budget exceeded response
+    - Error budget dashboard — not started
+    - Error budget runbook — not started
 
 [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
     Evidence:
-    - PR merged: <link>
-    - OTel: trace context propagated across all service boundaries
-    - Jaeger/Zipkin: trace searchable
+    - OTel trace context — not started
+    - No trace instrumentation across service boundaries yet
 
 [ ] Performance benchmarks: rebase latency p50/p95/p99
     Evidence:
-    - Benchmark results: rebase_engine benchmarks
+    - Benchmark results: not started
     - Target: p95 < 60s for low/medium risk
 
 [ ] Runbooks for common failure scenarios
     Evidence:
-    - Doc: ../../09-operations/05-runbooks.md (updated with Phase 3 scenarios)
-    - Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
+    - Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout — not started
 ```
 
 ---

@@ -12,7 +12,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
-| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | ⬜ Not Started | High |
+| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1 delivered) | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
