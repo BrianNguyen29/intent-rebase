@@ -419,18 +419,112 @@
       "title": "DLQ Candidate Count",
       "type": "stat",
       "description": "Threshold: 0 green / 1-5 yellow / > 5 red. Metric: intent_api_compensation_dlq_candidate_count"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "id": 13,
+      "panels": [],
+      "title": "Error Budget Tracking",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.3 },
+              { "color": "green", "value": 0.1 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 16 },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_preview_requests_total{status!=\"success\"}[1h])) / sum(rate(intent_api_rebase_preview_requests_total[1h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Preview Path Error Budget Burn (1h)",
+      "type": "stat",
+      "description": "1-hour burn rate for preview path. Budget: 0.1% (43.2 min/month). Alert fires at > 0.3 (30% of budget burned in 1h window). Metric: intent_api_rebase_preview_requests_total"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.3 },
+              { "color": "green", "value": 0.1 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 16 },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(intent_api_rebase_apply_requests_total{status!=\"success\"}[1h])) / sum(rate(intent_api_rebase_apply_requests_total[1h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Apply Path Error Budget Burn (1h)",
+      "type": "stat",
+      "description": "1-hour burn rate for apply path. Budget: 0.5% (216 min/month). Alert fires at > 0.3 (30% of budget burned in 1h window). Metric: intent_api_rebase_apply_requests_total"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["intent-rebase", "slo", "batch-2-slice-3"],
+  "tags": ["intent-rebase", "slo", "batch-2-slice-3", "batch-2-slice-5"],
   "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "Intent Rebase — SLO Overview",
   "uid": "intent-rebase-slo",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

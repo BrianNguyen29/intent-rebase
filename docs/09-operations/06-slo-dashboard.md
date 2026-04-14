@@ -1,8 +1,8 @@
 # SLO Dashboard — Grafana Scaffold
 
-> **Status (Batch 2 Slice 1):** Dashboard scaffold only. No production data sources are connected.
+> **Status (Batch 2 Slice 1 + Slice 5):** Dashboard scaffold (Slice 1). Slice 5 adds an error-budget tracking row (preview + apply 1h burn-rate stat panels) backed by the metrics emitted in Slice 3 (intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total with status label).
 > Panel queries reference metric names that require instrumentation to exist before they can return data.
-> Alerting rules, error budget tracking, and distributed tracing are out of scope for this slice.
+> Alerting rules and distributed tracing are out of scope for this slice.
 
 ---
 
@@ -147,42 +147,54 @@
 
 ---
 
-## Error Budget Tracking (Out of Scope for Slice 1)
+### Row 6 — Error Budget Tracking (Batch 2 Slice 5)
 
-These panels require error budget burn-rate queries and are documented here as placeholders for future work:
+These panels consume the metrics emitted by Batch 2 Slice 3 to display 1-hour burn rate for the preview and apply paths.
 
-- **Error budget panel — Preview path:** Tracks remaining budget against 43.2 min/month
-- **Error budget panel — Apply path:** Tracks remaining budget against 216 min/month
-- **Burn rate alert:** Multi-window burn rate alerting (e.g., 1h/6h/3d windows)
+#### Panel 17: Preview Path Error Budget Burn (1h)
+- **Metric:** `intent_api_rebase_preview_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_preview_requests_total{status!="success"}[1h])) / sum(rate(intent_api_rebase_preview_requests_total[1h]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.1 (10%) green / 0.1–0.3 (10–30%) yellow / > 0.3 (30%) red
+- **Notes:** Tracks 1-hour burn rate against the preview path error budget (0.1% of 43,200 min = 43.2 min/month). Aligned with `PreviewPathFastBurn` alert in `intent_api_alerts.yml`.
 
-Error budget tracking and alerting rules are **not implemented in Slice 1**.
+#### Panel 18: Apply Path Error Budget Burn (1h)
+- **Metric:** `intent_api_rebase_apply_requests_total` (counter with `status` label)
+- **Query:** `sum(rate(intent_api_rebase_apply_requests_total{status!="success"}[1h])) / sum(rate(intent_api_rebase_apply_requests_total[1h]))`
+- **Type:** Stat / gauge
+- **Thresholds:** < 0.1 (10%) green / 0.1–0.3 (10–30%) yellow / > 0.3 (30%) red
+- **Notes:** Tracks 1-hour burn rate against the apply path error budget (0.5% of 43,200 min = 216 min/month). Aligned with `ApplyPathFastBurn` alert in `intent_api_alerts.yml`.
+
+**Slice 5 scope (bounded/truthful):**
+- Preview + apply 1-hour burn rate stat panels backed by existing metrics ✅
+- **NOT in scope:** Multi-window burn rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
 
 ---
 
 ## Metrics That Require Instrumentation
 
-The following metric names are referenced in panels but do not yet exist in the codebase. They require instrumentation to be added:
+The following metric names are referenced in panels. Status reflects whether emission is active (per Batch 2 Slice 3):
 
 | Metric | Source | Status |
 |--------|--------|--------|
-| `intent_api_intent_version_created_total` | intent-api | Not instrumented |
-| `intent_api_rebase_preview_requests_total` | intent-api | Not instrumented |
-| `intent_api_rebase_apply_requests_total` | intent-api | Not instrumented |
+| `intent_api_intent_version_created_total` | intent-api | ✅ Active (Slice 3) |
+| `intent_api_rebase_preview_requests_total` | intent-api | ✅ Active (Slice 3) |
+| `intent_api_rebase_apply_requests_total` | intent-api | ✅ Active (Slice 3) |
+| `intent_api_diff_compute_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
+| `intent_api_rebase_preview_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
+| `intent_api_rebase_apply_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
 | `intent_api_audit_append_total` | audit service | Not instrumented |
-| `intent_api_diff_compute_duration_seconds` | rebase engine | Not instrumented |
-| `intent_api_rebase_preview_duration_seconds` | rebase engine | Not instrumented |
-| `intent_api_rebase_apply_duration_seconds` | rebase engine | Not instrumented |
 | `intent_api_approval_wait_duration_seconds` | intent-api | Not instrumented |
 | `intent_api_compensation_action_total` | compensation service | Not instrumented |
 | `intent_api_compensation_execution_total` | compensation service | Not instrumented |
 | `intent_api_side_effect_captured_total` | graph service | Not instrumented |
 | `intent_api_side_effect_capture_errors_total` | graph service | Not instrumented |
 
-**Until these metrics are emitted, all panels will return no data.**
+Metrics marked ✅ Active are recorded via metrics-exporter-prometheus 0.18.1 + metrics 0.24. Panels for those metrics will render real data once the intent-api service is running with the instrumented paths.
 
 ---
 
-## Grafana Provisioning (Out of Scope for Slice 1)
+## Grafana Provisioning
 
 Dashboard provisioning via `grafana-dashboards.yaml` or JSON provisioning is **not in scope for Slice 1**. This scaffold document is for manual dashboard construction. Automated provisioning requires:
 

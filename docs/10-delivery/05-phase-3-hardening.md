@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -108,16 +108,28 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 - Sync CPU-bound rebase-engine diff + plan path only ✅
 - **NOT in scope:** Graph traversal benchmarks, DB query benchmarks, HTTP/API benchmarks, load testing
 
+### Batch 2 Slice 5 (delivered — error budget tracking panels)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-7a | Preview path 1h burn rate stat panel | `intent_api_rebase_preview_requests_total` — query: `sum(rate(...{status!="success"}[1h])) / sum(rate(...[1h]))` |
+| 2-7b | Apply path 1h burn rate stat panel | `intent_api_rebase_apply_requests_total` — same burn-rate query pattern |
+
+**Slice 5 scope (bounded/truthful):**
+- Preview + apply 1-hour burn rate stat panels backed by metrics emitted in Slice 3 ✅
+- **NOT in scope:** Multi-window burn-rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
+
 ### Batch 2 remaining work (not yet delivered)
 
 | Item | Description | Notes |
 |------|-------------|-------|
 | 2-1 (remainder) | SLO definitions — SRE approval gate | External SRE sign-off still open |
 | 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
-| 2-3 (remainder) | Error budget tracking dashboard | Not started |
 | 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
 | 2-5 (remainder) | Graph traversal and DB query benchmarks | Not started |
 | 2-5 (remainder) | HTTP/API benchmarks and load testing | Not started — requires full stack |
+| 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | Slice 5 delivers 1h burn-rate stat panels; multi-window alerting rules remain future scope |
+| 2-7 (remainder) | Budget depletion forecasting / 30-day budget panel | Future scope after single-window burn-rate panels are validated |
 
 ---
 

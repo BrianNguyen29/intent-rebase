@@ -300,10 +300,11 @@
     - Runbooks: RB6 (rebase-stuck), RB7 (approval-backlog), RB8 (artifact-quarantine-fail), RB9 (compensation-timeout), RB10 (error-budget-burn)
     - Doc: docs/09-operations/05-runbooks.md (On-Call Quick Reference table)
 
-[ ] Error budget tracking dashboard + runbook
+[x] Error budget tracking dashboard + runbook — Batch 2 Slice 5
     Evidence:
-    - Error budget dashboard — not started
-    - Error budget runbook — not started (RB10 covers error budget burn response but not tracking dashboard)
+    - Doc: ../../09-operations/06-slo-dashboard.md (Row 6 — Error Budget Tracking: Panel 17 preview path burn rate, Panel 18 apply path burn rate)
+    - Code: infrastructure/local/grafana/provisioning/dashboards/slo-overview.json (version 2, new "Error Budget Tracking" row with panels 17–18)
+    - Note: Bounded to 1h burn-rate stat panels for preview and apply paths; multi-window alerting, budget depletion forecasting, and 30-day budget tracking remain future scope
 
 [~] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded foundation)
     Evidence:
