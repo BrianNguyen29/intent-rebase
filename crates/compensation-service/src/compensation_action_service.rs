@@ -25,6 +25,7 @@ use crate::side_effect_repo::SideEffectRepository;
 use intent_rebase_types::{
     AuditRepository, CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
     CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
+    get_current_trace_context,
 };
 use serde::{Deserialize, Serialize};
 
@@ -211,6 +212,7 @@ impl CompensationActionService {
                         "compensation-service/system",
                         intent_id,
                         payload,
+                        get_current_trace_context(),
                     )
                     .await
                 {
@@ -591,7 +593,7 @@ impl CompensationActionService {
                 actions_initiated: 1,
             };
             if let Err(e) = audit_repo
-                .record_compensation_started(tenant_id, actor_id, intent_id, payload)
+                .record_compensation_started(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
                 .await
             {
                 tracing::warn!(
@@ -617,7 +619,7 @@ impl CompensationActionService {
                     actions_failed: 0,
                 };
                 if let Err(e) = audit_repo
-                    .record_compensation_completed(tenant_id, actor_id, intent_id, payload)
+                    .record_compensation_completed(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
                     .await
                 {
                     tracing::warn!(
@@ -634,7 +636,7 @@ impl CompensationActionService {
                     error_summary: executor_result.summary.clone(),
                 };
                 if let Err(e) = audit_repo
-                    .record_compensation_failed(tenant_id, actor_id, intent_id, payload)
+                    .record_compensation_failed(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
                     .await
                 {
                     tracing::warn!(

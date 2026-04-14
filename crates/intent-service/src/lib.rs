@@ -15,7 +15,8 @@ use intent_rebase_types::{
     AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload, AuditRepository,
     ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
     CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
-    IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
+    IntentVersion, ListVersionsResponse, NodeType,
+    get_current_trace_context, VersionStatus,
 };
 use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
@@ -356,6 +357,7 @@ impl IntentService {
     }
 
     /// Create a new intent with initial version (transactional)
+    #[tracing::instrument(skip(self))]
     pub async fn create_intent(
         &self,
         request: CreateIntentRequest,
@@ -369,8 +371,9 @@ impl IntentService {
     /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
     ///   This allows clients to detect concurrent modifications and retry.
     ///
-    /// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
+/// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
     /// cancel any pending approval requests for the intent when a new version is created.
+    #[tracing::instrument(skip(self))]
     pub async fn create_version(
         &self,
         intent_id: Uuid,
@@ -427,6 +430,7 @@ impl IntentService {
                             &self.system_actor_id,
                             intent_id,
                             audit_payload,
+                            get_current_trace_context(),
                         )
                         .await;
                 }
@@ -437,6 +441,7 @@ impl IntentService {
     }
 
     /// Get the current (head) version of an intent
+    #[tracing::instrument(skip(self))]
     pub async fn get_intent_head(
         &self,
         intent_id: Uuid,
@@ -489,6 +494,7 @@ impl IntentService {
     /// Validates that both versions exist, belong to the same intent,
     /// and have valid ordering (from_version < to_version).
     /// Returns (from_version, to_version, diff, risk) tuple.
+    #[tracing::instrument(skip(self))]
     pub async fn compute_diff(
         &self,
         intent_id: Uuid,
@@ -537,6 +543,7 @@ impl IntentService {
     /// This is a preview-only endpoint that does NOT include:
     /// - affected_items (requires graph integration - Phase 2)
     /// - deferred fields (Phase 2)
+    #[tracing::instrument(skip(self))]
     pub async fn compute_rebase_preview(
         &self,
         intent_id: Uuid,
@@ -581,6 +588,7 @@ impl IntentService {
     /// This ensures the rebase preview remains reliable even when graph coverage is incomplete.
     ///
     /// The affected_items are classified starting from the `to_version` IntentVersion node.
+    #[tracing::instrument(skip(self))]
     pub async fn compute_rebase_preview_with_graph(
         &self,
         intent_id: Uuid,

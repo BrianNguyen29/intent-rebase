@@ -28,7 +28,7 @@
 use async_trait::async_trait;
 use intent_rebase_types::{
     CheckpointType, ConsumeResult, EventSubject, NotificationKind, NotificationRecord,
-    PolicySnapshot, PublishedEvent, ScopeDefinition, ScopeType,
+    PolicySnapshot, PublishedEvent, ScopeDefinition, ScopeType, TraceContext,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -837,6 +837,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload,
             published_at: chrono::Utc::now(),
         }
@@ -883,6 +885,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "approval_request_id": Uuid::new_v4().to_string(),
             }),
@@ -914,6 +918,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 // Missing intent_id
                 "from_version": 1,
@@ -978,7 +984,7 @@ mod tests {
             "workflow_id": workflow_id.to_string(),
         });
 
-        publisher.publish(&subject, &payload).await;
+        publisher.publish(&subject, &payload, TraceContext::default()).await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -1036,6 +1042,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "approval_request_id": approval_request_id.to_string(),
                 "intent_id": intent_id.to_string(),
@@ -1075,6 +1083,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "approval_request_id": approval_request_id.to_string(),
                 "intent_id": intent_id.to_string(),
@@ -1112,6 +1122,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "intent_id": intent_id.to_string(),
                 "cancelled_version_from": 1,
@@ -1151,6 +1163,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "intent_id": Uuid::new_v4().to_string(),
             }),
@@ -1178,6 +1192,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 // Missing intent_id
                 "approval_request_id": Uuid::new_v4().to_string(),
@@ -1215,7 +1231,7 @@ mod tests {
             "resolved_by": "admin",
         });
 
-        publisher.publish(&subject, &payload).await;
+        publisher.publish(&subject, &payload, TraceContext::default()).await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -1316,6 +1332,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload,
             published_at: chrono::Utc::now(),
         };
@@ -1354,6 +1372,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 "intent_id": Uuid::new_v4().to_string(),
             }),
@@ -1384,6 +1404,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload: serde_json::json!({
                 // Missing intent_id
                 "from_version": 1,
@@ -1418,6 +1440,8 @@ mod tests {
             subject: subject.subject,
             schema_version: "v1".to_string(),
             sequence: 1,
+            trace_id: None,
+            span_id: None,
             payload,
             published_at: chrono::Utc::now(),
         };
@@ -1465,7 +1489,7 @@ mod tests {
             "min_approvals": 1,
         });
 
-        publisher.publish(&subject, &payload).await;
+        publisher.publish(&subject, &payload, TraceContext::default()).await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -1513,6 +1537,8 @@ mod tests {
                 subject: subject.subject,
                 schema_version: "v1".to_string(),
                 sequence: version as u64,
+                trace_id: None,
+                span_id: None,
                 payload,
                 published_at: chrono::Utc::now(),
             };

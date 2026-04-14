@@ -1,70 +1,53 @@
-# Alertmanager configuration for Intent Rebase Engine
-# Phase 3 Batch 2 - P2-S2 bounded slice
+# Alertmanager configuration for local development
+# Batch 2 Slice 3 — alerting foundation (local dev only)
+# Not production-ready
 
 global:
-  resolve_timeout: 5m
+  # SMTP configuration for email notifications (placeholder)
+  # In production, configure real SMTP server
+  smtp_smarthost: 'localhost:25'
+  smtp_from: 'alertmanager@localhost'
 
-# Route alerts to receivers
+# Route alerts to appropriate receivers
 route:
   group_by: ['alertname', 'slo']
-  group_wait: 30s
-  group_interval: 5m
-  repeat_interval: 4h
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
   receiver: 'null'
-  
-  # Routes for critical alerts - immediate notification
   routes:
-    # Critical severity alerts - page immediately
+    # Critical alerts go to critical receiver
     - match:
         severity: critical
       receiver: 'critical-alerts'
-      group_wait: 10s
-      repeat_interval: 1h
-    
-    # Error budget alerts - urgent
-    - match:
-        slo: error_budget
-      receiver: 'error-budget-alerts'
-      priority: 2
-    
-    # Warning severity alerts - inform
+      continue: true
+    # Warning alerts go to warning receiver
     - match:
         severity: warning
       receiver: 'warning-alerts'
-      group_wait: 2m
 
-#抑制规则
+# Inhibit rules to suppress duplicate alerts
 inhibit_rules:
-  # Inhibit warning alerts when a critical alert for the same SLO is firing
+  # Don't fire multiple critical alerts for the same SLO at the same time
   - source_match:
-      severity: critical
+      severity: 'critical'
     target_match:
-      severity: warning
-    source_match_re:
-      slo: ".+"
-    target_match_re:
-      slo: ".+"
+      severity: 'warning'
+    equal: ['alertname', 'slo']
 
-# Receivers
+# Receivers (placeholder configurations for local dev)
 receivers:
   - name: 'null'
-    # No-op receiver - for testing
+    # No-op receiver — alerts are logged but not routed
 
   - name: 'critical-alerts'
-    # Critical alerts - would integrate with PagerDuty, Slack, etc. in production
-    # For local dev, just log
+    # In production: configure PagerDuty, Slack, email, etc.
     webhook_configs:
-      - url: 'http://localhost:9093/-/alert'
-        send_resolved: true
-
-  - name: 'error-budget-alerts'
-    # Error budget alerts
-    webhook_configs:
-      - url: 'http://localhost:9093/-/alert'
+      - url: 'http://localhost:9001/webhook'
         send_resolved: true
 
   - name: 'warning-alerts'
-    # Warning alerts
+    # In production: configure Slack, email, etc.
     webhook_configs:
-      - url: 'http://localhost:9093/-/alert'
+      - url: 'http://localhost:9001/webhook'
         send_resolved: true

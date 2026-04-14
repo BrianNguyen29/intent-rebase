@@ -2,22 +2,22 @@
 #
 # Note: This spec is the canonical source for implemented HTTP endpoints.
 # HTTP framework: lightweight approach — see docs for decision rationale.
-# Phase coverage: Phase 1 + Phase 3 Batch 1 (see implemented sections below).
+# Phase coverage: Phase 1 + Phase 3 Batch 1 + Phase 3 Batch 3b bounded slices (see implemented sections below).
 
 openapi: 3.1.0
 info:
   title: Intent Rebase Engine API
   description: |
     Manages intent lifecycle, versioning, diff computation, rebase preview, and dependency graph operations.
-    
+
     ## Implemented scopes
-    
+
     ### Phase 1 — Core Control Plane
     - Health & observability endpoints
     - Intent lifecycle (create/read/version)
     - Intent analysis (validate, diff, rebase-preview)
     - Dependency graph CRUD
-    
+
     ### Phase 3 Batch 1 — Compensation + Orchestration
     - Side effect capture and query
     - Compensation action CRUD and approve/waive/execute
@@ -26,30 +26,33 @@ info:
     - Orchestration dashboard and coordination view
     - Orchestration dry-run planner and batch approve/reapprove/execute
     - Single-shot orchestration runtime (HTTP + CLI)
-    
+
+    ### Phase 3 Batch 3b — Forensic Replay Verification (bounded slice)
+    - Request-driven forensic bundle feasibility verification
+    - Coverage estimates for intent versions, artifacts, audit events, and policy snapshots
+    - Read-only verification/reporting only (no generation, storage, download, or replay)
+
     ## Bounded scope note
     Phase 3 Batch 1 delivers bounded slices of the compensation engine.
     Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
-    
+
     ## Implemented (Phase 1)
-    
-    ### Health & Observability
     - GET /health — Service health check
     - GET /ready — Service readiness check
     - GET /metrics — Prometheus metrics endpoint
-    
+
     ### Intent Lifecycle
     - POST /intents — Create intent with initial version
     - GET /intents/{intent_id} — Get intent head (current version)
     - POST /intents/{intent_id}/versions — Create new version
     - GET /intents/{intent_id}/versions — List all versions (descending order)
     - GET /intents/{intent_id}/versions/{version_number} — Get specific version
-    
+
     ### Intent Analysis
     - POST /v1/intents/validate — Validate intent payload structure
     - POST /intents/{intent_id}/diff — Compute diff between two versions
     - POST /intents/{intent_id}/rebase-preview — Generate rebase preview plan
-    
+
     ### Dependency Graph (Phase 1 - CRUD only)
     - POST /v1/graph/nodes — Create graph node
     - GET /v1/graph/nodes — List graph nodes (with optional filters)
@@ -57,145 +60,6 @@ info:
     - POST /v1/graph/edges — Create graph edge
     - GET /v1/graph/edges — List graph edges (with optional filters)
     - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
-    
-    ### Phase 3 Batch 1 (groundwork + bounded execution slice)
-    - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
-    - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
-    - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
-    - GET /compensation-actions/policy-gate — Tenant-scoped policy gate evaluation (read-only query)
-    - GET /intents/{intent_id}/compensation-policy-gate — Intent-scoped policy gate evaluation (read-only query)
-    - GET /compensation-actions/orchestration-coordination — Tenant-scoped orchestration coordination status (read-only query)
-    - GET /intents/{intent_id}/orchestration-coordination — Intent-scoped orchestration coordination status (read-only query)
-    - POST /compensation-actions/{action_id}/approve — Approve a pending compensation action (bounded slice)
-    - POST /compensation-actions/{action_id}/waive — Waive a pending compensation action (bounded slice)
-    - POST /compensation-actions/{action_id}/execute — Execute an approved compensation action (bounded slice, stub executor)
-
-    ## Phase 3 Batch 1: Compensation Policy Gate Evaluation
-    - **Bounded read-only slice** — no execution, no persistence writes, no policy engine
-    - **GET /compensation-actions/policy-gate?tenant_id=...** — Tenant-scoped evaluation for all tenant actions
-    - **GET /intents/{intent_id}/compensation-policy-gate?tenant_id=...** — Intent-scoped evaluation
-    - **Canonical gate statuses** — exactly: eligible | blocked | manual_review_required
-    - **Risk metadata** — derived from existing fields: strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention
-    - **No new policy engine** — all fields derive from status, attempt_count, max_retries, error_code, feasibility, strategy_type
-    - **Policy metadata** — auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, has_non_retryable_error
-
-    ## Phase 3 Batch 1: Compensation Summary
-    - Rebase preview and apply responses include `compensation_planning` field with read-only compensation planning summary
-    - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
-    - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
-    - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
-    - **Execution policy gate:** Only service-executable combos can execute:
-        - Rollback + Automatic (S1InternalReversible)
-        - CounterAction + SemiAutomatic (S2ExternalReversible)
-        - FollowupNotice + ManualOnly (S3ExternalPartiallyReversible)
-        - Escalation + NotPossible (S4Irreversible)
-      All other feasibility levels or strategy types require human intervention workflows (not in this slice)
-    - **Bounded execution executors (Phase 3 Batch 1):**
-      - **RollbackExecutor:** Real acknowledgment for Rollback+Automatic (S1InternalReversible) path
-        - Success means "rollback action acknowledged" — validated against side effect ledger
-        - Non-Rollback strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-Automatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Missing side effect context fails closed with `SIDE_EFFECT_NOT_FOUND`
-        - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external reversal if current data model cannot support it
-      - **CounterActionExecutor:** Real acknowledgment for CounterAction+SemiAutomatic (S2ExternalReversible) path
-        - Validates side effect class is S2ExternalReversible
-        - Success means "counter-action acknowledged" — validated against side effect ledger
-        - Non-CounterAction strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-SemiAutomatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "Counter-action for {effect_type} targeting {target} acknowledged"
-      - **FollowupNoticeExecutor:** Real acknowledgment for FollowupNotice+ManualOnly (S3ExternalPartiallyReversible) path
-        - Validates side effect class is S3ExternalPartiallyReversible
-        - Success means "followup notice acknowledged" — validated against side effect ledger
-        - Non-FollowupNotice strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-ManualOnly feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "FollowupNotice for {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external resolution if current data model cannot support it
-      - **EscalationExecutor:** Real acknowledgment for Escalation+NotPossible (S4Irreversible) path
-        - Validates side effect class is S4Irreversible
-        - Success means "escalation acknowledged" — validated against side effect ledger
-        - Non-Escalation strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-NotPossible feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "Escalation for {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external resolution if current data model cannot support it
-    - **All executors share common validation:** tenant_id match, intent_id match, side effect existence
-
-    ## Phase 3 Batch 1: Intent Orchestration Dashboard
-    - GET /intents/{intent_id}/orchestration-dashboard — Bounded read-only dashboard endpoint
-    - Returns raw lists of side effects and compensation actions for a single intent within a tenant
-    - Derives bounded summary fields: counts by status, retryable_failed_count, dlq_candidate_count, reapprovable_count, irreversible-effect flag/count, auto-executable candidate count
-    - **This endpoint is READ-ONLY** — does not trigger compensation execution, orchestration engine, or background processing
-    - **Truthful summaries** — all counts are derived from persisted data via existing service query helpers
-    - No batch execution, no orchestration engine, no background processing claims
-
-    ## Phase 3 Batch 1: Orchestration Coordination Status
-    - **Bounded read-only orchestration coordination view** — no execution, no persistence writes, no orchestration engine
-    - **GET /compensation-actions/orchestration-coordination?tenant_id=...** — Tenant-scoped coordination status for all tenant actions
-    - **GET /intents/{intent_id}/orchestration-coordination?tenant_id=...** — Intent-scoped coordination status
-    - **Canonical coordination statuses** — exactly: ready | awaiting_policy | awaiting_manual_review | blocked | terminal
-    - **Per-item records** — each action has coordination_status, coordination_reason, and action details
-    - **Summary counts** — ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count
-    - **No new orchestration engine** — all fields derive from existing CompensationAction fields at query time
-    - **Response includes** — summary + per-item coordination records
-
-    ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
-    - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
-    - **DLQ query endpoint:** GET /compensation-actions/dlq lists derived DLQ candidates
-    - **Derived DLQ condition:** An action is a DLQ candidate when Failed AND (exhausted retry budget OR non-retryable error)
-    - **No DLQ table:** DLQ is a read-only derived condition from existing data
-    - **Retry policy gates (fail closed):**
-      - Only retryable error codes allow reapproval (explicit allowlist: CONNECTION_TIMEOUT, SERVICE_UNAVAILABLE, etc.)
-      - Non-retryable errors (INVALID_CONFIGURATION, PERMISSION_DENIED, etc.) cannot be reapproved
-      - Exhausted retry budget (attempt_count >= max_retries) cannot be reapproved
-      - Default max_retries is 3
-    - **Attempt count is preserved** during reapproval (not reset) for audit trail
-    - **No background workers** - all operations are explicit API calls
-
-    ## Phase 3 Batch 1: Single-Shot Orchestration Runtime (Bounded HTTP + CLI Slice)
-    - **HTTP POST /compensation-actions/runs:** Create and execute a single-shot orchestration run for explicit action IDs
-    - **HTTP GET /compensation-actions/runs/{run_id}:** Get an existing orchestration run by ID
-    - **Bounded single-shot semantics:**
-      - Single-shot: one run = one explicit action list, one auto-decide pass
-      - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
-      - Runtime auto-decides per action: approve | reapprove | execute | skip
-      - Uses existing CompensationActionService methods (does not replace enforcement)
-      - Partial-success: continues on per-item failures, records all outcomes
-    - **Auto-decide logic:**
-      - `Pending` → approve via approve_action
-      - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
-      - Terminal / policy-blocked → skip
-      - Not found → record not_found
-    - **Run status (HTTP 202 Accepted):**
-      - `pending` → run created, awaiting execution
-      - `running` → run is executing
-      - `completed` → all actions succeeded
-      - `completed_with_errors` → some actions failed
-      - `failed` → all actions failed or system error
-    - **CLI sync:** `intent-cli run --action-ids <ids> --tenant-id <id>` for explicit action IDs (single-shot sync)
-    - **No queue polling, no distributed claiming/locking, no scheduler**
-    - **CLI response includes:** run ID, status, per-action results (action_taken, success, reason, resulting_status)
-
-    ## Phase 3 Batch 1: Manual Orchestration + Dry-Run Planner (Bounded Slice)
-    - **Dry-run planner:** POST /compensation-actions/orchestration-dry-run returns per-item proposed action + reason for explicit IDs
-    - **Manual batch approve:** POST /compensation-actions/batch-approve triggers approve for explicit IDs with partial-success semantics
-    - **Manual batch reapprove:** POST /compensation-actions/batch-reapprove triggers reapprove for explicit IDs with partial-success semantics
-    - **Manual batch execute:** POST /compensation-actions/batch-execute triggers execute for explicit IDs with partial-success semantics
-    - **Bounded partial-success semantics:** Even if some items fail, the batch continues and reports per-item outcomes explicitly
-    - **No fail-fast:** All items are processed, results are accumulated and returned together
-    - **No background worker or queue claiming:** All operations are explicit API calls via existing service methods
-    - **Dry-run response includes:** per-item proposed_action (approve | reapprove | execute | no_action) + reason
-    - **Batch command response includes:** per-item success/failure + resulting action or error + summary counts
-
-    ## Phase 2b Bounded Delivery
-    - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
-    - Bounded runtime adapter integration for Temporal-backed signal/replay execution
-    - Pending approval queue/read endpoints and status-only approve/reject actions
-    - Canonical public `risk_tier` field in rebase preview/apply responses
-    - Bounded replay endpoint (`POST /intents/{intent_id}/replay`) — cooperative signal-based replay, not native Temporal reset
 
     ## Still Open (broader than current bounded slices)
     - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
@@ -218,7 +82,7 @@ servers:
   - url: /v1
     description: Version 1 API
 
-tags:
+  tags:
   - name: intents
     description: Intent lifecycle operations
   - name: versions
@@ -230,7 +94,7 @@ tags:
   - name: compensation
     description: Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
   - name: forensic
-    description: Forensic bundle export/download endpoints (Phase 3 Batch 3b P4 bounded slice)
+    description: Forensic verification endpoints (Phase 3 Batch 3b bounded slice)
 
 paths:
   /intents:
@@ -505,12 +369,12 @@ paths:
         The `affected_items.status` field indicates whether classification succeeded:
         - `available`: Graph data found and items classified
         - `unavailable`: Graph node not found or service unavailable
-        
+
         **Phase 1 PR #17: Apply/checkpoint groundwork (internal typed contracts, not executed):**
         Rebase engine internals now use typed readiness contracts for checkpoint selection,
         approval revalidation, and compensation planning, but those deferred fields are
         not exposed in the Phase 1 preview response yet.
-        
+
         **Apply endpoint NOT implemented in Phase 1** — POST /intents/{id}/rebase-apply deferred to Phase 2.
 
         **Reliability:** The endpoint remains functional even when graph coverage is incomplete.
@@ -2165,6 +2029,110 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /forensic/verify:
+    post:
+      tags:
+        - forensic
+      summary: Verify forensic bundle feasibility
+      description: |
+        Phase 3 Batch 3b (bounded slice): Verifies whether a forensic bundle can be
+        generated for the given parameters WITHOUT generating actual bundles.
+
+        **Bounded request-driven verification:**
+        - Accepts verification parameters (intent_id, time_range, purpose)
+        - Validates entity existence and coverage
+        - Reports what a bundle WOULD contain (counts, not actual data)
+        - Does NOT generate bundles, store data, or perform replay
+
+        **Truthful status semantics:**
+        - `ready`: All referenced entities exist and are within time range
+        - `incomplete`: Some entities are missing or time range has gaps
+        - `not_supported`: Verification mode not implemented
+        - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+
+        **NOT claimed:**
+        - Bundle generation (actual data collection)
+        - Bundle storage (S3 or any persistence)
+        - Bundle retrieval (downloading stored bundles)
+        - Bundle replay (reproducing state from a bundle)
+        - Hash chain integrity verification (requires generated bundle)
+      operationId: verifyForensicBundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicVerificationRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicVerificationResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic/export:
+    post:
+      tags:
+        - forensic
+      summary: Generate forensic archive for download
+      description: |
+        Phase 3 Batch 3b (bounded slice): Generates an in-memory forensic archive
+        from the given parameters. The archive contains scaffolded/fictional data
+        representing what a real bundle would contain.
+
+        **Bounded in-memory archive generation:**
+        - Accepts export parameters (intent_id, time_range, purpose)
+        - Generates scaffolded entries entirely in-memory (no real service queries)
+        - Returns archive metadata including size, content type, and item count
+        - Returns archive metadata only in this bounded slice (no archive byte streaming)
+
+        **Truthful semantics:**
+        - `archive_id` is a unique identifier for the generated archive
+        - `generated_at` timestamps when generation was triggered
+        - `item_count` reflects the count of scaffolded entries generated
+        - `archive_size_bytes` reflects the JSON-serialized size
+        - Entries contain scaffolded data (NOT actual intent versions, artifacts, etc.)
+
+        **NOT claimed:**
+        - Actual bundle generation from real services (intent service, graph service, etc.)
+        - Bundle storage (S3 or any persistence layer)
+        - Async job orchestration for bundle generation
+        - Real replay engine (state reproduction from bundle)
+        - Hash chain integrity verification
+      operationId: exportForensicArchive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicExportRequest'
+      responses:
+        '200':
+          description: Export archive metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicExportResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # Forensic Bundle Endpoints (Phase 3 Batch 3b P4 bounded slice)
   # Bounded scope note: This is a local/exportable bundle download path.
   # Not a full S3/production storage pipeline. S3 integration is Phase 4 scope.
@@ -2349,12 +2317,7 @@ paths:
                 $ref: '#/components/schemas/ForensicBundle'
         '400':
           description: Invalid status transition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Bundle not found or tenant mismatch
+>>>>>>> origin/main
           content:
             application/json:
               schema:
@@ -2493,6 +2456,7 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Bundle not found or tenant mismatch
+>>>>>>> origin/main
           content:
             application/json:
               schema:
@@ -2989,12 +2953,12 @@ components:
       type: object
       description: |
         Phase 1 PR #16: Graph-integrated rebase plan response.
-        
+
         Exposes planner summary fields plus graph-integrated affected items when available.
         The `affected_items.status` field indicates whether graph classification succeeded:
         - `available`: Graph data was found and affected items were classified
         - `unavailable`: Graph node not found or graph service unavailable - arrays may be incomplete
-        
+
         Phase 1 PR #17 kept apply/checkpoint typed contracts internal to the planner.
         This preview response now additionally exposes the bounded read-only
         `compensation_planning` summary, while execution contracts remain internal.
@@ -3155,12 +3119,6 @@ components:
     ReplayRequest:
       type: object
       description: |
-        Phase 2b bounded replay slice request.
-        
-        Bounded checkpoint selection strategy:
-        - If `checkpoint_id` is provided, use that specific checkpoint
-        - Otherwise, use the most recent active checkpoint for the workflow
-        
         Note: This is cooperative signal-based replay, NOT native Temporal reset.
       required: [to_version]
       properties:
@@ -3181,7 +3139,7 @@ components:
       type: object
       description: |
         Phase 2b bounded replay slice response.
-        
+
         Reflects cooperative signal-based replay semantics using existing
         runtime/checkpoint seams. This is NOT native Temporal reset.
       required:
@@ -3228,12 +3186,12 @@ components:
       type: object
       description: |
         Graph-integrated affected items preview (Phase 1 PR #16).
-        
+
         Contains classified affected items from the dependency graph when available.
         The `status` field indicates data availability:
         - `available`: Graph classification succeeded
         - `unavailable`: Graph node not found or graph service unavailable
-        
+
         Note: Compensation action generation is a Phase 2 feature (see `deferred.compensation`).
       required: [status]
       properties:
@@ -5011,6 +4969,151 @@ components:
           nullable: true
           description: Execution result context captured after executor runs
 
+    # ----- Forensic Verification Schemas (Phase 3 Batch 3b) -----
+    ForensicVerificationRequest:
+      type: object
+      required: [tenant_id, intent_id, time_range]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID for multi-tenancy isolation
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to verify forensic coverage for
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: Start of time range
+            end:
+              type: string
+              format: date-time
+              description: End of time range
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+          default: incident_investigation
+          description: Purpose of the verification
+        include_artifacts:
+          type: boolean
+          default: true
+          description: Whether to verify artifact coverage
+        include_audit_events:
+          type: boolean
+          default: true
+          description: Whether to verify audit event coverage
+        include_policy_snapshots:
+          type: boolean
+          default: true
+          description: Whether to verify policy snapshot coverage
+
+    ForensicVerificationResponse:
+      type: object
+      properties:
+        verification_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this verification
+        verified_at:
+          type: string
+          format: date-time
+          description: When verification was performed
+        status:
+          type: string
+          enum: [ready, incomplete, not_supported]
+          description: Verification status
+        status_reason:
+          type: string
+          description: Human-readable status reason
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+        intent_version_coverage:
+          type: object
+          properties:
+            intent_exists:
+              type: boolean
+            intent_id:
+              type: string
+              format: uuid
+            version_count:
+              type: integer
+            earliest_version:
+              type: string
+              format: date-time
+              nullable: true
+            latest_version:
+              type: string
+              format: date-time
+              nullable: true
+            has_artifact_traceability:
+              type: boolean
+        artifact_coverage:
+          type: object
+          nullable: true
+          properties:
+            artifact_count:
+              type: integer
+            artifacts_with_provenance:
+              type: integer
+            coverage_complete:
+              type: boolean
+        audit_event_coverage:
+          type: object
+          nullable: true
+          properties:
+            event_count:
+              type: integer
+            time_range_complete:
+              type: boolean
+            first_event:
+              type: string
+              format: date-time
+              nullable: true
+            last_event:
+              type: string
+              format: date-time
+              nullable: true
+        policy_snapshot_coverage:
+          type: object
+          nullable: true
+          properties:
+            snapshot_count:
+              type: integer
+            coverage_complete:
+              type: boolean
+        estimated_bundle_item_count:
+          type: integer
+          description: Estimated total items that would be in a full bundle
+
+    # ----- Forensic Export Schemas (Phase 3 Batch 3b - bounded in-memory slice) -----
+    ForensicExportRequest:
+      type: object
+      required: [tenant_id, intent_id, time_range]
+      properties:
+=======
     # Forensic Bundle (Phase 3 Batch 3b P4 bounded slice)
     BundleStatus:
       type: string
@@ -5092,10 +5195,63 @@ components:
         created_by:
           type: string
           description: Actor who triggered bundle generation (or "system")
+>>>>>>> origin/main
         tenant_id:
           type: string
           format: uuid
           description: Tenant ID for multi-tenancy isolation
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to generate archive for
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: Start of time range
+            end:
+              type: string
+              format: date-time
+              description: End of time range
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+          default: incident_investigation
+          description: Purpose of the archive
+        include_artifacts:
+          type: boolean
+          default: true
+          description: Whether to include artifact entries
+        include_audit_events:
+          type: boolean
+          default: true
+          description: Whether to include audit event entries
+        include_policy_snapshots:
+          type: boolean
+          default: true
+          description: Whether to include policy snapshot entries
+
+    ForensicExportResponse:
+      type: object
+      properties:
+        archive_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this archive
+        generated_at:
+          type: string
+          format: date-time
+          description: When archive was generated
+        status:
+          type: string
+          enum: [generated, failed]
+          description: Export status
+        status_reason:
+          type: string
+          description: Human-readable status reason
         time_range:
           $ref: '#/components/schemas/BundleTimeRange'
         purpose:
@@ -5144,6 +5300,7 @@ components:
         total:
           type: integer
           description: Total number of bundles
+>>>>>>> origin/main
 
     Error:
       type: object

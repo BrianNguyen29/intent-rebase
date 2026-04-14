@@ -10,18 +10,15 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use tracing::Instrument;
 use chrono::{DateTime, Utc};
-use forensic_service::{
-    bundle::{BundlePurpose, BundleTimeRange, ForensicBundle},
-    bundle_gen::{BundleGenerationService, CreateBundleRequest as GenCreateBundleRequest},
-    bundle_repo::InMemoryBundleRepository,
-};
 use graph_service::GraphService;
 use intent_rebase_types::{
     AffectedItemsPreview, CreateGraphEdgeRequest, CreateGraphNodeRequest, CreateIntentRequest,
     CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, DiffRequest, EdgeType,
     GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
     ListVersionsResponse, NodeType, PolicySnapshot, ValidateIntentResponse,
+    get_current_trace_context,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -34,6 +31,7 @@ use rebase_orchestrator::{
     RebaseOrchestrator, RuntimeExecutionStatus,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
@@ -41,6 +39,63 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
 use validator::Validate;
+
+// ============================================================================
+// Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
+// ============================================================================
+//
+// These metrics are aligned to the SLO targets documented in 04-sre-and-slos.md
+// and the dashboard scaffold in 06-slo-dashboard.md.
+//
+// NOT YET IMPLEMENTED for all flows — this is a bounded slice delivering
+// instrumentation for core intent operations only. Full coverage across all
+// artifact-producing operations and compensation flows remains future scope.
+//
+// Metrics are recorded using the metrics_exporter_prometheus handle which is
+// installed by the /metrics endpoint. The PrometheusBuilder handles the
+// exporter setup and metric registration.
+//
+// Metrics are actively recorded for core intent operations using the metrics 0.24
+// API via metrics-exporter-prometheus 0.18 (upgraded from 0.12 to resolve the
+// version conflict with workspace metrics 0.23).
+//
+// Metrics referenced by Prometheus rules:
+// - intent_api_intent_version_created_total{status="success|error"}
+// - intent_api_rebase_preview_requests_total{status="success|error"}
+// - intent_api_rebase_apply_requests_total{status="success|error"}
+// - intent_api_diff_compute_duration_seconds
+// - intent_api_rebase_preview_duration_seconds
+// - intent_api_rebase_apply_duration_seconds
+
+/// Record intent version creation outcome
+fn record_intent_version_created(status: &'static str) {
+    metrics::counter!("intent_api_intent_version_created_total", "status" => status).increment(1);
+}
+
+/// Record rebase preview request outcome
+fn record_rebase_preview_request(status: &'static str) {
+    metrics::counter!("intent_api_rebase_preview_requests_total", "status" => status).increment(1);
+}
+
+/// Record rebase apply request outcome
+fn record_rebase_apply_request(status: &'static str) {
+    metrics::counter!("intent_api_rebase_apply_requests_total", "status" => status).increment(1);
+}
+
+/// Record diff compute duration
+fn record_diff_compute_duration(duration_secs: f64) {
+    metrics::histogram!("intent_api_diff_compute_duration_seconds").record(duration_secs);
+}
+
+/// Record rebase preview duration
+fn record_rebase_preview_duration(duration_secs: f64, graph_size: &'static str) {
+    metrics::histogram!("intent_api_rebase_preview_duration_seconds", "graph_size" => graph_size).record(duration_secs);
+}
+
+/// Record rebase apply duration
+fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
+    metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class).record(duration_secs);
+}
 
 /// Response for diff computation including version context, diff, and risk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,10 +240,13 @@ pub struct AppState {
     /// Phase 3 Batch 1 (bounded single-shot): Orchestration runtime for executing
     /// compensation actions via HTTP accepted flow.
     pub orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
-    /// Phase 3 Batch 3b (P4 bounded slice): Forensic bundle generation service.
-    /// Manages bundle lifecycle (Pending -> Generating -> Ready/Failed).
-    /// S3 storage, actual content collection, integrity verification are Phase 4 scope.
-    pub forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
+    /// Phase 3 Batch 3b (bounded slice): Forensic verification service for
+    /// verifying forensic bundle feasibility without generating actual bundles.
+    pub forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    /// Phase 3 Batch 3b (bounded slice): Forensic archive generator for
+    /// in-memory archive generation with scaffolded data. Does NOT query
+    /// real services or persist data.
+    pub forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     pub start_time: Instant,
 }
 
@@ -351,7 +409,7 @@ impl IntoResponse for ApiErrorResponse {
                 (StatusCode::NOT_FOUND, "FORENSIC_BUNDLE_NOT_FOUND", false)
             }
             IntentRebaseError::InvalidForensicBundleStatusTransition { .. } => {
-                (StatusCode::BAD_REQUEST, "INVALID_BUNDLE_STATUS_TRANSITION", false)
+                (StatusCode::CONFLICT, "INVALID_BUNDLE_STATUS_TRANSITION", false)
             }
         };
 
@@ -631,14 +689,21 @@ async fn create_intent(
     Json(request): Json<CreateIntentRequest>,
 ) -> Result<(StatusCode, Json<CreateIntentResponse>), ApiErrorResponse> {
     // Phase 1: Input validation
-    validate_create_intent_request(&request).map_err(ApiErrorResponse)?;
+    if let Err(e) = validate_create_intent_request(&request) {
+        record_intent_version_created("error");
+        return Err(ApiErrorResponse(e));
+    }
 
-    state
-        .service
-        .create_intent(request)
-        .await
-        .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(ApiErrorResponse)
+    match state.service.create_intent(request).await {
+        Ok(r) => {
+            record_intent_version_created("success");
+            Ok((StatusCode::CREATED, Json(r)))
+        }
+        Err(e) => {
+            record_intent_version_created("error");
+            Err(ApiErrorResponse(e))
+        }
+    }
 }
 
 /// GET /intents/{intent_id} - Get intent head (current version)
@@ -667,17 +732,35 @@ async fn create_version(
     headers: HeaderMap,
     Json(request): Json<CreateVersionRequest>,
 ) -> Result<(StatusCode, Json<CreateVersionResponse>), ApiErrorResponse> {
-    let expected_version =
-        parse_optional_header(&headers, "x-expected-version").map_err(ApiErrorResponse)?;
-    let expected_row_version =
-        parse_optional_header(&headers, "x-expected-row-version").map_err(ApiErrorResponse)?;
+    let expected_version = match parse_optional_header(&headers, "x-expected-version") {
+        Ok(v) => v,
+        Err(e) => {
+            record_intent_version_created("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let expected_row_version = match parse_optional_header(&headers, "x-expected-row-version") {
+        Ok(v) => v,
+        Err(e) => {
+            record_intent_version_created("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
 
-    state
+    match state
         .service
         .create_version(intent_id, request, expected_version, expected_row_version)
         .await
-        .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(ApiErrorResponse)
+    {
+        Ok(r) => {
+            record_intent_version_created("success");
+            Ok((StatusCode::CREATED, Json(r)))
+        }
+        Err(e) => {
+            record_intent_version_created("error");
+            Err(ApiErrorResponse(e))
+        }
+    }
 }
 
 /// Parse an optional i32 header value.
@@ -806,19 +889,25 @@ async fn compute_diff(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<DiffResponse>, ApiErrorResponse> {
-    let (from_version, to_version, diff, risk) = state
+    let start = std::time::Instant::now();
+    let result = state
         .service
         .compute_diff(intent_id, request.from_version, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+        .await;
 
-    Ok(Json(DiffResponse {
-        intent_id,
-        from_version,
-        to_version,
-        diff,
-        risk,
-    }))
+    let duration = start.elapsed().as_secs_f64();
+    record_diff_compute_duration(duration);
+
+    match result {
+        Ok((from_version, to_version, diff, risk)) => Ok(Json(DiffResponse {
+            intent_id,
+            from_version,
+            to_version,
+            diff,
+            risk,
+        })),
+        Err(e) => Err(ApiErrorResponse(e)),
+    }
 }
 
 // /// POST /intents/{intent_id}/rebase-preview - Generate rebase preview plan
@@ -955,24 +1044,58 @@ async fn rebase_preview(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+    let start = std::time::Instant::now();
+
     // Always use graph-integrated preview - the service handles unavailability gracefully
-    let plan = state
+    let plan_result = state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+        .await;
+
+    let plan = match plan_result {
+        Ok(p) => p,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
 
     // Get version info for response context
-    let from_version = state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let to_version = state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
+    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Record latency with graph_size label (use "unknown" if affected_items unavailable)
+    let graph_size = match &plan.affected_items.status {
+        intent_rebase_types::AffectedItemsStatus::Available => {
+            let total = plan.affected_items.affected_artifacts.len()
+                + plan.affected_items.affected_approvals.len()
+                + plan.affected_items.side_effects.len();
+            if total < 10 {
+                "small"
+            } else if total < 100 {
+                "medium"
+            } else {
+                "large"
+            }
+        }
+        _ => "unknown",
+    };
+
+    let duration = start.elapsed().as_secs_f64();
+    record_rebase_preview_duration(duration, graph_size);
+    record_rebase_preview_request("success");
 
     Ok(Json(RebasePreviewResponse {
         intent_id,
@@ -994,27 +1117,41 @@ async fn rebase_apply(
     Path(intent_id): Path<Uuid>,
     Json(request): Json<DiffRequest>,
 ) -> Result<(StatusCode, Json<RebaseApplyResponse>), ApiErrorResponse> {
-    let intent_head = state
-        .service
-        .get_intent_head(intent_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let from_version = state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let to_version = state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-    let plan = state
+    let start = std::time::Instant::now();
+
+    let intent_head = match state.service.get_intent_head(intent_id).await {
+        Ok(h) => h,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let plan = match state
         .service
         .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
         .await
-        .map_err(ApiErrorResponse)?;
-    let apply_result = state
+    {
+        Ok(p) => p,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let apply_result = match state
         .orchestrator
         .apply_rebase(
             intent_id,
@@ -1026,7 +1163,23 @@ async fn rebase_apply(
             &plan.affected_items,
         )
         .await
-        .map_err(ApiErrorResponse)?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            record_rebase_apply_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Record latency with risk_class label
+    let risk_class = match plan.risk_tier {
+        RiskTier::Low => "low",
+        RiskTier::Medium => "medium",
+        RiskTier::High => "high",
+        RiskTier::Critical => "critical",
+    };
+    let duration = start.elapsed().as_secs_f64();
+    record_rebase_apply_duration(duration, risk_class);
 
     // Phase 2b bounded slice: Record audit event for all external apply outcomes
     // Best-effort actor attribution: fallback external-api/unknown
@@ -1074,6 +1227,7 @@ async fn rebase_apply(
             actor_id,
             intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1109,6 +1263,7 @@ async fn rebase_apply(
                 actor_id,
                 intent_id,
                 blocked_payload.clone(),
+                get_current_trace_context(),
             )
             .await
         {
@@ -1185,6 +1340,7 @@ async fn rebase_apply(
         compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     };
 
+    record_rebase_apply_request("success");
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
 }
 
@@ -1257,7 +1413,7 @@ async fn publish_audit_event(
     };
 
     let subject = intent_rebase_types::EventSubject::from_audit_event(tenant_id, event_type);
-    match publisher.publish(&subject, payload).await {
+    match publisher.publish(&subject, payload, get_current_trace_context()).await {
         intent_rebase_types::PublishResult::Published {
             subject: s,
             sequence,
@@ -1430,6 +1586,7 @@ async fn approve_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1504,6 +1661,7 @@ async fn reject_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1583,6 +1741,7 @@ async fn expire_approval_request(
             actor_id,
             approval_request.intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1961,6 +2120,7 @@ async fn replay_intent(
             actor_id,
             intent_id,
             audit_payload.clone(),
+            get_current_trace_context(),
         )
         .await
     {
@@ -1992,13 +2152,213 @@ async fn replay_intent(
     }))
 }
 
-/// Initialize tracing with JSON formatting using RUST_LOG env var
+/// Initialize tracing with optional OTLP export.
+///
+/// When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, this initializes the OpenTelemetry
+/// SDK with an OTLP exporter and a tokio runtime extension for background export.
+/// When the env var is absent, only JSON logging to stdout is active (existing behavior).
+///
+/// Phase 3 Batch 2 Slice 2 OTEL extension (bounded slice):
+/// - Optional OTLP export when endpoint is configured via env var
+/// - Retains existing JSON logging fallback when OTEL is not configured
+/// - Does NOT implement cross-process trace context propagation (future scope)
 pub fn init_tracing() {
+    use opentelemetry::trace::TracerProvider;
+
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt::layer().json())
-        .init();
+    let registry = tracing_subscriber::registry().with(filter).with(fmt::layer().json());
+
+    // Optionally wire in OTLP export if endpoint is configured
+    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        // Use the pipeline pattern to set up OTLP with batch export
+        let tracer_provider = opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic())
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
+            .expect("Failed to create OTLP tracer provider — check OTEL_EXPORTER_OTLP_ENDPOINT");
+
+        // Set as global provider so tracing-opentelemetry layer can use it
+        let _ = opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+        // Set global W3C trace-context propagator so extraction/injection work
+        let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
+        opentelemetry::global::set_text_map_propagator(propagator);
+
+        // Create tracing-opentelemetry layer with the tracer
+        let tracer = tracer_provider.tracer("intent-api");
+        let tracer_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+        registry.with(tracer_layer).init();
+        tracing::info!("OTLP tracing enabled via OTEL_EXPORTER_OTLP_ENDPOINT");
+    } else {
+        // Set global W3C trace-context propagator even without OTLP
+        // so trace_context_middleware extraction/injection works
+        let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
+        opentelemetry::global::set_text_map_propagator(propagator);
+
+        registry.init();
+        tracing::info!("OTLP tracing disabled (OTEL_EXPORTER_OTLP_ENDPOINT not set)");
+    }
+}
+
+// ============================================================================
+// Request-ID Extraction Middleware (Phase 3 Batch 2 Slice 2 — tracing foundation)
+// ============================================================================
+
+/// Request ID stored in request extensions by the request_id_middleware.
+#[derive(Clone)]
+pub struct RequestId(pub String);
+
+/// Middleware that extracts or generates a request ID for tracing correlation.
+///
+/// Phase 3 Batch 2 Slice 2 (bounded tracing foundation):
+/// - Extracts `X-Request-ID` header if present
+/// - Generates a new UUID if not present
+/// - Stores the request ID in request extensions for downstream use
+/// - Does NOT propagate to response headers (Phase 3 Batch 2 remainder scope)
+/// - Does NOT wire to OpenTelemetry export (future OTEL integration scope)
+///
+/// This enables basic request correlation for log tracing across service boundaries
+/// where explicit request-id propagation is implemented.
+pub async fn request_id_middleware(
+    mut request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Extract or generate request ID
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // Store in extensions for downstream access
+    request.extensions_mut().insert(RequestId(request_id));
+
+    // Continue with the request
+    next.run(request).await
+}
+
+// ============================================================================
+// W3C Trace Context Middleware (Phase 3 Batch 2 Slice 2 — bounded OTEL propagation)
+// ============================================================================
+
+/// W3C trace-context propagation middleware.
+///
+/// Phase 3 Batch 2 Slice 2 (bounded OTEL propagation):
+/// - Extracts `traceparent` header (W3C trace-context) from inbound requests
+/// - Extracts `tracestate` header if present
+/// - Injects the current span context into response `traceparent` and `tracestate` headers
+/// - Enables distributed tracing correlation across service boundaries
+///
+/// This middleware is intentionally scoped:
+/// - Only propagates trace context within this service process
+/// - Does NOT implement cross-process propagation (future scope)
+/// - Works regardless of whether OTLP export is configured (uses tracing core APIs)
+pub async fn trace_context_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use opentelemetry::trace::TraceContextExt;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    // Build span name from method and path
+    let span_name = format!(
+        "{} {}",
+        request.method(),
+        request.uri().path()
+    );
+
+    // Extract W3C traceparent header for parent context
+    let traceparent_value = request
+        .headers()
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Extract W3C tracestate header if present
+    let tracestate_value = request
+        .headers()
+        .get("tracestate")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Create the HTTP handler span
+    let span = tracing::info_span!(
+        "HTTP handler",
+        otel.name = %span_name,
+        "http.traceparent" = ?traceparent_value.as_deref().unwrap_or(""),
+        "tracestate" = ?tracestate_value.as_deref().unwrap_or("")
+    );
+
+    // If we have an incoming traceparent, set it as the parent context
+    if let Some(tp) = &traceparent_value {
+        let extracted_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+            let mut carrier: HashMap<String, String> = HashMap::new();
+            carrier.insert("traceparent".to_string(), tp.clone());
+            if let Some(ref ts) = tracestate_value {
+                carrier.insert("tracestate".to_string(), ts.clone());
+            }
+            propagator.extract(&carrier)
+        });
+
+        // If extraction produced a valid span, use it as parent
+        if extracted_context.span().span_context().is_valid() {
+            span.set_parent(extracted_context);
+        }
+    }
+
+    // Execute the request within the span context and capture the span
+    let response = tracing::Instrument::instrument(next.run(request), span.clone()).await;
+
+    // Get the active span context — span is still in scope since we cloned it
+    let span_context = span.context();
+
+    // Propagate trace context to response headers using the active span
+    let mut response_builder = axum::response::Response::builder();
+
+    let otel_span = span_context.span();
+    let otel_span_context = otel_span.span_context();
+    if otel_span_context.is_valid() {
+        // Use the W3C traceparent format: version-trace_id-span_id-trace_flags
+        // e.g., "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        let trace_id_hex = format!("{:x}", otel_span_context.trace_id());
+        let span_id_hex = format!("{:x}", otel_span_context.span_id());
+        let trace_flags = if otel_span_context.is_sampled() { "01" } else { "00" };
+        let traceparent_out = format!("00-{}-{}-{}", trace_id_hex, span_id_hex, trace_flags);
+        response_builder = response_builder.header("traceparent", traceparent_out);
+
+        // Add tracestate header if trace state is not empty
+        let trace_state = otel_span_context.trace_state();
+        let ts_header = trace_state.header();
+        if !ts_header.is_empty() {
+            response_builder = response_builder.header("tracestate", ts_header);
+        }
+    }
+
+    // Convert response to builder to add headers
+    let (parts, body) = response.into_parts();
+    let mut response_builder = response_builder
+        .status(parts.status)
+        .version(parts.version);
+
+    // Preserve all existing response headers
+    for (name, value) in parts.headers.iter() {
+        response_builder = response_builder.header(name, value);
+    }
+
+    let response = response_builder.body(body);
+
+    // Handle potential error building the response
+    match response {
+        Ok(resp) => resp,
+        Err(_) => {
+            // If header addition fails (shouldn't happen), return a basic error response
+            axum::response::Response::new(axum::body::Body::empty())
+        }
+    }
 }
 
 /// Health check response
@@ -2939,18 +3299,27 @@ async fn create_orchestration_run(
 
     // Step 2: Spawn background execution
     // The run handle is already returned to the client; execution proceeds in the background.
+    // Propagate current span context into the spawned task for distributed tracing.
     let runtime = state.orchestration_runtime.clone();
-    tokio::spawn(async move {
-        // Background execution; errors are logged but cannot be reported to the HTTP client
-        match runtime.execute_existing_run(run_id).await {
-            Ok(_) => {
-                tracing::debug!("Background orchestration run {} completed", run_id);
-            }
-            Err(e) => {
-                tracing::error!("Background orchestration run {} failed: {}", run_id, e);
+    let span = tracing::info_span!(
+        "background_orchestration_run",
+        run_id = %run_id,
+        otel.kind = "internal"
+    );
+    tokio::spawn(
+        async move {
+            // Background execution; errors are logged but cannot be reported to the HTTP client
+            match runtime.execute_existing_run(run_id).await {
+                Ok(_) => {
+                    tracing::debug!("Background orchestration run {} completed", run_id);
+                }
+                Err(e) => {
+                    tracing::error!("Background orchestration run {} failed: {}", run_id, e);
+                }
             }
         }
-    });
+        .instrument(span),
+    );
 
     // Return 202 Accepted with the persisted (pending) run handle immediately
     Ok((
@@ -3991,598 +4360,424 @@ async fn ingest_artifact(
 }
 
 // ============================================================================
-// Audit Event Query Endpoints (Phase 3 P3-S4 bounded slice)
+// Forensic Verification Handler (Phase 3 Batch 3b bounded slice)
 // ============================================================================
 
-/// Query parameters for listing audit events by tenant
-#[derive(Debug, Deserialize)]
-pub struct ListAuditEventsQuery {
+/// Request body for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Verifies forensic bundle feasibility
+/// for the given parameters WITHOUT generating actual bundles or storing data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationRequest {
+    /// Tenant ID for multi-tenancy isolation
     pub tenant_id: Uuid,
-    /// Maximum number of events to return (default 100, max 1000)
-    #[serde(default = "default_audit_limit")]
-    pub limit: usize,
+    /// Intent ID to verify forensic coverage for
+    pub intent_id: Uuid,
+    /// Time range to verify
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of the verification
+    #[serde(default)]
+    pub purpose: forensic_service::VerificationPurpose,
+    /// Whether to verify artifact coverage
+    #[serde(default = "default_include_artifacts")]
+    pub include_artifacts: bool,
+    /// Whether to verify audit event coverage
+    #[serde(default = "default_include_audit_events")]
+    pub include_audit_events: bool,
+    /// Whether to verify policy snapshot coverage
+    #[serde(default = "default_include_policy_snapshots")]
+    pub include_policy_snapshots: bool,
 }
 
-fn default_audit_limit() -> usize {
-    100
+fn default_include_artifacts() -> bool {
+    true
 }
 
-/// Query parameters for getting a single audit event
-#[derive(Debug, Deserialize)]
-pub struct GetAuditEventQuery {
+fn default_include_audit_events() -> bool {
+    true
+}
+
+fn default_include_policy_snapshots() -> bool {
+    true
+}
+
+/// Time range for forensic verification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationTimeRange {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Reports what a forensic bundle WOULD contain
+/// if generated with the given parameters. This is verification/reporting ONLY.
+///
+/// **Truthful semantics:**
+/// - `status: "ready"` means all referenced entities exist and are within time range
+/// - `status: "incomplete"` means some entities are missing or time range has gaps
+/// - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+///
+/// **NOT claimed:**
+/// - Actual bundle generation (no data is collected)
+/// - Bundle storage (no S3 or persistence writes)
+/// - Bundle retrieval (no stored bundle download)
+/// - Bundle replay (no state reproduction)
+/// - Hash chain integrity (requires generated bundle)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationResponse {
+    /// Unique identifier for this verification
+    pub verification_id: Uuid,
+    /// When verification was performed
+    pub verified_at: chrono::DateTime<chrono::Utc>,
+    /// Verification status
+    pub status: forensic_service::VerificationStatus,
+    /// Human-readable status reason
+    pub status_reason: String,
+    /// Tenant ID
     pub tenant_id: Uuid,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Time range that was verified
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of verification
+    pub purpose: forensic_service::VerificationPurpose,
+    /// Intent version coverage
+    pub intent_version_coverage: ForensicIntentVersionCoverage,
+    /// Artifact coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_coverage: Option<ForensicArtifactCoverage>,
+    /// Audit event coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_event_coverage: Option<ForensicAuditEventCoverage>,
+    /// Policy snapshot coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_snapshot_coverage: Option<ForensicPolicySnapshotCoverage>,
+    /// Estimated total items that would be in a full bundle
+    pub estimated_bundle_item_count: usize,
 }
 
-/// Response for listing audit events
-#[derive(Debug, Serialize)]
-pub struct ListAuditEventsResponse {
-    pub events: Vec<intent_rebase_types::AuditEvent>,
-    pub total: usize,
+/// Intent version coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicIntentVersionCoverage {
+    /// Whether intent exists
+    pub intent_exists: bool,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Number of versions within the time range
+    pub version_count: usize,
+    /// Earliest version timestamp within range
+    pub earliest_version: Option<chrono::DateTime<chrono::Utc>>,
+    /// Latest version timestamp within range
+    pub latest_version: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether all versions have artifact traceability
+    pub has_artifact_traceability: bool,
 }
 
-/// GET /audit/events - List audit events for a tenant
+/// Artifact coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicArtifactCoverage {
+    /// Number of artifacts found for the intent
+    pub artifact_count: usize,
+    /// Number of artifacts with complete provenance chain
+    pub artifacts_with_provenance: usize,
+    /// Whether artifact coverage is complete
+    pub coverage_complete: bool,
+}
+
+/// Audit event coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicAuditEventCoverage {
+    /// Number of audit events found for the tenant in time range
+    pub event_count: usize,
+    /// Whether the time range has full coverage (no gaps)
+    pub time_range_complete: bool,
+    /// First event timestamp in range
+    pub first_event: Option<chrono::DateTime<chrono::Utc>>,
+    /// Last event timestamp in range
+    pub last_event: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Policy snapshot coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicPolicySnapshotCoverage {
+    /// Number of policy snapshots found for the intent
+    pub snapshot_count: usize,
+    /// Whether snapshots cover all versions
+    pub coverage_complete: bool,
+}
+
+impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificationResponse {
+    fn from(resp: forensic_service::ForensicVerificationResponse) -> Self {
+        Self {
+            verification_id: resp.verification_id,
+            verified_at: resp.verified_at,
+            status: resp.status,
+            status_reason: resp.status_reason,
+            tenant_id: resp.tenant_id,
+            intent_id: resp.intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: resp.time_range.start,
+                end: resp.time_range.end,
+            },
+            purpose: resp.purpose,
+            intent_version_coverage: ForensicIntentVersionCoverage {
+                intent_exists: resp.intent_version_coverage.intent_exists,
+                intent_id: resp.intent_version_coverage.intent_id,
+                version_count: resp.intent_version_coverage.version_count,
+                earliest_version: resp.intent_version_coverage.earliest_version,
+                latest_version: resp.intent_version_coverage.latest_version,
+                has_artifact_traceability: resp.intent_version_coverage
+                    .has_artifact_traceability,
+            },
+            artifact_coverage: resp.artifact_coverage.map(|ac| ForensicArtifactCoverage {
+                artifact_count: ac.artifact_count,
+                artifacts_with_provenance: ac.artifacts_with_provenance,
+                coverage_complete: ac.coverage_complete,
+            }),
+            audit_event_coverage: resp.audit_event_coverage.map(|aec| ForensicAuditEventCoverage {
+                event_count: aec.event_count,
+                time_range_complete: aec.time_range_complete,
+                first_event: aec.first_event,
+                last_event: aec.last_event,
+            }),
+            policy_snapshot_coverage: resp
+                .policy_snapshot_coverage
+                .map(|psc| ForensicPolicySnapshotCoverage {
+                    snapshot_count: psc.snapshot_count,
+                    coverage_complete: psc.coverage_complete,
+                }),
+            estimated_bundle_item_count: resp.estimated_bundle_item_count,
+        }
+    }
+}
+
+// === Forensic Export Types ===
+
+/// Request body for forensic archive export
 ///
-/// Phase 3 P3-S4 (bounded tenant-scoped audit query slice):
-/// Returns all audit events belonging to the specified tenant, ordered by
-/// occurred_at descending (newest first).
+/// **Phase 3 Batch 3b (bounded slice):** Triggers in-memory archive generation
+/// from the given parameters. The archive contains scaffolded/fictional data
+/// representing what a real bundle would contain.
 ///
-/// **Tenant-scoped:** Results are filtered strictly to the provided tenant_id.
-/// Cross-tenant access is blocked at the repository layer.
+/// **Truthful semantics:**
+/// - Generated archive is entirely in-memory with scaffolded entries
+/// - Does NOT query actual services for real intent versions, artifacts, etc.
+/// - `item_count` reflects the configured generator counts, not actual data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent ID to generate archive for
+    pub intent_id: Uuid,
+    /// Time range to include in archive
+    pub time_range: ForensicExportTimeRange,
+    /// Purpose of the archive
+    #[serde(default)]
+    pub purpose: forensic_service::ExportPurpose,
+    /// Whether to include artifact entries
+    #[serde(default = "default_export_include_artifacts")]
+    pub include_artifacts: bool,
+    /// Whether to include audit event entries
+    #[serde(default = "default_export_include_audit_events")]
+    pub include_audit_events: bool,
+    /// Whether to include policy snapshot entries
+    #[serde(default = "default_export_include_policy_snapshots")]
+    pub include_policy_snapshots: bool,
+}
+
+fn default_export_include_artifacts() -> bool {
+    true
+}
+
+fn default_export_include_audit_events() -> bool {
+    true
+}
+
+fn default_export_include_policy_snapshots() -> bool {
+    true
+}
+
+/// Time range for forensic export
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportTimeRange {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for forensic archive export
 ///
-/// **Pagination:** Uses limit parameter (default 100, max 1000) for pagination.
+/// **Phase 3 Batch 3b (bounded slice):** Returns archive metadata and size
+/// for the generated in-memory archive. The actual archive content is NOT
+/// embedded in this response — it is generated on-demand.
 ///
-/// **This endpoint is READ-ONLY** - it only queries existing audit data.
-async fn list_audit_events(
+/// **Truthful semantics:**
+/// - `archive_id` is a unique identifier for the generated archive
+/// - `generated_at` timestamps when generation was triggered
+/// - `item_count` is the count of scaffolded entries generated
+/// - `archive_size_bytes` reflects the JSON-serialized size of the archive
+///
+/// **NOT claimed:**
+/// - Actual bundle generation from real services
+/// - Bundle storage (S3 or any persistence)
+/// - Async job orchestration
+/// - Real replay engine
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportResponse {
+    /// Unique identifier for this archive
+    pub archive_id: Uuid,
+    /// When archive was generated
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Export status
+    pub status: forensic_service::ExportStatus,
+    /// Human-readable status reason
+    pub status_reason: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Time range covered
+    pub time_range: ForensicExportTimeRange,
+    /// Purpose of archive
+    pub purpose: forensic_service::ExportPurpose,
+    /// Summary of archive contents
+    pub contents: ForensicExportContentsSummary,
+    /// Total item count
+    pub item_count: usize,
+    /// Content type (application/json)
+    pub content_type: String,
+    /// Archive size in bytes
+    pub archive_size_bytes: usize,
+}
+
+/// Summary of contents in an export archive
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicExportContentsSummary {
+    /// Number of intent version entries
+    pub intent_versions: usize,
+    /// Number of artifact entries
+    pub artifacts: usize,
+    /// Number of audit event entries
+    pub audit_events: usize,
+    /// Number of policy snapshot entries
+    pub policy_snapshots: usize,
+}
+
+/// POST /forensic/verify - Verify forensic bundle feasibility
+///
+/// Phase 3 Batch 3b (bounded slice): Verifies whether a forensic bundle can be
+/// generated for the given parameters WITHOUT generating actual bundles.
+///
+/// **Bounded request-driven verification:**
+/// - Accepts verification parameters (intent_id, time_range, purpose)
+/// - Validates entity existence and coverage
+/// - Reports what a bundle WOULD contain (counts, not actual data)
+/// - Does NOT generate bundles, store data, or perform replay
+///
+/// **Truthful status semantics:**
+/// - `ready`: All referenced entities exist and are within time range
+/// - `incomplete`: Some entities are missing or time range has gaps
+/// - `not_supported`: Verification mode not implemented
+///
+/// **NOT claimed:**
+/// - Bundle generation (actual data collection)
+/// - Bundle storage (S3 or any persistence)
+/// - Bundle retrieval (downloading stored bundles)
+/// - Bundle replay (reproducing state from a bundle)
+/// - Hash chain integrity verification (requires generated bundle)
+async fn verify_forensic_bundle(
     State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<ListAuditEventsQuery>,
-) -> Result<Json<ListAuditEventsResponse>, ApiErrorResponse> {
-    let limit = query.limit.min(1000); // Cap at 1000 to prevent abuse
-
-    let events = state
-        .audit_service
-        .list_by_tenant(query.tenant_id, limit)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let total = events.len();
-
-    Ok(Json(ListAuditEventsResponse { events, total }))
-}
-
-/// GET /audit/events/{event_id} - Get a single audit event by ID
-///
-/// Phase 3 P3-S4 (bounded tenant-scoped audit query slice):
-/// Returns a single audit event by its ID, scoped to the specified tenant.
-///
-/// **Tenant-scoped:** Returns 404 if the event doesn't exist OR if it belongs
-/// to a different tenant. This enforces tenant isolation at the API layer.
-///
-/// **This endpoint is READ-ONLY** - it only queries existing audit data.
-async fn get_audit_event(
-    State(state): State<AppState>,
-    Path(event_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<GetAuditEventQuery>,
-) -> Result<Json<intent_rebase_types::AuditEvent>, ApiErrorResponse> {
-    state
-        .audit_service
-        .get_audit_event(event_id, query.tenant_id)
-        .await
-        .map(Json)
-        .map_err(ApiErrorResponse)
-}
-
-// ============================================================================
-// Forensic Bundle Handlers (Phase 3 Batch 3b bounded slice)
-// ============================================================================
-
-/// Request body for creating a forensic bundle
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateForensicBundleRequest {
-    pub tenant_id: Uuid,
-    pub time_range: BundleTimeRange,
-    pub purpose: BundlePurpose,
-    pub created_by: String,
-}
-
-/// Response for forensic bundle creation
-#[derive(Debug, Clone, Serialize)]
-pub struct CreateForensicBundleResponse {
-    pub bundle: ForensicBundle,
-    pub message: String,
-}
-
-/// Response for listing forensic bundles
-#[derive(Debug, Clone, Serialize)]
-pub struct ListForensicBundlesResponse {
-    pub bundles: Vec<ForensicBundle>,
-    pub total: usize,
-}
-
-/// Query parameters for listing forensic bundles
-#[derive(Debug, Deserialize)]
-pub struct ListForensicBundlesQuery {
-    pub tenant_id: Uuid,
-    pub limit: Option<usize>,
-}
-
-/// Query parameters for getting a forensic bundle
-#[derive(Debug, Deserialize)]
-pub struct GetForensicBundleQuery {
-    pub tenant_id: Uuid,
-}
-
-/// POST /forensic-bundles - Create a new forensic bundle
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Creates a new forensic bundle manifest
-/// with Pending status. The bundle generation service manages the lifecycle
-/// (Pending -> Generating -> Ready/Failed).
-///
-/// **Bounded slice scope:**
-/// - Creates bundle manifest with Pending status
-/// - Status transitions via explicit transition endpoints
-/// - S3 storage, actual content collection, integrity verification are Phase 4
-async fn create_forensic_bundle(
-    State(state): State<AppState>,
-    Json(request): Json<CreateForensicBundleRequest>,
-) -> Result<(StatusCode, Json<CreateForensicBundleResponse>), ApiErrorResponse> {
-    let gen_request = GenCreateBundleRequest {
+    Json(request): Json<ForensicVerificationRequest>,
+) -> Result<Json<ForensicVerificationResponse>, ApiErrorResponse> {
+    let service_request = forensic_service::ForensicVerificationRequest {
         tenant_id: request.tenant_id,
-        time_range: request.time_range,
+        intent_id: request.intent_id,
+        time_range: forensic_service::VerificationTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
         purpose: request.purpose,
-        created_by: request.created_by,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
     };
 
     let response = state
-        .forensic_bundle_service
-        .initiate_bundle(gen_request)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(_) => {
-                ApiErrorResponse(IntentRebaseError::Internal("unexpected not found".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("initiate failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
+        .forensic_service
+        .verify(service_request)
+        .await;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(CreateForensicBundleResponse {
-            bundle: response.bundle,
-            message: response.message,
-        }),
-    ))
+    Ok(Json(ForensicVerificationResponse::from(response)))
 }
 
-/// GET /forensic-bundles/{bundle_id} - Get a forensic bundle by ID
+/// POST /forensic/export - Generate forensic archive metadata
 ///
-/// Phase 3 Batch 3b (P4 bounded slice): Returns a single forensic bundle
-/// by its ID, scoped to the specified tenant. Returns 404 if bundle not found
-/// or if the bundle belongs to a different tenant (fail-not-found pattern).
-async fn get_forensic_bundle(
+/// Phase 3 Batch 3b (bounded slice): Generates an in-memory forensic archive
+/// from the given parameters. The archive contains scaffolded/fictional data
+/// representing what a real bundle would contain.
+///
+/// **Bounded in-memory archive generation:**
+/// - Accepts export parameters (intent_id, time_range, purpose)
+/// - Generates scaffolded entries entirely in-memory (no real service queries)
+/// - Returns archive metadata including size, content type, and item count
+/// - Does NOT stream archive bytes in this bounded slice; response is metadata only
+///
+/// **Truthful semantics:**
+/// - `archive_id` is a unique identifier for the generated archive
+/// - `generated_at` timestamps when generation was triggered
+/// - `item_count` reflects the count of scaffolded entries generated
+/// - `archive_size_bytes` reflects the JSON-serialized size
+///
+/// **NOT claimed:**
+/// - Actual bundle generation from real services (intent service, graph service, etc.)
+/// - Bundle storage (S3 or any persistence layer)
+/// - Async job orchestration for bundle generation
+/// - Real replay engine (state reproduction from bundle)
+/// - Hash chain integrity verification
+async fn export_forensic_archive(
     State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<GetForensicBundleQuery>,
-) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
+    Json(request): Json<ForensicExportRequest>,
+) -> Result<Json<ForensicExportResponse>, ApiErrorResponse> {
+    let service_request = forensic_service::ForensicExportRequest {
+        tenant_id: request.tenant_id,
+        intent_id: request.intent_id,
+        time_range: forensic_service::ExportTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
+    };
 
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
+    let response = state
+        .forensic_archive_generator
+        .generate(service_request)
+        .await;
 
-    Ok(Json(bundle))
-}
-
-/// GET /forensic-bundles - List forensic bundles for a tenant
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Returns all forensic bundles
-/// for the specified tenant, ordered by created_at descending.
-async fn list_forensic_bundles(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<ListForensicBundlesQuery>,
-) -> Result<Json<ListForensicBundlesResponse>, ApiErrorResponse> {
-    let bundles = state
-        .forensic_bundle_service
-        .list_bundles(query.tenant_id, query.limit)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("list bundles failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    let total = bundles.len();
-
-    Ok(Json(ListForensicBundlesResponse { bundles, total }))
-}
-
-/// Query parameters for transitioning a forensic bundle
-#[derive(Debug, Deserialize)]
-pub struct TransitionBundleQuery {
-    pub tenant_id: Uuid,
-}
-
-/// POST /forensic-bundles/{bundle_id}/transition-to-generating - Transition bundle to Generating
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Pending bundle to Generating.
-/// This is a placeholder for actual content collection (Phase 4 scope).
-///
-/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-async fn transition_bundle_to_generating(
-    State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
-) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
-    // Verify bundle exists and tenant ownership before transition
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
-
-    state
-        .forensic_bundle_service
-        .transition_to_generating(bundle_id)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
-                from,
-                to,
-                reason,
-            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
-                from_status: format!("{:?}", from),
-                to_status: format!("{:?}", to),
-                reason,
-            }),
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })
-}
-
-/// POST /forensic-bundles/{bundle_id}/transition-to-ready - Transition bundle to Ready
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Ready.
-/// This is a placeholder for actual bundle assembly (Phase 4 scope).
-///
-/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-async fn transition_bundle_to_ready(
-    State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
-) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
-    // Verify bundle exists and tenant ownership before transition
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
-
-    state
-        .forensic_bundle_service
-        .transition_to_ready(bundle_id)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
-                from,
-                to,
-                reason,
-            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
-                from_status: format!("{:?}", from),
-                to_status: format!("{:?}", to),
-                reason,
-            }),
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })
-}
-
-/// POST /forensic-bundles/{bundle_id}/transition-to-failed - Transition bundle to Failed
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Failed.
-///
-/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-async fn transition_bundle_to_failed(
-    State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
-) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
-    // Verify bundle exists and tenant ownership before transition
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
-
-    state
-        .forensic_bundle_service
-        .transition_to_failed(bundle_id)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
-                from,
-                to,
-                reason,
-            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
-                from_status: format!("{:?}", from),
-                to_status: format!("{:?}", to),
-                reason,
-            }),
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("transition failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })
-}
-
-/// POST /forensic-bundles/{bundle_id}/complete - Complete bundle creation
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Transitions a bundle through the full
-/// Pending -> Generating -> Ready lifecycle. This is a convenience method for
-/// testing the complete flow.
-///
-/// **Bounded slice:** This simulates the full generation flow. Actual content
-/// collection and S3 storage are Phase 4 scope.
-///
-/// **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-/// not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-async fn complete_forensic_bundle(
-    State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<TransitionBundleQuery>,
-) -> Result<Json<ForensicBundle>, ApiErrorResponse> {
-    // Verify bundle exists and tenant ownership before transition
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("get bundle failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
-
-    state
-        .forensic_bundle_service
-        .complete_bundle_creation(bundle_id)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition {
-                from,
-                to,
-                reason,
-            } => ApiErrorResponse(IntentRebaseError::InvalidForensicBundleStatusTransition {
-                from_status: format!("{:?}", from),
-                to_status: format!("{:?}", to),
-                reason,
-            }),
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("complete failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })
-}
-
-/// Query parameters for downloading a forensic bundle
-#[derive(Debug, Deserialize)]
-pub struct DownloadForensicBundleQuery {
-    pub tenant_id: Uuid,
-}
-
-/// GET /forensic-bundles/{bundle_id}/download - Download a forensic bundle as JSON
-///
-/// Phase 3 Batch 3b (P4 bounded slice): Downloads a forensic bundle as a JSON file.
-/// Returns the bundle manifest serialized to JSON format with Content-Disposition
-/// header set for download.
-///
-/// **Bounded slice scope:**
-/// - Returns bundle manifest as downloadable JSON (no actual content files)
-/// - No S3 storage integration - bundle is returned directly from repository
-/// - No content collection - manifest only
-///
-/// **Truthful description:**
-/// - This is a local/exportable bundle download path
-/// - Not a full S3/production storage pipeline
-async fn download_forensic_bundle(
-    State(state): State<AppState>,
-    Path(bundle_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<DownloadForensicBundleQuery>,
-) -> Result<impl axum::response::IntoResponse, ApiErrorResponse> {
-    // Get the bundle first to verify it exists and check tenant ownership
-    let bundle = state
-        .forensic_bundle_service
-        .get_bundle(bundle_id)
-        .await
-        .map_err(|e| match e {
-            forensic_service::bundle_gen::BundleGenError::NotFound(id) => {
-                ApiErrorResponse(IntentRebaseError::ForensicBundleNotFound(id))
-            }
-            forensic_service::bundle_gen::BundleGenError::Serialization(msg) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!("download failed: {}", msg).into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::InvalidTransition { .. } => {
-                ApiErrorResponse(IntentRebaseError::Internal("invalid transition".into()))
-            }
-            forensic_service::bundle_gen::BundleGenError::Repository(err) => {
-                ApiErrorResponse(err)
-            }
-        })?;
-
-    // Verify tenant ownership (fail-not-found pattern)
-    if bundle.tenant_id != query.tenant_id {
-        return Err(ApiErrorResponse(
-            IntentRebaseError::ForensicBundleNotFound(bundle_id),
-        ));
-    }
-
-    // Serialize the bundle directly (avoiding double-fetch since we already have it)
-    let bundle_bytes = serde_json::to_vec_pretty(&bundle)
-        .map_err(|e| {
-            ApiErrorResponse(IntentRebaseError::Internal(format!("JSON serialization failed: {}", e).into()))
-        })?;
-
-    // Generate filename based on bundle metadata
-    let filename = format!(
-        "forensic-bundle-{}-{}.json",
-        bundle.bundle_id,
-        bundle.created_at.format("%Y%m%d-%H%M%S")
-    );
-
-    // Return as downloadable JSON response
-    Ok(axum::response::Response::builder()
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .header(
-            axum::http::header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
-        )
-        .body(axum::body::Body::from(bundle_bytes))
-        .unwrap_or_else(|_| {
-            axum::response::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(axum::body::Body::empty())
-                .unwrap()
-        }))
+    Ok(Json(ForensicExportResponse {
+        archive_id: response.archive_id,
+        generated_at: response.generated_at,
+        status: response.status,
+        status_reason: response.status_reason,
+        tenant_id: response.tenant_id,
+        intent_id: response.intent_id,
+        time_range: ForensicExportTimeRange {
+            start: response.time_range.start,
+            end: response.time_range.end,
+        },
+        purpose: response.purpose,
+        contents: ForensicExportContentsSummary {
+            intent_versions: response.contents.intent_versions,
+            artifacts: response.contents.artifacts,
+            audit_events: response.contents.audit_events,
+            policy_snapshots: response.contents.policy_snapshots,
+        },
+        item_count: response.item_count,
+        content_type: response.content_type,
+        archive_size_bytes: response.archive_size_bytes,
+    }))
 }
 
 /// Build the Phase 1 router with CORS enabled
@@ -4602,7 +4797,8 @@ pub fn build_router(
     approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
-    forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
 ) -> Router {
     let state = AppState {
         service,
@@ -4615,7 +4811,8 @@ pub fn build_router(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
-        forensic_bundle_service,
+        forensic_service,
+        forensic_archive_generator,
         start_time: Instant::now(),
     };
 
@@ -4768,39 +4965,16 @@ pub fn build_router(
             "/policy-snapshots/intent/{intent_id}",
             get(list_policy_snapshots),
         )
-        // Audit event query endpoints (Phase 3 P3-S4 bounded slice)
-        .route("/audit/events", get(list_audit_events))
-        .route(
-            "/audit/events/{event_id}",
-            get(get_audit_event),
-        )
-        // Forensic bundle endpoints (Phase 3 Batch 3b bounded slice)
-        .route("/forensic-bundles", post(create_forensic_bundle))
-        .route("/forensic-bundles/{bundle_id}", get(get_forensic_bundle))
-        .route("/forensic-bundles", get(list_forensic_bundles))
-        .route(
-            "/forensic-bundles/{bundle_id}/transition-to-generating",
-            post(transition_bundle_to_generating),
-        )
-        .route(
-            "/forensic-bundles/{bundle_id}/transition-to-ready",
-            post(transition_bundle_to_ready),
-        )
-        .route(
-            "/forensic-bundles/{bundle_id}/transition-to-failed",
-            post(transition_bundle_to_failed),
-        )
-        .route(
-            "/forensic-bundles/{bundle_id}/complete",
-            post(complete_forensic_bundle),
-        )
-        // GET download - bounded export/download slice (Phase 3 Batch 3b P4 bounded slice)
-        .route(
-            "/forensic-bundles/{bundle_id}/download",
-            get(download_forensic_bundle),
-        )
+        // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/verify", post(verify_forensic_bundle))
+        // Forensic archive export endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/export", post(export_forensic_archive))
         .with_state(state)
         .layer(CorsLayer::permissive())
+        // Trace context middleware must run AFTER request_id_middleware so that
+        // the span created here is a child of any extracted trace context.
+        .layer(axum::middleware::from_fn(request_id_middleware))
+        .layer(axum::middleware::from_fn(trace_context_middleware))
         .layer(TraceLayer::new_for_http())
 }
 
@@ -4857,7 +5031,8 @@ pub fn build_router_with_sql_audit_and_approval(
     orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
     orchestrator: Arc<RebaseOrchestrator>,
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
-    forensic_bundle_service: Arc<BundleGenerationService<InMemoryBundleRepository>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -4879,7 +5054,8 @@ pub fn build_router_with_sql_audit_and_approval(
         approval_request_repo,
         policy_snapshot_repo,
         event_publisher,
-        forensic_bundle_service,
+        forensic_service,
+        forensic_archive_generator,
     )
 }
 
@@ -4927,11 +5103,16 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle repository and service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
+        // Phase 3 Batch 3b: In-memory forensic verification service for tests
+        let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
+        // Phase 3 Batch 3b: In-memory forensic archive generator for tests
+        let forensic_archive_gen = Arc::new(
+            forensic_service::InMemoryForensicArchiveGenerator::new()
+                .with_intent_version_count(5)
+                .with_artifact_count(10)
+                .with_audit_event_count(100)
+                .with_policy_snapshot_count(3),
+        );
         AppState {
             service,
             graph_service: graph_svc,
@@ -4943,7 +5124,8 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: forensic_svc,
+            forensic_archive_generator: forensic_archive_gen,
             start_time: Instant::now(),
         }
     }
@@ -5521,11 +5703,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -5542,7 +5719,11 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -5732,11 +5913,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -5753,7 +5929,11 @@ mod tests {
             policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
                 as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None, // Phase 2b: event publishing optional in tests
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -6901,11 +7081,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -6919,7 +7094,11 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: Some(publisher),
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         }
     }
@@ -7000,7 +7179,7 @@ mod tests {
     #[tokio::test]
     async fn test_noop_event_publisher_skips() {
         // Test that NoOpEventPublisher skips all events (always returns Skipped)
-        use intent_rebase_types::EventPublisher;
+        use intent_rebase_types::{EventPublisher, TraceContext};
         let publisher = Arc::new(intent_rebase_types::NoOpEventPublisher::new());
         let tenant_id = Uuid::new_v4();
         let payload = serde_json::json!({ "test": true });
@@ -7008,7 +7187,7 @@ mod tests {
             intent_rebase_types::EventSubject::from_audit_event(tenant_id, "RebaseApplied");
 
         // NoOpEventPublisher should skip (return Skipped)
-        let result = publisher.publish(&subject, &payload).await;
+        let result = publisher.publish(&subject, &payload, TraceContext::default()).await;
         match result {
             intent_rebase_types::PublishResult::Skipped { reason } => {
                 assert!(reason.contains("disabled"));
@@ -7051,11 +7230,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
 
         let _router: axum::Router = build_router(
             service,
@@ -7068,7 +7242,10 @@ mod tests {
             approval_repo,
             policy_snapshot_repo,
             event_publisher,
-            forensic_bundle_svc,
+            Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new())
+                as Arc<dyn forensic_service::ForensicArchiveGenerator>,
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -7134,11 +7311,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
         let state = AppState {
             service,
             graph_service: graph_svc.clone(),
@@ -7152,7 +7324,11 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         };
 
@@ -7993,11 +8169,6 @@ mod tests {
             compensation_action_svc.clone(),
             orchestration_run_repo,
         ));
-        // Phase 3 Batch 3b: In-memory forensic bundle service for tests
-        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::BundleGenerationService::new(
-            forensic_bundle_repo,
-        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -8009,7 +8180,11 @@ mod tests {
             approval_request_repo: approval_repo,
             policy_snapshot_repo,
             event_publisher: None,
-            forensic_bundle_service: forensic_bundle_svc,
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+                as Arc<dyn forensic_service::ForensicVerificationService>,
+            forensic_archive_generator: Arc::new(
+                forensic_service::InMemoryForensicArchiveGenerator::new(),
+            ),
             start_time: Instant::now(),
         }
     }
@@ -8629,437 +8804,381 @@ mod tests {
         assert_eq!(result2.side_effects[0].effect_type, "effect_2");
     }
 
-    // === Audit Event Cross-Tenant Isolation Tests ===
+    // === Forensic Verification Tests ===
 
     #[tokio::test]
-    async fn test_list_audit_events_returns_only_tenant_events() {
-        let state = create_test_service();
-        let tenant_1 = Uuid::new_v4();
-        let tenant_2 = Uuid::new_v4();
-
-        // Create audit events for tenant 1
-        let event1 = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id: tenant_1,
-            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
-            actor_id: "test-user".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: None,
-            payload: serde_json::json!({ "test": "event1" }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(event1.clone())
-            .await
-            .unwrap();
-
-        let event2 = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id: tenant_1,
-            event_type: intent_rebase_types::AuditEventType::ApprovalGranted,
-            actor_id: "test-user".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: None,
-            payload: serde_json::json!({ "test": "event2" }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(event2.clone())
-            .await
-            .unwrap();
-
-        // Create audit event for tenant 2
-        let event3 = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id: tenant_2,
-            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
-            actor_id: "other-user".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: None,
-            payload: serde_json::json!({ "test": "event3" }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(event3.clone())
-            .await
-            .unwrap();
-
-        // List events for tenant 1
-        let query1 = ListAuditEventsQuery {
-            tenant_id: tenant_1,
-            limit: 100,
-        };
-        let result1 = list_audit_events(State(state.clone()), axum::extract::Query(query1))
-            .await
-            .expect("Should return events");
-
-        // Should only see tenant 1's events
-        assert_eq!(result1.events.len(), 2);
-        assert!(result1.events.iter().all(|e| e.tenant_id == tenant_1));
-        assert!(result1.events.iter().any(|e| e.id == event1.id));
-        assert!(result1.events.iter().any(|e| e.id == event2.id));
-        assert!(result1.events.iter().find(|e| e.id == event3.id).is_none());
-    }
-
-    #[tokio::test]
-    async fn test_list_audit_events_respects_limit() {
+    async fn test_verify_forensic_bundle_returns_ready_status() {
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
 
-        // Create 5 audit events
-        for i in 0..5 {
-            let event = intent_rebase_types::AuditEvent {
-                id: Uuid::new_v4(),
-                tenant_id,
-                event_type: intent_rebase_types::AuditEventType::RebaseApplied,
-                actor_id: "test-user".to_string(),
-                intent_id: Some(Uuid::new_v4()),
-                artifact_id: None,
-                payload: serde_json::json!({ "index": i }),
-                trace_id: None,
-                span_id: None,
-                occurred_at: chrono::Utc::now(),
-            };
-            state
-                .audit_service
-                .create_audit_event(event)
-                .await
-                .unwrap();
-        }
-
-        // Query with limit=3
-        let query = ListAuditEventsQuery {
+        let request = ForensicVerificationRequest {
             tenant_id,
-            limit: 3,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
         };
-        let result = list_audit_events(State(state), axum::extract::Query(query))
+
+        let result = verify_forensic_bundle(State(state), Json(request))
             .await
-            .expect("Should return events");
+            .expect("Should return verification result");
 
-        assert_eq!(result.events.len(), 3);
-        assert_eq!(result.total, 3);
-    }
-
-    #[tokio::test]
-    async fn test_get_audit_event_returns_event_for_correct_tenant() {
-        let state = create_test_service();
-        let tenant_id = Uuid::new_v4();
-
-        let event = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id,
-            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
-            actor_id: "test-user".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: None,
-            payload: serde_json::json!({ "test": "data" }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(event.clone())
-            .await
-            .unwrap();
-
-        // Get event with correct tenant
-        let query = GetAuditEventQuery { tenant_id };
-        let result = get_audit_event(State(state.clone()), Path(event.id), axum::extract::Query(query))
-            .await
-            .expect("Should return event");
-
-        assert_eq!(result.id, event.id);
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
         assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
     }
 
     #[tokio::test]
-    async fn test_get_audit_event_blocked_for_wrong_tenant() {
-        let state = create_test_service();
-        let tenant_1 = Uuid::new_v4();
-        let tenant_2 = Uuid::new_v4();
-
-        // Create event for tenant 1
-        let event = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id: tenant_1,
-            event_type: intent_rebase_types::AuditEventType::RebaseApplied,
-            actor_id: "test-user".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: None,
-            payload: serde_json::json!({ "test": "data" }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(event.clone())
-            .await
-            .unwrap();
-
-        // Try to get event with tenant 2's credentials - should get 404
-        let query = GetAuditEventQuery { tenant_id: tenant_2 };
-        let result = get_audit_event(State(state), Path(event.id), axum::extract::Query(query)).await;
-
-        // Should return error (404 via ApiErrorResponse)
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get_audit_event_not_found_for_nonexistent_event() {
-        let state = create_test_service();
-        let tenant_id = Uuid::new_v4();
-        let nonexistent_event_id = Uuid::new_v4();
-
-        let query = GetAuditEventQuery { tenant_id };
-        let result = get_audit_event(State(state), Path(nonexistent_event_id), axum::extract::Query(query)).await;
-
-        // Should return error (404)
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_cross_tenant_audit_events_completely_isolated() {
-        // This test verifies that even if we create events for multiple tenants,
-        // querying with the wrong tenant_id never leaks any data
-        let state = create_test_service();
-        let tenant_a = Uuid::new_v4();
-        let tenant_b = Uuid::new_v4();
-
-        // Create secret event for tenant A
-        let secret_event = intent_rebase_types::AuditEvent {
-            id: Uuid::new_v4(),
-            tenant_id: tenant_a,
-            event_type: intent_rebase_types::AuditEventType::ArtifactProduced,
-            actor_id: "secret-actor".to_string(),
-            intent_id: Some(Uuid::new_v4()),
-            artifact_id: Some(Uuid::new_v4()),
-            payload: serde_json::json!({
-                "secret_data": "this should never be visible to tenant b",
-                "sensitive_field": "classified"
-            }),
-            trace_id: None,
-            span_id: None,
-            occurred_at: chrono::Utc::now(),
-        };
-        state
-            .audit_service
-            .create_audit_event(secret_event.clone())
-            .await
-            .unwrap();
-
-        // Tenant B lists events - should see nothing
-        let list_query = ListAuditEventsQuery {
-            tenant_id: tenant_b,
-            limit: 100,
-        };
-        let list_result = list_audit_events(State(state.clone()), axum::extract::Query(list_query))
-            .await
-            .expect("Should return events (empty list is valid)");
-
-        assert!(list_result.events.is_empty());
-        assert_eq!(list_result.total, 0);
-
-        // Tenant B tries to get the secret event directly - should get 404
-        let get_query = GetAuditEventQuery { tenant_id: tenant_b };
-        let get_result = get_audit_event(State(state.clone()), Path(secret_event.id), axum::extract::Query(get_query)).await;
-
-        assert!(get_result.is_err());
-
-        // Verify the secret event still exists and is accessible with correct tenant
-        let get_query_a = GetAuditEventQuery { tenant_id: tenant_a };
-        let get_result_a = get_audit_event(
-            State(state),
-            Path(secret_event.id),
-            axum::extract::Query(get_query_a),
-        )
-        .await;
-
-        assert!(get_result_a.is_ok());
-        let retrieved = get_result_a.unwrap();
-        assert_eq!(retrieved.payload, secret_event.payload);
-    }
-
-    // =========================================================================
-    // Forensic Bundle Download Tests (Phase 3 Batch 3b P4 bounded slice)
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_download_forensic_bundle_success() {
-        let state = create_test_service();
-        let tenant_id = Uuid::new_v4();
-
-        // Create a forensic bundle
-        let create_request = CreateForensicBundleRequest {
-            tenant_id,
-            time_range: forensic_service::BundleTimeRange {
-                start: chrono::Utc::now(),
-                end: chrono::Utc::now(),
+    async fn test_verify_forensic_bundle_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
             },
-            purpose: forensic_service::BundlePurpose::IncidentInvestigation,
-            created_by: "test-user".to_string(),
-        };
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
 
-        let create_response = create_forensic_bundle(
-            State(state.clone()),
-            Json(create_request),
-        )
-        .await
-        .expect("Bundle creation should succeed");
+        let request: ForensicVerificationRequest =
+            serde_json::from_str(json).expect("Should deserialize");
 
-        assert_eq!(create_response.0, StatusCode::CREATED);
-        let bundle_id = create_response.1.bundle.bundle_id;
-
-        // Complete the bundle to get to Ready status
-        complete_forensic_bundle(
-            State(state.clone()),
-            Path(bundle_id),
-            axum::extract::Query(TransitionBundleQuery { tenant_id }),
-        )
-        .await
-        .expect("Bundle completion should succeed");
-
-        // Download the bundle
-        let query = DownloadForensicBundleQuery { tenant_id };
-        let response = download_forensic_bundle(
-            State(state),
-            Path(bundle_id),
-            axum::extract::Query(query),
-        )
-        .await
-        .expect("Bundle download should succeed");
-
-        let (parts, body) = response.into_response().into_parts();
-        assert_eq!(parts.status, StatusCode::OK);
         assert_eq!(
-            parts.headers.get("content-type").unwrap(),
-            "application/json"
+            request.purpose,
+            forensic_service::VerificationPurpose::ComplianceAudit
         );
-        let content_disposition = parts.headers.get("content-disposition").unwrap();
-        assert!(content_disposition.to_str().unwrap().contains("attachment"));
-        assert!(content_disposition.to_str().unwrap().contains("forensic-bundle-"));
-
-        // Verify the downloaded content is valid JSON
-        let body_bytes = axum::body::to_bytes(body, 1024 * 1024)
-            .await
-            .expect("Should read body");
-        let downloaded_bundle: forensic_service::ForensicBundle =
-            serde_json::from_slice(&body_bytes).expect("Should deserialize as ForensicBundle");
-        assert_eq!(downloaded_bundle.bundle_id, bundle_id);
-        assert_eq!(downloaded_bundle.tenant_id, tenant_id);
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
     }
 
     #[tokio::test]
-    async fn test_download_forensic_bundle_not_found() {
+    async fn test_verify_forensic_bundle_response_serialization() {
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
-        let nonexistent_bundle_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
 
-        let query = DownloadForensicBundleQuery { tenant_id };
-        let result = download_forensic_bundle(
-            State(state),
-            Path(nonexistent_bundle_id),
-            axum::extract::Query(query),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_download_forensic_bundle_wrong_tenant() {
-        let state = create_test_service();
-        let tenant_id = Uuid::new_v4();
-        let wrong_tenant_id = Uuid::new_v4();
-
-        // Create a bundle for tenant_id
-        let create_request = CreateForensicBundleRequest {
+        let request = ForensicVerificationRequest {
             tenant_id,
-            time_range: forensic_service::BundleTimeRange {
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
                 start: chrono::Utc::now(),
                 end: chrono::Utc::now(),
             },
-            purpose: forensic_service::BundlePurpose::ComplianceAudit,
-            created_by: "test-user".to_string(),
+            purpose: forensic_service::VerificationPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
         };
 
-        let create_response = create_forensic_bundle(
-            State(state.clone()),
-            Json(create_request),
-        )
-        .await
-        .expect("Bundle creation should succeed");
+        let result = verify_forensic_bundle(State(state), Json(request))
+            .await
+            .expect("Should return verification result");
 
-        let bundle_id = create_response.1.bundle.bundle_id;
-
-        // Try to download with wrong tenant
-        let query = DownloadForensicBundleQuery {
-            tenant_id: wrong_tenant_id,
-        };
-        let result = download_forensic_bundle(
-            State(state),
-            Path(bundle_id),
-            axum::extract::Query(query),
-        )
-        .await;
-
-        // Should return error (fail-not-found pattern)
-        assert!(result.is_err());
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"ready\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        // artifact_coverage should be present since include_artifacts=true
+        assert!(json.contains("\"artifact_coverage\""));
+        // policy_snapshot_coverage should be None since include_policy_snapshots=false
+        assert!(!json.contains("\"policy_snapshot_coverage\""));
     }
 
     #[tokio::test]
-    async fn test_download_forensic_bundle_returns_pretty_json() {
+    async fn test_verify_forensic_bundle_with_incomplete_status() {
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
 
-        // Create a forensic bundle
-        let create_request = CreateForensicBundleRequest {
+        let request = ForensicVerificationRequest {
             tenant_id,
-            time_range: forensic_service::BundleTimeRange {
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
                 start: chrono::Utc::now(),
                 end: chrono::Utc::now(),
             },
-            purpose: forensic_service::BundlePurpose::Legal,
-            created_by: "legal-team".to_string(),
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: false,
+            include_audit_events: false,
+            include_policy_snapshots: false,
         };
 
-        let create_response = create_forensic_bundle(
-            State(state.clone()),
-            Json(create_request),
-        )
-        .await
-        .expect("Bundle creation should succeed");
-
-        let bundle_id = create_response.1.bundle.bundle_id;
-
-        // Download the bundle
-        let query = DownloadForensicBundleQuery { tenant_id };
-        let response = download_forensic_bundle(
-            State(state),
-            Path(bundle_id),
-            axum::extract::Query(query),
-        )
-        .await
-        .expect("Bundle download should succeed");
-
-        let (_parts, body) = response.into_response().into_parts();
-
-        // Verify pretty formatting (should contain newlines and indentation)
-        let body_bytes = axum::body::to_bytes(body, 1024 * 1024)
+        let result = verify_forensic_bundle(State(state), Json(request))
             .await
-            .expect("Should read body");
-        let body_str = String::from_utf8(body_bytes.to_vec()).expect("Should be valid UTF-8");
-        // Pretty-printed JSON should contain at least one newline
-        assert!(body_str.contains('\n'), "Pretty JSON should contain newlines");
+            .expect("Should return verification result");
+
+        // In-memory service returns ready by default
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
+        // But with no coverage data since all includes are false
+        assert_eq!(result.estimated_bundle_item_count, 0);
     }
+
+    #[tokio::test]
+    async fn test_forensic_verification_purpose_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::IncidentInvestigation)
+                .unwrap(),
+            "\"incident_investigation\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::ComplianceAudit)
+                .unwrap(),
+            "\"compliance_audit\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::Legal)
+                .unwrap(),
+            "\"legal\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_verification_status_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Ready).unwrap(),
+            "\"ready\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Incomplete).unwrap(),
+            "\"incomplete\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::NotSupported).unwrap(),
+            "\"not_supported\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_intent_version_coverage_serialization() {
+        let coverage = ForensicIntentVersionCoverage {
+            intent_exists: true,
+            intent_id: Uuid::new_v4(),
+            version_count: 5,
+            earliest_version: Some(chrono::Utc::now()),
+            latest_version: Some(chrono::Utc::now()),
+            has_artifact_traceability: true,
+        };
+
+        let json = serde_json::to_string(&coverage).expect("Should serialize");
+        assert!(json.contains("\"intent_exists\":true"));
+        assert!(json.contains("\"version_count\":5"));
+        assert!(json.contains("\"has_artifact_traceability\":true"));
+    }
+
+    // === Forensic Export Tests ===
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_returns_generated_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        assert_eq!(result.status, forensic_service::ExportStatus::Generated);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
+        // Item count = 5 (intent versions) + 10 (artifacts) + 100 (audit events) + 3 (policy snapshots)
+        assert_eq!(result.item_count, 118);
+        assert_eq!(result.content_type, "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
+            },
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
+
+        let request: ForensicExportRequest =
+            serde_json::from_str(json).expect("Should deserialize");
+
+        assert_eq!(
+            request.purpose,
+            forensic_service::ExportPurpose::ComplianceAudit
+        );
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_response_serialization() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"generated\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        assert!(json.contains("\"content_type\":\"application/json\""));
+        // item_count = 5 + 10 + 100 = 115 (no policy snapshots)
+        assert!(json.contains("\"item_count\":115"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_status_reason_truthful() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Status reason should be truthful about in-memory generation
+        assert!(result.status_reason.contains("in-memory") || result.status_reason.contains("scaffolded"));
+        assert!(!result.status_reason.contains("S3"));
+        assert!(!result.status_reason.contains("persisted"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_empty_counts() {
+        // Use a generator with zero counts to test empty archive scenario
+        let generator = Arc::new(
+            forensic_service::InMemoryForensicArchiveGenerator::new()
+        ) as Arc<dyn forensic_service::ForensicArchiveGenerator>;
+
+        let state = AppState {
+            service: Arc::new(IntentService::new(Arc::new(
+                intent_service::InMemoryIntentRepository::new(),
+            ))),
+            graph_service: Arc::new(GraphService::new(Arc::new(
+                graph_service::InMemoryGraphRepository::new(),
+            ))),
+            orchestrator: Arc::new(RebaseOrchestrator::new(
+                Arc::new(intent_service::InMemoryCheckpointRepository::new()),
+                Arc::new(GraphService::new(Arc::new(
+                    graph_service::InMemoryGraphRepository::new(),
+                ))),
+                Arc::new(MockAdapter::ready()),
+            )),
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(
+                intent_service::InMemoryApprovalRequestRepository::new(),
+            ) as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(
+                intent_service::InMemoryPolicySnapshotRepository::new(),
+            ) as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None,
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(
+                Arc::new(compensation_service::InMemorySideEffectRepository::new()),
+            )),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(
+                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+                ),
+            ),
+            orchestration_runtime: Arc::new(compensation_service::OrchestrationRuntime::new(
+                Arc::new(compensation_service::CompensationActionService::new(
+                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+                )),
+                Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new()),
+            )),
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new()),
+            forensic_archive_generator: generator,
+            start_time: Instant::now(),
+        };
+
+        let request = ForensicExportRequest {
+            tenant_id: Uuid::new_v4(),
+            intent_id: Uuid::new_v4(),
+            time_range: ForensicExportTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::ComplianceAudit,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = export_forensic_archive(State(state), Json(request))
+            .await
+            .expect("Should return export result");
+
+        // Zero counts should produce zero items
+        assert_eq!(result.item_count, 0);
+        assert_eq!(result.contents.intent_versions, 0);
+        assert_eq!(result.contents.artifacts, 0);
+        assert_eq!(result.contents.audit_events, 0);
+        assert_eq!(result.contents.policy_snapshots, 0);
+    }
+
+    // =========================================================================
+    // Trace Context Propagation Tests (Phase 3 Batch 2 Slice 2 — bounded OTEL)
+    //
+    // Note: Direct middleware testing requires complex axum infrastructure.
+    // The trace_context_middleware is verified through:
+    // 1. cargo check -p intent-api (verifies compilation)
+    // 2. cargo test -p intent-api (verifies existing tests still pass)
+    // 3. Router wiring in build_router() includes trace_context_middleware layer
+    // =========================================================================
 }

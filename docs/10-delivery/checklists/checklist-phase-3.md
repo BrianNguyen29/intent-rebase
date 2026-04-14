@@ -3,8 +3,8 @@
 **Exit Gate:** Phase 3 exit gate khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.  
-**Phase:** Phase 3  
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED, BATCH 3b BOUNDED VERIFICATION + EXPORT SLICES DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Batch 3b currently includes bounded forensic verification via `POST /forensic/verify` and bounded in-memory export metadata generation via `POST /forensic/export`; bundle generation from real services, storage, download-from-storage, and replay remain future scope. Formal planner/executor/retry/rollback record remains gated on Phase 2b exit. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.  
+**Phase:** Phase 3
 **Target Duration:** 6–10 tuần
 
 ---
@@ -278,33 +278,71 @@
 **P2-S3 Bounded Slice — Item 2-4 (bounded distributed tracing slice) Delivered**
 
 ```
-[x] SLO definitions (intent processing latency, rebase latency, approval wait time) ✅ P2-S2
+[~] SLO definitions (intent processing latency, rebase latency, approval wait time)
     Evidence:
-    - PR merged: <link>
-    - Doc: ../../09-operations/04-sre-and-slos.md (updated)
-    - Dashboard: Grafana SLO dashboard (intent-rebase-slo)
-    - Metrics defined: crates/intent-api/src/metrics.rs
+    - Doc: ../../09-operations/04-sre-and-slos.md (updated — Batch 2 Slice 1 + Slice 3)
+    - Note: Provisional targets explicitly marked not SRE-approved; SRE confirmation still open
+    - Doc: ../../09-operations/06-slo-dashboard.md (Grafana dashboard scaffold — 16 panels)
 
-[x] Alerting rules (warning, critical thresholds) ✅ P2-S2
+[x] Alerting rules (warning, critical thresholds) — Batch 2 Slice 3 ✅ P2-S2
     Evidence:
-    - PR merged: <link>
-    - Alert rules: infrastructure/local/prometheus/rules.yml
-    - Alertmanager config: infrastructure/local/alertmanager/alertmanager.yml
-    - Grafana datasource: infrastructure/local/grafana/provisioning/datasources/datasources.yml
+    - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (Prometheus alerting rules)
+    - Code: infrastructure/local/alertmanager/alertmanager.yml (Alertmanager config)
+    - Note: Local dev infrastructure only — not production-ready
 
-[x] Error budget tracking ✅ P2-S2
+[x] Bounded metrics instrumentation — Batch 2 Slice 3 ✅ P2-S2
     Evidence:
-    - Dashboard: infrastructure/local/grafana/provisioning/dashboards/error-budget-dashboard.json
-    - Runbook: ../../09-operations/05-runbooks.md (RB6, RB7, RB8, RB9 added)
-    - Metrics: intent_api_error_budget_remaining gauge per SLO
+    - Code: crates/intent-api/src/lib.rs (metrics_handler function, OnceLock lazy metric statics)
+    - Code: crates/intent-api/src/lib.rs (record_intent_version_created, record_rebase_preview_request, record_rebase_apply_request, record_diff_compute_duration, record_rebase_preview_duration, record_rebase_apply_duration)
+    - Metrics: intent_api_intent_version_created_total, intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total, intent_api_diff_compute_duration_seconds, intent_api_rebase_preview_duration_seconds, intent_api_rebase_apply_duration_seconds
+    - Note: Metric definitions scaffolded and actively recorded (metrics-exporter-prometheus 0.18.1 with metrics 0.24); full coverage across all flows remains future scope
 
-[x] Distributed tracing across all services (bounded P2-S3 slice — trace context propagated via existing AuditEvent trace_id/span_id fields) ✅ P2-S3
+[x] Runbooks for common failure scenarios — Batch 2 Slice 3
     Evidence:
-    - Code: crates/intent-api/src/trace_context.rs (trace context extraction helper)
-    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_*_with_trace methods)
-    - Code: crates/intent-api/src/lib.rs (trace context propagation in audit calls)
-    - Instrumented: RebaseApplied, RebaseApplyBlocked, ApprovalGranted, ApprovalRevoked, ApprovalExpired, ReplayInitiated events carry trace_id/span_id
-    - Note: Full OTLP/cross-service trace propagation is P2-S4+ scope
+    - Doc: docs/09-operations/05-runbooks.md (RB6-RB10)
+    - Runbooks: RB6 (rebase-stuck), RB7 (approval-backlog), RB8 (artifact-quarantine-fail), RB9 (compensation-timeout), RB10 (error-budget-burn)
+    - Doc: docs/09-operations/05-runbooks.md (On-Call Quick Reference table)
+
+[x] Error budget tracking dashboard + runbook — Batch 2 Slice 5 + Slice 7 ✅ P2-S2
+    Evidence:
+    - Doc: ../../09-operations/06-slo-dashboard.md (Row 6 — Error Budget Tracking: Panels 17–18 (1h), Panels 19–20 (6h), Panels 21–22 (3d))
+    - Code: infrastructure/local/grafana/provisioning/dashboards/slo-overview.json (version 3, new 6h and 3d burn-rate panels)
+    - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (6 new multi-window burn-rate alerting rules: PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d)
+    - Note: Bounded to 1h/6h/3d burn-rate stat panels and multi-window alerting for preview and apply paths; budget depletion forecasting, 30-day budget tracking, and production Alertmanager deployment remain future scope
+
+[x] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded OTEL propagation) ✅ P2-S3
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (request_id_middleware + RequestId extraction)
+    - Code: crates/intent-api/src/lib.rs (request_id_middleware wired in build_router)
+    - Code: crates/intent-api/src/lib.rs (init_tracing with optional OTLP export via OTEL_EXPORTER_OTLP_ENDPOINT)
+    - Code: crates/intent-api/src/lib.rs (trace_context_middleware for W3C trace-context extraction and response propagation)
+    - Code: crates/intent-api/src/lib.rs (trace_context_middleware wired in build_router)
+    - Code: crates/intent-api/src/lib.rs (background task span propagation with tracing::Instrument)
+    - Code: crates/intent-service/src/lib.rs (#[tracing::instrument] on create_intent, create_version, get_intent_head, compute_diff, compute_rebase_preview, compute_rebase_preview_with_graph)
+    - Code: crates/rebase-engine/src/lib.rs (#[tracing::instrument] on compute_diff_sync, compute_diff_with_risk_sync)
+    - Code: crates/compensation-service/src/orchestration_runtime.rs (#[tracing::instrument] on execute_run, process_single_action, handle_pending_action, handle_approved_action, handle_failed_action)
+    - Note: This delivers **bounded in-process OTEL propagation** — optional OTLP export (when env var is set), W3C trace-context extraction from inbound requests, traceparent/tracestate in responses, and background task span propagation. Cross-process trace propagation remains future scope.
+
+[x] Phase 3 bounded trace continuity slice (trace_id/span_id in audit events and published event envelopes)
+    Evidence:
+    - Code: crates/intent-rebase-types/src/trace_context.rs (TraceContext struct with trace_id/span_id, get_current_trace_context helper)
+    - Code: crates/intent-rebase-types/src/audit_repo.rs (record_* helper methods now accept TraceContext parameter)
+    - Code: crates/intent-rebase-types/src/event_publisher.rs (EventEnvelope and PublishedEvent now carry trace_id/span_id)
+    - Code: crates/intent-rebase-types/Cargo.toml (opentelemetry dependency added for trace context types)
+    - Tests: cargo test -p intent-rebase-types (41 tests pass)
+    - Note: Bounded to in-process audit/event boundaries. Cross-process propagation via Temporal gRPC, sqlx connection context, or NATS headers remains future scope.
+
+[x] Phase 3 bounded Temporal adapter tracing slice (local span correlation around Temporal gRPC calls)
+    Evidence:
+    - Code: crates/runtime-adapter/src/temporal_adapter.rs (#[tracing::instrument] on connect, get_checkpoints, send_rebase_signal, map_intent_to_checkpoint, replay_from_checkpoint, is_adapter_ready)
+    - Note: Bounded to local tracing span correlation — adds trace spans with relevant fields (intent_id, workflow_id, checkpoint_id, etc.) around Temporal adapter method calls. Does NOT implement gRPC metadata/traceparent injection into Temporal wire protocol; cross-process trace propagation via Temporal gRPC remains future scope.
+
+[x] Phase 3 bounded sqlx tracing slice (local span correlation around high-value sqlx repository transactions)
+    Evidence:
+    - Code: crates/intent-service/src/sqlx_repository.rs (explicit transaction spans using tracing::info_span and tracing::Instrument on create_intent_tx, create_version_with_occ)
+    - Code: crates/intent-service/src/sqlx_repository.rs (create_intent_tx wrapped in sqlx_repo.create_intent_tx span with intent_id field)
+    - Code: crates/intent-service/src/sqlx_repository.rs (create_version_with_occ wrapped in sqlx_repo.create_version_occ span with intent_id field)
+    - Note: Bounded to local tracing span correlation — adds trace spans with intent_id around sqlx transaction operations (create_intent_tx, create_version_with_occ). The sqlx `tracing` feature was attempted but conflicts with workspace dependency resolution (intent-rebase-types also depends on sqlx without that feature), so explicit spans are used instead. This provides local query/span correlation without Postgres-side trace comments or wire-level propagation. Does NOT implement cross-process trace propagation via sqlx connection context; that remains future scope.
 
 [~] Performance benchmarks: rebase latency p50/p95/p99 (local baseline captured; CI-averaged targets and load testing gated on P2 completion)
     Evidence:
@@ -398,6 +436,22 @@
     - Tests: cargo test -p forensic-service --all-features (66 tests pass total in forensic-service)
     - Note: Bounded slice delivers status tracking primitives and in-memory repository only. S3 storage, generation API, integrity verification, and replay are Phase 4 scope.
 
+[x] Forensic verification API: `POST /forensic/verify` (Phase 3 Batch 3b bounded slice)
+    Evidence:
+    - Code: crates/forensic-service/src/verification.rs (ForensicVerificationService, types)
+    - Code: crates/forensic-service/src/lib.rs (module exports)
+    - Code: crates/intent-api/src/lib.rs (handler, DTOs, route wiring)
+    - Tests: cargo test -p forensic-service --all-features
+    - Tests: cargo test -p intent-api --all-features (forensic verification tests)
+    - Doc: docs/04-api/openapi.yaml (Phase 3 Batch 3b section + path definition)
+    - Doc: docs/14-governance/10-forensic-bundle.md (bounded slice documentation)
+    - Doc: docs/10-delivery/09-completion-proposals-tracker.md (P4 updated)
+    - Note: Bounded request-driven verification only. Does NOT claim bundle generation, storage, retrieval, replay, or hash chain integrity.
+
+[ ] Forensic verification integration with real services (Phase 3 Batch 3b+)
+    Evidence:
+    - Code: forensic-service integration with intent-service, graph-service, audit-service
+
 [x] Bundle content collection primitives — P4 bounded slice (content collection + integrity hashing)
     Evidence:
     - Code: crates/forensic-service/src/bundle_hasher.rs (SHA-256 hashing, BundleIntegrityHash, ContentSectionHash, section hash input types)
@@ -405,6 +459,11 @@
     - Tests: cargo test -p forensic-service --all-features (66 tests pass — deterministic hashing, content counts, tamper detection)
     - Doc: docs/14-governance/10-forensic-bundle.md (updated scope marker)
     - Note: Bounded slice delivers content collection types (IntentVersionsForHash, ArtifactsForHash, ApprovalsForHash, AuditEventsForHash, PolicySnapshotsForHash) and deterministic SHA-256 integrity hashing. No S3 storage, no generation API, no replay.
+
+[ ] Bundle generation API: `POST /api/v1/forensic/bundle`
+    Evidence:
+    - Role: forensic-access
+    - Code: intent-api forensic endpoint
 
 [x] Bundle integrity verification (hash chain) — P4 bounded slice
     Evidence:
@@ -422,27 +481,36 @@
 
 [ ] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ already done in 5-1
     Evidence:
-    - Code: crates/forensic-service/src/bundle.rs
-    - Code: crates/forensic-service/src/bundle_contents.rs
-    - Schema: infrastructure/migrations/TBD
+    - Code: forensic-service replay engine
 
-[ ] Bundle generation: collect intent versions, artifacts, audit events, graph state — ✅ partially done (content collection primitives done; actual collection from services is Phase 4)
+[x] Bundle retention policy metadata (configurable per tenant, model-level evidence only — Phase 3 Batch 3b retention-evidence slice)
     Evidence:
-    - Code: forensic-service bundle builder
-
-[ ] Bundle generation API: `POST /forensic-bundles`
-    Evidence:
-    - Role: forensic-access
-    - Code: intent-api forensic endpoint
-
-[ ] Full bundle replay capability (replay bundle to reproduce state in runtime) — ✅ partially done (bounded verification surface delivered; full runtime replay is Phase 4 scope)
-    Evidence:
-    - Code: forensic-service replay engine (bounded verification surface)
+    - Code: crates/forensic-service/src/bundle.rs (BundleRetention struct, RetentionPolicy enum, retention field on ForensicBundle)
+    - Code: crates/forensic-service/src/bundle.rs (BundleRetention::new, BundleRetention::with_expiry helpers)
+    - Tests: cargo test -p forensic-service --all-features (retention metadata tests)
+    - Doc: docs/14-governance/10-forensic-bundle.md (retention policy metadata only — truthful scope)
+    - Note: **Truthful scope — model-level retention evidence only.** No S3 lifecycle enforcement, no background deletion jobs, no automatic expiry. Retention policy and expiry metadata are recorded on the bundle model. Actual S3 lifecycle rules (GLACIER after 30d, DEEP_ARCHIVE after 3650d) are future phase.
 
 [ ] Bundle retention policy (configurable per tenant, compliance)
     Evidence:
     - S3 lifecycle policies
 
+[x] Forensic archive export API: `POST /forensic/export` (Phase 3 Batch 3b bounded slice)
+    Evidence:
+    - Code: crates/forensic-service/src/export.rs (ForensicArchiveGenerator, types)
+    - Code: crates/forensic-service/src/lib.rs (module exports)
+    - Code: crates/intent-api/src/lib.rs (handler, DTOs, route wiring)
+    - Tests: cargo test -p forensic-service --all-features (export tests)
+    - Tests: cargo test -p intent-api --all-features (export endpoint tests)
+    - Doc: docs/04-api/openapi.yaml (forensic export path + schemas)
+    - Doc: docs/14-governance/10-forensic-bundle.md (bounded export documentation)
+    - Doc: docs/10-delivery/09-completion-proposals-tracker.md (P4 export status)
+    - Note: Bounded in-memory archive generation only. Does NOT claim persisted bundles, S3 storage, async jobs, or download-from-storage.
+
+[ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
+    Evidence:
+    - Code: intent-api stored export/download endpoint
+=======
 [x] Forensic bundle export: `GET /forensic-bundles/{bundle_id}/download` — P4 bounded slice
     Evidence:
     - Code: crates/forensic-service/src/bundle_gen.rs (download_bundle method)
@@ -451,6 +519,7 @@
     - Tests: cargo test -p intent-api --all-features (4 new tests: download_success, not_found, wrong_tenant, pretty_json)
     - OpenAPI: docs/04-api/openapi.yaml (GET /forensic-bundles/{bundle_id}/download endpoint + schemas)
     - Note: Bounded local/exportable download path - returns bundle manifest as downloadable JSON. No S3 integration. No content collection. Not a full production storage pipeline.
+>>>>>>> origin/main
 ```
 
 ---
@@ -478,11 +547,32 @@
     - Tests: cargo test -p intent-service --all-features (102 tests pass)
     - Note: Bounded slice delivers harness infrastructure and in-memory baseline numbers. Uses in-memory repositories only — does NOT include actual SQLx/PostgreSQL connection pool overhead. Actual performance targets, production DB connection sizing, and load testing remain gated on P5 full completion.
 
-[ ] Intent diff optimization (caching, parallel computation)
+[x] Batch 2 Slice 4: rebase-engine sync diff + plan benchmark (Phase 3 Batch 2)
     Evidence:
-    - PR merged: <link>
-    - Benchmark: diff computation < 100ms for typical intent
-    - Code: rebase-engine/diff_cache.rs
+    - Code: crates/rebase-engine/Cargo.toml (criterion dev-dependency)
+    - Code: crates/rebase-engine/benches/rebase_latency.rs
+    - Benchmark: compute_diff_sync, compute_diff_with_risk_sync, diff_and_plan_sync
+    - Results: ~490ns-2.6µs for diff, ~958ns-4.2µs for diff+plan (all far under 100ms target)
+    - Scope: sync CPU-bound only; no HTTP/API, no graph service, no DB queries
+
+[ ] Intent diff optimization (caching, parallel computation)
+
+[x] Batch 2 Slice 6: graph-service + intent-api (sync + HTTP server) + intent-service DB benchmark harnesses (live run)
+    Evidence:
+    - Code: crates/graph-service/Cargo.toml (criterion dev-dependency)
+    - Code: crates/graph-service/benches/graph_traversal.rs (BFS, path finding, cycle detection)
+    - Code: crates/intent-api/Cargo.toml (criterion + reqwest dev-dependencies)
+    - Code: crates/intent-api/benches/http_handlers.rs (diff compute, validation, intent service create, HTTP server with real requests)
+    - Code: crates/intent-service/Cargo.toml (criterion dev-dependency)
+    - Code: crates/intent-service/benches/db_operations.rs (live run with DATABASE_URL)
+    - Results: graph traversal all sizes pass; intent-api sync path passes; HTTP server benchmarks pass (~270µs health, ~370µs create_intent, ~390µs validate); DB benchmarks live (p50: 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions)
+    - Scope: in-memory graph benchmarks; sync HTTP handler path; HTTP server benchmarks with real requests (in-memory repos); live DB benchmarks against Postgres
+
+[~] Intent diff optimization (caching, parallel computation)
+    Evidence:
+    - Benchmark baseline captured: diff computation ~490ns-2.6µs (target < 100ms: MET)
+    - Code: rebase-engine/diff_cache.rs (not yet implemented)
+    - Note: Optimization may not be needed given observed baseline performance
 
 [ ] Graph traversal optimization (indexing, query optimization)
     Evidence:

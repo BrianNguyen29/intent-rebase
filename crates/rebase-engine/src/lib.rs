@@ -176,6 +176,7 @@ impl Default for RebaseEngine {
 }
 
 /// Compute diff directly without using RebaseEngine instance
+#[tracing::instrument(skip(from_version, to_version), fields(intent_id = %from_version.intent_id, from_version = from_version.version_number, to_version = to_version.version_number))]
 pub fn compute_diff_sync(
     from_version: &IntentVersion,
     to_version: &IntentVersion,
@@ -197,6 +198,7 @@ pub fn compute_diff_sync(
 }
 
 /// Compute diff with risk analysis directly without using RebaseEngine instance
+#[tracing::instrument(skip(from_version, to_version), fields(intent_id = %from_version.intent_id, from_version = from_version.version_number, to_version = to_version.version_number))]
 pub fn compute_diff_with_risk_sync(
     from_version: &IntentVersion,
     to_version: &IntentVersion,

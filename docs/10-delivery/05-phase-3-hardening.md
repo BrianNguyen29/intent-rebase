@@ -50,8 +50,8 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 1-6f | Status transition validation matrix | ✅ delivered (Phase 3 Batch 1 bounded execution slice). Explicit validation with fail-closed semantics. |
 | 1-7 | Compensation planner: generate compensation plan from side effects | ✅ delivered (Phase 3 Batch 1 bounded slice). Fail-closed on non-Rollback strategies or unsupported side effect types. Acknowledgment-only (does not reverse; confirms compensation was applied). |
 | 1-8 | Compensation executor: real rollback/acknowledgment logic | ✅ delivered (Phase 3 Batch 1 bounded four-executor slice). RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). Acknowledged success summaries (confirmed against side effect ledger; not reversed). All four executors fail closed on non-matching strategy/feasibility combos. S2 planner/executor alignment resolved: S2ExternalReversible routes to CounterAction+SemiAutomatic. |
-| 1-9 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | ✅ delivered (Phase 3 Batch 1 bounded slice). Acknowledgment-only events; fail-closed on unknown side effects. |
-| 1-10 | Failed → Pending reapproval path | ✅ delivered (Phase 3 Batch 1 bounded manual retry slice). POST /compensation-actions/{action_id}/reapprove with fail-closed policy gates. Only retryable errors AND remaining budget allow reapproval. |
+| 1-10 | Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) | ✅ delivered (Phase 3 Batch 1 bounded slice). Acknowledgment-only events; fail-closed on unknown side effects. |
+| 1-11 | Failed → Pending reapproval path | ✅ delivered (Phase 3 Batch 1 bounded manual retry slice). POST /compensation-actions/{action_id}/reapprove with fail-closed policy gates. Only retryable errors AND remaining budget allow reapproval. |
 
 ---
 
@@ -59,14 +59,116 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered, Slice 7 (multi-window burn-rate alerting) delivered`
+
+### Batch 2 Slice 1 (delivered)
+
 | Item | Description | Notes |
 |------|-------------|-------|
-| 2-1 | SLO definitions (intent processing latency, rebase latency, approval wait time) | Dashboard: Grafana SLO dashboard |
-| 2-2 | Alerting rules (warning, critical thresholds) | Alertmanager config; test alerts fire |
-| 2-3 | Error budget tracking dashboard + runbook | |
-| 2-4 | Distributed tracing across all services (full Phase 2 → Phase 3 trace) | OTel trace context across all service boundaries |
-| 2-5 | Performance benchmarks: rebase latency p50/p95/p99 | Target: p95 < 60s for low/medium risk |
-| 2-6 | Runbooks for: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout | Dry-run each runbook |
+| 2-1a | SLO definitions documented | `docs/09-operations/04-sre-and-slos.md` — provisional targets, awaiting SRE confirmation |
+| 2-1b | Grafana dashboard scaffold | `docs/09-operations/06-slo-dashboard.md` — 16 panels, all referencing metrics that require instrumentation |
+
+### Batch 2 Slice 2 (delivered — bounded OTEL propagation)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-4a | HTTP request-id extraction middleware | Extracts `X-Request-ID` header or generates UUID; stores in request extensions for downstream correlation |
+| 2-4b | Service method instrumentation | `#[tracing::instrument]` on key intent-service, rebase-engine, and compensation-service methods |
+| 2-4c | Optional OTLP export | OTLP export activated when `OTEL_EXPORTER_OTLP_ENDPOINT` env var is set; JSON logging fallback otherwise |
+| 2-4d | W3C trace-context propagation | Extracts `traceparent`/`tracestate` from inbound requests; adds to responses |
+| 2-4e | Background task span propagation | Spawned background work inherits current span context via `tracing::Instrument` |
+
+**Slice 2 scope (bounded/truthful):**
+- Request-id extraction middleware in intent-api HTTP layer ✅
+- `#[tracing::instrument]` on key service methods ✅
+- Optional OTLP export (activated via env var) ✅
+- W3C trace-context extraction and propagation (in-process only) ✅
+- Background task span propagation ✅
+- **NOT in scope for Slice 2:** Cross-process trace propagation, full distributed trace across service boundaries
+
+### Batch 2 Slice 3 (delivered — alerting rules + runbook foundation)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-2a | Alerting rules | `infrastructure/local/prometheus/rules/intent_api_alerts.yml` — warning/critical thresholds for availability and latency SLOs |
+| 2-2b | Alertmanager config | `infrastructure/local/alertmanager/alertmanager.yml` — placeholder receivers for local dev only |
+| 2-3 | Error budget runbook | `docs/09-operations/05-runbooks.md` RB10 — error budget burn rate runbook |
+| 2-6 | Runbooks | `docs/09-operations/05-runbooks.md` RB6-RB10 — rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn |
+| Metrics | Bounded metrics instrumentation (active emission) | `intent_api_intent_version_created_total`, `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_diff_compute_duration_seconds`, `intent_api_rebase_preview_duration_seconds`, `intent_api_rebase_apply_duration_seconds` — metric definitions scaffolded and actively recorded in intent-api (metrics-exporter-prometheus 0.18.1 with metrics 0.24) |
+
+**Slice 3 scope (bounded/truthful):**
+- Local dev alerting infrastructure (Prometheus, Alertmanager, Grafana) ✅
+- Bounded metrics instrumentation (definitions scaffolded, emission active with metrics-exporter-prometheus 0.18.1 + metrics 0.24) ✅
+- Runbook scenarios for common failure modes ✅
+- **NOT in scope for Slice 3:** Full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks
+
+### Batch 2 Slice 4 (delivered — rebase-engine sync benchmark)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-5a | Benchmark harness for rebase-engine | `crates/rebase-engine/benches/rebase_latency.rs` (criterion) |
+| 2-5b | Low/medium/high complexity benchmark cases | Sync diff + plan path; synthetic fixtures |
+| 2-5c | Benchmark results captured | ~490ns-4.2µs observed (target < 100ms: MET) |
+
+**Slice 4 scope (bounded/truthful):**
+- Sync CPU-bound rebase-engine diff + plan path only ✅
+- **NOT in scope:** Graph traversal benchmarks, DB query benchmarks, HTTP/API benchmarks, load testing
+
+### Batch 2 Slice 5 (delivered — error budget tracking panels)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-7a | Preview path 1h burn rate stat panel | `intent_api_rebase_preview_requests_total` — query: `sum(rate(...{status!="success"}[1h])) / sum(rate(...[1h]))` |
+| 2-7b | Apply path 1h burn rate stat panel | `intent_api_rebase_apply_requests_total` — same burn-rate query pattern |
+
+**Slice 5 scope (bounded/truthful):**
+- Preview + apply 1-hour burn rate stat panels backed by metrics emitted in Slice 3 ✅
+- **NOT in scope:** Multi-window burn-rate alerting (1h/6h/3d), budget depletion forecasting, 30-day budget tracking panel, SLO composite panels
+
+### Batch 2 Slice 7 (delivered — multi-window burn-rate alerting)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-7c | Preview path 1h burn-rate alert | `PreviewPathBurnRate1h` — 1h window, threshold 0.5%, for 10m |
+| 2-7d | Apply path 1h burn-rate alert | `ApplyPathBurnRate1h` — 1h window, threshold 1.0%, for 10m |
+| 2-7e | Preview path 6h burn-rate alert | `PreviewPathBurnRate6h` — 6h window, threshold 0.6%, for 30m |
+| 2-7f | Apply path 6h burn-rate alert | `ApplyPathBurnRate6h` — 6h window, threshold 1.2%, for 30m |
+| 2-7g | Preview path 3d burn-rate alert | `PreviewPathBurnRate3d` — 3d window, threshold 0.8%, for 2h |
+| 2-7h | Apply path 3d burn-rate alert | `ApplyPathBurnRate3d` — 3d window, threshold 1.6%, for 2h |
+| 2-7i | 6h burn-rate stat panels | Preview + apply path 6h burn-rate panels in Grafana dashboard |
+| 2-7j | 3d burn-rate stat panels | Preview + apply path 3d burn-rate panels in Grafana dashboard |
+
+**Slice 7 scope (bounded/truthful):**
+- Multi-window burn-rate alerting rules (1h/6h/3d) for preview and apply paths ✅
+- 6h and 3d burn-rate dashboard panels ✅
+- **NOT in scope:** Budget depletion forecasting, 30-day budget tracking panel, SLO composite panels, production Alertmanager deployment, SRE-approved production rollout
+
+### Batch 2 Slice 6 (delivered — graph + HTTP + DB benchmark harnesses)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-8a | Graph-service traversal benchmark | `crates/graph-service/benches/graph_traversal.rs` — BFS, path finding, cycle detection |
+| 2-8b | Intent-api sync path benchmark | `crates/intent-api/benches/http_handlers.rs` — diff compute, validation |
+| 2-8c | Intent-service DB benchmark harness (live) | `crates/intent-service/benches/db_operations.rs` — live run complete; p50 25ms create, 1.6ms version, <1ms get/list |
+
+**Slice 6 scope (bounded/truthful):**
+- Graph traversal: in-memory repository benchmarks (BFS, path finding, cycle detection across small/medium/large graphs) ✅
+- Intent-api sync path: diff compute, validation, intent service create ✅
+- Intent-api HTTP server: real HTTP requests against live axum server with in-memory repos ✅
+- Intent-service DB: live benchmark against Postgres; p50 25ms create, 1.6ms version, <1ms get/list ✅
+- **NOT in scope:** SQL-backed graph benchmarks, concurrent DB benchmarks, load testing
+
+### Batch 2 remaining work (not yet delivered)
+
+| Item | Description | Notes |
+|------|-------------|-------|
+| 2-1 (remainder) | SLO definitions — SRE approval gate | External SRE sign-off still open |
+| 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
+| 2-4 (remainder) | Distributed tracing across all services | Bounded in-process OTEL propagation delivered (Slice 2); Phase 3 bounded trace continuity slice delivers trace_id/span_id in audit events and published event envelopes; Phase 3 bounded Temporal adapter tracing slice delivers local tracing span correlation around Temporal gRPC calls; cross-process propagation **investigated and deferred** — Temporal SDK 0.2.0 lacks safe per-request gRPC metadata injection (shared `Arc<RwLock>` race on `Connection::set_headers`), sqlx lacks per-query context propagation, NATS publisher not yet implemented. Revisit when SDK support improves. |
+| 2-5 (remainder) | Graph traversal and DB query benchmarks | Graph traversal and DB benchmarks — both delivered |
+| 2-5 (remainder) | HTTP/API benchmarks | ✅ Delivered (real HTTP with in-memory repos); full production load testing remains future scope |
+| 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | ✅ Delivered (Slice 7); 1h/6h/3d windows for preview and apply paths |
+| 2-7 (remainder) | Budget depletion forecasting / 30-day budget panel | Future scope after single-window burn-rate panels are validated |
 
 ---
 

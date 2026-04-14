@@ -133,6 +133,7 @@ impl BundleGeneratorService {
             request.purpose,
             contents,
             &request.created_by,
+            None,
         );
         // Set to Generating since we have content
         bundle.status = BundleStatus::Generating;

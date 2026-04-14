@@ -102,6 +102,11 @@ Trả impact graph rút gọn để hiển thị UI.
 
 ## Implemented (Phase 3 P3-S4)
 
+## Planned / target-state resources
+
+The following resources are part of the broader design direction and may not exist yet in the current implementation. Check [`openapi.yaml`](./openapi.yaml) before integrating against them.
+
+### POST /side-effects/{side_effect_id}/compensate
 ### GET /audit/events
 Tenant-scoped audit event query. Returns all audit events for a tenant, ordered by occurred_at descending.
 

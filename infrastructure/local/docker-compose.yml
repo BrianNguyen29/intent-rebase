@@ -50,6 +50,11 @@ services:
       timeout: 5s
       retries: 5
 
+  # ============================================================
+  # Batch 2 Slice 3 — Observability Stack (local dev only)
+  # Not production-ready alerting infrastructure
+  # ============================================================
+
   # Intent API (scrape target for Prometheus)
   # Note: This expects intent-api to be running on port 8080
   # Run with: cargo run -p intent-api (from repo root)
@@ -79,6 +84,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus_data:/prometheus
     command:
@@ -87,6 +93,8 @@ services:
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     profiles:
       - observability

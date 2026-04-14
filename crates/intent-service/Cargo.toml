@@ -23,8 +23,8 @@ async-trait = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 [[bench]]
-name = "query_latency"
+name = "db_operations"
 harness = false

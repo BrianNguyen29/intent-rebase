@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning
+# Batch 2 Slice 3 — Grafana provisioning (local dev only)
+# References the dashboard scaffold in docs/09-operations/06-slo-dashboard.md
+apiVersion: 1
+
+providers:
+  - name: 'Intent Rebase SLO Overview'
+    orgId: 1
+    folder: 'SLOs'
+    folderUid: 'slos'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

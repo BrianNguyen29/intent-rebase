@@ -78,10 +78,7 @@ impl OrchestrationRuntime {
     /// 4. Records per-item results in the run
     /// 5. Marks run as Completed/CompletedWithErrors/Failed
     /// 6. Returns the completed run
-    ///
-    /// **Partial-success semantics:**
-    /// - Continues on per-item failures, records all outcomes
-    /// - Run status is Completed if all succeeded, CompletedWithErrors if some failed, Failed if all failed
+    #[tracing::instrument(skip(self))]
     pub async fn execute_run(
         &self,
         tenant_id: Uuid,
@@ -161,6 +158,7 @@ impl OrchestrationRuntime {
     /// Process a single action and return the result.
     ///
     /// Auto-decides using existing CompensationActionService methods.
+    #[tracing::instrument(skip(self))]
     async fn process_single_action(
         &self,
         tenant_id: Uuid,
@@ -197,6 +195,7 @@ impl OrchestrationRuntime {
     }
 
     /// Handle a Pending action: approve it.
+    #[tracing::instrument(skip(self))]
     async fn handle_pending_action(
         &self,
         action: CompensationAction,
@@ -229,6 +228,7 @@ impl OrchestrationRuntime {
     ///
     /// **Phase 3 Batch 1 P7:** Uses `is_service_executable()` which allows both
     /// Automatic (Rollback) and SemiAutomatic (CounterAction) combos to execute.
+    #[tracing::instrument(skip(self))]
     async fn handle_approved_action(
         &self,
         action: CompensationAction,
@@ -268,6 +268,7 @@ impl OrchestrationRuntime {
     }
 
     /// Handle a Failed action: reapprove if eligible.
+    #[tracing::instrument(skip(self))]
     async fn handle_failed_action(
         &self,
         action: CompensationAction,

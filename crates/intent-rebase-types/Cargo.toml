@@ -21,3 +21,8 @@ schemars = { workspace = true }
 validator = { workspace = true }
 sqlx = { workspace = true }
 sha2 = { workspace = true }
+
+# OpenTelemetry for trace context propagation (Phase 3 bounded trace continuity slice)
+# Using opentelemetry instead of tracing-opentelemetry to keep dependency minimal.
+# This gives us the trace context types without the heavier tracing integration.
+opentelemetry = { workspace = true }
