@@ -410,6 +410,14 @@
     Evidence:
     - Code: forensic-service replay engine
 
+[x] Bundle retention policy metadata (configurable per tenant, model-level evidence only — Phase 3 Batch 3b retention-evidence slice)
+    Evidence:
+    - Code: crates/forensic-service/src/bundle.rs (BundleRetention struct, RetentionPolicy enum, retention field on ForensicBundle)
+    - Code: crates/forensic-service/src/bundle.rs (BundleRetention::new, BundleRetention::with_expiry helpers)
+    - Tests: cargo test -p forensic-service --all-features (retention metadata tests)
+    - Doc: docs/14-governance/10-forensic-bundle.md (retention policy metadata only — truthful scope)
+    - Note: **Truthful scope — model-level retention evidence only.** No S3 lifecycle enforcement, no background deletion jobs, no automatic expiry. Retention policy and expiry metadata are recorded on the bundle model. Actual S3 lifecycle rules (GLACIER after 30d, DEEP_ARCHIVE after 3650d) are future phase.
+
 [ ] Bundle retention policy (configurable per tenant, compliance)
     Evidence:
     - S3 lifecycle policies

@@ -178,9 +178,17 @@ forensic-bundle-{bundle_id}/
     "manifest_hash": "sha256:abc123...",
     "chain_verified": true,
     "verification_timestamp": "2025-04-03T12:00:00Z"
+  },
+  "retention": {
+    "policy": "cold",
+    "expires_at": null,
+    "retention_set_at": "2025-04-03T12:00:00Z",
+    "retention_set_by": "system"
   }
 }
 ```
+
+> **Truthful retention scope — model-level evidence only.** The `retention` field records the intended retention policy and expiry metadata. Actual S3 lifecycle enforcement (GLACIER after 30d, DEEP_ARCHIVE after 3650d), background deletion jobs, and automatic expiry are NOT implemented. These are future phase scope.
 
 ---
 
