@@ -164,7 +164,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 |------|-------------|-------|
 | 2-1 (remainder) | SLO definitions — SRE approval gate | External SRE sign-off still open |
 | 2-2 (remainder) | Production alerting deployment | Local dev infrastructure only — production requires SRE confirmation |
-| 2-4 (remainder) | Distributed tracing across all services | Full OTel trace context — not started; Slice 2 delivers foundation only |
+| 2-4 (remainder) | Distributed tracing across all services | Bounded in-process OTEL propagation delivered (Slice 2); cross-process propagation remains future scope |
 | 2-5 (remainder) | Graph traversal and DB query benchmarks | Graph traversal and DB benchmarks — both delivered |
 | 2-5 (remainder) | HTTP/API benchmarks | ✅ Delivered (real HTTP with in-memory repos); full production load testing remains future scope |
 | 2-7 (remainder) | Multi-window burn-rate alerting (1h/6h/3d) | ✅ Delivered (Slice 7); 1h/6h/3d windows for preview and apply paths |
