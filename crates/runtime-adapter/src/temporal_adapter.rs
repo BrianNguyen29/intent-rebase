@@ -79,7 +79,6 @@ impl Default for TemporalAdapterConfig {
 ///
 /// Local tracing span correlation is provided via `#[tracing::instrument]` on
 /// all adapter methods. This limitation is tracked as a future-scope item.
-
 #[derive(Clone)]
 pub struct TemporalAdapter {
     client: Client,

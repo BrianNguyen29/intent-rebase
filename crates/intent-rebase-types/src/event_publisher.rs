@@ -11,6 +11,7 @@
 //!   is Phase 3.
 //! - **Bounded trace continuity**: Phase 3 adds trace_id/span_id to `EventEnvelope` and
 //!   `PublishedEvent` for in-process trace correlation. Cross-process propagation is future scope.
+//! - **W3C trace-context injection into outbound NATS messages
 //!
 //! ## Subject Naming Convention (Phase 2b bounded slice)
 //!
@@ -35,7 +36,6 @@
 //! - Dead-letter queue (DLQ) for failed event processing
 //! - Full consumer startup wiring and lifecycle management
 //! - Consumer groups and parallel processing
-//! - W3C trace-context injection into outbound NATS messages
 
 use async_trait::async_trait;
 use serde::Serialize;

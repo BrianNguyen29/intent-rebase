@@ -371,7 +371,7 @@ impl IntentService {
     /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
     ///   This allows clients to detect concurrent modifications and retry.
     ///
-    /// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
+/// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
     /// cancel any pending approval requests for the intent when a new version is created.
     #[tracing::instrument(skip(self))]
     pub async fn create_version(
@@ -1470,6 +1470,7 @@ mod tests {
 
     fn create_test_request() -> CreateIntentRequest {
         CreateIntentRequest {
+            tenant_id: None,
             workflow_id: Uuid::new_v4(),
             source_refs: vec![SourceRef {
                 ref_type: "spec".to_string(),

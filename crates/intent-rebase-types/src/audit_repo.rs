@@ -25,6 +25,14 @@ pub trait AuditRepository: Send + Sync {
     /// Persist an audit event
     async fn create_audit_event(&self, event: AuditEvent) -> Result<(), IntentRebaseError>;
 
+    /// Get a single audit event by ID (tenant-scoped).
+    /// Returns Err(ArtifactNotFound) if event doesn't exist or belongs to a different tenant.
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError>;
+
     /// List audit events by intent (ordered by occurred_at descending)
     async fn list_by_intent(
         &self,
@@ -52,6 +60,20 @@ pub trait AuditRepository: Send + Sync {
         payload: RebaseApplyAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_rebase_applied_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record a RebaseApplied audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_rebase_applied_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: RebaseApplyAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -62,8 +84,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -80,6 +102,20 @@ pub trait AuditRepository: Send + Sync {
         payload: RebaseApplyBlockedAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_rebase_apply_blocked_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record a RebaseApplyBlocked audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_rebase_apply_blocked_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: RebaseApplyBlockedAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -90,8 +126,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -108,6 +144,20 @@ pub trait AuditRepository: Send + Sync {
         payload: ApprovalGrantedAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_approval_granted_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record an ApprovalGranted audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_approval_granted_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalGrantedAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -118,8 +168,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -136,6 +186,20 @@ pub trait AuditRepository: Send + Sync {
         payload: ApprovalRevokedAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_approval_revoked_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record an ApprovalRevoked audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_approval_revoked_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalRevokedAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -146,8 +210,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -194,6 +258,20 @@ pub trait AuditRepository: Send + Sync {
         payload: ApprovalExpiredAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_approval_expired_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record an ApprovalExpired audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_approval_expired_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalExpiredAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -204,8 +282,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -224,6 +302,20 @@ pub trait AuditRepository: Send + Sync {
         payload: ReplayAuditPayload,
         trace_context: TraceContext,
     ) -> Result<(), IntentRebaseError> {
+        self.record_replay_initiated_with_trace(tenant_id, actor_id, intent_id, payload, trace_context.trace_id, trace_context.span_id)
+            .await
+    }
+
+    /// Record a ReplayInitiated audit event with explicit trace context (P2-S3 bounded slice)
+    async fn record_replay_initiated_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ReplayAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             tenant_id,
@@ -234,8 +326,8 @@ pub trait AuditRepository: Send + Sync {
             payload: serde_json::to_value(payload).map_err(|e| {
                 IntentRebaseError::SerializationError(format!("audit payload: {}", e))
             })?,
-            trace_id: trace_context.trace_id,
-            span_id: trace_context.span_id,
+            trace_id: trace_id,
+            span_id: span_id,
             occurred_at: Utc::now(),
         };
         self.create_audit_event(event).await
@@ -443,6 +535,25 @@ impl AuditRepository for InMemoryAuditRepository {
         Ok(())
     }
 
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError> {
+        let events = self.events.read().await;
+        let event = events
+            .get(&event_id)
+            .cloned()
+            .ok_or(IntentRebaseError::ArtifactNotFound(event_id))?;
+
+        // Tenant isolation: ensure the event belongs to the requesting tenant
+        if event.tenant_id != tenant_id {
+            return Err(IntentRebaseError::ArtifactNotFound(event_id));
+        }
+
+        Ok(event)
+    }
+
     async fn list_by_intent(
         &self,
         intent_id: Uuid,
@@ -562,6 +673,31 @@ impl SqlxAuditRepository {
 impl AuditRepository for SqlxAuditRepository {
     async fn create_audit_event(&self, event: AuditEvent) -> Result<(), IntentRebaseError> {
         self.insert_event(&event).await
+    }
+
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+                payload, trace_id, span_id, occurred_at
+            FROM audit_events
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(event_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("get audit event: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_event(r),
+            None => Err(IntentRebaseError::ArtifactNotFound(event_id)),
+        }
     }
 
     async fn list_by_intent(

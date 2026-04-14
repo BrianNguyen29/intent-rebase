@@ -1,5 +1,6 @@
 # Prometheus configuration for local development
 # Batch 2 Slice 3 — alerting rules foundation (local dev only)
+
 global:
   scrape_interval: 15s
   evaluation_interval: 15s

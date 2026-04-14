@@ -80,3 +80,23 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Build workspace
         run: cargo build --workspace --release
+
+  # Bounded benchmark slice: runs criterion benchmarks and uploads reports.
+  # This verifies the benchmark harness infrastructure; actual performance targets
+  # and production load testing remain gated on P2 completion (Phase 3 Batch 2).
+  bench:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Run benchmarks
+        run: cargo bench -p rebase-engine
+      - name: Upload criterion reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports
+          path: crates/rebase-engine/target/criterion/**/report/
+          retention-days: 30

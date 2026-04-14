@@ -318,9 +318,33 @@ GET /api/v1/forensic/bundle/{bundle_id}:
 
 ## Bundle Replay
 
-### Replay Capability
+### Bounded Replay Capability (P4 Bounded Slice)
 
-Forensic bundles can be replayed to reproduce system state:
+This implementation provides a **bounded replay verification surface**:
+
+```
+1. Load bundle manifest
+2. Verify bundle integrity against recorded hashes
+3. Generate reconstruction report (per-section verification results)
+4. Provide human-readable verification summary
+```
+
+**What This IS:**
+- Verification: Confirm that a bundle's recorded integrity hashes match the content
+- Reconstruction report: Summary of what the bundle contains and how it validates
+- Audit trail: Provides evidence of bundle completeness for investigators
+- Read-only and isolated: No production data is modified
+
+**What This IS NOT (Phase 4 Scope):**
+- **Not runtime replay**: Does NOT reconstruct system state or replay events in a live system
+- **Not mutation**: Does NOT modify any production data or state
+- **Not S3 storage**: Does NOT handle bundle storage or retrieval from cloud
+- **Not export**: Does NOT provide download or export functionality
+- **Not full replay**: Does NOT execute events or reconstruct graph state
+
+### Full Replay Environment (Phase 4)
+
+Full forensic replay requires runtime adapter integration:
 
 ```
 1. Load bundle manifest
@@ -330,8 +354,6 @@ Forensic bundles can be replayed to reproduce system state:
 5. Replay audit events (in order)
 6. Validate end state matches original
 ```
-
-### Replay Environment
 
 - Replay must occur in isolated, non-production environment
 - Replay is read-only (no production data modified)

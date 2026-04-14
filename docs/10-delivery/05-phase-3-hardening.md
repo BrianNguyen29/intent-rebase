@@ -174,20 +174,16 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 ## Batch 3 — Tenant Isolation + Forensic (Gated: Phase 2b Complete)
 
----
-
-## Batch 3 — Tenant Isolation + Forensic (Gated: Phase 2b Complete)
-
 *Gate: Phase 2b exit gate confirmed. No hard dependency on Batch 1/2 but benefits from them.*
 
 | Item | Description | Notes |
 |------|-------------|-------|
-| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | |
-| 3-2 | Resource quota enforcement (intents per tenant, artifacts per tenant) | |
-| 3-3 | Tenant-specific rule pack isolation | |
-| 3-4 | Tenant audit log separation | S3 tenant-scoped buckets/prefixes |
-| 3-5 | Data residency: tenant data stays in assigned region | Update threat model |
-| 3-6 | Tenant onboarding/offboarding procedures documented | |
+| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | Not started — future phase scope |
+| 3-2 | Resource quota enforcement (intents per tenant, artifacts per tenant) | Not started — future phase scope |
+| 3-3 | Tenant-specific rule pack isolation | ✅ P3-S3 bounded slice delivered — TenantRulePackRepository trait + InMemory impl; 8 tenant isolation tests passing. Full upload/management API and S3 integration remain future phase scope. |
+| 3-4 | Tenant audit log separation | ✅ P3-S4 bounded slice delivered — tenant-scoped audit query API (GET /audit/events, GET /audit/events/{event_id}); cross-tenant isolation tests passing. S3 cold storage and archival remain Phase 4+ scope. |
+| 3-5 | Data residency: tenant data stays in assigned region | Not started — future phase scope; update threat model |
+| 3-6 | Tenant onboarding/offboarding procedures documented | ~ P3-S5 bounded slice delivered (skeleton/runner only) — tenant-service scaffold (Tenant model + repository + InMemory impl), tenant onboarding procedure skeleton in `09-operations/06-tenant-onboarding.md`. Full API, S3 bucket provisioning, NATS account creation, and RBAC setup remain future phase scope. |
 | 3-7 | Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) | |
 | 3-8 | Bundle generation: collect intent versions, artifacts, audit events, graph state | S3: `forensic-bundles/{tenant}/{bundle_id}/` |
 | 3-9 | Bundle generation API: `POST /api/v1/forensic/bundle` | Role: `forensic-access` |

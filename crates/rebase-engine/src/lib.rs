@@ -11,6 +11,7 @@ pub mod diff;
 pub mod planner;
 pub mod risk;
 pub mod rule_pack;
+pub mod rule_pack_registry;
 pub mod rules;
 
 use intent_rebase_types::{IntentRebaseError, IntentVersion};
@@ -26,6 +27,9 @@ pub use planner::{
 };
 pub use risk::{DiffRiskAnalysis, ManualReviewReason, RiskConfig, Severity};
 pub use rule_pack::{RulePack, RulePackVersion, DEFAULT_RULE_PACK};
+pub use rule_pack_registry::{
+    InMemoryTenantRulePackRepository, RulePackRegistryError, TenantRulePackRepository,
+};
 pub use rules::{analyze_diff_risk, analyze_diff_risk_with_config};
 
 /// RebaseEngine computes semantic diffs and generates rebase plans

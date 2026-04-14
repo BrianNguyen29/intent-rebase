@@ -23,6 +23,7 @@ Bộ tài liệu này định nghĩa các tiêu chuẩn về **audit, governance
 | [11](./11-incident-freeze.md) | Incident Freeze | P2+ | Data freeze during incident investigation |
 | [12](./12-replay-compatibility.md) | Replay Compatibility | P2+ | Replay guarantees và compatibility |
 | [13](./13-residual-risk-spec.md) | Residual Risk Specification | P3 | Risk acceptance và residual risk tracking |
+| [14](./14-incident-response-plan.md) | Incident Response Plan | P2+ | End-to-end incident response process |
 
 ---
 

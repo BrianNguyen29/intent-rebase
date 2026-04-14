@@ -120,4 +120,37 @@ pub enum IntentRebaseError {
     /// Phase 3 Batch 1: Side effect rollback record not found
     #[error("rollback record not found: {0}")]
     RollbackRecordNotFound(Uuid),
+
+    /// Phase 3 Batch 3a (P3-S2 bounded slice): Tenant quota exceeded
+    #[error(
+        "quota exceeded: tenant {tenant_id} has {current}/{limit} {resource} (limit: {limit})"
+    )]
+    QuotaExceeded {
+        tenant_id: Uuid,
+        resource: String,
+        current: i32,
+        limit: i32,
+    },
+
+    /// Phase 3 P3-S5: Tenant not found by ID
+    #[error("tenant not found: {0}")]
+    TenantNotFound(Uuid),
+
+    /// Phase 3 P3-S5: Tenant not found by slug
+    #[error("tenant not found with slug: {0}")]
+    TenantNotFoundBySlug(String),
+
+    /// Phase 3 Batch 3b (P4 bounded slice): Forensic bundle not found
+    #[error("forensic bundle not found: {0}")]
+    ForensicBundleNotFound(Uuid),
+
+    /// Phase 3 Batch 3b (P4 bounded slice): Invalid forensic bundle status transition
+    #[error(
+        "invalid forensic bundle status transition from {from_status} to {to_status}: {reason}"
+    )]
+    InvalidForensicBundleStatusTransition {
+        from_status: String,
+        to_status: String,
+        reason: String,
+    },
 }

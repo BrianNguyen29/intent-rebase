@@ -11,7 +11,7 @@
 Define and verify tenant isolation guarantees to ensure:
 - **No cross-tenant data access** — intentional or accidental
 - **No cross-tenant data leakage** — in logs, metrics, or exports
-- **No cross-tenant interference** — resource consumption隔离
+- **No cross-tenant interference** — resource consumption
 
 ---
 
@@ -87,7 +87,78 @@ ire-artifacts/
 }
 ```
 
-### Layer 4: NATS Isolation
+### Layer 4: Rule Pack Registry Isolation (P3-S3 bounded slice)
+
+```rust
+// Tenant-scoped rule pack repository trait
+pub trait TenantRulePackRepository: Send + Sync {
+    async fn list_packs(&self, tenant_id: Uuid, status: Option<RulePackStatus>) -> Result<Vec<RulePack>, RulePackRegistryError>;
+    async fn get_pack(&self, tenant_id: Uuid, version: &RulePackVersion) -> Result<RulePack, RulePackRegistryError>;
+    async fn get_active_pack(&self, tenant_id: Uuid) -> Result<RulePack, RulePackRegistryError>;
+    async fn create_pack(&self, tenant_id: Uuid, pack: RulePack) -> Result<RulePack, RulePackRegistryError>;
+    async fn update_pack_status(&self, tenant_id: Uuid, version: &RulePackVersion, status: RulePackStatus) -> Result<RulePack, RulePackRegistryError>;
+    async fn list_versions(&self, tenant_id: Uuid) -> Result<Vec<RulePackVersion>, RulePackRegistryError>;
+}
+
+// In-memory implementation for testing
+pub struct InMemoryTenantRulePackRepository {
+    packs: RwLock<HashMap<Uuid, HashMap<RulePackVersion, RulePack>>>,
+}
+
+// Isolation: all methods require tenant_id; cross-tenant access returns NotFound
+```
+
+**P3-S3 bounded slice delivered:**
+- `crates/rebase-engine/src/rule_pack_registry.rs` — registry primitives (trait + InMemory impl)
+- `crates/rebase-engine/src/rule_pack.rs` — `RulePackVersion` now derives `Hash`
+- 8 tenant isolation tests passing in `cargo test -p rebase-engine --all-features`
+
+**Out of scope for this slice:**
+- Full upload/management API (Phase 4+)
+- S3/object storage integration
+- Rule evaluation engine rewiring
+
+### Layer 6: Tenant Service (P3-S5 bounded slice)
+
+```rust
+// Tenant repository trait
+#[async_trait]
+pub trait TenantRepository: Send + Sync {
+    async fn create(&self, tenant: Tenant) -> Result<Tenant, IntentRebaseError>;
+    async fn get(&self, tenant_id: Uuid) -> Result<Tenant, IntentRebaseError>;
+    async fn get_by_slug(&self, slug: &str) -> Result<Tenant, IntentRebaseError>;
+    async fn list_by_status(&self, status: TenantStatus) -> Result<Vec<Tenant>, IntentRebaseError>;
+    async fn update_status(&self, tenant_id: Uuid, new_status: TenantStatus) -> Result<Tenant, IntentRebaseError>;
+    async fn list_all(&self, limit: Option<usize>) -> Result<Vec<Tenant>, IntentRebaseError>;
+}
+
+// Tenant model with status lifecycle
+pub struct Tenant {
+    pub id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub status: TenantStatus,
+    pub region: TenantRegion,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+**P3-S5 bounded slice delivered:**
+- `crates/tenant-service/src/lib.rs` — service scaffold with re-exports
+- `crates/tenant-service/src/tenant.rs` — `Tenant` model, `TenantStatus` enum, `TenantRegion` enum
+- `crates/tenant-service/src/tenant_repo.rs` — `TenantRepository` trait + `InMemoryTenantRepository` implementation
+- `crates/intent-rebase-types/src/error.rs` — `TenantNotFound` and `TenantNotFoundBySlug` error variants
+- Tests: `cargo test -p tenant-service --all-features` (15 tests pass)
+
+**Out of scope for this slice:**
+- SQL persistence (`SqlxTenantRepository` — future phase)
+- Public API endpoints for tenant CRUD (future phase)
+- Residency enforcement/routing (future phase)
+- Offboarding deletion orchestration (future phase)
+- Quota enforcement (future phase)
+
+### Layer 5: NATS Isolation
 
 ```
 # NATS subjects are tenant-scoped
@@ -98,6 +169,47 @@ rebase.signals.{tenant_id}.>
 consumer: {tenant_id}-audit-consumer
 filter subject: audit.events.v1.{tenant_id}.>
 ```
+
+### Layer 7: Audit Query API Isolation (P3-S4 bounded slice)
+
+```rust
+// Tenant-scoped audit repository trait
+#[async_trait]
+pub trait AuditRepository: Send + Sync {
+    /// Get a single audit event by ID (tenant-scoped).
+    /// Returns Err(ArtifactNotFound) if event doesn't exist or belongs to a different tenant.
+    async fn get_audit_event(
+        &self,
+        event_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<AuditEvent, IntentRebaseError>;
+
+    /// List audit events by tenant (ordered by occurred_at descending)
+    async fn list_by_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, IntentRebaseError>;
+}
+
+// API endpoints enforce tenant scoping
+// GET /audit/events?tenant_id=xxx&limit=yyy - list events for tenant
+// GET /audit/events/{event_id}?tenant_id=xxx - get single event (404 if wrong tenant)
+```
+
+**P3-S4 bounded slice delivered:**
+- `crates/intent-rebase-types/src/audit_repo.rs` — `get_audit_event` method added to trait
+- `crates/intent-api/src/lib.rs` — `GET /audit/events` and `GET /audit/events/{event_id}` endpoints
+- `crates/intent-api/src/lib.rs` — Cross-tenant isolation tests verifying:
+  - Tenant A's events are not visible in Tenant B's queries
+  - `GET /audit/events/{event_id}` returns 404 for wrong tenant
+  - `GET /audit/events` returns only tenant's own events
+- Tests: `cargo test -p intent-api --all-features` (cross-tenant audit tests pass)
+
+**Out of scope for this slice:**
+- S3 cold storage and archival (Phase 4+)
+- Cross-service audit streaming via NATS consumers
+- Audit event retention/lifecycle policies
 
 ---
 

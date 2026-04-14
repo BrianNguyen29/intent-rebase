@@ -12,7 +12,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
-| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4 delivered) | High |
+| [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7, Slice 8, Slice 9 delivered) | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
@@ -62,7 +62,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Cross-process trace propagation investigated and deferred (SDK limitation); production load testing; SRE approval gate |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace-context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths (PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d), 6h and 3d burn-rate dashboard panels in Grafana. Batch 2 Slice 8 (bounded Temporal adapter tracing) delivered: local tracing span correlation around Temporal adapter method calls (connect, get_checkpoints, send_rebase_signal, map_intent_to_checkpoint, replay_from_checkpoint, is_adapter_ready) with relevant span fields. Batch 2 Slice 9 (bounded sqlx repository tracing) delivered: local span correlation around high-value sqlx repository transactions (create_intent_tx, create_version_with_occ) in intent-service with explicit tracing::info_span + tracing::Instrument. sqlx tracing feature not enabled at workspace level due to dependency conflict with intent-rebase-types, so explicit spans used for local query/span correlation. No Postgres-side trace comments or wire-level propagation. Cross-process trace propagation via Temporal gRPC metadata/traceparent injection, sqlx connection context, or NATS headers remains future scope. |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths. Batch 2 Slice 8 (bounded Temporal adapter tracing) delivered. Batch 2 Slice 9 (bounded sqlx repository tracing) delivered.
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
@@ -84,6 +84,21 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Phase 3 bounded sqlx repository tracing (local span correlation around high-value sqlx transactions: create_intent_tx, create_version_with_occ) — delivered
 - [ ] Cross-process trace propagation across all service boundaries — investigated and deferred: Temporal SDK lacks per-request gRPC metadata injection (shared `Arc<RwLock>` race); sqlx lacks per-query context propagation; NATS publisher not yet implemented. Revisit when temporalio-client adds interceptor support or upgrades to a version with per-request metadata.
 - [ ] Full production load testing
+=======
+| **Status** | 🔄 In Progress (Slice P2-S4 delivered; local baseline numbers captured) |
+| **Priority** | High |
+| **Owner** | SRE / Platform |
+| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
+| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs + CI benchmark job + baseline template) and RB6 rebase-stuck runbook. **P2-S5 local baseline numbers captured:** actual `compute_diff_sync` latency measured on local dev hardware (p50 range: 3.78–6.09 µs across 5 benchmark scenarios). Values recorded in `docs/11-quality/benchmark-baseline-results.md`. CI-averaged baseline and production load testing (k6/Artillery) remain gated on P2 full completion. |
+
+**Items:**
+- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
+- [ ] Alerting rules (warning, critical thresholds)
+- [ ] Error budget tracking dashboard + runbook
+- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
+- [~] Performance benchmarks: rebase latency p50/p95/p99 — **bounded slice delivered:** benchmark harness infrastructure (CI job + criterion reports + baseline template). Actual targets and production load testing remain gated on P2 full completion.
+- [~] Runbooks: rebase-stuck (RB6 delivered); approval-backlog, artifact-quarantine-fail, compensation-timeout remain open
+>>>>>>> origin/main
 
 ---
 
@@ -98,7 +113,9 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | Security / Platform |
 | **Suggested Next Step** | Draft tenant isolation verification test plan; audit existing API endpoints for tenant-scoped enforcement |
-| **Progress Notes** | Batch 3a gated on Phase 2b exit. No hard dependency on Batch 1/2 but benefits from them. Tenant-scoped idempotency already implemented in compensation-service path. Broader artifact-service coverage remains open. |
+| **Progress Notes** | Batch 3a gated on Phase 2b exit. No hard dependency on Batch 1/2 but benefits from them. Tenant-scoped idempotency already implemented in compensation-service path. Broader artifact-service coverage remains open.
+
+**Items:**
 
 **Items:**
 - [ ] Tenant isolation verification tests (cross-tenant access blocked, no data leakage)
@@ -121,7 +138,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | Backend Lead |
 | **Suggested Next Step** | Implement bundle generation API and S3 storage integration |
-| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. |
+| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated.
 
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ Batch 0 scaffold delivered
@@ -135,11 +152,6 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
 
 **Bounded verification + export slices (delivered):**
-- Verification: request-driven verification validates parameters and computes coverage estimates
-- Export: in-memory archive generation with scaffolded entries representing what a real bundle would contain
-- Does NOT claim: actual bundle generation from services, S3 storage, async jobs, replay engine, or hash chain integrity
-- Truthful status semantics for verification: `ready`, `incomplete`, `not_supported`
-- Truthful status semantics for export: `generated`, `failed`
 
 ---
 
@@ -154,36 +166,13 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
 | **Suggested Next Step** | Proceed with DB query optimization if needed; consider full HTTP server benchmarks with load testing infrastructure |
-| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. **Slice 6 delivered:** graph-service benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). Observed latencies are microsecond-level for sync paths. Graph traversal benchmarks complete successfully across all sizes. DB benchmarks now live. |
+| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. **Slice 6 delivered:** graph-service benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). Observed latencies are microsecond-level for sync paths. Graph traversal benchmarks complete successfully across all sizes. DB benchmarks now live.
 
 **Items:**
 - [x] **Batch 2 Slice 4:** rebase-engine sync diff + plan benchmark harness — benchmark harness with criterion, low/medium/high complexity cases
 - [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms (baseline: ~490ns-2.6µs, target met)
-- [ ] Graph traversal optimization (indexing, query optimization) — benchmark target: traversal < 50ms for 10k node graph
-- [ ] Database query optimization (indexes, query plans) — `EXPLAIN ANALYZE` on critical queries
-- [ ] Connection pooling (Postgres, NATS) — no connection exhaustion under load
-- [ ] Load testing: simulate Phase 3 production load (10x normal, no SLO violations) — report: `load-test-results.md`
 
 **Benchmark Results (Batch 2 Slice 4):**
-```
-compute_diff_sync:
-  - low (no change):    ~490ns
-  - medium (scope add): ~556ns
-  - high (multi-sec):   ~2.6µs
-
-compute_diff_with_risk_sync:
-  - low:    ~1µs
-  - medium: ~988ns
-  - high:   ~2.5µs
-
-diff_and_plan_sync:
-  - low:    ~958ns
-  - medium: ~2.5µs
-  - high:   ~4.2µs
-```
-Scope: sync CPU-bound computation only. No I/O, no external services.
-
----
 
 ## P6 — Phase 3 Batch 4b — Security Hardening
 
@@ -196,15 +185,9 @@ Scope: sync CPU-bound computation only. No I/O, no external services.
 | **Priority** | High |
 | **Owner** | Security Team |
 | **Suggested Next Step** | Schedule threat model v2 review; begin penetration testing scope definition |
-| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. Batch 4b gated on Batch 2 (observability) complete. |
+| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. Batch 4b gated on Batch 2 (observability) complete.
 
 **Items:**
-- [ ] Threat model v2 (updated from Phase 1) — doc: `../../14-governance/06-threat-model-v2.md`
-- [ ] Penetration testing completed — all critical/high findings remediated
-- [ ] Security review for all Phase 3 features — sign-off: security-team
-- [ ] Compliance checklist (SOC2/GDPR if applicable)
-- [ ] Incident response plan documented — doc: `../../14-governance/11-incident-freeze.md`; runbook: `incident-response.md`
-- [ ] Data retention and deletion verified — S3 lifecycle policies enforced
 
 ---
 

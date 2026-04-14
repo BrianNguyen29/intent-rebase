@@ -345,6 +345,11 @@ pub struct IntentClause {
 /// Request to create a new intent
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CreateIntentRequest {
+    /// Tenant ID for quota enforcement (Phase 3 P3-S2).
+    /// When None, quota enforcement is skipped on this path.
+    /// Callers should populate this from auth context (JWT/API key).
+    #[serde(rename = "tenant_id", default)]
+    pub tenant_id: Option<Uuid>,
     #[serde(rename = "workflow_id")]
     pub workflow_id: Uuid,
     #[serde(rename = "source_refs")]

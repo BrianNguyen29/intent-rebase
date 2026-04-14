@@ -37,8 +37,6 @@ info:
     Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
 
     ## Implemented (Phase 1)
-
-    ### Health & Observability
     - GET /health — Service health check
     - GET /ready — Service readiness check
     - GET /metrics — Prometheus metrics endpoint
@@ -62,180 +60,6 @@ info:
     - POST /v1/graph/edges — Create graph edge
     - GET /v1/graph/edges — List graph edges (with optional filters)
     - GET /v1/graph/nodes/{node_id}/edges — List edges from a node
-
-    ### Phase 3 Batch 1 (groundwork + bounded execution slice)
-    - POST /v1/graph/artifacts — Ingest artifact with optional side effect capture
-    - GET /intents/{intent_id}/side-effects — List side effects for an intent (query API for compensation planning input)
-    - GET /intents/{intent_id}/compensation-actions — List compensation actions for an intent (read-only query)
-    - GET /compensation-actions/policy-gate — Tenant-scoped policy gate evaluation (read-only query)
-    - GET /intents/{intent_id}/compensation-policy-gate — Intent-scoped policy gate evaluation (read-only query)
-    - GET /compensation-actions/orchestration-coordination — Tenant-scoped orchestration coordination status (read-only query)
-    - GET /intents/{intent_id}/orchestration-coordination — Intent-scoped orchestration coordination status (read-only query)
-    - POST /compensation-actions/{action_id}/approve — Approve a pending compensation action (bounded slice)
-    - POST /compensation-actions/{action_id}/waive — Waive a pending compensation action (bounded slice)
-    - POST /compensation-actions/{action_id}/execute — Execute an approved compensation action (bounded slice, stub executor)
-
-    ## Phase 3 Batch 1: Compensation Policy Gate Evaluation
-    - **Bounded read-only slice** — no execution, no persistence writes, no policy engine
-    - **GET /compensation-actions/policy-gate?tenant_id=...** — Tenant-scoped evaluation for all tenant actions
-    - **GET /intents/{intent_id}/compensation-policy-gate?tenant_id=...** — Intent-scoped evaluation
-    - **Canonical gate statuses** — exactly: eligible | blocked | manual_review_required
-    - **Risk metadata** — derived from existing fields: strategy_severity, retry_exhaustion_risk, feasibility_risk, error_severity, retry_budget_remaining, error_classification, is_terminal, requires_manual_intervention
-    - **No new policy engine** — all fields derive from status, attempt_count, max_retries, error_code, feasibility, strategy_type
-    - **Policy metadata** — auto_executable, is_dlq_candidate, can_reapprove, retry_budget_exhausted, has_non_retryable_error
-
-    ## Phase 3 Batch 1: Compensation Summary
-    - Rebase preview and apply responses include `compensation_planning` field with read-only compensation planning summary
-    - `ready: false` in Phase 3 Batch 1 indicates compensation planning is deferred; actual planner/executor are Batch 1+ scope
-    - **Bounded execution slice:** approve/waive/execute endpoints implement guarded status transitions
-    - **Executor gate:** Only Approved actions can execute; illegal transitions fail closed
-    - **Execution policy gate:** Only service-executable combos can execute:
-        - Rollback + Automatic (S1InternalReversible)
-        - CounterAction + SemiAutomatic (S2ExternalReversible)
-        - FollowupNotice + ManualOnly (S3ExternalPartiallyReversible)
-        - Escalation + NotPossible (S4Irreversible)
-      All other feasibility levels or strategy types require human intervention workflows (not in this slice)
-    - **Bounded execution executors (Phase 3 Batch 1):**
-      - **RollbackExecutor:** Real acknowledgment for Rollback+Automatic (S1InternalReversible) path
-        - Success means "rollback action acknowledged" — validated against side effect ledger
-        - Non-Rollback strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-Automatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Missing side effect context fails closed with `SIDE_EFFECT_NOT_FOUND`
-        - Success summary is truthful: "Rollback of {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external reversal if current data model cannot support it
-      - **CounterActionExecutor:** Real acknowledgment for CounterAction+SemiAutomatic (S2ExternalReversible) path
-        - Validates side effect class is S2ExternalReversible
-        - Success means "counter-action acknowledged" — validated against side effect ledger
-        - Non-CounterAction strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-SemiAutomatic feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "Counter-action for {effect_type} targeting {target} acknowledged"
-      - **FollowupNoticeExecutor:** Real acknowledgment for FollowupNotice+ManualOnly (S3ExternalPartiallyReversible) path
-        - Validates side effect class is S3ExternalPartiallyReversible
-        - Success means "followup notice acknowledged" — validated against side effect ledger
-        - Non-FollowupNotice strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-ManualOnly feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "FollowupNotice for {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external resolution if current data model cannot support it
-      - **EscalationExecutor:** Real acknowledgment for Escalation+NotPossible (S4Irreversible) path
-        - Validates side effect class is S4Irreversible
-        - Success means "escalation acknowledged" — validated against side effect ledger
-        - Non-Escalation strategies fail closed with `UNSUPPORTED_STRATEGY_TYPE`
-        - Non-NotPossible feasibility fails closed with `UNSUPPORTED_FEASIBILITY`
-        - Wrong side effect class fails closed with `INVALID_SIDE_EFFECT_CLASS`
-        - Success summary is truthful: "Escalation for {effect_type} targeting {target} acknowledged"
-        - Does NOT claim external resolution if current data model cannot support it
-    - **All executors share common validation:** tenant_id match, intent_id match, side effect existence
-
-    ## Phase 3 Batch 1: Intent Orchestration Dashboard
-    - GET /intents/{intent_id}/orchestration-dashboard — Bounded read-only dashboard endpoint
-    - Returns raw lists of side effects and compensation actions for a single intent within a tenant
-    - Derives bounded summary fields: counts by status, retryable_failed_count, dlq_candidate_count, reapprovable_count, irreversible-effect flag/count, auto-executable candidate count
-    - **This endpoint is READ-ONLY** — does not trigger compensation execution, orchestration engine, or background processing
-    - **Truthful summaries** — all counts are derived from persisted data via existing service query helpers
-    - No batch execution, no orchestration engine, no background processing claims
-
-    ## Phase 3 Batch 1: Orchestration Coordination Status
-    - **Bounded read-only orchestration coordination view** — no execution, no persistence writes, no orchestration engine
-    - **GET /compensation-actions/orchestration-coordination?tenant_id=...** — Tenant-scoped coordination status for all tenant actions
-    - **GET /intents/{intent_id}/orchestration-coordination?tenant_id=...** — Intent-scoped coordination status
-    - **Canonical coordination statuses** — exactly: ready | awaiting_policy | awaiting_manual_review | blocked | terminal
-    - **Per-item records** — each action has coordination_status, coordination_reason, and action details
-    - **Summary counts** — ready_count, awaiting_policy_count, awaiting_manual_review_count, blocked_count, terminal_count, dlq_candidate_count, auto_executable_count
-    - **No new orchestration engine** — all fields derive from existing CompensationAction fields at query time
-    - **Response includes** — summary + per-item coordination records
-
-    ## Phase 3 Batch 1: Bounded Manual Retry + DLQ Slice
-    - **Manual retry path:** POST /compensation-actions/{action_id}/reapprove transitions Failed → Pending
-    - **DLQ query endpoint:** GET /compensation-actions/dlq lists derived DLQ candidates
-    - **Derived DLQ condition:** An action is a DLQ candidate when Failed AND (exhausted retry budget OR non-retryable error)
-    - **No DLQ table:** DLQ is a read-only derived condition from existing data
-    - **Retry policy gates (fail closed):**
-      - Only retryable error codes allow reapproval (explicit allowlist: CONNECTION_TIMEOUT, SERVICE_UNAVAILABLE, etc.)
-      - Non-retryable errors (INVALID_CONFIGURATION, PERMISSION_DENIED, etc.) cannot be reapproved
-      - Exhausted retry budget (attempt_count >= max_retries) cannot be reapproved
-      - Default max_retries is 3
-    - **Attempt count is preserved** during reapproval (not reset) for audit trail
-    - **No background workers** - all operations are explicit API calls
-
-    ## Phase 3 Batch 1: Single-Shot Orchestration Runtime (Bounded HTTP + CLI Slice)
-    - **HTTP POST /compensation-actions/runs:** Create and execute a single-shot orchestration run for explicit action IDs
-    - **HTTP GET /compensation-actions/runs/{run_id}:** Get an existing orchestration run by ID
-    - **Bounded single-shot semantics:**
-      - Single-shot: one run = one explicit action list, one auto-decide pass
-      - HTTP accepted: returns immediately with a persisted run handle (HTTP 202)
-      - Runtime auto-decides per action: approve | reapprove | execute | skip
-      - Uses existing CompensationActionService methods (does not replace enforcement)
-      - Partial-success: continues on per-item failures, records all outcomes
-    - **Auto-decide logic:**
-      - `Pending` → approve via approve_action
-      - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-        - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic or FollowupNotice+ManualOnly or Escalation+NotPossible) → execute via execute_action
-      - Terminal / policy-blocked → skip
-      - Not found → record not_found
-    - **Run status (HTTP 202 Accepted):**
-      - `pending` → run created, awaiting execution
-      - `running` → run is executing
-      - `completed` → all actions succeeded
-      - `completed_with_errors` → some actions failed
-      - `failed` → all actions failed or system error
-    - **CLI sync:** `intent-cli run --action-ids <ids> --tenant-id <id>` for explicit action IDs (single-shot sync)
-    - **No queue polling, no distributed claiming/locking, no scheduler**
-    - **CLI response includes:** run ID, status, per-action results (action_taken, success, reason, resulting_status)
-
-    ## Phase 3 Batch 1: Manual Orchestration + Dry-Run Planner (Bounded Slice)
-    - **Dry-run planner:** POST /compensation-actions/orchestration-dry-run returns per-item proposed action + reason for explicit IDs
-    - **Manual batch approve:** POST /compensation-actions/batch-approve triggers approve for explicit IDs with partial-success semantics
-    - **Manual batch reapprove:** POST /compensation-actions/batch-reapprove triggers reapprove for explicit IDs with partial-success semantics
-    - **Manual batch execute:** POST /compensation-actions/batch-execute triggers execute for explicit IDs with partial-success semantics
-    - **Bounded partial-success semantics:** Even if some items fail, the batch continues and reports per-item outcomes explicitly
-    - **No fail-fast:** All items are processed, results are accumulated and returned together
-    - **No background worker or queue claiming:** All operations are explicit API calls via existing service methods
-    - **Dry-run response includes:** per-item proposed_action (approve | reapprove | execute | no_action) + reason
-    - **Batch command response includes:** per-item success/failure + resulting action or error + summary counts
-
-    ## Phase 2b Bounded Delivery
-    - Rebase apply endpoint (`POST /intents/{intent_id}/rebase-apply`)
-    - Bounded runtime adapter integration for Temporal-backed signal/replay execution
-    - Pending approval queue/read endpoints and status-only approve/reject actions
-    - Canonical public `risk_tier` field in rebase preview/apply responses
-    - Bounded replay endpoint (`POST /intents/{intent_id}/replay`) — cooperative signal-based replay, not native Temporal reset
-
-    ## Phase 3 Batch 3b: Forensic Replay Verification (Bounded Slice)
-    - **POST /forensic/verify** — Request-driven verification of forensic bundle feasibility
-    - **POST /forensic/export** — In-memory forensic archive metadata generation (scaffolded data)
-    - **Bounded request-driven verification semantics:**
-      - Accepts verification parameters (intent_id, time_range, purpose)
-      - Validates entity existence and coverage
-      - Reports what a bundle WOULD contain (counts, not actual data)
-    - **Bounded in-memory archive export semantics:**
-      - Accepts export parameters (intent_id, time_range, purpose)
-      - Generates scaffolded/fictional entries entirely in-memory
-      - Returns archive metadata: archive_id, item_count, archive_size_bytes, content_type
-      - Archive content is scaffolded representation only — NOT actual service data
-    - **Truthful status semantics:**
-      - `ready`: All referenced entities exist and are within time range
-      - `incomplete`: Some entities are missing or time range has gaps
-      - `not_supported`: Verification mode not implemented
-      - `generated`: Archive was successfully generated in-memory
-    - **NOT claimed:**
-      - Bundle generation (actual data collection from intent/graph/audit services)
-      - Bundle storage (S3 or any persistence layer)
-      - Async job orchestration for bundle generation
-      - Bundle retrieval (downloading stored bundles)
-      - Bundle replay (reproducing state from a bundle)
-      - Hash chain integrity verification (requires generated bundle)
-    - **Verification coverage includes (request-driven, no storage):**
-      - Intent version coverage: intent_exists, version_count, time range, artifact traceability
-      - Artifact coverage: artifact_count, provenance completeness (when requested)
-      - Audit event coverage: event_count, time range coverage (when requested)
-      - Policy snapshot coverage: snapshot_count, version coverage (when requested)
-    - **Export coverage includes (in-memory generation, scaffolded data):**
-      - Intent version entries: scaffolded entries with version_number, status, timestamps
-      - Artifact entries: scaffolded entries with artifact_id, artifact_type, provenance chain
-      - Audit event entries: scaffolded entries with event_type, actor, occurred_at
-      - Policy snapshot entries: scaffolded entries with snapshot_version, policy_content
 
     ## Still Open (broader than current bounded slices)
     - Checkpoint lifecycle automation and broader checkpoint query/replay APIs
@@ -465,11 +289,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntentVersion'
         '404':
-          description: Version not found
+          description: Bundle not found or tenant mismatch
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
 
   /intents/{intent_id}/diff:
     post:
@@ -2307,8 +2132,331 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '500':
-          description: Internal server error
+
+  # Forensic Bundle Endpoints (Phase 3 Batch 3b P4 bounded slice)
+  # Bounded scope note: This is a local/exportable bundle download path.
+  # Not a full S3/production storage pipeline. S3 integration is Phase 4 scope.
+
+  /forensic-bundles:
+    post:
+      tags:
+        - forensic
+      summary: Create a new forensic bundle
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Creates a new forensic bundle manifest
+        with Pending status. The bundle generation service manages the lifecycle
+        (Pending -> Generating -> Ready/Failed).
+      operationId: createForensicBundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateForensicBundleRequest'
+      responses:
+        '201':
+          description: Bundle created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateForensicBundleResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+        - forensic
+      summary: List forensic bundles for a tenant
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Returns all forensic bundles
+        for the specified tenant, ordered by created_at descending.
+      operationId: listForensicBundles
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Bundles retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListForensicBundlesResponse'
+
+  /forensic-bundles/{bundle_id}:
+    get:
+      tags:
+        - forensic
+      summary: Get a forensic bundle by ID
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Returns a single forensic bundle
+        by its ID, scoped to the specified tenant. Returns 404 if bundle not found
+        or if the bundle belongs to a different tenant (fail-not-found pattern).
+      operationId: getForensicBundle
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bundle found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+        '404':
+          description: Bundle not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic-bundles/{bundle_id}/download:
+    get:
+      tags:
+        - forensic
+      summary: Download a forensic bundle as JSON
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Downloads a forensic bundle as a JSON file.
+        Returns the bundle manifest serialized to JSON format with Content-Disposition
+        header set for download.
+
+        Bounded slice scope:
+        - Returns bundle manifest as downloadable JSON (no actual content files)
+        - No S3 storage integration - bundle is returned directly from repository
+        - No content collection - manifest only
+
+        Truthful description: This is a local/exportable bundle download path.
+        Not a full S3/production storage pipeline.
+      operationId: downloadForensicBundle
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bundle downloaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+          headers:
+            Content-Disposition:
+              description: Attachment filename for download
+              schema:
+                type: string
+                example: 'attachment; filename="forensic-bundle-{bundle_id}-{timestamp}.json"'
+        '404':
+          description: Bundle not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic-bundles/{bundle_id}/transition-to-generating:
+    post:
+      tags:
+        - forensic
+      summary: Transition bundle to Generating status
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Transitions a Pending bundle to Generating.
+        This is a placeholder for actual content collection (Phase 4 scope).
+
+        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
+      operationId: transitionBundleToGenerating
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID for ownership verification
+      responses:
+        '200':
+          description: Bundle transitioned to Generating
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+        '400':
+          description: Invalid status transition
+>>>>>>> origin/main
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic-bundles/{bundle_id}/transition-to-ready:
+    post:
+      tags:
+        - forensic
+      summary: Transition bundle to Ready status
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Ready.
+        This is a placeholder for actual bundle assembly (Phase 4 scope).
+
+        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
+      operationId: transitionBundleToReady
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID for ownership verification
+      responses:
+        '200':
+          description: Bundle transitioned to Ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+        '400':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bundle not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic-bundles/{bundle_id}/transition-to-failed:
+    post:
+      tags:
+        - forensic
+      summary: Transition bundle to Failed status
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Failed.
+
+        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
+      operationId: transitionBundleToFailed
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID for ownership verification
+      responses:
+        '200':
+          description: Bundle transitioned to Failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+        '400':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bundle not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /forensic-bundles/{bundle_id}/complete:
+    post:
+      tags:
+        - forensic
+      summary: Complete bundle creation
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Transitions a bundle through the full
+        Pending -> Generating -> Ready lifecycle. This is a convenience method for
+        testing the complete flow.
+
+        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
+        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
+      operationId: completeForensicBundle
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID for ownership verification
+      responses:
+        '200':
+          description: Bundle creation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundle'
+        '400':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bundle not found or tenant mismatch
+>>>>>>> origin/main
           content:
             application/json:
               schema:
@@ -2971,12 +3119,6 @@ components:
     ReplayRequest:
       type: object
       description: |
-        Phase 2b bounded replay slice request.
-
-        Bounded checkpoint selection strategy:
-        - If `checkpoint_id` is provided, use that specific checkpoint
-        - Otherwise, use the most recent active checkpoint for the workflow
-
         Note: This is cooperative signal-based replay, NOT native Temporal reset.
       required: [to_version]
       properties:
@@ -3760,7 +3902,7 @@ components:
           description: The created DependsOn edges to IntentVersion nodes
         side_effect_recorded:
           type: boolean
-          description: Phase 3 Batch 1 (groundwork): Indicates whether a side effect was recorded
+          description: "Phase 3 Batch 1 (groundwork): Indicates whether a side effect was recorded"
         side_effect_id:
           type: string
           format: uuid
@@ -4971,6 +5113,89 @@ components:
       type: object
       required: [tenant_id, intent_id, time_range]
       properties:
+=======
+    # Forensic Bundle (Phase 3 Batch 3b P4 bounded slice)
+    BundleStatus:
+      type: string
+      enum: [pending, generating, ready, failed]
+      description: Generation status of a forensic bundle
+
+    BundlePurpose:
+      type: string
+      enum: [incident_investigation, compliance_audit, legal]
+      description: Purpose of the forensic bundle
+
+    BundleTimeRange:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Start of time range
+        end:
+          type: string
+          format: date-time
+          description: End of time range
+
+    BundleContents:
+      type: object
+      description: Summary of contents included in a forensic bundle
+      properties:
+        intent_versions:
+          type: integer
+          description: Number of intent versions included
+        artifacts:
+          type: integer
+          description: Number of artifact metadata entries included
+        approvals:
+          type: integer
+          description: Number of approval records included
+        audit_events:
+          type: integer
+          description: Number of audit events included
+        policy_snapshots:
+          type: integer
+          description: Number of policy snapshots included
+
+    BundleIntegrity:
+      type: object
+      description: Integrity verification result embedded in the manifest
+      properties:
+        manifest_hash:
+          type: string
+          description: SHA256 hash of the manifest
+        chain_verified:
+          type: boolean
+          description: Whether the full hash chain was verified successfully
+        verification_timestamp:
+          type: string
+          format: date-time
+          description: When verification was performed
+
+    ForensicBundle:
+      type: object
+      description: |
+        Phase 3 Batch 3b (P4 bounded slice): Top-level forensic bundle manifest.
+        Status tracking added. Bundle generation, S3 storage, and integrity
+        verification are Phase 4 scope.
+      required: [bundle_id, bundle_version, created_at, created_by, tenant_id, time_range, purpose, status, contents, integrity]
+      properties:
+        bundle_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this bundle
+        bundle_version:
+          type: string
+          description: Bundle format version
+        created_at:
+          type: string
+          format: date-time
+          description: When this bundle was created
+        created_by:
+          type: string
+          description: Actor who triggered bundle generation (or "system")
+>>>>>>> origin/main
         tenant_id:
           type: string
           format: uuid
@@ -5027,50 +5252,55 @@ components:
         status_reason:
           type: string
           description: Human-readable status reason
+        time_range:
+          $ref: '#/components/schemas/BundleTimeRange'
+        purpose:
+          $ref: '#/components/schemas/BundlePurpose'
+        status:
+          $ref: '#/components/schemas/BundleStatus'
+        contents:
+          $ref: '#/components/schemas/BundleContents'
+        integrity:
+          $ref: '#/components/schemas/BundleIntegrity'
+
+    CreateForensicBundleRequest:
+      type: object
+      required: [tenant_id, time_range, purpose, created_by]
+      properties:
         tenant_id:
           type: string
           format: uuid
           description: Tenant ID
-        intent_id:
-          type: string
-          format: uuid
-          description: Intent ID
         time_range:
-          type: object
-          properties:
-            start:
-              type: string
-              format: date-time
-            end:
-              type: string
-              format: date-time
+          $ref: '#/components/schemas/BundleTimeRange'
         purpose:
+          $ref: '#/components/schemas/BundlePurpose'
+        created_by:
           type: string
-          enum: [incident_investigation, compliance_audit, legal]
-        contents:
-          type: object
-          properties:
-            intent_versions:
-              type: integer
-              description: Number of intent version entries
-            artifacts:
-              type: integer
-              description: Number of artifact entries
-            audit_events:
-              type: integer
-              description: Number of audit event entries
-            policy_snapshots:
-              type: integer
-              description: Number of policy snapshot entries
-        item_count:
-          type: integer
-          description: Total item count in archive
-        content_type:
+          description: Actor who triggered bundle generation
+
+    CreateForensicBundleResponse:
+      type: object
+      required: [bundle, message]
+      properties:
+        bundle:
+          $ref: '#/components/schemas/ForensicBundle'
+        message:
           type: string
-          description: Content type (application/json)
-        archive_size_bytes:
+          description: Human-readable message
+
+    ListForensicBundlesResponse:
+      type: object
+      required: [bundles, total]
+      properties:
+        bundles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForensicBundle'
+        total:
           type: integer
-          description: Archive size in bytes
+          description: Total number of bundles
+>>>>>>> origin/main
 
     Error:
       type: object

@@ -89,6 +89,9 @@ impl SqlxIntentRepository {
         request: CreateIntentRequest,
     ) -> Result<CreateIntentResponse, IntentRebaseError> {
         let intent_id = Uuid::new_v4();
+        let now = Utc::now();
+        // P3-S2: Use tenant_id from request if provided, otherwise fall back to resolver
+        let tenant_id = request.tenant_id.unwrap_or_else(|| self.tenant_resolver.resolve_tenant_id_or_default());
 
         let create_span = |tid: Uuid| {
             tracing::info_span!(

@@ -13,6 +13,8 @@ pub mod graph;
 pub mod intent;
 pub mod policy_snapshot;
 pub mod trace_context;
+pub mod quota;
+pub mod retention_verification;
 
 pub use artifact::*;
 pub use audit::*;
@@ -24,3 +26,4 @@ pub use graph::*;
 pub use intent::*;
 pub use policy_snapshot::*;
 pub use trace_context::*;
+pub use quota::*;
