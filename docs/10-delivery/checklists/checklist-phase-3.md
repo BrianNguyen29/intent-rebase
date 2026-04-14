@@ -289,10 +289,10 @@
 
 [x] Bounded metrics instrumentation — Batch 2 Slice 3
     Evidence:
-    - Code: crates/intent-api/src/lib.rs (init_metrics function, lazy metric statics)
+    - Code: crates/intent-api/src/lib.rs (metrics_handler function, OnceLock lazy metric statics)
     - Code: crates/intent-api/src/lib.rs (record_intent_version_created, record_rebase_preview_request, record_rebase_apply_request, record_diff_compute_duration, record_rebase_preview_duration, record_rebase_apply_duration)
     - Metrics: intent_api_intent_version_created_total, intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total, intent_api_diff_compute_duration_seconds, intent_api_rebase_preview_duration_seconds, intent_api_rebase_apply_duration_seconds
-    - Note: Metric definitions scaffolded but recording disabled due to metrics crate version conflict (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23); full coverage across all flows remains future scope
+    - Note: Metric definitions scaffolded and actively recorded (metrics-exporter-prometheus 0.18.1 with metrics 0.24); full coverage across all flows remains future scope
 
 [x] Runbooks for common failure scenarios — Batch 2 Slice 3
     Evidence:

@@ -52,11 +52,9 @@ use validator::Validate;
 // installed by the /metrics endpoint. The PrometheusBuilder handles the
 // exporter setup and metric registration.
 //
-// Note: Due to metrics crate version conflicts (metrics-exporter-prometheus 0.12.2
-// uses metrics 0.21.1 while workspace specifies metrics 0.23), direct macro
-// calls have API incompatibilities. The metrics are defined but not actively
-// recorded in this slice. Future work should resolve the version conflict
-// or use a compatible metrics API.
+// Metrics are actively recorded for core intent operations using the metrics 0.24
+// API via metrics-exporter-prometheus 0.18 (upgraded from 0.12 to resolve the
+// version conflict with workspace metrics 0.23).
 //
 // Metrics referenced by Prometheus rules:
 // - intent_api_intent_version_created_total{status="success|error"}
@@ -67,37 +65,33 @@ use validator::Validate;
 // - intent_api_rebase_apply_duration_seconds
 
 /// Record intent version creation outcome
-fn record_intent_version_created(_status: &'static str) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
-    // The counter metric is registered by the PrometheusBuilder but cannot be
-    // incremented via the 0.23 macro API due to incompatibility with 0.21.1
-    // types used by metrics-exporter-prometheus.
-    // See: infrastructure/local/prometheus/rules/intent_api_alerts.yml
+fn record_intent_version_created(status: &'static str) {
+    metrics::counter!("intent_api_intent_version_created_total", "status" => status).increment(1);
 }
 
 /// Record rebase preview request outcome
-fn record_rebase_preview_request(_status: &'static str) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
+fn record_rebase_preview_request(status: &'static str) {
+    metrics::counter!("intent_api_rebase_preview_requests_total", "status" => status).increment(1);
 }
 
 /// Record rebase apply request outcome
-fn record_rebase_apply_request(_status: &'static str) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
+fn record_rebase_apply_request(status: &'static str) {
+    metrics::counter!("intent_api_rebase_apply_requests_total", "status" => status).increment(1);
 }
 
 /// Record diff compute duration
-fn record_diff_compute_duration(_duration_secs: f64) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
+fn record_diff_compute_duration(duration_secs: f64) {
+    metrics::histogram!("intent_api_diff_compute_duration_seconds").record(duration_secs);
 }
 
 /// Record rebase preview duration
-fn record_rebase_preview_duration(_duration_secs: f64, _graph_size: &'static str) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
+fn record_rebase_preview_duration(duration_secs: f64, graph_size: &'static str) {
+    metrics::histogram!("intent_api_rebase_preview_duration_seconds", "graph_size" => graph_size).record(duration_secs);
 }
 
 /// Record rebase apply duration
-fn record_rebase_apply_duration(_duration_secs: f64, _risk_class: &'static str) {
-    // Note: Metrics recording disabled due to metrics crate version conflict.
+fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
+    metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class).record(duration_secs);
 }
 
 /// Response for diff computation including version context, diff, and risk

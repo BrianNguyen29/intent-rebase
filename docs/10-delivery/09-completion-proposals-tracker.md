@@ -62,7 +62,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | SRE / Platform |
 | **Suggested Next Step** | Continue with error budget tracking dashboard and performance benchmarks |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics definitions scaffolded (emission blocked by metrics crate version conflict), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Full OTEL export, distributed trace context across all services, metric emission, and active benchmark coverage remain future scope. |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded tracing foundation) delivered: request-id middleware, service method instrumentation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Full OTEL export, distributed trace context across all services, and active benchmark coverage remain future scope. |
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
@@ -70,12 +70,12 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Distributed tracing foundation (request-id extraction + service method instrumentation) — Batch 2 Slice 2
 - [x] Alerting rules (warning, critical thresholds) — Batch 2 Slice 3
 - [x] Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn — Batch 2 Slice 3
-- [x] Bounded metrics instrumentation (intent version creation, rebase preview/apply counters and histograms — definitions scaffolded, emission blocked by metrics crate version conflict) — Batch 2 Slice 3
+- [x] Bounded metrics instrumentation (intent version creation, rebase preview/apply counters and histograms — definitions scaffolded, emission now active with metrics-exporter-prometheus 0.18.1 + metrics 0.24) — Batch 2 Slice 3
 - [x] Rebase-engine sync diff + plan benchmark harness (criterion, low/medium/high complexity) — Batch 2 Slice 4
 - [ ] Error budget tracking dashboard + runbook
 - [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace) — future scope after Slice 2 foundation
 - [ ] Full OTEL trace context propagation across all service boundaries
-- [ ] Metric emission (blocked by metrics crate version conflict; definitions scaffolded but recording disabled)
+- [ ] Metric emission (now enabled — metrics-exporter-prometheus 0.18.1 with metrics 0.24; definitions scaffolded)
 - [ ] Graph traversal and DB query benchmarks
 - [ ] HTTP/API benchmarks and load testing
 

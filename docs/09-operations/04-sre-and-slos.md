@@ -4,7 +4,7 @@
 > These targets are **not yet SRE-approved** and **no production telemetry is connected**.
 > Batch 2 Slice 1 delivers the **SLO foundation only** — SLO definitions documented, dashboard scaffold written.
 > Batch 2 Slice 2 delivers **tracing foundation only** — request-id extraction middleware and service method instrumentation; no full OTEL export or distributed trace across all boundaries.
-> Batch 2 Slice 3 delivers **alerting rules + runbook foundation** — Alertmanager config, Prometheus alerting rules, Grafana provisioning, and runbook scenarios for common failure modes. Metric emission is **blocked by a metrics crate version conflict** (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23); metric definitions are scaffolded but not actively recorded. Full metrics coverage across all flows is NOT claimed.
+> Batch 2 Slice 3 delivers **alerting rules + runbook foundation** — Alertmanager config, Prometheus alerting rules, Grafana provisioning, and runbook scenarios for common failure modes. Metric emission is active (metrics-exporter-prometheus 0.18.1 with metrics 0.24); metric definitions are scaffolded and actively recorded. Full metrics coverage across all flows is NOT claimed.
 
 ---
 
@@ -68,13 +68,12 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
   - `intent_api_diff_compute_duration_seconds` (histogram)
   - `intent_api_rebase_preview_duration_seconds` (histogram with graph_size label)
   - `intent_api_rebase_apply_duration_seconds` (histogram with risk_class label)
-  - ⚠️ **Metric emission is blocked** — metric definitions are registered but recording is disabled due to a metrics crate version conflict (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23). The alerting rules reference these metrics, but they will not be actively emitted until the version conflict is resolved.
+  - ✅ **Metric emission is now enabled** — metrics-exporter-prometheus upgraded to 0.18.1 (from 0.12.2) which is compatible with workspace metrics 0.24; metrics are actively recorded for core intent operations.
 - **Runbook scenarios** — see `05-runbooks.md` for RB6-RB10 covering: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn
 
 ### ⬜ Not Yet Implemented
 
-- **Metric emission** — metric definitions are scaffolded but recording is disabled due to a metrics crate version conflict (metrics-exporter-prometheus 0.12.2 uses metrics 0.21.1 while workspace specifies metrics 0.23); alerting rules reference these metrics but they will not be actively emitted until the conflict is resolved
-- **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented even if emission were unblocked
+- **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented
 - **Error budget tracking dashboard** — no burn-rate query or budget tracking panels
 - **Distributed tracing** — no full OTEL instrumentation, no trace context propagation across all service boundaries (Slice 2 delivers foundation only)
 - **Performance benchmarks** — no rebase latency p50/p95/p99 measurements

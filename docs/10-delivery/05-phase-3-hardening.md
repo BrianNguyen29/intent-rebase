@@ -88,13 +88,13 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 2-2b | Alertmanager config | `infrastructure/local/alertmanager/alertmanager.yml` — placeholder receivers for local dev only |
 | 2-3 | Error budget runbook | `docs/09-operations/05-runbooks.md` RB10 — error budget burn rate runbook |
 | 2-6 | Runbooks | `docs/09-operations/05-runbooks.md` RB6-RB10 — rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn |
-| Metrics | Bounded metrics instrumentation (scaffolded, emission blocked) | `intent_api_intent_version_created_total`, `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_diff_compute_duration_seconds`, `intent_api_rebase_preview_duration_seconds`, `intent_api_rebase_apply_duration_seconds` — metric definitions scaffolded in intent-api but recording disabled due to metrics crate version conflict |
+| Metrics | Bounded metrics instrumentation (active emission) | `intent_api_intent_version_created_total`, `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_diff_compute_duration_seconds`, `intent_api_rebase_preview_duration_seconds`, `intent_api_rebase_apply_duration_seconds` — metric definitions scaffolded and actively recorded in intent-api (metrics-exporter-prometheus 0.18.1 with metrics 0.24) |
 
 **Slice 3 scope (bounded/truthful):**
 - Local dev alerting infrastructure (Prometheus, Alertmanager, Grafana) ✅
-- Bounded metrics instrumentation (definitions scaffolded, emission blocked by metrics crate version conflict) ✅
+- Bounded metrics instrumentation (definitions scaffolded, emission active with metrics-exporter-prometheus 0.18.1 + metrics 0.24) ✅
 - Runbook scenarios for common failure modes ✅
-- **NOT in scope for Slice 3:** Metric emission (blocked by version conflict), full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks
+- **NOT in scope for Slice 3:** Full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks
 
 ### Batch 2 Slice 4 (delivered — rebase-engine sync benchmark)
 
