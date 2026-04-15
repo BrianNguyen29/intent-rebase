@@ -13,10 +13,10 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 |----|-------|--------|----------|
 | [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
 | [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7, Slice 8, Slice 9 delivered) | High |
-| [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | ⬜ Not Started | High |
+| [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | 🔄 In Progress (bounded slices delivered: P3-S1, P3-S2, P3-S3, P3-S4, P3-S5) | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
-| [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | ⬜ Not Started | Medium |
-| [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | ⬜ Not Started | High |
+| [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | 🔄 In Progress (bounded slices delivered: P5-S1 graph traversal benchmarks, P5-S2 DB query benchmarks, bounded HTTP load harness) | Medium |
+| [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | 🔄 In Progress (bounded slices delivered: JWT auth, RLS policies, audit immutability trigger, retention verification types) | High |
 | [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ✅ Closed (Phase 3 Batch 1) | Critical |
 | [P8](#p8--phase-4-enterprise-expansion--policy-simulation) | Phase 4 — Enterprise Expansion: Policy Simulation | ⬜ Not Started | Medium |
 | [P9](#p9--phase-4-enterprise-expansion--advanced-adapters--cross-workflow) | Phase 4 — Advanced Adapters + Cross-Workflow Families | ⬜ Not Started | Medium |
@@ -83,22 +83,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Phase 3 bounded Temporal adapter tracing (local span correlation around Temporal gRPC calls) — Batch 2 Slice 8 delivered
 - [x] Phase 3 bounded sqlx repository tracing (local span correlation around high-value sqlx transactions: create_intent_tx, create_version_with_occ) — delivered
 - [ ] Cross-process trace propagation across all service boundaries — investigated and deferred: Temporal SDK lacks per-request gRPC metadata injection (shared `Arc<RwLock>` race); sqlx lacks per-query context propagation; NATS publisher not yet implemented. Revisit when temporalio-client adds interceptor support or upgrades to a version with per-request metadata.
-- [ ] Full production load testing
-=======
-| **Status** | 🔄 In Progress (Slice P2-S4 delivered; local baseline numbers captured) |
-| **Priority** | High |
-| **Owner** | SRE / Platform |
-| **Suggested Next Step** | Define SLO targets (intent processing latency, rebase latency, approval wait time); set up provisional Grafana dashboard |
-| **Progress Notes** | Batch 2 gated on Phase 2b exit and basic compensation engine path verified. Provisional SLO targets documented in `09-operations/04-sre-and-slos.md`; external SRE confirmation still open. **P2-S4 slice delivered:** benchmark harness infrastructure (criterion + benches/diff_latency.rs + CI benchmark job + baseline template) and RB6 rebase-stuck runbook. **P2-S5 local baseline numbers captured:** actual `compute_diff_sync` latency measured on local dev hardware (p50 range: 3.78–6.09 µs across 5 benchmark scenarios). Values recorded in `docs/11-quality/benchmark-baseline-results.md`. CI-averaged baseline and production load testing (k6/Artillery) remain gated on P2 full completion. |
-
-**Items:**
-- [ ] SLO definitions (intent processing latency, rebase latency, approval wait time)
-- [ ] Alerting rules (warning, critical thresholds)
-- [ ] Error budget tracking dashboard + runbook
-- [ ] Distributed tracing across all services (full Phase 2 → Phase 3 trace)
-- [~] Performance benchmarks: rebase latency p50/p95/p99 — **bounded slice delivered:** benchmark harness infrastructure (CI job + criterion reports + baseline template). Actual targets and production load testing remain gated on P2 full completion.
-- [~] Runbooks: rebase-stuck (RB6 delivered); approval-backlog, artifact-quarantine-fail, compensation-timeout remain open
->>>>>>> origin/main
+- [ ] Full production load testing (bounded HTTP load harness delivered — intent-api HTTP server benchmark with in-memory repos; full production load testing remains gated on P2 full completion)
 
 ---
 
@@ -109,21 +94,19 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P3 |
 | **Title** | Phase 3 Batch 3a — Tenant Isolation Hardening |
 | **Purpose** | Verify and enforce tenant isolation across all surfaces: access control, data visibility, quotas, audit log separation, and data residency. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (bounded slices delivered: tenant isolation tests P3-S1, quota enforcement P3-S2, rule pack isolation P3-S3, audit query isolation P3-S4, tenant service/onboarding scaffold P3-S5) |
 | **Priority** | High |
 | **Owner** | Security / Platform |
-| **Suggested Next Step** | Draft tenant isolation verification test plan; audit existing API endpoints for tenant-scoped enforcement |
-| **Progress Notes** | Batch 3a gated on Phase 2b exit. No hard dependency on Batch 1/2 but benefits from them. Tenant-scoped idempotency already implemented in compensation-service path. Broader artifact-service coverage remains open.
+| **Suggested Next Step** | Data residency verification; artifact-service tenant coverage extension |
+| **Progress Notes** | Batch 3a gated on Phase 2b exit. Bounded slices delivered: P3-S1 (tenant isolation verification tests), P3-S2 (quota enforcement), P3-S3 (tenant-specific rule pack isolation), P3-S4 (tenant audit log separation via scoped audit query API), P3-S5 (tenant service scaffold + onboarding procedure skeleton). Broader artifact-service coverage and data residency remain open. |
 
 **Items:**
-
-**Items:**
-- [ ] Tenant isolation verification tests (cross-tenant access blocked, no data leakage)
-- [ ] Resource quota enforcement (intents per tenant, artifacts per tenant)
-- [ ] Tenant-specific rule pack isolation
-- [ ] Tenant audit log separation (S3 tenant-scoped buckets/prefixes)
+- [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 bounded slice delivered
+- [x] Resource quota enforcement (intents per tenant, artifacts per tenant) — P3-S2 bounded slice delivered
+- [x] Tenant-specific rule pack isolation — P3-S3 bounded slice delivered
+- [x] Tenant audit log separation (tenant-scoped audit query API) — P3-S4 bounded slice delivered; S3 cold storage remains Phase 4+ scope
 - [ ] Data residency: tenant data stays in assigned region (update threat model)
-- [ ] Tenant onboarding/offboarding procedures documented
+- [~] Tenant onboarding/offboarding procedures documented — P3-S5 bounded slice (skeleton/runner only); full API, S3 bucket provisioning, NATS account creation, RBAC setup remain future scope
 
 ---
 
@@ -162,17 +145,22 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P5 |
 | **Title** | Phase 3 Batch 4a — Performance Work |
 | **Purpose** | Optimize intent diff, graph traversal, and database queries; configure connection pooling; run load tests to validate Phase 3 production readiness. |
-| **Status** | 🔄 In Progress (Slice 1: rebase-engine sync benchmark slice delivered; Slice 2: graph-service + intent-api + intent-service DB benchmarks delivered with live Postgres) |
+| **Status** | 🔄 In Progress (bounded slices delivered: P5-S1 graph traversal benchmarks, P5-S2 DB query benchmarks, bounded HTTP load harness/report; full production load testing remains open) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
-| **Suggested Next Step** | Proceed with DB query optimization if needed; consider full HTTP server benchmarks with load testing infrastructure |
-| **Progress Notes** | **Batch 2 Slice 4 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity. **Slice 6 delivered:** graph-service benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). Observed latencies are microsecond-level for sync paths. Graph traversal benchmarks complete successfully across all sizes. DB benchmarks now live.
+| **Suggested Next Step** | Proceed with DB query optimization if needed; full production load testing gated on P5 full completion |
+| **Progress Notes** | **P5-S1 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity (~490ns-4.2µs, all under 100ms target). **P5-S2 delivered:** graph traversal benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). **Bounded HTTP load harness delivered:** intent-api HTTP server benchmarks with in-memory repos (3 load levels, all passed; scope: in-memory repos only, no live Postgres). Full production load testing remains gated on P5 full completion. |
 
 **Items:**
-- [x] **Batch 2 Slice 4:** rebase-engine sync diff + plan benchmark harness — benchmark harness with criterion, low/medium/high complexity cases
-- [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms (baseline: ~490ns-2.6µs, target met)
-
-**Benchmark Results (Batch 2 Slice 4):**
+- [x] Rebase-engine sync diff + plan benchmark harness — P5-S1 bounded slice delivered
+- [x] Graph traversal benchmarks (BFS, path finding, cycle detection) — P5-S1 bounded slice delivered
+- [x] DB query benchmarks with live Postgres — P5-S2 bounded slice delivered
+- [x] Intent-api HTTP server benchmarks (bounded — in-memory repos) — bounded slice delivered; full production load testing remains open
+- [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms (baseline: ~490ns-2.6µs, target met; may not be needed)
+- [ ] Graph traversal optimization (indexing, query optimization)
+- [ ] Database query optimization (indexes, query plans)
+- [ ] Connection pooling (Postgres, NATS)
+- [ ] Full production load testing (bounded HTTP harness delivered; full k6/Artillery production load testing remains gated on P5 full completion)
 
 ## P6 — Phase 3 Batch 4b — Security Hardening
 
@@ -181,13 +169,23 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P6 |
 | **Title** | Phase 3 Batch 4b — Security Hardening |
 | **Purpose** | Complete threat model v2, penetration testing, security review for all Phase 3 features, compliance checklist, incident response plan, and data retention/deletion verification. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 In Progress (bounded slices delivered: JWT auth middleware, RLS migration definitions, audit immutability trigger, retention verification types; pen test and external review remain open) |
 | **Priority** | High |
 | **Owner** | Security Team |
-| **Suggested Next Step** | Schedule threat model v2 review; begin penetration testing scope definition |
-| **Progress Notes** | Threat model v2 input captured in `08-phase-2b-security-findings-input.md`. Batch 4b gated on Batch 2 (observability) complete.
+| **Suggested Next Step** | Pen test scope definition; external security review engagement |
+| **Progress Notes** | **Bounded slices delivered:** JWT authentication middleware implemented (intent-api HTTP server), PostgreSQL RLS policy migration definitions documented, audit immutability trigger implemented (prevent UPDATE/DELETE on audit_events), retention verification types and S3 lifecycle config template (P6-S1 bounded slice). **Threat model v2** input captured in `08-phase-2b-security-findings-input.md`. **Pen test and external security review remain open.** |
 
 **Items:**
+- [x] JWT authentication middleware implemented — P6 bounded slice delivered
+- [x] PostgreSQL RLS policies defined — P6 bounded slice delivered
+- [x] Audit immutability trigger (prevent UPDATE/DELETE) — P6 bounded slice delivered
+- [x] Data retention and deletion verification (bounded — retention verification types + S3 lifecycle config template) — P6-S1 bounded slice delivered; live S3 enforcement remains Phase 4+ scope
+- [x] Threat model v2 documented
+- [x] Compliance checklist (bounded — SOC2/GDPR/ISO27001 control tracking)
+- [x] Incident response plan documented
+- [~] Penetration testing scope defined — bounded planning artifact; actual pen testing remains Phase 3/4 future work
+- [ ] Penetration testing completed
+- [ ] External security review sign-off
 
 ---
 

@@ -16,7 +16,7 @@
 | Phase 0 — Foundations | ✓ Complete | Repo scaffold, ADRs, architecture baseline, local dev, CI |
 | Phase 1 — Core Control Plane MVP | ✓ Complete | Intent schema + versioning (PR #21), Graph HTTP API (PR #22), Observability v1 (PR #23), Security v1 (PR #24) |
 | Phase 2 — Runtime-Integrated Rebase | ✅ Complete | Phase 2a runtime adapter delivered; Phase 2b complete and signed off — exit gate CLOSED |
-| Phase 3 — Compensation + Hardening | 🔄 Active | Batch 0 scaffold + planning ✅; Batch 1 largely delivered ⚠️; Batches 2–4 not started |
+| Phase 3 — Compensation + Hardening | 🔄 Active | Batch 0 scaffold + planning ✅; Batch 1 largely delivered ⚠️; Batch 2 (observability/SRE) in progress; Batch 3 (P3: tenant isolation) in progress; Batch 4 (P5: performance, P6: security) in progress |
 
 ---
 
@@ -68,14 +68,14 @@
 | Compensation planner (full — bounded delivered) | ✅ Delivered | Bounded planner: generates compensation plans from side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic (per class routing); fail-closed on unsupported strategy classes |
 | Compensation executor (four bounded executors — Rollback/CounterAction/FollowupNotice/Escalation) | ✅ Delivered | Bounded: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible); fail-closed on non-matching combos; S2 planner/executor alignment resolved (S2ExternalReversible routes to CounterAction+SemiAutomatic) |
 | Compensation audit trail | ✅ Delivered | Bounded: `compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed` events |
-| SLO definitions + alerting + error budget | Not started | |
-| Distributed tracing across Phase 2→3 | Not started | |
-| Performance benchmarks | Not started | |
-| Runbooks | Not started | |
-| Tenant isolation verification tests | Not started | |
-| Forensic bundle (model, generation, API, replay) | Not started | |
-| Threat model v2, penetration testing | Not started | |
-| Load testing | Not started | |
+| SLO definitions + alerting + error budget | 🔄 In Progress | Batch 2 bounded slices delivered (SLO definitions provisional, alerting rules, error budget panels); external SRE sign-off remains open |
+| Distributed tracing across Phase 2→3 | 🔄 In Progress | Batch 2 bounded in-process OTEL propagation delivered; cross-process propagation investigated and deferred (Temporal SDK limitation) |
+| Performance benchmarks | 🔄 In Progress | Bounded slices delivered: rebase-engine sync bench, graph traversal bench, DB bench, HTTP server bench with in-memory repos; full production load testing remains open |
+| Runbooks | 🔄 In Progress | RB6-RB10 delivered (rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn) |
+| Tenant isolation verification tests | 🔄 In Progress | Bounded slices delivered: P3-S1 (tenant isolation tests), P3-S2 (quota enforcement), P3-S3 (rule pack isolation), P3-S4 (audit query isolation), P3-S5 (tenant service scaffold) |
+| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface, download endpoint; bundle generation from real services and S3 storage remain open |
+| Threat model v2, penetration testing | 🔄 In Progress | Threat model v2 documented; pen test scope defined (planning artifact only); pen test execution and external security review remain open |
+| Load testing | 🔄 In Progress | Bounded HTTP load harness delivered (intent-api HTTP server with in-memory repos); full production load testing remains gated on P5 full completion |
 
 ---
 

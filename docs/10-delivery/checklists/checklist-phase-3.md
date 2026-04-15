@@ -350,11 +350,6 @@
     - Harness: crates/rebase-engine/benches/diff_latency.rs (criterion-based, harness=false)
     - Baseline results: docs/11-quality/benchmark-baseline-results.md (local baseline measured April 2026: p50 range 3.78–6.09 µs)
     - Note: This slice delivers benchmark harness infrastructure and local baseline numbers. Actual CI-averaged p50/p95/p99 targets and production load testing (k6/Artillery) remain gated on P2 full completion.
-
-[ ] Runbooks for common failure scenarios
-    Evidence:
-    - Doc: ../../09-operations/05-runbooks.md (updated with Phase 3 scenarios)
-    - Runbooks: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout
 ```
 
 ---
@@ -507,19 +502,18 @@
     - Doc: docs/10-delivery/09-completion-proposals-tracker.md (P4 export status)
     - Note: Bounded in-memory archive generation only. Does NOT claim persisted bundles, S3 storage, async jobs, or download-from-storage.
 
-[ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
-    Evidence:
-    - Code: intent-api stored export/download endpoint
-=======
-[x] Forensic bundle export: `GET /forensic-bundles/{bundle_id}/download` — P4 bounded slice
+[x] Forensic bundle download: `GET /forensic-bundles/{bundle_id}/download` (Phase 3 Batch 3b bounded slice)
     Evidence:
     - Code: crates/forensic-service/src/bundle_gen.rs (download_bundle method)
     - Code: crates/intent-api/src/lib.rs (download_forensic_bundle handler)
     - Code: crates/intent-api/src/lib.rs (DownloadForensicBundleQuery, wired route)
     - Tests: cargo test -p intent-api --all-features (4 new tests: download_success, not_found, wrong_tenant, pretty_json)
     - OpenAPI: docs/04-api/openapi.yaml (GET /forensic-bundles/{bundle_id}/download endpoint + schemas)
-    - Note: Bounded local/exportable download path - returns bundle manifest as downloadable JSON. No S3 integration. No content collection. Not a full production storage pipeline.
->>>>>>> origin/main
+    - Note: Bounded local/exportable download path — returns bundle manifest as downloadable JSON. No S3 integration. Not a full production storage pipeline.
+
+[ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download` (S3-backed — future phase scope)
+    Evidence:
+    - Code: intent-api stored export/download endpoint
 ```
 
 ---

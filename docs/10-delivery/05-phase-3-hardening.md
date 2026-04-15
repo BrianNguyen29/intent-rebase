@@ -178,8 +178,8 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 | Item | Description | Notes |
 |------|-------------|-------|
-| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | Not started — future phase scope |
-| 3-2 | Resource quota enforcement (intents per tenant, artifacts per tenant) | Not started — future phase scope |
+| 3-1 | Tenant isolation verification tests (cross-tenant access blocked, no data leakage) | ✅ P3-S1 bounded slice delivered — cross-tenant access blocked, no data leakage tests passing |
+| 3-2 | Resource quota enforcement (intents per tenant, artifacts per tenant) | ✅ P3-S2 bounded slice delivered — QuotaService with InMemoryQuotaRepository; quota checks on create_intent and ingest_artifact |
 | 3-3 | Tenant-specific rule pack isolation | ✅ P3-S3 bounded slice delivered — TenantRulePackRepository trait + InMemory impl; 8 tenant isolation tests passing. Full upload/management API and S3 integration remain future phase scope. |
 | 3-4 | Tenant audit log separation | ✅ P3-S4 bounded slice delivered — tenant-scoped audit query API (GET /audit/events, GET /audit/events/{event_id}); cross-tenant isolation tests passing. S3 cold storage and archival remain Phase 4+ scope. |
 | 3-5 | Data residency: tenant data stays in assigned region | Not started — future phase scope; update threat model |
