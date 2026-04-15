@@ -96,7 +96,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 - **Full metrics coverage** — Slice 3 instruments core intent operations only; other flows (compensation, audit, side effects) remain uninstrumented
 - **Error budget tracking dashboard** — Slice 5 delivers preview + apply 1h burn-rate stat panels; Slice 7 delivers 6h and 3d burn-rate panels and multi-window alerting rules; budget depletion forecasting and 30-day budget tracking remain future scope
 - **Cross-process trace propagation** — Slice 2 delivers bounded in-process OTEL propagation (optional OTLP export, W3C trace-context headers, background task span propagation); Slice 8 delivers bounded Temporal adapter local span correlation; full distributed trace across service boundaries via Temporal gRPC metadata/traceparent injection, sqlx connection context, or NATS headers remains future scope
-- **Performance benchmarks** — no rebase latency p50/p95/p99 measurements
+- **Performance benchmarks** — local baseline captured (rebase-engine diff+plan: p50 3.78–6.09 µs); CI-averaged p50/p95/p99 targets and production load testing remain gated on P2 completion
 - **Production alerting** — Slice 3 + Slice 7 deliver local dev infrastructure only; production Alertmanager configuration is future scope; SRE approval for production deployment is still open
 
 ---

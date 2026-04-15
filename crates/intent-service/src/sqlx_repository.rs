@@ -607,4 +607,42 @@ mod tests {
         );
         assert_eq!(version_status_from_string("unknown"), VersionStatus::Active);
     }
+
+    #[test]
+    fn test_default_tenant_resolver_returns_none() {
+        let resolver = DefaultTenantResolver;
+        // DefaultTenantResolver always returns None for tenant_id
+        assert!(resolver.resolve_tenant_id().is_none());
+    }
+
+    #[test]
+    fn test_default_tenant_resolver_returns_new_uuid_for_default() {
+        let resolver = DefaultTenantResolver;
+        // When None is expected, it generates a new random UUID
+        let tenant_id = resolver.resolve_tenant_id_or_default();
+        assert!(tenant_id != Uuid::nil());
+    }
+
+    #[test]
+    fn test_static_tenant_resolver_returns_provided_value() {
+        let specific_tenant = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let resolver = StaticTenantResolver::new(specific_tenant);
+        
+        // StaticTenantResolver always returns the configured tenant_id
+        assert_eq!(resolver.resolve_tenant_id(), Some(specific_tenant));
+        assert_eq!(resolver.resolve_tenant_id_or_default(), specific_tenant);
+    }
+
+    #[test]
+    fn test_static_tenant_resolver_with_different_tenants() {
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        
+        let resolver_a = StaticTenantResolver::new(tenant_a);
+        let resolver_b = StaticTenantResolver::new(tenant_b);
+        
+        // Each resolver returns its own tenant
+        assert_eq!(resolver_a.resolve_tenant_id_or_default(), tenant_a);
+        assert_eq!(resolver_b.resolve_tenant_id_or_default(), tenant_b);
+    }
 }

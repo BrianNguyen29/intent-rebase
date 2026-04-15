@@ -40,6 +40,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
 use validator::Validate;
 
+#[cfg(feature = "jwt-auth")]
+pub mod auth;
+
+// Re-export auth types for convenience when jwt-auth feature is enabled
+#[cfg(feature = "jwt-auth")]
+pub use auth::{AuthConfig, Claims, generate_test_token};
+
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
 // ============================================================================
@@ -4971,6 +4978,275 @@ pub fn build_router(
         .route("/forensic/export", post(export_forensic_archive))
         .with_state(state)
         .layer(CorsLayer::permissive())
+        // Trace context middleware must run AFTER request_id_middleware so that
+        // the span created here is a child of any extracted trace context.
+        .layer(axum::middleware::from_fn(request_id_middleware))
+        .layer(axum::middleware::from_fn(trace_context_middleware))
+        .layer(TraceLayer::new_for_http())
+}
+
+/// JWT authentication middleware for protected routes.
+///
+/// Public paths (/health, /ready, /metrics) bypass JWT validation.
+#[cfg(feature = "jwt-auth")]
+async fn jwt_auth_async(
+    auth_config: auth::AuthConfig,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::header;
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+    const PUBLIC_PATHS: &[&str] = &["/health", "/ready", "/metrics"];
+    let path = request.uri().path();
+
+    // Skip JWT check for public paths
+    if PUBLIC_PATHS.iter().any(|p| *p == path) {
+        return next.run(request).await;
+    }
+
+    let auth_header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v: &axum::http::HeaderValue| v.to_str().ok());
+
+    match auth_header {
+        Some(auth_value) if auth_value.starts_with("Bearer ") => {
+            let token = &auth_value[7..];
+            match decode::<auth::Claims>(
+                token,
+                &DecodingKey::from_secret(auth_config.jwt_secret.as_bytes()),
+                &Validation::new(auth_config.algorithm),
+            ) {
+                Ok(token_data) => {
+                    let mut request = request;
+                    request.extensions_mut().insert(token_data.claims);
+                    next.run(request).await
+                }
+                Err(_) => axum::response::Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body("Invalid or expired token".into())
+                    .unwrap(),
+            }
+        }
+        _ => axum::response::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body("Missing or invalid Authorization header".into())
+            .unwrap(),
+    }
+}
+
+/// Wrapper middleware that captures auth_config and delegates to jwt_auth_async
+#[cfg(feature = "jwt-auth")]
+async fn jwt_auth_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    jwt_auth_async(auth_config(), request, next).await
+}
+
+/// Returns the JWT auth config, loading from environment or using defaults
+#[cfg(feature = "jwt-auth")]
+fn auth_config() -> auth::AuthConfig {
+    auth::AuthConfig::default()
+}
+
+/// Build a router with JWT authentication middleware applied to protected routes.
+///
+/// Public routes (health, ready, metrics) are NOT protected by JWT.
+/// All other routes require a valid JWT in the Authorization header.
+///
+/// Use this instead of `build_router` when JWT authentication is enabled.
+#[cfg(feature = "jwt-auth")]
+#[allow(clippy::too_many_arguments)]
+pub fn build_router_with_jwt_auth(
+    service: Arc<IntentService>,
+    graph_service: Arc<GraphService>,
+    side_effect_service: Arc<compensation_service::SideEffectService>,
+    compensation_action_service: Arc<compensation_service::CompensationActionService>,
+    orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
+    orchestrator: Arc<RebaseOrchestrator>,
+    audit_service: Arc<dyn intent_rebase_types::AuditRepository>,
+    approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository>,
+    policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
+    event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    auth_config: auth::AuthConfig,
+) -> Router {
+    let state = AppState {
+        service,
+        graph_service,
+        side_effect_service,
+        compensation_action_service,
+        orchestration_runtime,
+        orchestrator,
+        audit_service,
+        approval_request_repo,
+        policy_snapshot_repo,
+        event_publisher,
+        forensic_service,
+        forensic_archive_generator,
+        start_time: Instant::now(),
+    };
+
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler))
+        .route("/metrics", get(metrics_handler))
+        .route("/v1/intents/validate", post(validate_intent))
+        .route("/intents", post(create_intent))
+        .route("/intents/{intent_id}", get(get_intent_head))
+        .route("/intents/{intent_id}/versions", post(create_version))
+        .route("/intents/{intent_id}/versions", get(list_versions))
+        .route(
+            "/intents/{intent_id}/versions/{version_number}",
+            get(get_version),
+        )
+        .route("/intents/{intent_id}/diff", post(compute_diff))
+        .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+        .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
+        // Replay endpoint (Phase 2b bounded replay slice)
+        .route("/intents/{intent_id}/replay", post(replay_intent))
+        // Side effect query endpoint (Phase 3 Batch 1 groundwork)
+        .route("/intents/{intent_id}/side-effects", get(list_side_effects))
+        // Orchestration dashboard endpoint (Phase 3 Batch 1 bounded read-only slice)
+        .route(
+            "/intents/{intent_id}/orchestration-dashboard",
+            get(get_orchestration_dashboard),
+        )
+        // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
+        .route(
+            "/intents/{intent_id}/compensation-actions",
+            get(list_compensation_actions),
+        )
+        // Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
+        // NOTE: These routes are placed before graph routes to avoid path conflict
+        .route(
+            "/compensation-actions/{action_id}/approve",
+            post(approve_compensation_action),
+        )
+        .route(
+            "/compensation-actions/{action_id}/waive",
+            post(waive_compensation_action),
+        )
+        .route(
+            "/compensation-actions/{action_id}/execute",
+            post(execute_compensation_action),
+        )
+        // Compensation action manual retry and DLQ endpoints (Phase 3 Batch 1 bounded manual retry slice)
+        .route(
+            "/compensation-actions/{action_id}/reapprove",
+            post(reapprove_compensation_action),
+        )
+        // Bounded compensation planner endpoint (Phase 3 bounded planner slice)
+        .route(
+            "/compensation-actions/plan",
+            post(plan_compensation_actions),
+        )
+        .route("/compensation-actions/dlq", get(list_dlq_candidates))
+        // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
+        .route(
+            "/compensation-actions/batch-candidates",
+            get(list_batch_candidates),
+        )
+        // Policy gate evaluation endpoints (Phase 3 Batch 1 bounded read-only slice)
+        // NOTE: These routes are placed before graph routes to avoid path conflict
+        .route(
+            "/compensation-actions/policy-gate",
+            get(get_compensation_policy_gate),
+        )
+        .route(
+            "/intents/{intent_id}/compensation-policy-gate",
+            get(get_intent_compensation_policy_gate),
+        )
+        // Orchestration coordination status endpoints (Phase 3 Batch 1 bounded read-only orchestration view)
+        .route(
+            "/compensation-actions/orchestration-coordination",
+            get(get_orchestration_coordination),
+        )
+        .route(
+            "/intents/{intent_id}/orchestration-coordination",
+            get(get_intent_orchestration_coordination),
+        )
+        // Manual orchestration & dry-run planner endpoints (Phase 3 Batch 1 bounded slice)
+        // NOTE: These routes are placed before graph routes to avoid path conflict
+        .route(
+            "/compensation-actions/orchestration-dry-run",
+            post(orchestration_dry_run),
+        )
+        .route(
+            "/compensation-actions/batch-approve",
+            post(batch_approve_compensation_actions),
+        )
+        .route(
+            "/compensation-actions/batch-reapprove",
+            post(batch_reapprove_compensation_actions),
+        )
+        .route(
+            "/compensation-actions/batch-execute",
+            post(batch_execute_compensation_actions),
+        )
+        // Orchestration run endpoints (Phase 3 Batch 1 bounded single-shot HTTP orchestration slice)
+        .route("/compensation-actions/runs", post(create_orchestration_run))
+        .route(
+            "/compensation-actions/runs/{run_id}",
+            get(get_orchestration_run),
+        )
+        // Graph endpoints (Phase 1 - internal CRUD only)
+        .route("/v1/graph/nodes", post(create_graph_node))
+        .route("/v1/graph/nodes", get(list_graph_nodes))
+        .route("/v1/graph/nodes/{node_id}", get(get_graph_node))
+        .route("/v1/graph/edges", post(create_graph_edge))
+        .route("/v1/graph/edges", get(list_graph_edges))
+        .route("/v1/graph/nodes/{node_id}/edges", get(list_edges_from_node))
+        // Artifact ingest with optional side effect capture (Phase 3 Batch 1 groundwork)
+        .route("/v1/graph/artifacts", post(ingest_artifact))
+        // Approval request endpoints (Phase 2b bounded slice)
+        .route(
+            "/approval-requests/pending",
+            get(list_pending_approval_requests),
+        )
+        .route(
+            "/approval-requests/{approval_request_id}/approve",
+            post(approve_approval_request),
+        )
+        .route(
+            "/approval-requests/{approval_request_id}/reject",
+            post(reject_approval_request),
+        )
+        // POST expire - bounded manual expiry transition (Phase 2b)
+        .route(
+            "/approval-requests/{approval_request_id}/expire",
+            post(expire_approval_request),
+        )
+        // GET revalidate - bounded read-only scope comparison (Phase 2b)
+        .route(
+            "/approval-requests/{approval_request_id}/revalidate",
+            get(revalidate_approval_request),
+        )
+        // Policy snapshot endpoints (Phase 2 bounded read-only slice)
+        .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
+        .route(
+            "/policy-snapshots/intent/{intent_id}/latest",
+            get(get_latest_policy_snapshot),
+        )
+        .route(
+            "/policy-snapshots/intent/{intent_id}/versions/{version}",
+            get(get_policy_snapshot_by_version),
+        )
+        .route(
+            "/policy-snapshots/intent/{intent_id}",
+            get(list_policy_snapshots),
+        )
+        // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/verify", post(verify_forensic_bundle))
+        // Forensic archive export endpoint (Phase 3 Batch 3b bounded slice)
+        .route("/forensic/export", post(export_forensic_archive))
+        .with_state(state)
+        .layer(CorsLayer::permissive())
+        // JWT auth layer - skips public paths internally
+        .layer(axum::middleware::from_fn(jwt_auth_middleware))
         // Trace context middleware must run AFTER request_id_middleware so that
         // the span created here is a child of any extracted trace context.
         .layer(axum::middleware::from_fn(request_id_middleware))

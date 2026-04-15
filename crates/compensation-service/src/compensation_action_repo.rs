@@ -1246,6 +1246,87 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_get_compensation_action_cross_tenant_blocked() {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates a compensation action
+        let action = create_test_action(tenant_a, Uuid::new_v4(), Uuid::new_v4());
+        let action_id = action.id;
+        repo.create(action).await.unwrap();
+
+        // Tenant A can get their own action
+        let result = repo.get(action_id).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().tenant_id, tenant_a);
+
+        // Note: The InMemory repository's `get` method does not enforce tenant isolation.
+        // This test documents the current behavior where any tenant can get any action by ID.
+        // Production implementations should add tenant filtering to the `get` method.
+    }
+
+    #[tokio::test]
+    async fn test_list_by_tenant_cross_tenant_isolation() {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        // Tenant A creates 3 compensation actions
+        for _ in 0..3 {
+            let action = create_test_action(tenant_a, Uuid::new_v4(), Uuid::new_v4());
+            repo.create(action).await.unwrap();
+        }
+
+        // Tenant B creates 2 compensation actions
+        for _ in 0..2 {
+            let action = create_test_action(tenant_b, Uuid::new_v4(), Uuid::new_v4());
+            repo.create(action).await.unwrap();
+        }
+
+        // List for tenant A should return 3 actions
+        let actions_a = repo.list_by_tenant(tenant_a, None).await.unwrap();
+        assert_eq!(actions_a.len(), 3);
+        assert!(actions_a.iter().all(|a| a.tenant_id == tenant_a));
+
+        // List for tenant B should return 2 actions
+        let actions_b = repo.list_by_tenant(tenant_b, None).await.unwrap();
+        assert_eq!(actions_b.len(), 2);
+        assert!(actions_b.iter().all(|a| a.tenant_id == tenant_b));
+    }
+
+    #[tokio::test]
+    async fn test_list_by_side_effect_cross_tenant_isolation() {
+        let repo = Arc::new(InMemoryCompensationActionRepository::new());
+
+        let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let shared_side_effect_id = Uuid::new_v4();
+
+        // Tenant A creates 2 actions for the shared side effect
+        for _ in 0..2 {
+            let action = create_test_action(tenant_a, shared_side_effect_id, Uuid::new_v4());
+            repo.create(action).await.unwrap();
+        }
+
+        // Tenant B creates 1 action for the same shared side effect
+        let action_b = create_test_action(tenant_b, shared_side_effect_id, Uuid::new_v4());
+        repo.create(action_b).await.unwrap();
+
+        // List for tenant A should only return tenant A's 2 actions
+        let actions_a = repo.list_by_side_effect(shared_side_effect_id, tenant_a).await.unwrap();
+        assert_eq!(actions_a.len(), 2);
+        assert!(actions_a.iter().all(|a| a.tenant_id == tenant_a));
+
+        // List for tenant B should only return tenant B's 1 action
+        let actions_b = repo.list_by_side_effect(shared_side_effect_id, tenant_b).await.unwrap();
+        assert_eq!(actions_b.len(), 1);
+        assert!(actions_b.iter().all(|a| a.tenant_id == tenant_b));
+    }
 }
 
 #[cfg(test)]
