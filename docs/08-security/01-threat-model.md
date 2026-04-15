@@ -69,3 +69,19 @@ Mitigations:
 - source trust tiers
 - content sanitization by source type
 - low-confidence route to manual review
+
+---
+
+## Data Residency (Bounded Verification/Planning)
+
+**Current state (truthful):**
+- Single-region deployment today (no multi-region routing implemented)
+- `tenant.region` metadata field exists on Tenant model
+- Target-region tagging is recorded but **no enforcement or routing exists**
+- Enforcement and routing to tenant-assigned regions remains **future phase scope (Phase 4+)**
+
+**What this means:**
+- Tenant data is not currently segmented by region at the storage or API layer
+- Bundle generation and storage use the locally configured S3/MinIO endpoint
+- Cross-region data residency guarantees cannot be claimed at this time
+- Compliance evidence (e.g., GDPR Art. 30 records of processing) should note single-region current state

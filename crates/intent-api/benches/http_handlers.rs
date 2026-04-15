@@ -420,6 +420,17 @@ fn bench_http_server(c: &mut Criterion) {
                 .with_audit_event_count(100)
                 .with_policy_snapshot_count(3),
         );
+        let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+        let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+            Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+        let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
+            forensic_service::ForensicBundleService::new(
+                forensic_bundle_repo,
+                forensic_bundle_storage,
+                forensic_bundle_collector,
+            ),
+        );
 
         let state = intent_api::AppState {
             service,
@@ -434,6 +445,7 @@ fn bench_http_server(c: &mut Criterion) {
             event_publisher: None,
             forensic_service: forensic_svc,
             forensic_archive_generator: forensic_archive_gen,
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: std::time::Instant::now(),
         };
 
@@ -450,6 +462,7 @@ fn bench_http_server(c: &mut Criterion) {
             state.event_publisher.clone(),
             state.forensic_service.clone(),
             state.forensic_archive_generator.clone(),
+            state.forensic_bundle_service.clone(),
         );
 
         // Bind to ephemeral port using tokio

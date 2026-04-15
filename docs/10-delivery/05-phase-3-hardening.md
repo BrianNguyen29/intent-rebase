@@ -184,13 +184,13 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 3-4 | Tenant audit log separation | ✅ P3-S4 bounded slice delivered — tenant-scoped audit query API (GET /audit/events, GET /audit/events/{event_id}); cross-tenant isolation tests passing. S3 cold storage and archival remain Phase 4+ scope. |
 | 3-5 | Data residency: tenant data stays in assigned region | Not started — future phase scope; update threat model |
 | 3-6 | Tenant onboarding/offboarding procedures documented | ~ P3-S5 bounded slice delivered (skeleton/runner only) — tenant-service scaffold (Tenant model + repository + InMemory impl), tenant onboarding procedure skeleton in `09-operations/06-tenant-onboarding.md`. Full API, S3 bucket provisioning, NATS account creation, and RBAC setup remain future phase scope. |
-| 3-7 | Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) | |
-| 3-8 | Bundle generation: collect intent versions, artifacts, audit events, graph state | S3: `forensic-bundles/{tenant}/{bundle_id}/` |
-| 3-9 | Bundle generation API: `POST /api/v1/forensic/bundle` | Role: `forensic-access` |
-| 3-10 | Bundle integrity verification (hash chain) | |
-| 3-11 | Bundle replay capability (replay bundle to reproduce state) | |
-| 3-12 | Bundle retention policy (configurable per tenant, compliance) | S3 lifecycle |
-| 3-13 | Forensic bundle export: `GET /api/v1/forensic/bundles/{id}/download` | |
+| 3-7 | Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) | ✅ delivered (Batch 0 scaffold) |
+| 3-8 | Bundle generation: collect intent versions, artifacts, audit events, graph state from real services | ✅ P4 bounded slice delivered — ForensicDataCollector + real repository calls |
+| 3-9 | Bundle generation API: `POST /forensic/bundle` | ✅ P4 bounded slice delivered — bounded synchronous path: collect + generate manifest + persist to S3/MinIO + record Ready |
+| 3-10 | Bundle integrity verification (hash chain) | ✅ Phase 3 Batch 3b bounded slice delivered — verify_bundle_integrity function |
+| 3-11 | Bundle replay capability (replay bundle to reproduce state) | 🔄 Phase 4 scope — bounded replay verification surface (read-only integrity check) delivered |
+| 3-12 | Bundle retention policy (configurable per tenant, compliance) | 🔄 Phase 4 scope — retention policy metadata model delivered; S3 lifecycle enforcement future work |
+| 3-13 | Forensic bundle export: `GET /forensic/bundles/{bundle_id}/download` | 🔄 bounded local/exportable download delivered; S3-backed retrieval is Phase 4 scope |
 
 ---
 

@@ -226,7 +226,7 @@ class ForensicBundleVerifier:
 ### Generation API
 
 ```yaml
-POST /api/v1/forensic/bundle:
+POST /forensic/bundle:
   description: Generate forensic bundle
   body:
     {
@@ -246,7 +246,7 @@ POST /api/v1/forensic/bundle:
       "estimated_completion": "ISO8601"
     }
 
-GET /api/v1/forensic/bundle/{bundle_id}:
+GET /forensic/bundle/{bundle_id}:
   response:
     {
       "bundle_id": "uuid",
