@@ -5,10 +5,26 @@
 //!
 //! This test is gated behind the `load-test` feature to avoid running in normal `cargo test`.
 //! Run with: cargo test -p intent-api --test load_test --features load-test -- --nocapture
+//!
+//! ## Local Live Load Test (SQLx-backed)
+//!
+//! For local live load testing against PostgreSQL via docker-compose:
+//!
+//! 1. Start local infrastructure:
+//!    cd infrastructure/local && docker-compose up -d postgres
+//!
+//! 2. Set DATABASE_URL:
+//!    export DATABASE_URL="postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase"
+//!
+//! 3. Run the SQLx-backed load test:
+//!    cargo test -p intent-api --test load_test --features load-test,sqlx-load-test -- --nocapture test_load_sqlx
+//!
+//! Note: Requires migrations to be run first. See infrastructure/migrations/.
 
 use axum::Router;
 use rebase_orchestrator::RebaseOrchestrator;
 use reqwest::Client;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +42,11 @@ const LOAD_TEST_ITEMS: &[(usize, usize)] = &[
 // SLO thresholds from docs
 const SLO_P95_LATENCY_MS: u64 = 10_000; // p95 < 10s
 const SLO_ERROR_RATE: f64 = 0.01; // < 1% error rate
+
+/// Check if DATABASE_URL is set for SQLx load test
+fn requires_database_url() -> bool {
+    std::env::var("DATABASE_URL").is_ok()
+}
 
 #[derive(Debug)]
 struct LoadTestMetrics {
@@ -201,6 +222,17 @@ fn create_test_router() -> Router {
             .with_audit_event_count(100)
             .with_policy_snapshot_count(3),
     );
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
+        forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ),
+    );
 
     intent_api::build_router(
         service,
@@ -215,6 +247,7 @@ fn create_test_router() -> Router {
         None, // event_publisher
         forensic_svc,
         forensic_archive_gen,
+        forensic_bundle_svc,
     )
 }
 
@@ -421,4 +454,217 @@ async fn test_load() {
     println!("{}", "=".repeat(80));
 
     assert!(all_passed, "Some load levels did not meet SLO requirements");
+}
+
+/// Create a router with SQLx-backed repositories for live load testing.
+///
+/// This is the production-like configuration that uses actual PostgreSQL
+/// via the DATABASE_URL environment variable.
+fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
+    use graph_service::{GraphService, InMemoryGraphRepository};
+    use intent_service::{IntentService, SqlxIntentRepository};
+    use runtime_adapter::MockAdapter;
+    use std::sync::Arc;
+
+    let repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
+    let graph_repo = Arc::new(InMemoryGraphRepository::new());
+    let checkpoint_repo = Arc::new(intent_service::SqlxCheckpointRepository::new(pool.clone()));
+    let graph_svc = Arc::new(GraphService::new(graph_repo));
+    let service = Arc::new(IntentService::new(repo));
+    let orchestrator = Arc::new(RebaseOrchestrator::new(
+        checkpoint_repo,
+        graph_svc.clone(),
+        Arc::new(MockAdapter::ready()),
+    ));
+    let audit_repo: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
+    let approval_repo = intent_service::SqlxApprovalRequestRepository::new(pool.clone());
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> =
+        Arc::new(intent_service::SqlxPolicySnapshotRepository::new(pool.clone()));
+    let side_effect_repo = compensation_service::SqlxSideEffectRepository::new(pool.clone());
+    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+        Arc::new(side_effect_repo),
+    ));
+    let compensation_action_repo =
+        Arc::new(compensation_service::SqlxCompensationActionRepository::new(pool.clone()));
+    let compensation_action_svc = Arc::new(
+        compensation_service::CompensationActionService::new(compensation_action_repo),
+    );
+    let orchestration_run_repo =
+        Arc::new(compensation_service::SqlxOrchestrationRunRepository::new(pool.clone()));
+    let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+        compensation_action_svc.clone(),
+        orchestration_run_repo,
+    ));
+    let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
+    let forensic_archive_gen = Arc::new(
+        forensic_service::InMemoryForensicArchiveGenerator::new()
+            .with_intent_version_count(5)
+            .with_artifact_count(10)
+            .with_audit_event_count(100)
+            .with_policy_snapshot_count(3),
+    );
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
+        forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ),
+    );
+
+    intent_api::build_router(
+        service,
+        graph_svc,
+        side_effect_svc,
+        compensation_action_svc,
+        orchestration_runtime,
+        orchestrator,
+        audit_repo,
+        Arc::new(approval_repo),
+        policy_snapshot_repo,
+        None, // event_publisher
+        forensic_svc,
+        forensic_archive_gen,
+        forensic_bundle_svc,
+    )
+}
+
+/// SQLx-backed load test for local live infrastructure testing.
+///
+/// Scope: Tests intent-api HTTP server against live PostgreSQL.
+/// This variant uses SQLx-backed repositories instead of in-memory,
+/// enabling verification of:
+/// - PostgreSQL connection pool behavior under load
+/// - Actual SQL query performance
+/// - Transaction handling
+///
+/// Limitations:
+/// - Uses in-memory graph repository (graph-service doesn't have SQLx impl yet)
+/// - No NATS integration
+/// - No actual side effect execution
+///
+/// Requirements:
+/// - DATABASE_URL environment variable must be set
+/// - PostgreSQL must be running (e.g., via docker-compose)
+/// - Migrations must be applied
+///
+/// Execution:
+/// ```bash
+/// cd infrastructure/local && docker-compose up -d postgres
+/// export DATABASE_URL="postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase"
+/// cargo test -p intent-api --test load_test --features load-test,sqlx-load-test -- --nocapture test_load_sqlx
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg(feature = "sqlx-load-test")]
+async fn test_load_sqlx() {
+    if !requires_database_url() {
+        println!("\n{}", "=".repeat(80));
+        println!("SKIPPED: test_load_sqlx requires DATABASE_URL environment variable");
+        println!("Set it with: export DATABASE_URL=\"postgres://user:pass@localhost:5432/db\"");
+        println!("Or start postgres via: cd infrastructure/local && docker-compose up -d postgres");
+        println!("{}", "=".repeat(80));
+        return;
+    }
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    println!("\n{}", "=".repeat(80));
+    println!("SQLX-BACKED LOAD TEST");
+    println!("Connecting to: {}", database_url.replace(&*std::env::var("PGPASSWORD").unwrap_or_default(), "****"));
+    println!("{:=<80}", "");
+
+    // Create SQLx pool with connection pooling settings suitable for load testing
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .min_connections(2)
+        .acquire_timeout(Duration::from_secs(30))
+        .idle_timeout(Duration::from_secs(600))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database - ensure postgres is running and migrations are applied");
+
+    println!("Connected to PostgreSQL - pool created with max_connections=20");
+
+    // Create SQLx-backed router
+    let router = create_sqlx_test_router(pool.clone());
+
+    // Bind to a random available port
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind to TCP port");
+    let addr = listener.local_addr().expect("Failed to get local address");
+    let port = addr.port();
+    let base_url = format!("http://127.0.0.1:{}", port);
+
+    println!("Server listening on {}", base_url);
+    println!("{:=<80}", "");
+
+    // Spawn the server
+    let server = axum::serve(listener, router);
+    let server_handle = tokio::spawn(async move {
+        server.await.expect("Server error");
+    });
+
+    // Give the server a moment to start
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Create HTTP client with connection pooling
+    let client = Client::builder()
+        .pool_max_idle_per_host(20)
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client");
+
+    // Run load tests at each level (using smaller values for SQLx to avoid overwhelming DB)
+    let sqlx_load_levels: &[(usize, usize)] = &[
+        (5, 500),   // Level 1: 5 concurrent clients, 500 total requests
+        (10, 1000), // Level 2: 10 concurrent clients, 1000 total requests
+    ];
+
+    let mut all_passed = true;
+    let mut all_stats = Vec::new();
+
+    for (level, &(concurrent_clients, total_requests)) in sqlx_load_levels.iter().enumerate() {
+        let stats = run_load_level(&client, &base_url, level + 1, concurrent_clients, total_requests).await;
+        print_report(level + 1, concurrent_clients, total_requests, &stats);
+
+        let violations = check_slo_compliance(&stats, level + 1);
+        if !violations.is_empty() {
+            all_passed = false;
+            for v in &violations {
+                println!("  WARNING: {}", v);
+            }
+        } else {
+            println!("  All SLOs met");
+        }
+        all_stats.push(stats);
+    }
+
+    // Shutdown server
+    server_handle.abort();
+
+    // Close the pool
+    pool.close().await;
+
+    println!("\n{}", "=".repeat(80));
+    println!("SQLX LOAD TEST SUMMARY");
+    println!("{:=<80}", "");
+
+    // Final assertions
+    for (i, stats) in all_stats.iter().enumerate() {
+        print_report(i + 1, sqlx_load_levels[i].0, sqlx_load_levels[i].1, stats);
+    }
+
+    if all_passed {
+        println!("\nALL SQLX LOAD LEVELS PASSED - SLOs MET");
+    } else {
+        println!("\nSOME SQLX LOAD LEVELS FAILED - SLO VIOLATIONS DETECTED");
+    }
+    println!("{}", "=".repeat(80));
+
+    assert!(all_passed, "Some SQLx load levels did not meet SLO requirements");
 }

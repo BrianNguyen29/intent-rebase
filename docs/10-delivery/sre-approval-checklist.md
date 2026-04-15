@@ -21,7 +21,8 @@
 - [x] Criterion benchmarks for graph-service (all sizes pass)
 - [x] HTTP server benchmarks (p50 health ~270µs, create ~370µs)
 - [x] DB operation benchmarks (p50 create_intent ~25ms with live Postgres)
-- [x] Bounded HTTP load test harness (3 levels, all PASS — scope: intent-api HTTP server with in-memory repos; full production load testing remains open)
+- [x] Bounded HTTP load test (3 levels, all PASS — L1 p95 5ms, L2 p95 33ms, L3 p95 60ms, 0% errors; scope: in-memory repos)
+- [x] SQLx-backed local-live load test (all PASS — SQLx-L1 p95 5ms, SQLx-L2 p95 4ms, 0% errors; scope: docker-compose Postgres, pool config max_connections=20)
 - [ ] Full production load test (k6/Artillery) — gated on P5 full completion
 
 ### Reliability

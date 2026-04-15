@@ -254,6 +254,10 @@ pub struct AppState {
     /// in-memory archive generation with scaffolded data. Does NOT query
     /// real services or persist data.
     pub forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    /// P4 (bounded slice): Forensic bundle service for real data collection,
+    /// bundle generation, and S3/MinIO persistence. Orchestrates the full
+    /// generate→store→record cycle.
+    pub forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     pub start_time: Instant,
 }
 
@@ -4367,6 +4371,211 @@ async fn ingest_artifact(
 }
 
 // ============================================================================
+// Forensic Bundle Handler (P4 bounded slice)
+// ============================================================================
+
+/// Request body for forensic bundle generation
+///
+/// **P4 bounded slice:** Collects real data, generates a bundle manifest,
+/// persists it to S3/MinIO, and records the bundle in the repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent IDs to include in the bundle
+    pub intent_ids: Vec<Uuid>,
+    /// Time range to collect data for
+    pub time_range: ForensicBundleTimeRange,
+    /// Purpose of the bundle
+    pub purpose: forensic_service::BundlePurpose,
+    /// Actor who triggered bundle generation
+    #[serde(default = "default_actor")]
+    pub created_by: String,
+}
+
+fn default_actor() -> String {
+    "system".to_string()
+}
+
+/// Time range for forensic bundle request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleTimeRange {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for forensic bundle creation
+///
+/// **P4 bounded slice:** Returns the generated bundle manifest with
+/// storage location and size. The bundle bytes are already persisted
+/// to S3/MinIO when this response is returned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleResponse {
+    /// Unique identifier for the generated bundle
+    pub bundle_id: Uuid,
+    /// When the bundle was created
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Actor who triggered bundle generation
+    pub created_by: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Time range covered by the bundle
+    pub time_range: ForensicBundleTimeRange,
+    /// Bundle generation status (always "ready" on success)
+    pub status: forensic_service::BundleStatus,
+    /// Purpose of the bundle
+    pub purpose: forensic_service::BundlePurpose,
+    /// Summary of bundle contents
+    pub contents: ForensicBundleContentsSummary,
+    /// Integrity information
+    pub integrity: ForensicBundleIntegrityInfo,
+    /// Storage location (S3/MinIO path)
+    pub storage_location: String,
+    /// Size of stored bundle in bytes
+    pub bundle_size_bytes: usize,
+    /// Human-readable message
+    pub message: String,
+}
+
+/// Summary of contents in a forensic bundle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleContentsSummary {
+    pub intent_versions: usize,
+    pub artifacts: usize,
+    pub approvals: usize,
+    pub audit_events: usize,
+    pub policy_snapshots: usize,
+}
+
+/// Integrity information for a forensic bundle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleIntegrityInfo {
+    /// SHA-256 hash of the bundle manifest
+    pub manifest_hash: String,
+    /// Whether the hash chain was verified (always false for new bundles)
+    pub chain_verified: bool,
+    /// When integrity was computed
+    pub verification_timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// POST /forensic/bundle - Generate and store a forensic bundle
+///
+/// P4 (bounded slice): Collects real data from intent/graph/audit repositories,
+/// generates a forensic bundle manifest with integrity hashes, persists the
+/// bundle bytes to S3/MinIO, and records the bundle in the repository.
+///
+/// **Bounded synchronous path:**
+/// 1. Collects intent versions, audit events, and policy snapshots via ForensicDataCollector
+/// 2. Generates bundle manifest with integrity hashes via BundleGeneratorService
+/// 3. Persists bundle JSON to S3/MinIO via BundleStorage
+/// 4. Records bundle status=Ready in repository
+///
+/// **Truthful semantics:**
+/// - `bundle_id` is a unique identifier for the persisted bundle
+/// - `storage_location` shows where bundle bytes are stored (S3/MinIO path)
+/// - `bundle_size_bytes` reflects the JSON-serialized bundle size
+/// - `contents.*_count` reflects actual collected data counts
+/// - `integrity.manifest_hash` is the SHA-256 of the serialized bundle manifest
+///
+/// **Tenant scoping:** All data collection is scoped to the provided `tenant_id`.
+/// Cross-tenant access is denied by the collector.
+///
+/// **NOT claimed in this slice:**
+/// - Async job orchestration for large bundle generation
+/// - Bundle retrieval/download API (GET /forensic/bundle/{id}/download)
+/// - Bundle replay (state reproduction from stored bundle)
+/// - Hash chain integrity verification
+async fn create_forensic_bundle(
+    State(state): State<AppState>,
+    Json(request): Json<ForensicBundleRequest>,
+) -> Result<(StatusCode, Json<ForensicBundleResponse>), ApiErrorResponse> {
+    let service_request = forensic_service::CreateForensicBundleRequest {
+        tenant_id: request.tenant_id,
+        intent_ids: request.intent_ids.clone(),
+        time_range: forensic_service::BundleTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        created_by: request.created_by.clone(),
+    };
+
+    let response = state
+        .forensic_bundle_service
+        .create_bundle(service_request)
+        .await
+        .map_err(|e| match e {
+            forensic_service::ForensicBundleServiceError::NotFound(_) => {
+                ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))
+            }
+            forensic_service::ForensicBundleServiceError::Collection(e) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "collection failed: {}",
+                    e
+                )))
+            }
+            forensic_service::ForensicBundleServiceError::Generation(e) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "generation failed: {}",
+                    e
+                )))
+            }
+            forensic_service::ForensicBundleServiceError::Storage(e) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "storage failed: {}",
+                    e
+                )))
+            }
+            forensic_service::ForensicBundleServiceError::Repository(e) => {
+                ApiErrorResponse(e)
+            }
+            forensic_service::ForensicBundleServiceError::Serialization(e) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "serialization failed: {}",
+                    e
+                )))
+            }
+            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => {
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "invalid time range: {}",
+                    e
+                )))
+            }
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ForensicBundleResponse {
+            bundle_id: response.bundle.bundle_id,
+            created_at: response.bundle.created_at,
+            created_by: response.bundle.created_by,
+            tenant_id: response.bundle.tenant_id,
+            time_range: ForensicBundleTimeRange {
+                start: response.bundle.time_range.start,
+                end: response.bundle.time_range.end,
+            },
+            status: response.bundle.status,
+            purpose: response.bundle.purpose,
+            contents: ForensicBundleContentsSummary {
+                intent_versions: response.bundle.contents.intent_versions,
+                artifacts: response.bundle.contents.artifacts,
+                approvals: response.bundle.contents.approvals,
+                audit_events: response.bundle.contents.audit_events,
+                policy_snapshots: response.bundle.contents.policy_snapshots,
+            },
+            integrity: ForensicBundleIntegrityInfo {
+                manifest_hash: response.bundle.integrity.manifest_hash,
+                chain_verified: response.bundle.integrity.chain_verified,
+                verification_timestamp: response.bundle.integrity.verification_timestamp,
+            },
+            storage_location: response.storage_location,
+            bundle_size_bytes: response.bundle_size_bytes,
+            message: response.message,
+        }),
+    ))
+}
+
+// ============================================================================
 // Forensic Verification Handler (Phase 3 Batch 3b bounded slice)
 // ============================================================================
 
@@ -4806,6 +5015,7 @@ pub fn build_router(
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
 ) -> Router {
     let state = AppState {
         service,
@@ -4820,6 +5030,7 @@ pub fn build_router(
         event_publisher,
         forensic_service,
         forensic_archive_generator,
+        forensic_bundle_service,
         start_time: Instant::now(),
     };
 
@@ -4976,6 +5187,8 @@ pub fn build_router(
         .route("/forensic/verify", post(verify_forensic_bundle))
         // Forensic archive export endpoint (Phase 3 Batch 3b bounded slice)
         .route("/forensic/export", post(export_forensic_archive))
+        // Forensic bundle generation endpoint (P4 bounded slice)
+        .route("/forensic/bundle", post(create_forensic_bundle))
         .with_state(state)
         .layer(CorsLayer::permissive())
         // Trace context middleware must run AFTER request_id_middleware so that
@@ -5072,6 +5285,7 @@ pub fn build_router_with_jwt_auth(
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     auth_config: auth::AuthConfig,
 ) -> Router {
     let state = AppState {
@@ -5087,6 +5301,7 @@ pub fn build_router_with_jwt_auth(
         event_publisher,
         forensic_service,
         forensic_archive_generator,
+        forensic_bundle_service,
         start_time: Instant::now(),
     };
 
@@ -5243,6 +5458,8 @@ pub fn build_router_with_jwt_auth(
         .route("/forensic/verify", post(verify_forensic_bundle))
         // Forensic archive export endpoint (Phase 3 Batch 3b bounded slice)
         .route("/forensic/export", post(export_forensic_archive))
+        // Forensic bundle generation endpoint (P4 bounded slice)
+        .route("/forensic/bundle", post(create_forensic_bundle))
         .with_state(state)
         .layer(CorsLayer::permissive())
         // JWT auth layer - skips public paths internally
@@ -5309,6 +5526,7 @@ pub fn build_router_with_sql_audit_and_approval(
     event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -5332,6 +5550,7 @@ pub fn build_router_with_sql_audit_and_approval(
         event_publisher,
         forensic_service,
         forensic_archive_generator,
+        forensic_bundle_service,
     )
 }
 
@@ -5389,6 +5608,16 @@ mod tests {
                 .with_audit_event_count(100)
                 .with_policy_snapshot_count(3),
         );
+        // P4: In-memory forensic bundle service for tests (uses in-memory repo and storage)
+        let bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+        let bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+        // Use a mock collector that returns empty data for basic tests
+        let bundle_collector = Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+        let forensic_bundle_svc = Arc::new(forensic_service::ForensicBundleService::new(
+            bundle_repo,
+            bundle_storage,
+            bundle_collector,
+        ));
         AppState {
             service,
             graph_service: graph_svc,
@@ -5402,6 +5631,7 @@ mod tests {
             event_publisher: None, // Phase 2b: event publishing optional in tests
             forensic_service: forensic_svc,
             forensic_archive_generator: forensic_archive_gen,
+            forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
         }
     }
@@ -6000,6 +6230,11 @@ mod tests {
             forensic_archive_generator: Arc::new(
                 forensic_service::InMemoryForensicArchiveGenerator::new(),
             ),
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         };
 
@@ -6210,6 +6445,11 @@ mod tests {
             forensic_archive_generator: Arc::new(
                 forensic_service::InMemoryForensicArchiveGenerator::new(),
             ),
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         };
 
@@ -7375,6 +7615,11 @@ mod tests {
             forensic_archive_generator: Arc::new(
                 forensic_service::InMemoryForensicArchiveGenerator::new(),
             ),
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         }
     }
@@ -7522,6 +7767,11 @@ mod tests {
                 as Arc<dyn forensic_service::ForensicVerificationService>,
             Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new())
                 as Arc<dyn forensic_service::ForensicArchiveGenerator>,
+            Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -7605,6 +7855,11 @@ mod tests {
             forensic_archive_generator: Arc::new(
                 forensic_service::InMemoryForensicArchiveGenerator::new(),
             ),
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         };
 
@@ -8410,6 +8665,299 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    // =========================================================================
+    // Side Effect Tenant Isolation Tests (Phase 3 Batch 1)
+    // =========================================================================
+
+    /// Helper to create AppState with shared graph service but separate side effect repos.
+    /// Returns (state, side_effect_repo, graph_repo) so tests can create nodes directly
+    /// via the graph_repo without needing to access the private repo field.
+    fn create_test_service_with_tenant_isolated_side_effect_repo(
+    ) -> (AppState, Arc<compensation_service::InMemorySideEffectRepository>, Arc<InMemoryGraphRepository>) {
+        use graph_service::{GraphService, InMemoryGraphRepository};
+        use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
+        use runtime_adapter::MockAdapter;
+
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        // Isolated side effect repo for testing tenant isolation
+        let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+            side_effect_repo.clone(),
+        ));
+        let compensation_action_repo =
+            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
+        let compensation_action_svc = Arc::new(
+            compensation_service::CompensationActionService::new(compensation_action_repo),
+        );
+        let orchestration_run_repo =
+            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
+        let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new())
+            as Arc<dyn forensic_service::ForensicVerificationService>;
+        let forensic_archive_gen = Arc::new(
+            forensic_service::InMemoryForensicArchiveGenerator::new(),
+        );
+        let state = AppState {
+            service,
+            graph_service: graph_svc,
+            side_effect_service: side_effect_svc,
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: None,
+            forensic_service: forensic_svc,
+            forensic_archive_generator: forensic_archive_gen,
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
+            start_time: Instant::now(),
+        };
+        (state, side_effect_repo, graph_repo)
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_tenant_isolation_cross_tenant_query() {
+        // Test that side effects recorded by tenant A's artifact ingest
+        // are NOT visible when tenant B queries by intent
+        use graph_service::{GraphRepository, InMemoryGraphRepository};
+        use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext};
+
+        let (state, _side_effect_repo, graph_repo) = create_test_service_with_tenant_isolated_side_effect_repo();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create an IntentVersion node in the graph that tenant A's artifact can depend on
+        let intent_version_ref_id = Uuid::new_v4();
+        let iv_node = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id: tenant_a,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: intent_version_ref_id,
+                }),
+                label: "IntentVersion v1".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Tenant A ingests an artifact with side effect capture
+        let artifact_request_a = ArtifactIngestRequest {
+            tenant_id: tenant_a,
+            workflow_id,
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Tenant A Artifact".to_string(),
+            depends_on_intent_versions: vec![iv_node.id],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: intent_version_ref_id,
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "tenant-a-artifact-123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result_a = ingest_artifact(State(state.clone()), Json(artifact_request_a))
+            .await
+            .expect("Tenant A artifact ingest should succeed");
+        // ingest_artifact returns (StatusCode, Json<ArtifactIngestResponse>)
+        assert!(result_a.1.side_effect_recorded);
+        let side_effect_id_a = result_a.1.side_effect_id.expect("Should have side effect ID");
+
+        // Tenant B attempts to query side effects for the same intent
+        // (Tenant B has no side effects - they should see empty)
+        let side_effects_b = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_version_ref_id, tenant_b)
+            .await
+            .expect("Query should succeed");
+
+        // Tenant B should see NO side effects (tenant isolation)
+        assert!(
+            side_effects_b.is_empty(),
+            "Tenant B should not see Tenant A's side effects"
+        );
+
+        // Tenant A should still see their own side effect
+        let side_effects_a = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_version_ref_id, tenant_a)
+            .await
+            .expect("Query should succeed");
+        assert_eq!(side_effects_a.len(), 1);
+        assert_eq!(side_effects_a[0].id, side_effect_id_a);
+        assert_eq!(side_effects_a[0].effect_type, "artifact_created");
+    }
+
+    #[tokio::test]
+    async fn test_ingest_artifact_side_effect_tenant_isolation_separate_intents() {
+        // Test that side effects for different tenants are isolated even with same intent ID
+        use graph_service::{GraphRepository, InMemoryGraphRepository};
+        use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext};
+
+        let (state, _side_effect_repo, graph_repo) = create_test_service_with_tenant_isolated_side_effect_repo();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create IntentVersion nodes for each tenant
+        let intent_ref_a = Uuid::new_v4();
+        let intent_ref_b = Uuid::new_v4();
+
+        let iv_node_a = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id: tenant_a,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: intent_ref_a,
+                }),
+                label: "Tenant A IntentVersion".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        let iv_node_b = graph_repo
+            .create_node(intent_rebase_types::CreateGraphNodeRequest {
+                tenant_id: tenant_b,
+                workflow_id,
+                node_type: NodeType::IntentVersion,
+                external_ref: Some(ExternalRef {
+                    ref_type: ExternalRefType::IntentVersion,
+                    ref_id: intent_ref_b,
+                }),
+                label: "Tenant B IntentVersion".to_string(),
+                properties: None,
+            })
+            .await
+            .unwrap();
+
+        // Tenant A ingests artifact
+        let artifact_request_a = ArtifactIngestRequest {
+            tenant_id: tenant_a,
+            workflow_id,
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Tenant A Artifact".to_string(),
+            depends_on_intent_versions: vec![iv_node_a.id],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: intent_ref_a,
+                source_intent_version: 1,
+                effect_type: "tenant_a_effect".to_string(),
+                target: "target-a".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        // Tenant B ingests artifact
+        let artifact_request_b = ArtifactIngestRequest {
+            tenant_id: tenant_b,
+            workflow_id,
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Tenant B Artifact".to_string(),
+            depends_on_intent_versions: vec![iv_node_b.id],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: intent_ref_b,
+                source_intent_version: 1,
+                effect_type: "tenant_b_effect".to_string(),
+                target: "target-b".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        // Both ingests should succeed
+        let result_a = ingest_artifact(State(state.clone()), Json(artifact_request_a))
+            .await
+            .expect("Tenant A artifact ingest should succeed");
+        let result_b = ingest_artifact(State(state.clone()), Json(artifact_request_b))
+            .await
+            .expect("Tenant B artifact ingest should succeed");
+
+        // ingest_artifact returns (StatusCode, Json<ArtifactIngestResponse>)
+        assert!(result_a.1.side_effect_recorded);
+        assert!(result_b.1.side_effect_recorded);
+
+        // Each tenant should see only their own side effect
+        let side_effects_a = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_ref_a, tenant_a)
+            .await
+            .expect("Query should succeed");
+        let side_effects_b = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_ref_b, tenant_b)
+            .await
+            .expect("Query should succeed");
+
+        assert_eq!(side_effects_a.len(), 1);
+        assert_eq!(side_effects_a[0].effect_type, "tenant_a_effect");
+        assert_eq!(side_effects_b.len(), 1);
+        assert_eq!(side_effects_b[0].effect_type, "tenant_b_effect");
+
+        // Cross-query should return empty
+        let side_effects_a_from_b = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_ref_a, tenant_b)
+            .await
+            .expect("Query should succeed");
+        let side_effects_b_from_a = state
+            .side_effect_service
+            .list_side_effects_by_intent(intent_ref_b, tenant_a)
+            .await
+            .expect("Query should succeed");
+
+        assert!(
+            side_effects_a_from_b.is_empty(),
+            "Tenant B should not see Tenant A's side effects for intent_ref_a"
+        );
+        assert!(
+            side_effects_b_from_a.is_empty(),
+            "Tenant A should not see Tenant B's side effects for intent_ref_b"
+        );
+    }
+
     // === Compensation Action API Tests ===
 
     fn create_test_service_with_executor() -> AppState {
@@ -8461,6 +9009,11 @@ mod tests {
             forensic_archive_generator: Arc::new(
                 forensic_service::InMemoryForensicArchiveGenerator::new(),
             ),
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         }
     }
@@ -9420,6 +9973,11 @@ mod tests {
             )),
             forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new()),
             forensic_archive_generator: generator,
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
             start_time: Instant::now(),
         };
 

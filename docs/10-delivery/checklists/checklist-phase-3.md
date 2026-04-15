@@ -62,8 +62,10 @@
     - Code: crates/intent-rebase-types/src/graph.rs (SideEffectCaptureContext added)
     - Code: crates/graph-service/src/lib.rs (side_effect_context field on ArtifactIngestRequest, documentation updated)
     - Code: crates/intent-api/src/lib.rs (ingest_artifact endpoint with optional side effect capture, 16 validation tests for side_effect_context)
+    - Code: crates/intent-api/src/lib.rs (2 new tenant isolation tests: test_ingest_artifact_side_effect_tenant_isolation_cross_tenant_query, test_ingest_artifact_side_effect_tenant_isolation_separate_intents)
     - Tests: cargo test -p graph-service --all-features (78 tests pass), cargo test -p intent-api --all-features (67 tests pass)
     - Note: Delivered capture path is artifact-ingest only (via POST /v1/graph/artifacts with side_effect_context). Broader capture across other artifact-producing operations remains open and requires artifact-service integration.
+    - Note: P3 tenant isolation tests added for artifact ingest with side effect capture - verifies cross-tenant query isolation.
 
 [x] Side effect query API for compensation planning (Phase 3 Batch 1 groundwork)
     Evidence:
@@ -419,7 +421,7 @@
 
 ## 5. Forensic Replay Bundle
 
-**P4 Bounded Slice — Items 5-1, 5-2, 5-4, 5-5 Delivered**
+**P4 Bounded Slice — Items 5-1, 5-2, 5-3, 5-4, 5-5 Delivered**
 
 ```
 [x] Forensic bundle model + status tracking (P4 bounded slice)
@@ -455,10 +457,16 @@
     - Doc: docs/14-governance/10-forensic-bundle.md (updated scope marker)
     - Note: Bounded slice delivers content collection types (IntentVersionsForHash, ArtifactsForHash, ApprovalsForHash, AuditEventsForHash, PolicySnapshotsForHash) and deterministic SHA-256 integrity hashing. No S3 storage, no generation API, no replay.
 
-[ ] Bundle generation API: `POST /api/v1/forensic/bundle`
+[x] Bundle generation API: `POST /forensic/bundle` — P4 bounded slice (bounded synchronous path with real collection + S3/MinIO persistence seam)
     Evidence:
-    - Role: forensic-access
-    - Code: intent-api forensic endpoint
+    - Code: crates/forensic-service/src/bundle_service.rs (ForensicBundleService with create_bundle method)
+    - Code: crates/forensic-service/src/real_collector.rs (ForensicDataCollector — real repository calls)
+    - Code: crates/forensic-service/src/s3_bundle_storage.rs (S3/MinIO implementation of BundleStorage trait)
+    - Code: crates/forensic-service/src/bundle_generator.rs (BundleGeneratorService — manifest generation with integrity hashes)
+    - Code: crates/intent-api/src/lib.rs (create_forensic_bundle handler at POST /forensic/bundle)
+    - Tests: cargo test -p forensic-service --all-features (bundle generation + storage tests)
+    - Tests: cargo test -p intent-api --all-features (forensic bundle endpoint tests)
+    - Note: Bounded synchronous path: (1) ForensicDataCollector collects real data from intent/graph/audit repositories, (2) BundleGeneratorService generates manifest with integrity hashes, (3) BundleStorage persists bundle JSON to S3/MinIO, (4) bundle status=Ready recorded in repository. NOT claimed: async job orchestration, download-from-storage, full replay, hash chain verification.
 
 [x] Bundle integrity verification (hash chain) — P4 bounded slice
     Evidence:
@@ -580,17 +588,24 @@
     - EXPLAIN ANALYZE on critical queries
     - New indexes: optimization index migration TBD
 
-[ ] Connection pooling (Postgres, NATS)
+[~] Connection pooling (Postgres, NATS) — P5 local-live groundwork delivered
     Evidence:
-    - Code: connection pool configured
-    - Benchmark: no connection exhaustion under load
+    - Code: crates/intent-api/tests/load_test.rs (SQLx-backed test variant with pool configuration)
+    - Code: crates/intent-api/Cargo.toml (sqlx-load-test feature added)
+    - Pool config: max_connections=20, min_connections=2, acquire_timeout=30s, idle_timeout=600s
+    - Harness: create_sqlx_test_router function with SQLx-backed repositories
+    - Run: cd infrastructure/local && docker-compose up -d postgres && export DATABASE_URL="postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase" && cargo test -p intent-api --test load_test --features load-test,sqlx-load-test -- --nocapture test_load_sqlx
+    - Note: Local live load test groundwork delivered. Full production load testing (k6/Artillery) remains gated on P5 full completion.
 
 [x] Load testing: simulate Phase 3 production load
     - Harness: crates/intent-api/tests/load_test.rs
-    - Run: cargo test -p intent-api --features load-test --test load_test -- --nocapture
+    - In-memory run: cargo test -p intent-api --features load-test --test load_test -- --nocapture test_load_inmemory
     - Results: docs/11-quality/load-test-results.md
-    - All 3 load levels PASS (10x normal: p95 41ms, 0% errors)
-    - Limitation: in-memory repos only, no live Postgres
+    - In-memory results: L1 p95 5ms, L2 p95 33ms, L3 p95 60ms, all 0% errors
+    - SQLx-backed run: cargo test -p intent-api --features load-test,sqlx-load-test --test load_test -- --nocapture test_load_sqlx
+    - SQLx results: SQLx-L1 (5 clients/500 req) p95 5ms, 0% errors; SQLx-L2 (10 clients/1000 req) p95 4ms, 0% errors
+    - Limitation (in-memory): in-memory repos only, no live Postgres
+    - Limitation (SQLx): docker-compose Postgres only (not production RDS), dev profile unoptimized
 ```
 
 ---

@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS policy_snapshot (
 
     -- Tenant and intent association
     tenant_id UUID NOT NULL,
-    intent_id UUID NOT NULL REFERENCES intents(id),
+    intent_id UUID NOT NULL REFERENCES intents(intent_id),
     intent_version INT NOT NULL,
 
     -- Policy state at snapshot time

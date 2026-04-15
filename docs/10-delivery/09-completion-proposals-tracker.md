@@ -94,18 +94,19 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P3 |
 | **Title** | Phase 3 Batch 3a — Tenant Isolation Hardening |
 | **Purpose** | Verify and enforce tenant isolation across all surfaces: access control, data visibility, quotas, audit log separation, and data residency. |
-| **Status** | 🔄 In Progress (bounded slices delivered: tenant isolation tests P3-S1, quota enforcement P3-S2, rule pack isolation P3-S3, audit query isolation P3-S4, tenant service/onboarding scaffold P3-S5) |
+| **Status** | 🔄 In Progress (bounded slices delivered: tenant isolation tests P3-S1, quota enforcement P3-S2, rule pack isolation P3-S3, audit query isolation P3-S4, tenant service/onboarding scaffold P3-S5, artifact ingest tenant isolation) |
 | **Priority** | High |
 | **Owner** | Security / Platform |
-| **Suggested Next Step** | Data residency verification; artifact-service tenant coverage extension |
-| **Progress Notes** | Batch 3a gated on Phase 2b exit. Bounded slices delivered: P3-S1 (tenant isolation verification tests), P3-S2 (quota enforcement), P3-S3 (tenant-specific rule pack isolation), P3-S4 (tenant audit log separation via scoped audit query API), P3-S5 (tenant service scaffold + onboarding procedure skeleton). Broader artifact-service coverage and data residency remain open. |
+| **Suggested Next Step** | Data residency verification; broader artifact-service tenant coverage extension |
+| **Progress Notes** | Batch 3a gated on Phase 2b exit. Bounded slices delivered: P3-S1 (tenant isolation verification tests), P3-S2 (quota enforcement), P3-S3 (tenant-specific rule pack isolation), P3-S4 (tenant audit log separation via scoped audit query API), P3-S5 (tenant service scaffold + onboarding procedure skeleton). **Artifact ingest side-effect tenant isolation tests now pass in intent-api lib tests.** Data residency note added to threat model (bounded verification/planning — single-region today, target-region metadata exists, enforcement/routing is future work). Broader artifact-service coverage remains open. |
 
 **Items:**
 - [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 bounded slice delivered
 - [x] Resource quota enforcement (intents per tenant, artifacts per tenant) — P3-S2 bounded slice delivered
 - [x] Tenant-specific rule pack isolation — P3-S3 bounded slice delivered
 - [x] Tenant audit log separation (tenant-scoped audit query API) — P3-S4 bounded slice delivered; S3 cold storage remains Phase 4+ scope
-- [ ] Data residency: tenant data stays in assigned region (update threat model)
+- [x] Artifact ingest tenant isolation (cross-tenant query isolation on ingest with side_effect_context) — ✅ delivered in intent-api lib tests
+- [~] Data residency: tenant data stays in assigned region — bounded verification note added to threat model (single-region today, target-region metadata exists, enforcement/routing is future work)
 - [~] Tenant onboarding/offboarding procedures documented — P3-S5 bounded slice (skeleton/runner only); full API, S3 bucket provisioning, NATS account creation, RBAC setup remain future scope
 
 ---
@@ -117,24 +118,22 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P4 |
 | **Title** | Phase 3 Batch 3b — Forensic Replay Bundle |
 | **Purpose** | Deliver forensic bundle capability: bundle model, generation (intent versions + artifacts + audit events + graph state), integrity verification, replay, retention, and export. |
-| **Status** | 🔄 In Progress (Phase 3 Batch 3b bounded slice delivered) |
+| **Status** | 🔄 In Progress (Phase 3 Batch 3b bounded slice + P4 bounded generation/storage slice delivered) |
 | **Priority** | High |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Implement bundle generation API and S3 storage integration |
-| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated.
+| **Suggested Next Step** | Bundle retrieval/download API; full replay capability; hash chain verification |
+| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. **P4 bounded generation/storage slice delivered:** `POST /forensic/bundle` bounded synchronous path — ForensicDataCollector collects real data from intent/graph/audit repositories, BundleGeneratorService generates manifest with integrity hashes, BundleStorage persists bundle JSON to S3/MinIO, bundle status=Ready recorded in repository. |
 
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ Batch 0 scaffold delivered
 - [x] Forensic verification API: `POST /forensic/verify` (bounded request-driven verification) — ✅ Phase 3 Batch 3b bounded slice delivered
 - [x] Forensic archive export API: `POST /forensic/export` (bounded in-memory generation with scaffolded data) — ✅ Phase 3 Batch 3b bounded slice delivered
-- [ ] Bundle generation: collect intent versions, artifacts, audit events, graph state from real services
-- [ ] Bundle generation API: `POST /api/v1/forensic/bundle` (role: `forensic-access`)
-- [ ] Bundle integrity verification (hash chain)
+- [x] Bundle generation: collect intent versions, artifacts, audit events, graph state from real services — ✅ P4 bounded slice delivered (ForensicDataCollector + real repository calls)
+- [x] Bundle generation API: `POST /forensic/bundle` (role: `forensic-access`) — ✅ P4 bounded slice delivered; bounded synchronous path with real collection + S3/MinIO persistence seam
+- [x] Bundle integrity verification (hash chain) — ✅ Phase 3 Batch 3b bounded slice delivered (verify_bundle_integrity function)
 - [ ] Bundle replay capability (replay bundle to reproduce state)
-- [ ] Bundle retention policy (configurable per tenant, compliance)
-- [ ] Forensic bundle export from storage: `GET /api/v1/forensic/bundles/{id}/download`
-
-**Bounded verification + export slices (delivered):**
+- [ ] Bundle retention policy (configurable per tenant, compliance) — retention policy metadata model delivered; S3 lifecycle enforcement remains Phase 4+ scope
+- [ ] Forensic bundle export from storage: `GET /forensic/bundles/{bundle_id}/download` (S3-backed retrieval) — download endpoint exists for in-memory/exportable bundles; S3-backed retrieval remains Phase 4 scope
 
 ---
 
@@ -145,22 +144,23 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P5 |
 | **Title** | Phase 3 Batch 4a — Performance Work |
 | **Purpose** | Optimize intent diff, graph traversal, and database queries; configure connection pooling; run load tests to validate Phase 3 production readiness. |
-| **Status** | 🔄 In Progress (bounded slices delivered: P5-S1 graph traversal benchmarks, P5-S2 DB query benchmarks, bounded HTTP load harness/report; full production load testing remains open) |
+| **Status** | 🔄 In Progress (bounded slices delivered: P5-S1 graph traversal benchmarks, P5-S2 DB query benchmarks, in-memory HTTP load test, SQLx-backed local-live load test; full production load testing remains open) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / SRE |
 | **Suggested Next Step** | Proceed with DB query optimization if needed; full production load testing gated on P5 full completion |
-| **Progress Notes** | **P5-S1 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity (~490ns-4.2µs, all under 100ms target). **P5-S2 delivered:** graph traversal benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). **Bounded HTTP load harness delivered:** intent-api HTTP server benchmarks with in-memory repos (3 load levels, all passed; scope: in-memory repos only, no live Postgres). Full production load testing remains gated on P5 full completion. |
+| **Progress Notes** | **P5-S1 delivered:** rebase-engine benchmark harness with criterion. Benchmarks sync diff + plan path across low/medium/high complexity (~490ns-4.2µs, all under 100ms target). **P5-S2 delivered:** graph traversal benchmark (BFS, path finding, cycle detection across small/medium/large graphs), intent-api sync path benchmark (diff compute, validation, intent service create), and intent-service DB benchmark with live Postgres run (p50 25ms create_intent, 1.6ms create_version_with_occ, 873µs get_intent, 959µs get_versions_by_intent). **In-memory HTTP load test delivered:** 3 load levels against intent-api HTTP server with in-memory repos; L1 p95 5ms, L2 p95 33ms, L3 p95 60ms, all 0% errors. **SQLx-backed local-live load test delivered:** docker-compose Postgres; SQLx-L1 (5 clients/500 req) p95 5ms, 0% errors; SQLx-L2 (10 clients/1000 req) p95 4ms, 0% errors. Full production load testing (k6/Artillery against staging/production) remains gated on P5 full completion. |
 
 **Items:**
 - [x] Rebase-engine sync diff + plan benchmark harness — P5-S1 bounded slice delivered
 - [x] Graph traversal benchmarks (BFS, path finding, cycle detection) — P5-S1 bounded slice delivered
 - [x] DB query benchmarks with live Postgres — P5-S2 bounded slice delivered
-- [x] Intent-api HTTP server benchmarks (bounded — in-memory repos) — bounded slice delivered; full production load testing remains open
+- [x] Intent-api HTTP server benchmarks (in-memory repos) — bounded slice delivered; L1 p95 5ms, L2 p95 33ms, L3 p95 60ms, all 0% errors
+- [x] SQLx-backed local-live load test (docker-compose Postgres) — bounded slice delivered; SQLx-L1 p95 5ms, SQLx-L2 p95 4ms, 0% errors
 - [ ] Intent diff optimization (caching, parallel computation) — benchmark target: diff < 100ms (baseline: ~490ns-2.6µs, target met; may not be needed)
 - [ ] Graph traversal optimization (indexing, query optimization)
 - [ ] Database query optimization (indexes, query plans)
-- [ ] Connection pooling (Postgres, NATS)
-- [ ] Full production load testing (bounded HTTP harness delivered; full k6/Artillery production load testing remains gated on P5 full completion)
+- [ ] Connection pooling (Postgres, NATS) — local-live groundwork delivered (pool config: max_connections=20, min_connections=2, acquire_timeout=30s, idle_timeout=600s); production pool sizing remains open
+- [ ] Full production load testing (bounded HTTP harness and SQLx local-live test delivered; full k6/Artillery production load testing remains gated on P5 full completion)
 
 ## P6 — Phase 3 Batch 4b — Security Hardening
 

@@ -67,7 +67,7 @@ Defines the end-to-end incident response process for Intent Rebase Engine — co
 
 **Evidence preservation:**
 1. Invoke data freeze (`POST /api/v1/incident/freeze`)
-2. Capture forensic bundle (`POST /api/v1/forensic/bundle`) — see [10-forensic-bundle.md](./10-forensic-bundle.md)
+2. Capture forensic bundle (`POST /forensic/bundle`) — see [10-forensic-bundle.md](./10-forensic-bundle.md)
 3. Export audit events for affected tenant/time range
 4. Preserve all relevant logs (no rotation/deletion)
 

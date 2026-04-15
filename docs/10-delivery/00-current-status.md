@@ -73,7 +73,7 @@
 | Performance benchmarks | 🔄 In Progress | Bounded slices delivered: rebase-engine sync bench, graph traversal bench, DB bench, HTTP server bench with in-memory repos; full production load testing remains open |
 | Runbooks | 🔄 In Progress | RB6-RB10 delivered (rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn) |
 | Tenant isolation verification tests | 🔄 In Progress | Bounded slices delivered: P3-S1 (tenant isolation tests), P3-S2 (quota enforcement), P3-S3 (rule pack isolation), P3-S4 (audit query isolation), P3-S5 (tenant service scaffold) |
-| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface, download endpoint; bundle generation from real services and S3 storage remain open |
+| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface; **bundle generation + storage (POST /forensic/bundle with S3/MinIO) now delivered**; download-from-S3 and full replay remain open |
 | Threat model v2, penetration testing | 🔄 In Progress | Threat model v2 documented; pen test scope defined (planning artifact only); pen test execution and external security review remain open |
 | Load testing | 🔄 In Progress | Bounded HTTP load harness delivered (intent-api HTTP server with in-memory repos); full production load testing remains gated on P5 full completion |
 
