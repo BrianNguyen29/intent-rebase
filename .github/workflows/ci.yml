@@ -90,6 +90,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Run benchmarks
@@ -100,3 +102,56 @@ jobs:
           name: criterion-reports
           path: crates/rebase-engine/target/criterion/**/report/
           retention-days: 30
+
+  test-db:
+    name: Migration Integration Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: intent_rebase
+          POSTGRES_PASSWORD: intent_rebase_dev
+          POSTGRES_DB: intent_rebase
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Wait for postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -U intent_rebase && echo "Postgres ready" && break
+            echo "Waiting for postgres... ($i)"
+            sleep 1
+          done
+      - name: Run migration integration test
+        run: cargo test -p intent-service --test migration_integration -- --ignored
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: intent-api:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

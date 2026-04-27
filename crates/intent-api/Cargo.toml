@@ -14,6 +14,7 @@ forensic-service = { path = "../forensic-service" }
 intent-rebase-types = { path = "../intent-rebase-types" }
 rebase-engine = { path = "../rebase-engine" }
 rebase-orchestrator = { path = "../rebase-orchestrator" }
+runtime-adapter = { path = "../runtime-adapter" }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
@@ -40,7 +41,6 @@ opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 tracing-opentelemetry = "0.25"
 
 [dev-dependencies]
-runtime-adapter = { path = "../runtime-adapter" }
 criterion = { version = "0.5", features = ["html_reports"] }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -62,3 +62,8 @@ load-test = []
 # This feature is for documentation/future use
 sqlx-load-test = []
 jwt-auth = []
+
+[[bin]]
+name = "intent-api"
+path = "src/main.rs"
+required-features = []

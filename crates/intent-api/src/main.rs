@@ -1,0 +1,225 @@
+//! Intent API Server Binary
+//!
+//! Phase C: Minimal runnable server binary with Docker build path.
+//!
+//! **Development server** — uses in-memory repositories when DATABASE_URL is not set.
+//! This is suitable for local development and smoke testing only.
+//!
+//! **Production server** — set DATABASE_URL to use SQL-backed repositories.
+//!
+//! # Environment Variables
+//!
+//! - `DATABASE_URL` — PostgreSQL connection string. If not set, uses in-memory repositories.
+//! - `INTENT_API_BIND_ADDR` — Address to bind to (default: `0.0.0.0:8080`)
+//! - `RUST_LOG` — Logging filter (default: `info`)
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT` — Optional OTLP endpoint for tracing export
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::Router;
+use compensation_service::{
+    CompensationActionRepository, InMemoryCompensationActionRepository,
+    InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
+    SideEffectRepository,
+};
+use forensic_service::{
+    ForensicArchiveGenerator, ForensicVerificationService, InMemoryForensicArchiveGenerator,
+    InMemoryForensicVerificationService,
+};
+use graph_service::{GraphService, InMemoryGraphRepository};
+use intent_api::{build_router, build_router_with_sql_audit_and_approval, init_tracing};
+use intent_rebase_types::{EventPublisher, InMemoryEventPublisher};
+use intent_service::{
+    ApprovalRequestRepository, InMemoryApprovalRequestRepository, InMemoryCheckpointRepository,
+    InMemoryIntentRepository, InMemoryPolicySnapshotRepository, IntentService,
+    PolicySnapshotRepository, SqlxCheckpointRepository, SqlxIntentRepository,
+};
+use rebase_orchestrator::RebaseOrchestrator;
+use runtime_adapter::MockAdapter;
+
+/// Build an in-memory-based router for development/smoke testing
+fn build_inmemory_router() -> Router {
+    // In-memory intent repository
+    let intent_repo = Arc::new(InMemoryIntentRepository::new());
+    let intent_service = Arc::new(IntentService::new(intent_repo));
+
+    // In-memory graph repository
+    let graph_repo = Arc::new(InMemoryGraphRepository::new());
+    let graph_service = Arc::new(GraphService::new(graph_repo));
+
+    // In-memory checkpoint repository
+    let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+    let runtime_adapter = Arc::new(MockAdapter::ready());
+    let orchestrator = Arc::new(RebaseOrchestrator::new(
+        checkpoint_repo.clone(),
+        graph_service.clone(),
+        runtime_adapter,
+    ));
+
+    // In-memory audit repository
+    let audit_repo: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
+
+    // In-memory approval request repository
+    let approval_repo: Arc<dyn ApprovalRequestRepository> =
+        Arc::new(InMemoryApprovalRequestRepository::new());
+
+    // In-memory policy snapshot repository
+    let policy_snapshot_repo: Arc<dyn PolicySnapshotRepository> =
+        Arc::new(InMemoryPolicySnapshotRepository::new());
+
+    // In-memory side effect repository and service
+    let side_effect_repo: Arc<dyn SideEffectRepository> =
+        Arc::new(InMemorySideEffectRepository::new());
+    let side_effect_service = Arc::new(compensation_service::SideEffectService::new(
+        side_effect_repo,
+    ));
+
+    // In-memory compensation action repository and service
+    let compensation_action_repo: Arc<dyn CompensationActionRepository> =
+        Arc::new(InMemoryCompensationActionRepository::new());
+    let compensation_action_service = Arc::new(
+        compensation_service::CompensationActionService::new(compensation_action_repo),
+    );
+
+    // In-memory orchestration run repository and runtime
+    let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+    let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
+        compensation_action_service.clone(),
+        orchestration_run_repo,
+    ));
+
+    // In-memory forensic services
+    let forensic_service: Arc<dyn ForensicVerificationService> =
+        Arc::new(InMemoryForensicVerificationService::new());
+    let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
+        Arc::new(InMemoryForensicArchiveGenerator::new());
+
+    // In-memory event publisher (no-op for dev)
+    let event_publisher: Option<Arc<dyn EventPublisher>> =
+        Some(Arc::new(InMemoryEventPublisher::new()));
+
+    build_router(
+        intent_service,
+        graph_service,
+        side_effect_service,
+        compensation_action_service,
+        orchestration_runtime,
+        orchestrator,
+        audit_repo,
+        approval_repo,
+        policy_snapshot_repo,
+        event_publisher,
+        forensic_service,
+        forensic_archive_generator,
+    )
+}
+
+/// Build a SQL-backed router for production
+async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(database_url).await?;
+
+    // SQL-backed intent repository
+    let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
+    let intent_service = Arc::new(IntentService::new(intent_repo));
+
+    // In-memory graph repository (production graph service TBD)
+    let graph_repo = Arc::new(InMemoryGraphRepository::new());
+    let graph_service = Arc::new(GraphService::new(graph_repo));
+
+    // SQL-backed checkpoint repository
+    let checkpoint_repo = Arc::new(SqlxCheckpointRepository::new(pool.clone()));
+    let runtime_adapter = Arc::new(MockAdapter::ready());
+    let orchestrator = Arc::new(RebaseOrchestrator::new(
+        checkpoint_repo,
+        graph_service.clone(),
+        runtime_adapter,
+    ));
+
+    // SQL-backed side effect repository and service
+    // Note: SqlxSideEffectRepository and SqlxCompensationActionRepository TBD
+    // For now, use in-memory for these
+    let side_effect_repo: Arc<dyn SideEffectRepository> =
+        Arc::new(InMemorySideEffectRepository::new());
+    let side_effect_service = Arc::new(compensation_service::SideEffectService::new(
+        side_effect_repo,
+    ));
+
+    let compensation_action_repo: Arc<dyn CompensationActionRepository> =
+        Arc::new(InMemoryCompensationActionRepository::new());
+    let compensation_action_service = Arc::new(
+        compensation_service::CompensationActionService::new(compensation_action_repo),
+    );
+
+    let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+    let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
+        compensation_action_service.clone(),
+        orchestration_run_repo,
+    ));
+
+    // In-memory forensic services (production TBD)
+    let forensic_service: Arc<dyn ForensicVerificationService> =
+        Arc::new(InMemoryForensicVerificationService::new());
+    let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
+        Arc::new(InMemoryForensicArchiveGenerator::new());
+
+    // No event publisher by default
+    let event_publisher: Option<Arc<dyn EventPublisher>> = None;
+
+    Ok(build_router_with_sql_audit_and_approval(
+        pool,
+        intent_service,
+        graph_service,
+        side_effect_service,
+        compensation_action_service,
+        orchestration_runtime,
+        orchestrator,
+        event_publisher,
+        forensic_service,
+        forensic_archive_generator,
+    ))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing (supports OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set)
+    init_tracing();
+
+    // Get bind address from environment or use default
+    let bind_addr: SocketAddr = std::env::var("INTENT_API_BIND_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+        .parse()
+        .expect("Failed to parse INTENT_API_BIND_ADDR");
+
+    // Check if DATABASE_URL is set to determine which router to use
+    let router = if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        tracing::info!("DATABASE_URL set — using SQL-backed repositories");
+        tracing::info!("Connecting to PostgreSQL...");
+
+        match build_sql_router(&database_url).await {
+            Ok(router) => {
+                tracing::info!("SQL-backed router initialized successfully");
+                router
+            }
+            Err(e) => {
+                tracing::error!("Failed to connect to database: {}", e);
+                tracing::warn!("Falling back to in-memory repositories");
+                tracing::warn!("Set DATABASE_URL properly for production use");
+                build_inmemory_router()
+            }
+        }
+    } else {
+        tracing::info!("DATABASE_URL not set — using in-memory repositories");
+        tracing::warn!("This is suitable for development/smoke testing only");
+        tracing::warn!("Set DATABASE_URL for production deployments");
+        build_inmemory_router()
+    };
+
+    tracing::info!("Intent API server starting on {}", bind_addr);
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    axum::serve(listener, router).await?;
+
+    Ok(())
+}

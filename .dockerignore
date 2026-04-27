@@ -1,0 +1,50 @@
+# =============================================================================
+# Docker Ignore File
+# =============================================================================
+# Excludes unnecessary files from Docker build context
+
+# Version control
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+target/
+**/target/
+
+# Test files and fixtures
+tests/
+benches/
+*_test.rs
+*_tests.rs
+
+# Example and scratch files
+examples/
+*.example
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Docker files (we copy Dockerfile explicitly)
+Dockerfile*
+docker-compose*
+
+# CI/CD
+.github/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
