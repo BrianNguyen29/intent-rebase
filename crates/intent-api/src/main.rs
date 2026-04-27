@@ -21,7 +21,8 @@ use axum::Router;
 use compensation_service::{
     CompensationActionRepository, InMemoryCompensationActionRepository,
     InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
-    SideEffectRepository,
+    SideEffectRepository, SqlxCompensationActionRepository, SqlxOrchestrationRunRepository,
+    SqlxSideEffectRepository,
 };
 use forensic_service::{
     ForensicArchiveGenerator, ForensicVerificationService, InMemoryForensicArchiveGenerator,
@@ -150,21 +151,19 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
     ));
 
     // SQL-backed side effect repository and service
-    // Note: SqlxSideEffectRepository and SqlxCompensationActionRepository TBD
-    // For now, use in-memory for these
     let side_effect_repo: Arc<dyn SideEffectRepository> =
-        Arc::new(InMemorySideEffectRepository::new());
+        Arc::new(SqlxSideEffectRepository::new(pool.clone()));
     let side_effect_service = Arc::new(compensation_service::SideEffectService::new(
         side_effect_repo,
     ));
 
     let compensation_action_repo: Arc<dyn CompensationActionRepository> =
-        Arc::new(InMemoryCompensationActionRepository::new());
+        Arc::new(SqlxCompensationActionRepository::new(pool.clone()));
     let compensation_action_service = Arc::new(
         compensation_service::CompensationActionService::new(compensation_action_repo),
     );
 
-    let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+    let orchestration_run_repo = Arc::new(SqlxOrchestrationRunRepository::new(pool.clone()));
     let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
         compensation_action_service.clone(),
         orchestration_run_repo,
@@ -217,6 +216,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to parse INTENT_API_BIND_ADDR");
 
     // Check if DATABASE_URL is set to determine which router to use
+    let is_strict_mode = std::env::var("INTENT_API_STRICT")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true")
+        || std::env::var("INTENT_API_PRODUCTION")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+
     let router = if let Ok(database_url) = std::env::var("DATABASE_URL") {
         tracing::info!("DATABASE_URL set — using SQL-backed repositories");
         tracing::info!("Connecting to PostgreSQL...");
@@ -228,12 +234,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 tracing::error!("Failed to connect to database: {}", e);
+                if is_strict_mode {
+                    tracing::error!("INTENT_API_STRICT or INTENT_API_PRODUCTION is set — exiting instead of falling back");
+                    return Err(format!("Database connection failed in strict mode: {}", e).into());
+                }
                 tracing::warn!("Falling back to in-memory repositories");
                 tracing::warn!("Set DATABASE_URL properly for production use");
                 build_inmemory_router()
             }
         }
     } else {
+        if is_strict_mode {
+            tracing::error!(
+                "INTENT_API_STRICT or INTENT_API_PRODUCTION is set but DATABASE_URL is not set"
+            );
+            return Err("DATABASE_URL must be set in strict/production mode".into());
+        }
         tracing::info!("DATABASE_URL not set — using in-memory repositories");
         tracing::warn!("This is suitable for development/smoke testing only");
         tracing::warn!("Set DATABASE_URL for production deployments");

@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Tenant status within the platform
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TenantStatus {
     /// Tenant is being provisioned but not yet active
+    #[default]
     Provisioning,
     /// Tenant is active and can perform operations
     Active,
@@ -23,29 +24,18 @@ pub enum TenantStatus {
     Offboarded,
 }
 
-impl Default for TenantStatus {
-    fn default() -> Self {
-        TenantStatus::Provisioning
-    }
-}
-
 /// Target data residency region for a tenant
 ///
 /// **P3-S5 scope:** Region field is recorded but residency enforcement/routing
 /// is out of scope for this bounded slice.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TenantRegion {
+    #[default]
     UsEast1,
     UsWest2,
     EuWest1,
     ApSoutheast1,
-}
-
-impl Default for TenantRegion {
-    fn default() -> Self {
-        TenantRegion::UsEast1
-    }
 }
 
 /// A tenant record within the Intent Rebase Engine platform.

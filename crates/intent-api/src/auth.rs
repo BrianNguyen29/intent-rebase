@@ -3,7 +3,7 @@
 //! This module provides JWT authentication when the `jwt-auth` feature is enabled.
 //! Use `build_router_with_jwt_auth` instead of `build_router` to enable JWT authentication.
 
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use jsonwebtoken::Algorithm;
 use serde::{Deserialize, Serialize};
 
 /// JWT claims structure
@@ -59,7 +59,7 @@ pub fn generate_test_token(secret: &str, sub: &str, tenant_id: &str, roles: &[&s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{decode, DecodingKey, Validation};
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     #[test]
     fn test_generate_and_validate_token() {

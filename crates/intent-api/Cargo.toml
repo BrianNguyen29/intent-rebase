@@ -55,7 +55,7 @@ name = "load_test"
 path = "tests/load_test.rs"
 
 [features]
-default = []
+default = ["jwt-auth"]
 load-test = []
 # sqlx-load-test enables SQLx-backed local live load testing
 # SQLx types are always available (in regular dependencies)
