@@ -23,18 +23,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Purpose of the forensic verification
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationPurpose {
+    #[default]
     IncidentInvestigation,
     ComplianceAudit,
     Legal,
-}
-
-impl Default for VerificationPurpose {
-    fn default() -> Self {
-        VerificationPurpose::IncidentInvestigation
-    }
 }
 
 /// Time range for forensic verification
@@ -306,10 +301,7 @@ impl Default for InMemoryForensicVerificationService {
 
 #[async_trait::async_trait]
 impl ForensicVerificationService for InMemoryForensicVerificationService {
-    async fn verify(
-        &self,
-        request: ForensicVerificationRequest,
-    ) -> ForensicVerificationResponse {
+    async fn verify(&self, request: ForensicVerificationRequest) -> ForensicVerificationResponse {
         let mut response = ForensicVerificationResponse::new(
             request.tenant_id,
             request.intent_id,
@@ -352,12 +344,11 @@ impl ForensicVerificationService for InMemoryForensicVerificationService {
         // Set status based on configuration
         if self.ready_status {
             response.status = VerificationStatus::Ready;
-            response.status_reason = "All referenced entities exist and are within time range"
-                .to_string();
+            response.status_reason =
+                "All referenced entities exist and are within time range".to_string();
         } else {
             response.status = VerificationStatus::Incomplete;
-            response.status_reason = "Some entities are missing or time range has gaps"
-                .to_string();
+            response.status_reason = "Some entities are missing or time range has gaps".to_string();
         }
 
         response.compute_estimated_count();
@@ -443,18 +434,15 @@ mod tests {
     #[test]
     fn test_purpose_default() {
         assert_eq!(
-            serde_json::from_str::<VerificationPurpose>("\"incident_investigation\"")
-                .unwrap(),
+            serde_json::from_str::<VerificationPurpose>("\"incident_investigation\"").unwrap(),
             VerificationPurpose::IncidentInvestigation
         );
         assert_eq!(
-            serde_json::from_str::<VerificationPurpose>("\"compliance_audit\"")
-                .unwrap(),
+            serde_json::from_str::<VerificationPurpose>("\"compliance_audit\"").unwrap(),
             VerificationPurpose::ComplianceAudit
         );
         assert_eq!(
-            serde_json::from_str::<VerificationPurpose>("\"legal\"")
-                .unwrap(),
+            serde_json::from_str::<VerificationPurpose>("\"legal\"").unwrap(),
             VerificationPurpose::Legal
         );
     }

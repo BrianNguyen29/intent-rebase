@@ -24,9 +24,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Re-export from verification module for coverage types
-use super::verification::{
-    VerificationPurpose, VerificationTimeRange,
-};
+use super::verification::{VerificationPurpose, VerificationTimeRange};
 
 /// Request for forensic archive export
 ///
@@ -95,18 +93,13 @@ impl From<VerificationPurpose> for ExportPurpose {
 }
 
 /// Purpose of the forensic archive
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportPurpose {
+    #[default]
     IncidentInvestigation,
     ComplianceAudit,
     Legal,
-}
-
-impl Default for ExportPurpose {
-    fn default() -> Self {
-        ExportPurpose::IncidentInvestigation
-    }
 }
 
 /// Individual entry within a forensic archive
@@ -174,7 +167,7 @@ pub struct ForensicArchive {
 }
 
 /// Summary of contents in an export archive
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExportContentsSummary {
     /// Number of intent version entries
     pub intent_versions: usize,
@@ -184,17 +177,6 @@ pub struct ExportContentsSummary {
     pub audit_events: usize,
     /// Number of policy snapshot entries
     pub policy_snapshots: usize,
-}
-
-impl Default for ExportContentsSummary {
-    fn default() -> Self {
-        Self {
-            intent_versions: 0,
-            artifacts: 0,
-            audit_events: 0,
-            policy_snapshots: 0,
-        }
-    }
 }
 
 /// Response for forensic archive export

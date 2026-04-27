@@ -414,7 +414,9 @@ impl FollowupNoticeExecutor {
         }
 
         // Validate side effect class is S3ExternalPartiallyReversible
-        if side_effect.effect_class != crate::side_effect::SideEffectClass::S3ExternalPartiallyReversible {
+        if side_effect.effect_class
+            != crate::side_effect::SideEffectClass::S3ExternalPartiallyReversible
+        {
             return Ok(ExecutionResult::failure(
                 &format!(
                     "Invalid side effect class for followup notice: {:?}. Expected S3ExternalPartiallyReversible.",
@@ -1104,11 +1106,7 @@ mod tests {
 
     // === CounterActionExecutor tests ===
 
-    fn create_s2_side_effect(
-        tenant_id: Uuid,
-        intent_id: Uuid,
-        side_effect_id: Uuid,
-    ) -> SideEffect {
+    fn create_s2_side_effect(tenant_id: Uuid, intent_id: Uuid, side_effect_id: Uuid) -> SideEffect {
         SideEffect {
             id: side_effect_id,
             tenant_id,
@@ -1543,11 +1541,7 @@ mod tests {
 
     // === FollowupNoticeExecutor tests ===
 
-    fn create_s3_side_effect(
-        tenant_id: Uuid,
-        intent_id: Uuid,
-        side_effect_id: Uuid,
-    ) -> SideEffect {
+    fn create_s3_side_effect(tenant_id: Uuid, intent_id: Uuid, side_effect_id: Uuid) -> SideEffect {
         SideEffect {
             id: side_effect_id,
             tenant_id,
@@ -1919,11 +1913,7 @@ mod tests {
 
     // === EscalationExecutor tests ===
 
-    fn create_s4_side_effect(
-        tenant_id: Uuid,
-        intent_id: Uuid,
-        side_effect_id: Uuid,
-    ) -> SideEffect {
+    fn create_s4_side_effect(tenant_id: Uuid, intent_id: Uuid, side_effect_id: Uuid) -> SideEffect {
         SideEffect {
             id: side_effect_id,
             tenant_id,

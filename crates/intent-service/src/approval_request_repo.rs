@@ -882,8 +882,8 @@ mod tests {
         for i in 0..3 {
             let request = ApprovalRequest::new_pending(
                 intent_id,
-                i as i32 + 1,
-                i as i32 + 2,
+                i + 1,
+                i + 2,
                 workflow_id,
                 tenant_id,
                 "external-api/unknown",

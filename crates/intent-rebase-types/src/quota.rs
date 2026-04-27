@@ -79,13 +79,22 @@ pub trait QuotaRepository: Send + Sync {
     async fn decrement(&self, tenant_id: Uuid, resource: &str) -> Result<(), IntentRebaseError>;
 
     /// Set count for a tenant+resource
-    async fn set_count(&self, tenant_id: Uuid, resource: &str, count: i32) -> Result<(), IntentRebaseError>;
+    async fn set_count(
+        &self,
+        tenant_id: Uuid,
+        resource: &str,
+        count: i32,
+    ) -> Result<(), IntentRebaseError>;
 
     /// Get all limits (for a tenant or global defaults)
     async fn get_limits(&self, tenant_id: Uuid) -> Result<Vec<QuotaLimit>, IntentRebaseError>;
 
     /// Check if a resource has a specific limit value (returns limit or None if no custom limit)
-    async fn get_limit(&self, tenant_id: Uuid, resource: &str) -> Result<Option<i32>, IntentRebaseError>;
+    async fn get_limit(
+        &self,
+        tenant_id: Uuid,
+        resource: &str,
+    ) -> Result<Option<i32>, IntentRebaseError>;
 }
 
 /// In-memory quota repository for Phase 1 testing and single-instance deployments
@@ -169,7 +178,12 @@ impl QuotaRepository for InMemoryQuotaRepository {
         Ok(())
     }
 
-    async fn set_count(&self, tenant_id: Uuid, resource: &str, count: i32) -> Result<(), IntentRebaseError> {
+    async fn set_count(
+        &self,
+        tenant_id: Uuid,
+        resource: &str,
+        count: i32,
+    ) -> Result<(), IntentRebaseError> {
         let mut counts = self.counts.write().await;
         counts.insert((tenant_id, resource.to_string()), count.max(0));
         Ok(())
@@ -205,7 +219,11 @@ impl QuotaRepository for InMemoryQuotaRepository {
         Ok(result)
     }
 
-    async fn get_limit(&self, tenant_id: Uuid, resource: &str) -> Result<Option<i32>, IntentRebaseError> {
+    async fn get_limit(
+        &self,
+        tenant_id: Uuid,
+        resource: &str,
+    ) -> Result<Option<i32>, IntentRebaseError> {
         // Check tenant-specific limit first
         {
             let limits = self.limits.read().await;
@@ -241,7 +259,11 @@ impl QuotaService {
 
     /// Check if a tenant is within quota for a resource
     /// Returns Ok(()) if within limits, Err(QuotaExceeded) if over
-    pub async fn check_quota(&self, tenant_id: Uuid, resource: &str) -> Result<(), IntentRebaseError> {
+    pub async fn check_quota(
+        &self,
+        tenant_id: Uuid,
+        resource: &str,
+    ) -> Result<(), IntentRebaseError> {
         let current = self.repo.get_count(tenant_id, resource).await?;
         let limit = self.get_effective_limit(tenant_id, resource).await;
 
@@ -285,7 +307,10 @@ impl QuotaService {
         if let Ok(Some(limit)) = self.repo.get_limit(tenant_id, resource).await {
             return limit;
         }
-        self.default_limits.get(resource).copied().unwrap_or(i32::MAX)
+        self.default_limits
+            .get(resource)
+            .copied()
+            .unwrap_or(i32::MAX)
     }
 }
 

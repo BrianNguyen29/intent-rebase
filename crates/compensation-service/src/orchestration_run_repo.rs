@@ -399,7 +399,7 @@ mod tests {
         let repo = Arc::new(InMemoryOrchestrationRunRepository::new());
 
         let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
-        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let _tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
 
         // Tenant A creates a run
         let run = create_test_run(tenant_a);

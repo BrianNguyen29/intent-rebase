@@ -19,13 +19,12 @@
 //! ```
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use intent_service::{SqlxIntentRepository, IntentRepository};
 use intent_rebase_types::{
-    ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, IntentPayload,
-    IntentObjective, IntentScope, IntentConstraints, AcceptanceCriteria, IntentAuthority,
-    IntentPreferences, IntentReferences, IntentAssumptions, IntentMetadataV1, RiskTier, Urgency,
-    SourceRef,
+    AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+    IntentAssumptions, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
+    IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
 };
+use intent_service::{IntentRepository, SqlxIntentRepository};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -82,6 +81,7 @@ fn create_test_payload(summary: &str) -> IntentPayload {
 /// Create a test intent request
 fn create_test_request() -> CreateIntentRequest {
     CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![SourceRef {
             ref_type: "spec".to_string(),
@@ -191,9 +191,7 @@ fn bench_db_create_version(c: &mut Criterion) {
             let repo = repo.clone();
             let request = create_version_request();
             async move {
-                let _ = repo
-                    .create_version_with_occ(intent_id, request, 1, 1)
-                    .await;
+                let _ = repo.create_version_with_occ(intent_id, request, 1, 1).await;
             }
         });
     });
@@ -232,7 +230,6 @@ fn bench_db_get_intent(c: &mut Criterion) {
     group.bench_function("get_intent", |b| {
         b.to_async(&rt).iter(|| {
             let repo = repo.clone();
-            let intent_id = intent_id;
             async move {
                 let _ = repo.get_intent(intent_id).await;
             }
@@ -292,7 +289,6 @@ fn bench_db_list_versions(c: &mut Criterion) {
     group.bench_function("get_versions_by_intent", |b| {
         b.to_async(&rt).iter(|| {
             let repo = repo.clone();
-            let intent_id = intent_id;
             async move {
                 let _ = repo.get_versions_by_intent(intent_id).await;
             }

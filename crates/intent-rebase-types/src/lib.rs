@@ -12,9 +12,9 @@ pub mod event_publisher;
 pub mod graph;
 pub mod intent;
 pub mod policy_snapshot;
-pub mod trace_context;
 pub mod quota;
 pub mod retention_verification;
+pub mod trace_context;
 
 pub use artifact::*;
 pub use audit::*;
@@ -25,5 +25,5 @@ pub use event_publisher::*;
 pub use graph::*;
 pub use intent::*;
 pub use policy_snapshot::*;
-pub use trace_context::*;
 pub use quota::*;
+pub use trace_context::*;

@@ -64,6 +64,7 @@ impl ReplaySectionResult {
         }
     }
 
+    #[allow(dead_code)]
     fn failure(section: &str, item_count: usize, recorded_hash: &str, computed_hash: &str) -> Self {
         Self {
             section: section.to_string(),

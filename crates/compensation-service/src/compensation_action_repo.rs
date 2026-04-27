@@ -1252,7 +1252,7 @@ mod tests {
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
 
         let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
-        let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let _tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
 
         // Tenant A creates a compensation action
         let action = create_test_action(tenant_a, Uuid::new_v4(), Uuid::new_v4());
@@ -1318,12 +1318,18 @@ mod tests {
         repo.create(action_b).await.unwrap();
 
         // List for tenant A should only return tenant A's 2 actions
-        let actions_a = repo.list_by_side_effect(shared_side_effect_id, tenant_a).await.unwrap();
+        let actions_a = repo
+            .list_by_side_effect(shared_side_effect_id, tenant_a)
+            .await
+            .unwrap();
         assert_eq!(actions_a.len(), 2);
         assert!(actions_a.iter().all(|a| a.tenant_id == tenant_a));
 
         // List for tenant B should only return tenant B's 1 action
-        let actions_b = repo.list_by_side_effect(shared_side_effect_id, tenant_b).await.unwrap();
+        let actions_b = repo
+            .list_by_side_effect(shared_side_effect_id, tenant_b)
+            .await
+            .unwrap();
         assert_eq!(actions_b.len(), 1);
         assert!(actions_b.iter().all(|a| a.tenant_id == tenant_b));
     }

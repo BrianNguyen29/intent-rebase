@@ -191,41 +191,32 @@ impl ForensicDataCollector for RealForensicDataCollector {
             }
 
             // Count versions in time range
-            match self.intent_repo.get_versions_by_intent(intent_id).await {
-                Ok(versions) => {
-                    version_count += versions
-                        .iter()
-                        .filter(|v| v.created_at >= time_range.0 && v.created_at <= time_range.1)
-                        .count();
-                }
-                Err(_) => {}
+            if let Ok(versions) = self.intent_repo.get_versions_by_intent(intent_id).await {
+                version_count += versions
+                    .iter()
+                    .filter(|v| v.created_at >= time_range.0 && v.created_at <= time_range.1)
+                    .count();
             }
 
             // Count audit events in time range
-            let tenant_uuid = tenant_id.unwrap_or_else(|| Uuid::nil());
-            match self.audit_repo.list_by_intent(intent_id, tenant_uuid).await {
-                Ok(events) => {
-                    audit_event_count += events
-                        .iter()
-                        .filter(|e| e.occurred_at >= time_range.0 && e.occurred_at <= time_range.1)
-                        .count();
-                }
-                Err(_) => {}
+            let tenant_uuid = tenant_id.unwrap_or_else(Uuid::nil);
+            if let Ok(events) = self.audit_repo.list_by_intent(intent_id, tenant_uuid).await {
+                audit_event_count += events
+                    .iter()
+                    .filter(|e| e.occurred_at >= time_range.0 && e.occurred_at <= time_range.1)
+                    .count();
             }
 
             // Count policy snapshots in time range
-            match self
+            if let Ok(snapshots) = self
                 .policy_snapshot_repo
                 .list_by_intent(intent_id, tenant_uuid)
                 .await
             {
-                Ok(snapshots) => {
-                    policy_snapshot_count += snapshots
-                        .iter()
-                        .filter(|s| s.created_at >= time_range.0 && s.created_at <= time_range.1)
-                        .count();
-                }
-                Err(_) => {}
+                policy_snapshot_count += snapshots
+                    .iter()
+                    .filter(|s| s.created_at >= time_range.0 && s.created_at <= time_range.1)
+                    .count();
             }
         }
 
@@ -274,9 +265,7 @@ mod tests {
         let collector = RealForensicDataCollector::new(intent_repo, audit_repo, policy_repo);
 
         let time_range = (Utc::now() - chrono::Duration::days(1), Utc::now());
-        let result = collector
-            .collect(None, &[], &time_range)
-            .await;
+        let result = collector.collect(None, &[], &time_range).await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -320,7 +309,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CollectorError::InvalidTimeRange(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CollectorError::InvalidTimeRange(_)
+        ));
     }
 
     #[tokio::test]
@@ -337,7 +329,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CollectorError::InvalidTimeRange(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CollectorError::InvalidTimeRange(_)
+        ));
     }
 
     #[tokio::test]
@@ -363,7 +358,8 @@ mod tests {
         let audit_repo = Arc::new(InMemoryAuditRepository::new());
         let policy_repo = Arc::new(InMemoryPolicySnapshotRepository::new());
 
-        let collector = RealForensicDataCollector::new(intent_repo.clone(), audit_repo.clone(), policy_repo);
+        let collector =
+            RealForensicDataCollector::new(intent_repo.clone(), audit_repo.clone(), policy_repo);
 
         // Create an audit event outside the time range
         let old_event = create_test_audit_event(
@@ -375,9 +371,7 @@ mod tests {
         audit_repo.create_audit_event(old_event).await.unwrap();
 
         let time_range = (Utc::now() - chrono::Duration::days(1), Utc::now());
-        let result = collector
-            .count_available(None, &[], &time_range)
-            .await;
+        let result = collector.count_available(None, &[], &time_range).await;
 
         assert!(result.is_ok());
     }

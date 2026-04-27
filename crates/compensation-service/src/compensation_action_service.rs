@@ -23,9 +23,9 @@ use crate::compensation_executor::CompensationExecutor;
 use crate::rollback_record_repo::RollbackRecordRepository;
 use crate::side_effect_repo::SideEffectRepository;
 use intent_rebase_types::{
-    AuditRepository, CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
-    CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
-    get_current_trace_context,
+    get_current_trace_context, AuditRepository, CompensationCompletedAuditPayload,
+    CompensationFailedAuditPayload, CompensationPlannedAuditPayload,
+    CompensationStartedAuditPayload, IntentRebaseError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -150,7 +150,8 @@ impl CompensationActionService {
 
         // Use bounded planner to classify and generate actions
         let planner = crate::BoundedCompensationPlanner::new();
-        let generated_actions = planner.plan_from_side_effects(&rebase_context, &side_effects, tenant_id);
+        let generated_actions =
+            planner.plan_from_side_effects(&rebase_context, &side_effects, tenant_id);
 
         // Persist all generated actions
         let mut persisted_actions = Vec::with_capacity(generated_actions.len());
@@ -490,9 +491,18 @@ impl CompensationActionService {
         let is_allowed_combo = matches!(
             (action.strategy_type, action.feasibility),
             (StrategyType::Rollback, CompensationFeasibility::Automatic)
-                | (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic)
-                | (StrategyType::FollowupNotice, CompensationFeasibility::ManualOnly)
-                | (StrategyType::Escalation, CompensationFeasibility::NotPossible)
+                | (
+                    StrategyType::CounterAction,
+                    CompensationFeasibility::SemiAutomatic
+                )
+                | (
+                    StrategyType::FollowupNotice,
+                    CompensationFeasibility::ManualOnly
+                )
+                | (
+                    StrategyType::Escalation,
+                    CompensationFeasibility::NotPossible
+                )
         );
         if !is_allowed_combo {
             return Err(IntentRebaseError::CompensationActionNotExecutable(
@@ -593,7 +603,13 @@ impl CompensationActionService {
                 actions_initiated: 1,
             };
             if let Err(e) = audit_repo
-                .record_compensation_started(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
+                .record_compensation_started(
+                    tenant_id,
+                    actor_id,
+                    intent_id,
+                    payload,
+                    get_current_trace_context(),
+                )
                 .await
             {
                 tracing::warn!(
@@ -619,7 +635,13 @@ impl CompensationActionService {
                     actions_failed: 0,
                 };
                 if let Err(e) = audit_repo
-                    .record_compensation_completed(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
+                    .record_compensation_completed(
+                        tenant_id,
+                        actor_id,
+                        intent_id,
+                        payload,
+                        get_current_trace_context(),
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -636,7 +658,13 @@ impl CompensationActionService {
                     error_summary: executor_result.summary.clone(),
                 };
                 if let Err(e) = audit_repo
-                    .record_compensation_failed(tenant_id, actor_id, intent_id, payload, get_current_trace_context())
+                    .record_compensation_failed(
+                        tenant_id,
+                        actor_id,
+                        intent_id,
+                        payload,
+                        get_current_trace_context(),
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -2314,8 +2342,8 @@ mod tests {
     use super::*;
     use crate::compensation_action::{CompensationFeasibility, RebaseContext, StrategyType};
     use crate::compensation_action_repo::InMemoryCompensationActionRepository;
+    use crate::rollback_record::RollbackRecordResult;
     use crate::rollback_record_repo::InMemoryRollbackRecordRepository;
-    use crate::rollback_record::{RollbackRecordResult, SideEffectRollbackRecord};
     use std::sync::Arc;
 
     fn create_test_service() -> CompensationActionService {
@@ -2323,6 +2351,7 @@ mod tests {
         CompensationActionService::new(repo)
     }
 
+    #[allow(dead_code)]
     fn create_test_service_with_side_effect_repo() -> CompensationActionService {
         // Service configured with side effect repo for real RollbackExecutor path
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
@@ -3719,7 +3748,7 @@ mod tests {
 
         let created = service.create_action(action).await.unwrap();
         let executed_result = ExecutionResult::success("Completed");
-        let executed = service
+        let _executed = service
             .record_result(created.id, &executed_result, created.lock_version, None)
             .await
             .unwrap();
@@ -3791,7 +3820,7 @@ mod tests {
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
         let rebase_context = RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
-        let mut action = CompensationAction::new(
+        let action = CompensationAction::new(
             tenant_id,
             Uuid::new_v4(),
             intent_id,
@@ -3802,7 +3831,7 @@ mod tests {
         );
 
         let created = service.create_action(action).await.unwrap();
-        let approved = service
+        let _approved = service
             .approve_action(created.id, created.lock_version, None)
             .await
             .unwrap();
@@ -4484,7 +4513,8 @@ mod tests {
         audit_repo: Arc<dyn intent_rebase_types::AuditRepository>,
     ) -> CompensationActionService {
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
         CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo)
             .with_audit_repo(audit_repo)
     }
@@ -4502,7 +4532,10 @@ mod tests {
         let created = service.create_action(action).await.unwrap();
 
         // Verify CompensationPlanned audit event was emitted
-        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        let events = audit_repo
+            .list_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events[0].event_type,
@@ -4535,7 +4568,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_action_emits_started_and_completed_audit_events() {
         let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new());
-        let service = create_test_service_with_audit_repo(audit_repo.clone());
+        let _service = create_test_service_with_audit_repo(audit_repo.clone());
 
         let tenant_id = Uuid::new_v4();
         let intent_id = Uuid::new_v4();
@@ -4560,15 +4593,16 @@ mod tests {
             Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
         side_effect_repo.create(side_effect).await.unwrap();
 
-        let service_with_side_effect = CompensationActionService::new_with_side_effect_repo(
-            repo,
-            side_effect_repo,
-        )
-        .with_audit_repo(audit_repo.clone());
+        let service_with_side_effect =
+            CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo)
+                .with_audit_repo(audit_repo.clone());
 
         let action = create_test_action(tenant_id, side_effect_id, intent_id);
 
-        let created = service_with_side_effect.create_action(action).await.unwrap();
+        let created = service_with_side_effect
+            .create_action(action)
+            .await
+            .unwrap();
         let approved = service_with_side_effect
             .approve_action(created.id, created.lock_version, Some("test-approver"))
             .await
@@ -4581,13 +4615,13 @@ mod tests {
             .unwrap();
 
         // Verify audit events were emitted
-        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        let events = audit_repo
+            .list_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 3); // CompensationPlanned + Started + Completed
 
-        let event_types: Vec<_> = events
-            .iter()
-            .map(|e| e.event_type.clone())
-            .collect();
+        let event_types: Vec<_> = events.iter().map(|e| e.event_type.clone()).collect();
         assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationPlanned));
         assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationStarted));
         assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationCompleted));
@@ -4619,12 +4653,12 @@ mod tests {
             .unwrap();
 
         // Even stub success should have emitted Started + Completed
-        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
+        let events = audit_repo
+            .list_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
         assert!(events.len() >= 2);
-        let event_types: Vec<_> = events
-            .iter()
-            .map(|e| e.event_type.clone())
-            .collect();
+        let event_types: Vec<_> = events.iter().map(|e| e.event_type.clone()).collect();
         assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationStarted));
         assert!(event_types.contains(&intent_rebase_types::AuditEventType::CompensationCompleted));
         assert_eq!(_executed.status, CompensationStatus::Executed);
@@ -4659,10 +4693,19 @@ mod tests {
         let created = service.create_action(action).await.unwrap();
 
         // Verify CompensationPlanned audit event payload
-        let events = audit_repo.list_by_intent(intent_id, tenant_id).await.unwrap();
-        let planned_event = events.iter().find(|e| {
-            matches!(e.event_type, intent_rebase_types::AuditEventType::CompensationPlanned)
-        }).unwrap();
+        let events = audit_repo
+            .list_by_intent(intent_id, tenant_id)
+            .await
+            .unwrap();
+        let planned_event = events
+            .iter()
+            .find(|e| {
+                matches!(
+                    e.event_type,
+                    intent_rebase_types::AuditEventType::CompensationPlanned
+                )
+            })
+            .unwrap();
 
         let payload: intent_rebase_types::CompensationPlannedAuditPayload =
             serde_json::from_value(planned_event.payload.clone()).unwrap();
@@ -4682,21 +4725,22 @@ mod tests {
 
     fn create_test_service_with_rollback_record_repo(
         rollback_record_repo: Arc<dyn RollbackRecordRepository>,
-    ) -> (CompensationActionService, Arc<crate::side_effect_repo::InMemorySideEffectRepository>) {
+    ) -> (
+        CompensationActionService,
+        Arc<crate::side_effect_repo::InMemorySideEffectRepository>,
+    ) {
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
-        let service = CompensationActionService::new_with_side_effect_repo(
-            repo,
-            side_effect_repo.clone(),
-        )
-        .with_rollback_record_repo(rollback_record_repo);
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let service =
+            CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo.clone())
+                .with_rollback_record_repo(rollback_record_repo);
         (service, side_effect_repo)
     }
 
     #[tokio::test]
     async fn test_execute_action_creates_rollback_record_on_success() {
-        let rollback_record_repo =
-            Arc::new(InMemoryRollbackRecordRepository::new());
+        let rollback_record_repo = Arc::new(InMemoryRollbackRecordRepository::new());
         let (service, side_effect_repo) =
             create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
 
@@ -4748,8 +4792,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_creates_rollback_record_on_failure() {
-        let rollback_record_repo =
-            Arc::new(InMemoryRollbackRecordRepository::new());
+        let rollback_record_repo = Arc::new(InMemoryRollbackRecordRepository::new());
         let (service, _side_effect_repo) =
             create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
 
@@ -4785,8 +4828,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_waive_action_creates_rollback_record() {
-        let rollback_record_repo =
-            Arc::new(InMemoryRollbackRecordRepository::new());
+        let rollback_record_repo = Arc::new(InMemoryRollbackRecordRepository::new());
         let (service, _side_effect_repo) =
             create_test_service_with_rollback_record_repo(rollback_record_repo.clone());
 
@@ -4864,14 +4906,15 @@ mod tests {
     // CounterAction + SemiAutomatic Tests (Phase 3 Batch 1 P7 bounded slice)
     // ============================================================================
 
-    fn create_counter_action_semi_auto_test_service(
-    ) -> (CompensationActionService, Arc<crate::side_effect_repo::InMemorySideEffectRepository>) {
+    fn create_counter_action_semi_auto_test_service() -> (
+        CompensationActionService,
+        Arc<crate::side_effect_repo::InMemorySideEffectRepository>,
+    ) {
         let repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let side_effect_repo = Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
-        let service = CompensationActionService::new_with_side_effect_repo(
-            repo,
-            side_effect_repo.clone(),
-        );
+        let side_effect_repo =
+            Arc::new(crate::side_effect_repo::InMemorySideEffectRepository::new());
+        let service =
+            CompensationActionService::new_with_side_effect_repo(repo, side_effect_repo.clone());
         (service, side_effect_repo)
     }
 
@@ -4967,9 +5010,14 @@ mod tests {
 
         // Execute should fail with CompensationActionNotExecutable error
         // because Rollback + SemiAutomatic is not a supported combo
-        let result = service.execute_action(approved.id, Some("test-executor")).await;
+        let result = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), IntentRebaseError::CompensationActionNotExecutable(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
     }
 
     #[tokio::test]
@@ -5001,9 +5049,14 @@ mod tests {
 
         // Execute should fail with CompensationActionNotExecutable error
         // because CounterAction + Automatic is not a supported combo
-        let result = service.execute_action(approved.id, Some("test-executor")).await;
+        let result = service
+            .execute_action(approved.id, Some("test-executor"))
+            .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), IntentRebaseError::CompensationActionNotExecutable(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentRebaseError::CompensationActionNotExecutable(_)
+        ));
     }
 
     #[tokio::test]
@@ -5044,7 +5097,10 @@ mod tests {
         assert_eq!(executed.status, CompensationStatus::Failed);
         let result = executed.execution_result_payload.unwrap();
         assert!(!result.success);
-        assert_eq!(result.error_code, Some("INVALID_SIDE_EFFECT_CLASS".to_string()));
+        assert_eq!(
+            result.error_code,
+            Some("INVALID_SIDE_EFFECT_CLASS".to_string())
+        );
     }
 
     #[tokio::test]

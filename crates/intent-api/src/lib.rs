@@ -10,15 +10,14 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use tracing::Instrument;
 use chrono::{DateTime, Utc};
 use graph_service::GraphService;
 use intent_rebase_types::{
-    AffectedItemsPreview, CreateGraphEdgeRequest, CreateGraphNodeRequest, CreateIntentRequest,
-    CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, DiffRequest, EdgeType,
-    GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
-    ListVersionsResponse, NodeType, PolicySnapshot, ValidateIntentResponse,
-    get_current_trace_context,
+    get_current_trace_context, AffectedItemsPreview, CreateGraphEdgeRequest,
+    CreateGraphNodeRequest, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
+    CreateVersionResponse, DiffRequest, EdgeType, GraphEdge, GraphNode, IntentHeadResponse,
+    IntentRebaseError, IntentVersion, ListVersionsResponse, NodeType, PolicySnapshot,
+    ValidateIntentResponse,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -36,6 +35,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use tracing::Instrument;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
 use validator::Validate;
@@ -45,7 +45,7 @@ pub mod auth;
 
 // Re-export auth types for convenience when jwt-auth feature is enabled
 #[cfg(feature = "jwt-auth")]
-pub use auth::{AuthConfig, Claims, generate_test_token};
+pub use auth::{generate_test_token, AuthConfig, Claims};
 
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
@@ -96,12 +96,14 @@ fn record_diff_compute_duration(duration_secs: f64) {
 
 /// Record rebase preview duration
 fn record_rebase_preview_duration(duration_secs: f64, graph_size: &'static str) {
-    metrics::histogram!("intent_api_rebase_preview_duration_seconds", "graph_size" => graph_size).record(duration_secs);
+    metrics::histogram!("intent_api_rebase_preview_duration_seconds", "graph_size" => graph_size)
+        .record(duration_secs);
 }
 
 /// Record rebase apply duration
 fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
-    metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class).record(duration_secs);
+    metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class)
+        .record(duration_secs);
 }
 
 /// Response for diff computation including version context, diff, and risk
@@ -419,9 +421,11 @@ impl IntoResponse for ApiErrorResponse {
             IntentRebaseError::ForensicBundleNotFound(_) => {
                 (StatusCode::NOT_FOUND, "FORENSIC_BUNDLE_NOT_FOUND", false)
             }
-            IntentRebaseError::InvalidForensicBundleStatusTransition { .. } => {
-                (StatusCode::CONFLICT, "INVALID_BUNDLE_STATUS_TRANSITION", false)
-            }
+            IntentRebaseError::InvalidForensicBundleStatusTransition { .. } => (
+                StatusCode::CONFLICT,
+                "INVALID_BUNDLE_STATUS_TRANSITION",
+                false,
+            ),
         };
 
         let body = ApiError {
@@ -1072,14 +1076,22 @@ async fn rebase_preview(
     };
 
     // Get version info for response context
-    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+    let from_version = match state
+        .service
+        .get_version(intent_id, request.from_version)
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             record_rebase_preview_request("error");
             return Err(ApiErrorResponse(e));
         }
     };
-    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+    let to_version = match state
+        .service
+        .get_version(intent_id, request.to_version)
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             record_rebase_preview_request("error");
@@ -1137,14 +1149,22 @@ async fn rebase_apply(
             return Err(ApiErrorResponse(e));
         }
     };
-    let from_version = match state.service.get_version(intent_id, request.from_version).await {
+    let from_version = match state
+        .service
+        .get_version(intent_id, request.from_version)
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             record_rebase_apply_request("error");
             return Err(ApiErrorResponse(e));
         }
     };
-    let to_version = match state.service.get_version(intent_id, request.to_version).await {
+    let to_version = match state
+        .service
+        .get_version(intent_id, request.to_version)
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             record_rebase_apply_request("error");
@@ -1424,7 +1444,10 @@ async fn publish_audit_event(
     };
 
     let subject = intent_rebase_types::EventSubject::from_audit_event(tenant_id, event_type);
-    match publisher.publish(&subject, payload, get_current_trace_context()).await {
+    match publisher
+        .publish(&subject, payload, get_current_trace_context())
+        .await
+    {
         intent_rebase_types::PublishResult::Published {
             subject: s,
             sequence,
@@ -2177,7 +2200,9 @@ pub fn init_tracing() {
     use opentelemetry::trace::TracerProvider;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let registry = tracing_subscriber::registry().with(filter).with(fmt::layer().json());
+    let registry = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().json());
 
     // Optionally wire in OTLP export if endpoint is configured
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
@@ -2274,11 +2299,7 @@ pub async fn trace_context_middleware(
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     // Build span name from method and path
-    let span_name = format!(
-        "{} {}",
-        request.method(),
-        request.uri().path()
-    );
+    let span_name = format!("{} {}", request.method(), request.uri().path());
 
     // Extract W3C traceparent header for parent context
     let traceparent_value = request
@@ -2337,7 +2358,11 @@ pub async fn trace_context_middleware(
         // e.g., "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
         let trace_id_hex = format!("{:x}", otel_span_context.trace_id());
         let span_id_hex = format!("{:x}", otel_span_context.span_id());
-        let trace_flags = if otel_span_context.is_sampled() { "01" } else { "00" };
+        let trace_flags = if otel_span_context.is_sampled() {
+            "01"
+        } else {
+            "00"
+        };
         let traceparent_out = format!("00-{}-{}-{}", trace_id_hex, span_id_hex, trace_flags);
         response_builder = response_builder.header("traceparent", traceparent_out);
 
@@ -2351,9 +2376,7 @@ pub async fn trace_context_middleware(
 
     // Convert response to builder to add headers
     let (parts, body) = response.into_parts();
-    let mut response_builder = response_builder
-        .status(parts.status)
-        .version(parts.version);
+    let mut response_builder = response_builder.status(parts.status).version(parts.version);
 
     // Preserve all existing response headers
     for (name, value) in parts.headers.iter() {
@@ -2977,8 +3000,8 @@ pub struct ListBatchCandidatesQuery {
 ///
 /// **Four candidate categories:**
 /// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-    /// 2. `approved_service_executable_candidates` - Approved actions executable by the service
-    ///    Phase 3 Batch 1 P7: Includes both Rollback+Automatic and CounterAction+SemiAutomatic
+/// 2. `approved_service_executable_candidates` - Approved actions executable by the service
+///    Phase 3 Batch 1 P7: Includes both Rollback+Automatic and CounterAction+SemiAutomatic
 /// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
 /// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
 ///
@@ -3279,7 +3302,7 @@ fn format_action_decision(d: &compensation_service::OrchestrationActionDecision)
 /// **Auto-decide logic:**
 /// - `Pending` → approve via approve_action
 /// - `Failed` (can_be_reapproved) → reapprove via reapprove_action
-    /// - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
+/// - `Approved` (is_service_executable: Rollback+Automatic or CounterAction+SemiAutomatic) → execute via execute_action
 /// - Terminal / policy-blocked → skip
 /// - Not found → record not_found
 ///
@@ -3997,7 +4020,7 @@ pub struct OrchestrationQuery {
 /// **Action determination logic:**
 /// - `approve`: Action is Pending (can transition to Approved)
 /// - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
-    /// - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic)
+/// - `execute`: Action is Approved AND is_service_executable() (Rollback+Automatic or CounterAction+SemiAutomatic)
 /// - `no_action`: Action is in a terminal state or cannot perform any valid transition
 ///
 /// **Bounded partial-success semantics:**
@@ -4508,39 +4531,22 @@ async fn create_forensic_bundle(
             forensic_service::ForensicBundleServiceError::NotFound(_) => {
                 ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))
             }
-            forensic_service::ForensicBundleServiceError::Collection(e) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!(
-                    "collection failed: {}",
-                    e
-                )))
-            }
-            forensic_service::ForensicBundleServiceError::Generation(e) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!(
-                    "generation failed: {}",
-                    e
-                )))
-            }
-            forensic_service::ForensicBundleServiceError::Storage(e) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!(
-                    "storage failed: {}",
-                    e
-                )))
-            }
-            forensic_service::ForensicBundleServiceError::Repository(e) => {
-                ApiErrorResponse(e)
-            }
-            forensic_service::ForensicBundleServiceError::Serialization(e) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!(
-                    "serialization failed: {}",
-                    e
-                )))
-            }
-            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => {
-                ApiErrorResponse(IntentRebaseError::Internal(format!(
-                    "invalid time range: {}",
-                    e
-                )))
-            }
+            forensic_service::ForensicBundleServiceError::Collection(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("collection failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Generation(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("generation failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Storage(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("storage failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Repository(e) => ApiErrorResponse(e),
+            forensic_service::ForensicBundleServiceError::Serialization(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("serialization failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("invalid time range: {}", e)),
+            ),
         })?;
 
     Ok((
@@ -4743,26 +4749,27 @@ impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificati
                 version_count: resp.intent_version_coverage.version_count,
                 earliest_version: resp.intent_version_coverage.earliest_version,
                 latest_version: resp.intent_version_coverage.latest_version,
-                has_artifact_traceability: resp.intent_version_coverage
-                    .has_artifact_traceability,
+                has_artifact_traceability: resp.intent_version_coverage.has_artifact_traceability,
             },
             artifact_coverage: resp.artifact_coverage.map(|ac| ForensicArtifactCoverage {
                 artifact_count: ac.artifact_count,
                 artifacts_with_provenance: ac.artifacts_with_provenance,
                 coverage_complete: ac.coverage_complete,
             }),
-            audit_event_coverage: resp.audit_event_coverage.map(|aec| ForensicAuditEventCoverage {
-                event_count: aec.event_count,
-                time_range_complete: aec.time_range_complete,
-                first_event: aec.first_event,
-                last_event: aec.last_event,
-            }),
-            policy_snapshot_coverage: resp
-                .policy_snapshot_coverage
-                .map(|psc| ForensicPolicySnapshotCoverage {
+            audit_event_coverage: resp
+                .audit_event_coverage
+                .map(|aec| ForensicAuditEventCoverage {
+                    event_count: aec.event_count,
+                    time_range_complete: aec.time_range_complete,
+                    first_event: aec.first_event,
+                    last_event: aec.last_event,
+                }),
+            policy_snapshot_coverage: resp.policy_snapshot_coverage.map(|psc| {
+                ForensicPolicySnapshotCoverage {
                     snapshot_count: psc.snapshot_count,
                     coverage_complete: psc.coverage_complete,
-                }),
+                }
+            }),
             estimated_bundle_item_count: resp.estimated_bundle_item_count,
         }
     }
@@ -4918,10 +4925,7 @@ async fn verify_forensic_bundle(
         include_policy_snapshots: request.include_policy_snapshots,
     };
 
-    let response = state
-        .forensic_service
-        .verify(service_request)
-        .await;
+    let response = state.forensic_service.verify(service_request).await;
 
     Ok(Json(ForensicVerificationResponse::from(response)))
 }
@@ -6044,7 +6048,7 @@ mod tests {
         assert_eq!(result.from_version.version_number, 1);
         assert_eq!(result.to_version.version_number, 2);
         // Verify response has semantically reliable fields only
-        assert!(result.rationale.len() > 0);
+        assert!(!result.rationale.is_empty());
         assert!(result.risk_level >= 1 && result.risk_level <= 5);
     }
 
@@ -6510,7 +6514,7 @@ mod tests {
             AffectedItemsStatus::Unavailable
         );
         // But endpoint still returns useful data
-        assert!(result.rationale.len() > 0);
+        assert!(!result.rationale.is_empty());
     }
 
     // === Input Validation Tests ===
@@ -7708,7 +7712,9 @@ mod tests {
             intent_rebase_types::EventSubject::from_audit_event(tenant_id, "RebaseApplied");
 
         // NoOpEventPublisher should skip (return Skipped)
-        let result = publisher.publish(&subject, &payload, TraceContext::default()).await;
+        let result = publisher
+            .publish(&subject, &payload, TraceContext::default())
+            .await;
         match result {
             intent_rebase_types::PublishResult::Skipped { reason } => {
                 assert!(reason.contains("disabled"));
@@ -8672,10 +8678,15 @@ mod tests {
     /// Helper to create AppState with shared graph service but separate side effect repos.
     /// Returns (state, side_effect_repo, graph_repo) so tests can create nodes directly
     /// via the graph_repo without needing to access the private repo field.
-    fn create_test_service_with_tenant_isolated_side_effect_repo(
-    ) -> (AppState, Arc<compensation_service::InMemorySideEffectRepository>, Arc<InMemoryGraphRepository>) {
+    fn create_test_service_with_tenant_isolated_side_effect_repo() -> (
+        AppState,
+        Arc<compensation_service::InMemorySideEffectRepository>,
+        Arc<InMemoryGraphRepository>,
+    ) {
         use graph_service::{GraphService, InMemoryGraphRepository};
-        use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
+        use intent_service::{
+            InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService,
+        };
         use runtime_adapter::MockAdapter;
 
         let repo = Arc::new(InMemoryIntentRepository::new());
@@ -8712,9 +8723,8 @@ mod tests {
         ));
         let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new())
             as Arc<dyn forensic_service::ForensicVerificationService>;
-        let forensic_archive_gen = Arc::new(
-            forensic_service::InMemoryForensicArchiveGenerator::new(),
-        );
+        let forensic_archive_gen =
+            Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new());
         let state = AppState {
             service,
             graph_service: graph_svc,
@@ -8743,9 +8753,12 @@ mod tests {
         // Test that side effects recorded by tenant A's artifact ingest
         // are NOT visible when tenant B queries by intent
         use graph_service::{GraphRepository, InMemoryGraphRepository};
-        use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext};
+        use intent_rebase_types::{
+            ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
+        };
 
-        let (state, _side_effect_repo, graph_repo) = create_test_service_with_tenant_isolated_side_effect_repo();
+        let (state, _side_effect_repo, graph_repo) =
+            create_test_service_with_tenant_isolated_side_effect_repo();
         let tenant_a = Uuid::new_v4();
         let tenant_b = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -8793,7 +8806,10 @@ mod tests {
             .expect("Tenant A artifact ingest should succeed");
         // ingest_artifact returns (StatusCode, Json<ArtifactIngestResponse>)
         assert!(result_a.1.side_effect_recorded);
-        let side_effect_id_a = result_a.1.side_effect_id.expect("Should have side effect ID");
+        let side_effect_id_a = result_a
+            .1
+            .side_effect_id
+            .expect("Should have side effect ID");
 
         // Tenant B attempts to query side effects for the same intent
         // (Tenant B has no side effects - they should see empty)
@@ -8824,9 +8840,12 @@ mod tests {
     async fn test_ingest_artifact_side_effect_tenant_isolation_separate_intents() {
         // Test that side effects for different tenants are isolated even with same intent ID
         use graph_service::{GraphRepository, InMemoryGraphRepository};
-        use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext};
+        use intent_rebase_types::{
+            ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
+        };
 
-        let (state, _side_effect_repo, graph_repo) = create_test_service_with_tenant_isolated_side_effect_repo();
+        let (state, _side_effect_repo, graph_repo) =
+            create_test_service_with_tenant_isolated_side_effect_repo();
         let tenant_a = Uuid::new_v4();
         let tenant_b = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -9761,13 +9780,11 @@ mod tests {
             "\"incident_investigation\""
         );
         assert_eq!(
-            serde_json::to_string(&forensic_service::VerificationPurpose::ComplianceAudit)
-                .unwrap(),
+            serde_json::to_string(&forensic_service::VerificationPurpose::ComplianceAudit).unwrap(),
             "\"compliance_audit\""
         );
         assert_eq!(
-            serde_json::to_string(&forensic_service::VerificationPurpose::Legal)
-                .unwrap(),
+            serde_json::to_string(&forensic_service::VerificationPurpose::Legal).unwrap(),
             "\"legal\""
         );
     }
@@ -9922,7 +9939,10 @@ mod tests {
             .expect("Should return export result");
 
         // Status reason should be truthful about in-memory generation
-        assert!(result.status_reason.contains("in-memory") || result.status_reason.contains("scaffolded"));
+        assert!(
+            result.status_reason.contains("in-memory")
+                || result.status_reason.contains("scaffolded")
+        );
         assert!(!result.status_reason.contains("S3"));
         assert!(!result.status_reason.contains("persisted"));
     }
@@ -9930,9 +9950,8 @@ mod tests {
     #[tokio::test]
     async fn test_export_forensic_archive_empty_counts() {
         // Use a generator with zero counts to test empty archive scenario
-        let generator = Arc::new(
-            forensic_service::InMemoryForensicArchiveGenerator::new()
-        ) as Arc<dyn forensic_service::ForensicArchiveGenerator>;
+        let generator = Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new())
+            as Arc<dyn forensic_service::ForensicArchiveGenerator>;
 
         let state = AppState {
             service: Arc::new(IntentService::new(Arc::new(
@@ -9950,20 +9969,18 @@ mod tests {
             )),
             audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
                 as Arc<dyn intent_rebase_types::AuditRepository>,
-            approval_request_repo: Arc::new(
-                intent_service::InMemoryApprovalRequestRepository::new(),
-            ) as Arc<dyn intent_service::ApprovalRequestRepository>,
-            policy_snapshot_repo: Arc::new(
-                intent_service::InMemoryPolicySnapshotRepository::new(),
-            ) as Arc<dyn intent_service::PolicySnapshotRepository>,
+            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+                as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+                as Arc<dyn intent_service::PolicySnapshotRepository>,
             event_publisher: None,
-            side_effect_service: Arc::new(compensation_service::SideEffectService::new(
-                Arc::new(compensation_service::InMemorySideEffectRepository::new()),
-            )),
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
             compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(
-                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
-                ),
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
             ),
             orchestration_runtime: Arc::new(compensation_service::OrchestrationRuntime::new(
                 Arc::new(compensation_service::CompensationActionService::new(

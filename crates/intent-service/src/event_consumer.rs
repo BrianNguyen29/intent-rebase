@@ -28,7 +28,7 @@
 use async_trait::async_trait;
 use intent_rebase_types::{
     CheckpointType, ConsumeResult, EventSubject, NotificationKind, NotificationRecord,
-    PolicySnapshot, PublishedEvent, ScopeDefinition, ScopeType, TraceContext,
+    PolicySnapshot, PublishedEvent, ScopeDefinition, ScopeType,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -812,7 +812,7 @@ mod tests {
     use crate::{CheckpointRepository, CheckpointService, InMemoryCheckpointRepository};
     use crate::{InMemoryPolicySnapshotRepository, PolicySnapshotRepository};
     use intent_rebase_types::{
-        CheckpointStatus, EventConsumer, EventPublisher, EventSubject, ScopeType,
+        CheckpointStatus, EventConsumer, EventPublisher, EventSubject, ScopeType, TraceContext,
     };
     use std::sync::Arc;
 
@@ -984,7 +984,9 @@ mod tests {
             "workflow_id": workflow_id.to_string(),
         });
 
-        publisher.publish(&subject, &payload, TraceContext::default()).await;
+        publisher
+            .publish(&subject, &payload, TraceContext::default())
+            .await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -1231,7 +1233,9 @@ mod tests {
             "resolved_by": "admin",
         });
 
-        publisher.publish(&subject, &payload, TraceContext::default()).await;
+        publisher
+            .publish(&subject, &payload, TraceContext::default())
+            .await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;
@@ -1489,7 +1493,9 @@ mod tests {
             "min_approvals": 1,
         });
 
-        publisher.publish(&subject, &payload, TraceContext::default()).await;
+        publisher
+            .publish(&subject, &payload, TraceContext::default())
+            .await;
 
         // Verify event was published
         let events = publisher.get_events_for_subject(&subject.subject).await;

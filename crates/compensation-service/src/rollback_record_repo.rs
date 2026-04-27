@@ -9,14 +9,17 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::rollback_record::{SideEffectRollbackRecord, RollbackRecordResult};
+use crate::rollback_record::{RollbackRecordResult, SideEffectRollbackRecord};
 
 /// Repository trait for side effect rollback record storage.
 /// Allows for in-memory (tests) or SQL-backed implementations.
 #[async_trait]
 pub trait RollbackRecordRepository: Send + Sync {
     /// Create a new rollback record.
-    async fn create(&self, record: SideEffectRollbackRecord) -> Result<SideEffectRollbackRecord, IntentRebaseError>;
+    async fn create(
+        &self,
+        record: SideEffectRollbackRecord,
+    ) -> Result<SideEffectRollbackRecord, IntentRebaseError>;
 
     /// Get a rollback record by its ID.
     async fn get(&self, record_id: Uuid) -> Result<SideEffectRollbackRecord, IntentRebaseError>;
@@ -97,7 +100,10 @@ impl Default for InMemoryRollbackRecordRepository {
 
 #[async_trait]
 impl RollbackRecordRepository for InMemoryRollbackRecordRepository {
-    async fn create(&self, record: SideEffectRollbackRecord) -> Result<SideEffectRollbackRecord, IntentRebaseError> {
+    async fn create(
+        &self,
+        record: SideEffectRollbackRecord,
+    ) -> Result<SideEffectRollbackRecord, IntentRebaseError> {
         let mut records = self.records.write().await;
         let mut by_tenant = self.by_tenant.write().await;
         let mut by_compensation_action = self.by_compensation_action.write().await;
@@ -202,7 +208,10 @@ impl RollbackRecordRepository for InMemoryRollbackRecordRepository {
         let records = self.records.read().await;
         let by_side_effect = self.by_side_effect.read().await;
 
-        let ids = by_side_effect.get(&side_effect_id).cloned().unwrap_or_default();
+        let ids = by_side_effect
+            .get(&side_effect_id)
+            .cloned()
+            .unwrap_or_default();
         let result: Vec<SideEffectRollbackRecord> = ids
             .iter()
             .filter_map(|id| records.get(id).cloned())
@@ -220,7 +229,10 @@ impl RollbackRecordRepository for InMemoryRollbackRecordRepository {
         let records = self.records.read().await;
         let by_intent = self.by_intent.read().await;
 
-        let ids = by_intent.get(&(tenant_id, intent_id)).cloned().unwrap_or_default();
+        let ids = by_intent
+            .get(&(tenant_id, intent_id))
+            .cloned()
+            .unwrap_or_default();
         let result: Vec<SideEffectRollbackRecord> = ids
             .iter()
             .filter_map(|id| records.get(id).cloned())
@@ -237,7 +249,10 @@ impl RollbackRecordRepository for InMemoryRollbackRecordRepository {
         let records = self.records.read().await;
         let by_result = self.by_result.read().await;
 
-        let ids = by_result.get(&(tenant_id, result)).cloned().unwrap_or_default();
+        let ids = by_result
+            .get(&(tenant_id, result))
+            .cloned()
+            .unwrap_or_default();
         let result: Vec<SideEffectRollbackRecord> = ids
             .iter()
             .filter_map(|id| records.get(id).cloned())
@@ -291,7 +306,10 @@ impl SqlxRollbackRecordRepository {
 
 #[async_trait]
 impl RollbackRecordRepository for SqlxRollbackRecordRepository {
-    async fn create(&self, record: SideEffectRollbackRecord) -> Result<SideEffectRollbackRecord, IntentRebaseError> {
+    async fn create(
+        &self,
+        record: SideEffectRollbackRecord,
+    ) -> Result<SideEffectRollbackRecord, IntentRebaseError> {
         sqlx::query(
             r#"
             INSERT INTO side_effect_rollback_records (
@@ -414,10 +432,7 @@ impl RollbackRecordRepository for SqlxRollbackRecordRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| {
-            IntentRebaseError::StorageError(format!(
-                "list rollback records by side effect: {}",
-                e
-            ))
+            IntentRebaseError::StorageError(format!("list rollback records by side effect: {}", e))
         })?;
 
         rows.into_iter().map(|r| self.row_to_record(r)).collect()

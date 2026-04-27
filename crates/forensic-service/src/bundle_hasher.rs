@@ -18,9 +18,9 @@ pub type Sha256Hex = String;
 /// # Errors
 ///
 /// Returns an error if serialization fails.
-pub fn compute_sha256<T: ?Sized>(value: &T) -> Result<Sha256Hex, serde_json::Error>
+pub fn compute_sha256<T>(value: &T) -> Result<Sha256Hex, serde_json::Error>
 where
-    T: serde::Serialize,
+    T: ?Sized + serde::Serialize,
 {
     let json = serde_json::to_string(value)?;
     let mut hasher = Sha256::new();
@@ -380,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_verify_bundle_integrity_all_sections() {
         // Verify that all 5 sections contribute to integrity
         let mut all_sections = ContentSectionsForVerification::default();
@@ -499,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_multiple_sections_tamper_detection() {
         let mut sections = ContentSectionsForVerification::default();
         sections.intent_versions = IntentVersionsForHash {

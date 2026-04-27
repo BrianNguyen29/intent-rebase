@@ -83,15 +83,21 @@ impl SqlxIntentRepository {
     }
 
     /// Create a new intent with initial version (transactional)
-    #[tracing::instrument(name = "sqlx_repo.create_intent", skip(self, request), fields(intent_id))]
+    #[tracing::instrument(
+        name = "sqlx_repo.create_intent",
+        skip(self, request),
+        fields(intent_id)
+    )]
     pub async fn create_intent_tx(
         &self,
         request: CreateIntentRequest,
     ) -> Result<CreateIntentResponse, IntentRebaseError> {
         let intent_id = Uuid::new_v4();
-        let now = Utc::now();
+        let _now = Utc::now();
         // P3-S2: Use tenant_id from request if provided, otherwise fall back to resolver
-        let tenant_id = request.tenant_id.unwrap_or_else(|| self.tenant_resolver.resolve_tenant_id_or_default());
+        let _tenant_id = request
+            .tenant_id
+            .unwrap_or_else(|| self.tenant_resolver.resolve_tenant_id_or_default());
 
         let create_span = |tid: Uuid| {
             tracing::info_span!(
@@ -627,7 +633,7 @@ mod tests {
     fn test_static_tenant_resolver_returns_provided_value() {
         let specific_tenant = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
         let resolver = StaticTenantResolver::new(specific_tenant);
-        
+
         // StaticTenantResolver always returns the configured tenant_id
         assert_eq!(resolver.resolve_tenant_id(), Some(specific_tenant));
         assert_eq!(resolver.resolve_tenant_id_or_default(), specific_tenant);
@@ -637,10 +643,10 @@ mod tests {
     fn test_static_tenant_resolver_with_different_tenants() {
         let tenant_a = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
         let tenant_b = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
-        
+
         let resolver_a = StaticTenantResolver::new(tenant_a);
         let resolver_b = StaticTenantResolver::new(tenant_b);
-        
+
         // Each resolver returns its own tenant
         assert_eq!(resolver_a.resolve_tenant_id_or_default(), tenant_a);
         assert_eq!(resolver_b.resolve_tenant_id_or_default(), tenant_b);

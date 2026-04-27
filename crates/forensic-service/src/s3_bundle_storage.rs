@@ -62,13 +62,7 @@ impl S3BundleStorage {
         secret_key: &str,
         bucket: String,
     ) -> Self {
-        let creds = Credentials::new(
-            access_key,
-            secret_key,
-            None,
-            None,
-            "explicit",
-        );
+        let creds = Credentials::new(access_key, secret_key, None, None, "explicit");
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .credentials_provider(creds)
             .region(aws_config::Region::new("us-east-1"))
@@ -152,7 +146,8 @@ impl BundleStorage for S3BundleStorage {
     async fn exists(&self, bundle_id: Uuid, tenant_id: Uuid) -> Result<bool, BundleStorageError> {
         let key = self.build_key(tenant_id, bundle_id);
 
-        let result = self.client
+        let result = self
+            .client
             .head_object()
             .bucket(&self.bucket)
             .key(&key)
@@ -164,7 +159,10 @@ impl BundleStorage for S3BundleStorage {
             Err(e) => {
                 let err_str = e.to_string();
                 // Check if it's a "not found" error
-                if err_str.contains("NoSuchKey") || err_str.contains("NotFound") || err_str.contains("404") {
+                if err_str.contains("NoSuchKey")
+                    || err_str.contains("NotFound")
+                    || err_str.contains("404")
+                {
                     Ok(false)
                 } else {
                     Err(BundleStorageError::Storage(err_str))

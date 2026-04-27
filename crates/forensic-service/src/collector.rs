@@ -5,9 +5,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use intent_rebase_types::{
-    AuditEvent, PolicySnapshot,
-};
+use intent_rebase_types::{AuditEvent, PolicySnapshot};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -53,7 +51,7 @@ pub trait ForensicDataCollector: Send + Sync {
         intent_ids: &[Uuid],
         time_range: &(DateTime<Utc>, DateTime<Utc>),
     ) -> Result<CollectionResult, CollectorError>;
-    
+
     /// Count available records without collecting full data (for verification)
     async fn count_available(
         &self,
@@ -137,15 +135,9 @@ impl ForensicDataCollector for InMemoryForensicDataCollector {
             .cloned()
             .collect();
 
-        let total_audit_events = filtered
-            .iter()
-            .map(|i| i.audit_events.len())
-            .sum();
+        let total_audit_events = filtered.iter().map(|i| i.audit_events.len()).sum();
 
-        let total_policy_snapshots = filtered
-            .iter()
-            .map(|i| i.policy_snapshots.len())
-            .sum();
+        let total_policy_snapshots = filtered.iter().map(|i| i.policy_snapshots.len()).sum();
 
         Ok(CollectionResult {
             tenant_id,
@@ -178,14 +170,8 @@ impl ForensicDataCollector for InMemoryForensicDataCollector {
         Ok(CollectionCounts {
             intent_count: filtered.len(),
             version_count: filtered.iter().map(|i| i.versions.len()).sum(),
-            audit_event_count: filtered
-                .iter()
-                .map(|i| i.audit_events.len())
-                .sum(),
-            policy_snapshot_count: filtered
-                .iter()
-                .map(|i| i.policy_snapshots.len())
-                .sum(),
+            audit_event_count: filtered.iter().map(|i| i.audit_events.len()).sum(),
+            policy_snapshot_count: filtered.iter().map(|i| i.policy_snapshots.len()).sum(),
         })
     }
 }
@@ -215,10 +201,7 @@ mod tests {
         let collector = InMemoryForensicDataCollector::new();
         let time_range = (Utc::now() - chrono::Duration::days(1), Utc::now());
 
-        let result = collector
-            .collect(None, &[], &time_range)
-            .await
-            .unwrap();
+        let result = collector.collect(None, &[], &time_range).await.unwrap();
 
         assert!(result.intents.is_empty());
     }
@@ -242,9 +225,7 @@ mod tests {
         let collector = InMemoryForensicDataCollector::new();
         let time_range = (Utc::now(), Utc::now() - chrono::Duration::days(1));
 
-        let result = collector
-            .collect(None, &[], &time_range)
-            .await;
+        let result = collector.collect(None, &[], &time_range).await;
 
         assert!(matches!(result, Err(CollectorError::InvalidTimeRange(_))));
     }

@@ -12,11 +12,10 @@ pub mod sqlx_repository;
 use async_trait::async_trait;
 use chrono::Utc;
 use intent_rebase_types::{
-    AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload, AuditRepository,
-    ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
-    CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError, IntentStatus,
-    IntentVersion, ListVersionsResponse, NodeType,
-    get_current_trace_context, VersionStatus,
+    get_current_trace_context, AffectedItem, AffectedItemsPreview, ApprovalCancelledAuditPayload,
+    AuditRepository, ChangeChannel, Checkpoint, CreateIntentRequest, CreateIntentResponse,
+    CreateVersionRequest, CreateVersionResponse, Intent, IntentHeadResponse, IntentRebaseError,
+    IntentStatus, IntentVersion, ListVersionsResponse, NodeType, VersionStatus,
 };
 use rebase_engine::{compute_diff_with_risk_sync, DiffRiskAnalysis, IntentVersionDiff, RebasePlan};
 use std::collections::HashMap;
@@ -371,7 +370,7 @@ impl IntentService {
     /// - Returns `ConcurrencyConflict` if the intent's current version or row_version doesn't match
     ///   This allows clients to detect concurrent modifications and retry.
     ///
-/// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
+    /// Phase 2b bounded slice: When approval_repo is configured, this method will automatically
     /// cancel any pending approval requests for the intent when a new version is created.
     #[tracing::instrument(skip(self))]
     pub async fn create_version(
@@ -1039,7 +1038,7 @@ mod checkpoint_service_tests {
             service
                 .create_checkpoint(
                     intent_id,
-                    i as i32 + 1,
+                    i + 1,
                     workflow_id,
                     tenant_id,
                     CheckpointType::Initial,
@@ -1072,7 +1071,7 @@ mod checkpoint_service_tests {
             service
                 .create_checkpoint(
                     intent_id,
-                    i as i32 + 1,
+                    i + 1,
                     workflow_id,
                     tenant_id,
                     CheckpointType::Initial,
@@ -1106,7 +1105,7 @@ mod checkpoint_service_tests {
             service
                 .create_checkpoint(
                     intent_id,
-                    i as i32 + 1,
+                    i + 1,
                     workflow_id,
                     tenant_id,
                     CheckpointType::Initial,

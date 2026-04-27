@@ -164,17 +164,19 @@ pub struct ForensicBundleService<R: BundleRepository, S: BundleStorage> {
 
 impl<R: BundleRepository, S: BundleStorage> ForensicBundleService<R, S> {
     /// Create a new forensic bundle service.
-    pub fn new(
-        repo: Arc<R>,
-        storage: Arc<S>,
-        collector: Arc<dyn ForensicDataCollector>,
-    ) -> Self {
-        Self { repo, storage, collector }
+    pub fn new(repo: Arc<R>, storage: Arc<S>, collector: Arc<dyn ForensicDataCollector>) -> Self {
+        Self {
+            repo,
+            storage,
+            collector,
+        }
     }
 }
 
 #[async_trait]
-impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait for ForensicBundleService<R, S> {
+impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait
+    for ForensicBundleService<R, S>
+{
     /// Create a new forensic bundle.
     ///
     /// Full generation path:
@@ -336,15 +338,12 @@ impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait for Foren
         &self,
         bundle_id: Uuid,
     ) -> Result<ForensicBundle, ForensicBundleServiceError> {
-        self.repo
-            .get(bundle_id)
-            .await
-            .map_err(|e| match e {
-                IntentRebaseError::ForensicBundleNotFound(id) => {
-                    ForensicBundleServiceError::NotFound(id)
-                }
-                _ => ForensicBundleServiceError::Repository(e),
-            })
+        self.repo.get(bundle_id).await.map_err(|e| match e {
+            IntentRebaseError::ForensicBundleNotFound(id) => {
+                ForensicBundleServiceError::NotFound(id)
+            }
+            _ => ForensicBundleServiceError::Repository(e),
+        })
     }
 
     /// List bundles for a tenant.
@@ -400,7 +399,10 @@ mod tests {
     use super::*;
     use crate::bundle_repo::InMemoryBundleRepository;
     use crate::bundle_storage::InMemoryBundleStorage;
-    use crate::collector::{CollectionCounts, CollectionResult, CollectedIntentData, CollectedVersionData, CollectorError, ForensicDataCollector};
+    use crate::collector::{
+        CollectedIntentData, CollectedVersionData, CollectionCounts, CollectionResult,
+        CollectorError, ForensicDataCollector,
+    };
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
 
@@ -577,14 +579,10 @@ mod tests {
         let repo = Arc::new(InMemoryBundleRepository::new());
         let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
 
-        let collector1 = Arc::new(
-            MockCollector::new()
-                .with_intents(vec![create_test_intent(tenant1, intent1)]),
-        );
-        let collector2 = Arc::new(
-            MockCollector::new()
-                .with_intents(vec![create_test_intent(tenant2, intent2)]),
-        );
+        let collector1 =
+            Arc::new(MockCollector::new().with_intents(vec![create_test_intent(tenant1, intent1)]));
+        let collector2 =
+            Arc::new(MockCollector::new().with_intents(vec![create_test_intent(tenant2, intent2)]));
 
         let service1 = ForensicBundleService::new(repo.clone(), storage.clone(), collector1);
         let service2 = ForensicBundleService::new(repo.clone(), storage.clone(), collector2);
@@ -634,8 +632,7 @@ mod tests {
         let repo = Arc::new(InMemoryBundleRepository::new());
         let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
         let collector = Arc::new(
-            MockCollector::new()
-                .with_intents(vec![create_test_intent(tenant_id, Uuid::new_v4())]),
+            MockCollector::new().with_intents(vec![create_test_intent(tenant_id, Uuid::new_v4())]),
         );
 
         let service = ForensicBundleService::new(repo.clone(), storage.clone(), collector);
@@ -667,7 +664,10 @@ mod tests {
         let service = ForensicBundleService::new(repo, storage, collector);
 
         let result = service.get_bundle(Uuid::new_v4()).await;
-        assert!(matches!(result, Err(ForensicBundleServiceError::NotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ForensicBundleServiceError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -676,8 +676,7 @@ mod tests {
         let repo = Arc::new(InMemoryBundleRepository::new());
         let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
         let collector = Arc::new(
-            MockCollector::new()
-                .with_intents(vec![create_test_intent(tenant_id, Uuid::new_v4())]),
+            MockCollector::new().with_intents(vec![create_test_intent(tenant_id, Uuid::new_v4())]),
         );
 
         let service = ForensicBundleService::new(repo.clone(), storage.clone(), collector);

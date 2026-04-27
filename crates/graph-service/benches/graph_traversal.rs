@@ -94,11 +94,7 @@ async fn setup_small_chain(
 }
 
 /// Setup a medium star graph: center connected to 20 leaves
-async fn setup_medium_star(
-    graph: &GraphService,
-    tenant_id: Uuid,
-    workflow_id: Uuid,
-) -> Uuid {
+async fn setup_medium_star(graph: &GraphService, tenant_id: Uuid, workflow_id: Uuid) -> Uuid {
     let center = graph
         .add_node(create_node(tenant_id, workflow_id, NodeType::IntentVersion))
         .await
@@ -134,11 +130,7 @@ async fn setup_medium_star(
 }
 
 /// Setup a large tree graph: 5 levels, branching factor 3
-async fn setup_large_tree(
-    graph: &GraphService,
-    tenant_id: Uuid,
-    workflow_id: Uuid,
-) -> Uuid {
+async fn setup_large_tree(graph: &GraphService, tenant_id: Uuid, workflow_id: Uuid) -> Uuid {
     // Build a tree with 3^0 + 3^1 + 3^2 + 3^3 + 3^4 = 1 + 3 + 9 + 27 + 81 = 121 nodes
     let root = graph
         .add_node(create_node(tenant_id, workflow_id, NodeType::Intent))
@@ -191,41 +183,29 @@ async fn setup_large_tree(
 /// Benchmark BFS reachability across graph sizes
 fn bench_bfs_reachable(c: &mut Criterion) {
     // Build graphs once outside the benchmark loop
-    let (graph_small, start_small) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            let (_, _, _, d) = setup_small_chain(&graph, tenant_id, workflow_id).await;
-            (graph, d)
-        });
+    let (graph_small, start_small) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let (_, _, _, d) = setup_small_chain(&graph, tenant_id, workflow_id).await;
+        (graph, d)
+    });
 
-    let (graph_medium, start_medium) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            let start = setup_medium_star(&graph, tenant_id, workflow_id).await;
-            (graph, start)
-        });
+    let (graph_medium, start_medium) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let start = setup_medium_star(&graph, tenant_id, workflow_id).await;
+        (graph, start)
+    });
 
-    let (graph_large, start_large) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            let start = setup_large_tree(&graph, tenant_id, workflow_id).await;
-            (graph, start)
-        });
+    let (graph_large, start_large) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let start = setup_large_tree(&graph, tenant_id, workflow_id).await;
+        (graph, start)
+    });
 
     let mut group = c.benchmark_group("bfs_reachable");
 
@@ -234,14 +214,16 @@ fn bench_bfs_reachable(c: &mut Criterion) {
         b.iter(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let _ = graph.find_reachable(
-                    start,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+                let _ = graph
+                    .find_reachable(
+                        start,
+                        TraversalOptions {
+                            max_depth: Some(10),
+                            include_start: false,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             });
         });
     });
@@ -251,14 +233,16 @@ fn bench_bfs_reachable(c: &mut Criterion) {
         b.iter(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let _ = graph.find_reachable(
-                    start,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+                let _ = graph
+                    .find_reachable(
+                        start,
+                        TraversalOptions {
+                            max_depth: Some(10),
+                            include_start: false,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             });
         });
     });
@@ -268,14 +252,16 @@ fn bench_bfs_reachable(c: &mut Criterion) {
         b.iter(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let _ = graph.find_reachable(
-                    start,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+                let _ = graph
+                    .find_reachable(
+                        start,
+                        TraversalOptions {
+                            max_depth: Some(10),
+                            include_start: false,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             });
         });
     });
@@ -285,24 +271,17 @@ fn bench_bfs_reachable(c: &mut Criterion) {
 
 /// Benchmark path finding across graph sizes
 fn bench_find_path(c: &mut Criterion) {
-    let (graph_small, a_small, d_small) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            let (a, _, _, d) = setup_small_chain(&graph, tenant_id, workflow_id).await;
-            (graph, a, d)
-        });
+    let (graph_small, a_small, d_small) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        let (a, _, _, d) = setup_small_chain(&graph, tenant_id, workflow_id).await;
+        (graph, a, d)
+    });
 
-    let (graph_medium, center_medium, leaf_medium) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
+    let (graph_medium, center_medium, leaf_medium) =
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
             let tenant_id = Uuid::new_v4();
             let workflow_id = Uuid::new_v4();
             let center = setup_medium_star(&graph, tenant_id, workflow_id).await;
@@ -320,12 +299,9 @@ fn bench_find_path(c: &mut Criterion) {
             (graph, center, leaves.first().unwrap().id)
         });
 
-    let (graph_large, root_large, leaf_large) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
+    let (graph_large, root_large, leaf_large) =
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
             let tenant_id = Uuid::new_v4();
             let workflow_id = Uuid::new_v4();
             let root = setup_large_tree(&graph, tenant_id, workflow_id).await;
@@ -350,95 +326,97 @@ fn bench_find_path(c: &mut Criterion) {
         b.iter(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let _ = graph.find_path(
-                    src,
-                    dst,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+                let _ = graph
+                    .find_path(
+                        src,
+                        dst,
+                        TraversalOptions {
+                            max_depth: Some(10),
+                            include_start: false,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             });
         });
     });
 
-    group.bench_with_input("medium_21_nodes", &(center_medium, leaf_medium), |b, &(src, dst)| {
-        let graph = graph_medium.clone();
-        b.iter(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let _ = graph.find_path(
-                    src,
-                    dst,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+    group.bench_with_input(
+        "medium_21_nodes",
+        &(center_medium, leaf_medium),
+        |b, &(src, dst)| {
+            let graph = graph_medium.clone();
+            b.iter(|| {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let _ = graph
+                        .find_path(
+                            src,
+                            dst,
+                            TraversalOptions {
+                                max_depth: Some(10),
+                                include_start: false,
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                });
             });
-        });
-    });
+        },
+    );
 
-    group.bench_with_input("large_121_nodes", &(root_large, leaf_large), |b, &(src, dst)| {
-        let graph = graph_large.clone();
-        b.iter(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let _ = graph.find_path(
-                    src,
-                    dst,
-                    TraversalOptions {
-                        max_depth: Some(10),
-                        include_start: false,
-                        ..Default::default()
-                    },
-                ).await;
+    group.bench_with_input(
+        "large_121_nodes",
+        &(root_large, leaf_large),
+        |b, &(src, dst)| {
+            let graph = graph_large.clone();
+            b.iter(|| {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let _ = graph
+                        .find_path(
+                            src,
+                            dst,
+                            TraversalOptions {
+                                max_depth: Some(10),
+                                include_start: false,
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                });
             });
-        });
-    });
+        },
+    );
 
     group.finish();
 }
 
 /// Benchmark cycle detection across graph sizes
 fn bench_cycle_detection(c: &mut Criterion) {
-    let (graph_small, workflow_small) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            setup_small_chain(&graph, tenant_id, workflow_id).await;
-            (graph, workflow_id)
-        });
+    let (graph_small, workflow_small) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        setup_small_chain(&graph, tenant_id, workflow_id).await;
+        (graph, workflow_id)
+    });
 
-    let (graph_medium, workflow_medium) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            setup_medium_star(&graph, tenant_id, workflow_id).await;
-            (graph, workflow_id)
-        });
+    let (graph_medium, workflow_medium) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        setup_medium_star(&graph, tenant_id, workflow_id).await;
+        (graph, workflow_id)
+    });
 
-    let (graph_large, workflow_large) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let graph = GraphService::new(std::sync::Arc::new(
-                InMemoryGraphRepository::new(),
-            ));
-            let tenant_id = Uuid::new_v4();
-            let workflow_id = Uuid::new_v4();
-            setup_large_tree(&graph, tenant_id, workflow_id).await;
-            (graph, workflow_id)
-        });
+    let (graph_large, workflow_large) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let graph = GraphService::new(std::sync::Arc::new(InMemoryGraphRepository::new()));
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+        setup_large_tree(&graph, tenant_id, workflow_id).await;
+        (graph, workflow_id)
+    });
 
     let mut group = c.benchmark_group("cycle_detection");
 

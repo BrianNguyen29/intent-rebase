@@ -1182,9 +1182,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::NotApplicable
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, false);
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.signal_sent);
+        assert!(!result.runtime_execution_result.replay_completed);
+        assert!(!result.runtime_execution_result.replay_attempted);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -1249,9 +1249,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::NotApplicable
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, false);
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.signal_sent);
+        assert!(!result.runtime_execution_result.replay_completed);
+        assert!(!result.runtime_execution_result.replay_attempted);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -1315,9 +1315,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::NotApplicable
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, false);
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.signal_sent);
+        assert!(!result.runtime_execution_result.replay_completed);
+        assert!(!result.runtime_execution_result.replay_attempted);
         assert_eq!(
             result.runtime_execution_result.status_message,
             "Not executed"
@@ -1381,11 +1381,11 @@ mod tests {
             RuntimeExecutionStatus::SucceededNoReplay
         );
         // Signal should be sent
-        assert_eq!(result.runtime_execution_result.signal_sent, true);
+        assert!(result.runtime_execution_result.signal_sent);
         // Replay should be skipped because no checkpoint exists
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert!(!result.runtime_execution_result.replay_completed);
         // Replay was NOT attempted because no checkpoint was available
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.replay_attempted);
         assert!(result
             .runtime_execution_result
             .status_message
@@ -1492,9 +1492,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::Succeeded
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, true);
-        assert_eq!(result.runtime_execution_result.replay_completed, true);
-        assert_eq!(result.runtime_execution_result.replay_attempted, true);
+        assert!(result.runtime_execution_result.signal_sent);
+        assert!(result.runtime_execution_result.replay_completed);
+        assert!(result.runtime_execution_result.replay_attempted);
     }
 
     #[tokio::test]
@@ -1559,7 +1559,7 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::Succeeded
         );
-        assert_eq!(result.runtime_execution_result.replay_attempted, true);
+        assert!(result.runtime_execution_result.replay_attempted);
     }
 
     #[tokio::test]
@@ -1620,9 +1620,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::Degraded
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, false);
+        assert!(!result.runtime_execution_result.signal_sent);
         // Replay was not attempted because signal failed first
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.replay_attempted);
     }
 
     #[tokio::test]
@@ -1692,10 +1692,10 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::Degraded
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, true);
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
+        assert!(result.runtime_execution_result.signal_sent);
+        assert!(!result.runtime_execution_result.replay_completed);
         // Replay was attempted but failed
-        assert_eq!(result.runtime_execution_result.replay_attempted, true);
+        assert!(result.runtime_execution_result.replay_attempted);
     }
 
     #[tokio::test]
@@ -1789,9 +1789,9 @@ mod tests {
             result.runtime_execution_result.status,
             RuntimeExecutionStatus::SkippedNotReady
         );
-        assert_eq!(result.runtime_execution_result.signal_sent, false);
-        assert_eq!(result.runtime_execution_result.replay_completed, false);
-        assert_eq!(result.runtime_execution_result.replay_attempted, false);
+        assert!(!result.runtime_execution_result.signal_sent);
+        assert!(!result.runtime_execution_result.replay_completed);
+        assert!(!result.runtime_execution_result.replay_attempted);
         assert!(result
             .runtime_execution_result
             .status_message

@@ -21,18 +21,22 @@
 //!
 //! Note: Requires migrations to be run first. See infrastructure/migrations/.
 
+#[allow(unused_imports)]
 use axum::Router;
 use rebase_orchestrator::RebaseOrchestrator;
 use reqwest::Client;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+#[allow(unused_imports)]
 use std::time::{Duration, Instant};
+#[allow(unused_imports)]
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 // Load test configuration
+#[allow(dead_code)]
 const LOAD_TEST_ITEMS: &[(usize, usize)] = &[
     (10, 1000),   // Level 1: 10 concurrent clients, 1000 total requests (~"normal" load)
     (50, 5000),   // Level 2: 50 concurrent clients, 5000 total requests (~5x load)
@@ -40,7 +44,9 @@ const LOAD_TEST_ITEMS: &[(usize, usize)] = &[
 ];
 
 // SLO thresholds from docs
+#[allow(dead_code)]
 const SLO_P95_LATENCY_MS: u64 = 10_000; // p95 < 10s
+#[allow(dead_code)]
 const SLO_ERROR_RATE: f64 = 0.01; // < 1% error rate
 
 /// Check if DATABASE_URL is set for SQLx load test
@@ -49,6 +55,7 @@ fn requires_database_url() -> bool {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct LoadTestMetrics {
     total_requests: Arc<AtomicUsize>,
     successful_requests: Arc<AtomicUsize>,
@@ -67,6 +74,7 @@ impl Default for LoadTestMetrics {
     }
 }
 
+#[allow(dead_code)]
 impl LoadTestMetrics {
     fn record_success(&self, latency_ms: u64) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
@@ -113,6 +121,7 @@ impl LoadTestMetrics {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct LoadTestStats {
     total_requests: usize,
     successful_requests: usize,
@@ -125,6 +134,7 @@ struct LoadTestStats {
     max_latency_ms: u64,
 }
 
+#[allow(dead_code)]
 fn percentile(sorted: &[u64], p: f64) -> u64 {
     if sorted.is_empty() {
         return 0;
@@ -133,15 +143,14 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+#[allow(dead_code)]
 fn check_slo_compliance(stats: &LoadTestStats, level: usize) -> Vec<String> {
     let mut violations = Vec::new();
 
     if stats.p95_latency_ms > SLO_P95_LATENCY_MS {
         violations.push(format!(
             "Level {}: p95 latency {}ms exceeds SLO {}ms",
-            level,
-            stats.p95_latency_ms,
-            SLO_P95_LATENCY_MS
+            level, stats.p95_latency_ms, SLO_P95_LATENCY_MS
         ));
     }
 
@@ -157,9 +166,13 @@ fn check_slo_compliance(stats: &LoadTestStats, level: usize) -> Vec<String> {
     violations
 }
 
+#[allow(dead_code)]
 fn print_report(level: usize, clients: usize, total_requests: usize, stats: &LoadTestStats) {
     println!("\n{:=<80}", "");
-    println!("LOAD TEST LEVEL {} - {} concurrent clients, {} total requests", level, clients, total_requests);
+    println!(
+        "LOAD TEST LEVEL {} - {} concurrent clients, {} total requests",
+        level, clients, total_requests
+    );
     println!("{:=<80}", "");
     println!("THROUGHPUT:");
     println!("  Total requests:    {}", stats.total_requests);
@@ -175,10 +188,27 @@ fn print_report(level: usize, clients: usize, total_requests: usize, stats: &Loa
     println!("  Max:                {}", stats.max_latency_ms);
     println!();
     println!("SLO COMPLIANCE:");
-    println!("  p95 < {}ms:       {}", SLO_P95_LATENCY_MS, if stats.p95_latency_ms <= SLO_P95_LATENCY_MS { "PASS" } else { "FAIL" });
-    println!("  Error rate < {}%:  {}", SLO_ERROR_RATE * 100.0, if stats.error_rate <= SLO_ERROR_RATE { "PASS" } else { "FAIL" });
+    println!(
+        "  p95 < {}ms:       {}",
+        SLO_P95_LATENCY_MS,
+        if stats.p95_latency_ms <= SLO_P95_LATENCY_MS {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+    println!(
+        "  Error rate < {}%:  {}",
+        SLO_ERROR_RATE * 100.0,
+        if stats.error_rate <= SLO_ERROR_RATE {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
 }
 
+#[allow(dead_code)]
 fn create_test_router() -> Router {
     use graph_service::{GraphService, InMemoryGraphRepository};
     use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
@@ -202,12 +232,14 @@ fn create_test_router() -> Router {
     let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
         as Arc<dyn intent_service::PolicySnapshotRepository>;
     let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
-    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(side_effect_repo));
+    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+        side_effect_repo,
+    ));
     let compensation_action_repo =
         Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
-    let compensation_action_svc = Arc::new(
-        compensation_service::CompensationActionService::new(compensation_action_repo),
-    );
+    let compensation_action_svc = Arc::new(compensation_service::CompensationActionService::new(
+        compensation_action_repo,
+    ));
     let orchestration_run_repo =
         Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
     let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
@@ -223,16 +255,16 @@ fn create_test_router() -> Router {
             .with_policy_snapshot_count(3),
     );
     let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-    let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
     let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
         Arc::new(forensic_service::InMemoryForensicDataCollector::new());
-    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
-        forensic_service::ForensicBundleService::new(
+    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
             forensic_bundle_repo,
             forensic_bundle_storage,
             forensic_bundle_collector,
-        ),
-    );
+        ));
 
     intent_api::build_router(
         service,
@@ -251,6 +283,7 @@ fn create_test_router() -> Router {
     )
 }
 
+#[allow(dead_code)]
 async fn run_load_level(
     client: &Client,
     base_url: &str,
@@ -258,7 +291,10 @@ async fn run_load_level(
     concurrent_clients: usize,
     total_requests: usize,
 ) -> LoadTestStats {
-    println!("\nStarting Level {}: {} concurrent clients, {} total requests", level, concurrent_clients, total_requests);
+    println!(
+        "\nStarting Level {}: {} concurrent clients, {} total requests",
+        level, concurrent_clients, total_requests
+    );
 
     let metrics = Arc::new(LoadTestMetrics::default());
     let start_time = Instant::now();
@@ -292,7 +328,11 @@ async fn run_load_level(
                     ("GET".to_string(), path.to_string(), None)
                 } else if rand_val < 90 {
                     // 20% write operations (create intent)
-                    ("POST".to_string(), "/intents".to_string(), Some(create_intent_body()))
+                    (
+                        "POST".to_string(),
+                        "/intents".to_string(),
+                        Some(create_intent_body()),
+                    )
                 } else {
                     // 10% compute operations
                     let intent_id = Uuid::new_v4();
@@ -352,6 +392,7 @@ async fn run_load_level(
     stats
 }
 
+#[allow(dead_code)]
 fn create_intent_body() -> serde_json::Value {
     serde_json::json!({
         "name": format!("load-test-intent-{}", Uuid::new_v4()),
@@ -369,6 +410,7 @@ fn create_intent_body() -> serde_json::Value {
     })
 }
 
+#[allow(dead_code)]
 fn create_diff_body() -> serde_json::Value {
     serde_json::json!({
         "from_version": 1,
@@ -419,7 +461,14 @@ async fn test_load() {
     let mut all_stats = Vec::new();
 
     for (level, &(concurrent_clients, total_requests)) in LOAD_TEST_ITEMS.iter().enumerate() {
-        let stats = run_load_level(&client, &base_url, level + 1, concurrent_clients, total_requests).await;
+        let stats = run_load_level(
+            &client,
+            &base_url,
+            level + 1,
+            concurrent_clients,
+            total_requests,
+        )
+        .await;
         print_report(level + 1, concurrent_clients, total_requests, &stats);
 
         let violations = check_slo_compliance(&stats, level + 1);
@@ -479,19 +528,22 @@ fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
     let audit_repo: Arc<dyn intent_rebase_types::AuditRepository> =
         Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
     let approval_repo = intent_service::SqlxApprovalRequestRepository::new(pool.clone());
-    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> =
-        Arc::new(intent_service::SqlxPolicySnapshotRepository::new(pool.clone()));
-    let side_effect_repo = compensation_service::SqlxSideEffectRepository::new(pool.clone());
-    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
-        Arc::new(side_effect_repo),
-    ));
-    let compensation_action_repo =
-        Arc::new(compensation_service::SqlxCompensationActionRepository::new(pool.clone()));
-    let compensation_action_svc = Arc::new(
-        compensation_service::CompensationActionService::new(compensation_action_repo),
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
+        intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
     );
-    let orchestration_run_repo =
-        Arc::new(compensation_service::SqlxOrchestrationRunRepository::new(pool.clone()));
+    let side_effect_repo = compensation_service::SqlxSideEffectRepository::new(pool.clone());
+    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(Arc::new(
+        side_effect_repo,
+    )));
+    let compensation_action_repo = Arc::new(
+        compensation_service::SqlxCompensationActionRepository::new(pool.clone()),
+    );
+    let compensation_action_svc = Arc::new(compensation_service::CompensationActionService::new(
+        compensation_action_repo,
+    ));
+    let orchestration_run_repo = Arc::new(
+        compensation_service::SqlxOrchestrationRunRepository::new(pool.clone()),
+    );
     let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
         compensation_action_svc.clone(),
         orchestration_run_repo,
@@ -505,16 +557,16 @@ fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
             .with_policy_snapshot_count(3),
     );
     let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-    let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
     let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
         Arc::new(forensic_service::InMemoryForensicDataCollector::new());
-    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
-        forensic_service::ForensicBundleService::new(
+    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
             forensic_bundle_repo,
             forensic_bundle_storage,
             forensic_bundle_collector,
-        ),
-    );
+        ));
 
     intent_api::build_router(
         service,
@@ -574,7 +626,10 @@ async fn test_load_sqlx() {
 
     println!("\n{}", "=".repeat(80));
     println!("SQLX-BACKED LOAD TEST");
-    println!("Connecting to: {}", database_url.replace(&*std::env::var("PGPASSWORD").unwrap_or_default(), "****"));
+    println!(
+        "Connecting to: {}",
+        database_url.replace(&*std::env::var("PGPASSWORD").unwrap_or_default(), "****")
+    );
     println!("{:=<80}", "");
 
     // Create SQLx pool with connection pooling settings suitable for load testing
@@ -585,7 +640,9 @@ async fn test_load_sqlx() {
         .idle_timeout(Duration::from_secs(600))
         .connect(&database_url)
         .await
-        .expect("Failed to connect to database - ensure postgres is running and migrations are applied");
+        .expect(
+            "Failed to connect to database - ensure postgres is running and migrations are applied",
+        );
 
     println!("Connected to PostgreSQL - pool created with max_connections=20");
 
@@ -629,7 +686,14 @@ async fn test_load_sqlx() {
     let mut all_stats = Vec::new();
 
     for (level, &(concurrent_clients, total_requests)) in sqlx_load_levels.iter().enumerate() {
-        let stats = run_load_level(&client, &base_url, level + 1, concurrent_clients, total_requests).await;
+        let stats = run_load_level(
+            &client,
+            &base_url,
+            level + 1,
+            concurrent_clients,
+            total_requests,
+        )
+        .await;
         print_report(level + 1, concurrent_clients, total_requests, &stats);
 
         let violations = check_slo_compliance(&stats, level + 1);
@@ -666,5 +730,8 @@ async fn test_load_sqlx() {
     }
     println!("{}", "=".repeat(80));
 
-    assert!(all_passed, "Some SQLx load levels did not meet SLO requirements");
+    assert!(
+        all_passed,
+        "Some SQLx load levels did not meet SLO requirements"
+    );
 }

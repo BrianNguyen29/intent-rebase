@@ -222,6 +222,7 @@ fn bench_validation(c: &mut Criterion) {
     let mut group = c.benchmark_group("validation");
 
     let valid_request = intent_rebase_types::CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![intent_rebase_types::SourceRef {
             ref_type: "spec".to_string(),
@@ -236,6 +237,7 @@ fn bench_validation(c: &mut Criterion) {
     };
 
     let invalid_request_empty_summary = intent_rebase_types::CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![],
         payload: intent_rebase_types::IntentPayload {
@@ -254,6 +256,7 @@ fn bench_validation(c: &mut Criterion) {
     };
 
     let invalid_request_nil_workflow = intent_rebase_types::CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::nil(), // Invalid: nil UUID
         source_refs: vec![],
         payload: create_test_payload(),
@@ -270,14 +273,18 @@ fn bench_validation(c: &mut Criterion) {
             let result: Result<(), intent_rebase_types::IntentRebaseError> = (|| {
                 // Simulate validate_create_intent_request logic
                 if request.workflow_id == Uuid::nil() {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "workflow_id cannot be nil".into(),
-                    ));
+                    return Err(
+                        intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                            "workflow_id cannot be nil".into(),
+                        ),
+                    );
                 }
                 if request.payload.objective.summary.trim().is_empty() {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "payload.objective.summary cannot be empty".into(),
-                    ));
+                    return Err(
+                        intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                            "payload.objective.summary cannot be empty".into(),
+                        ),
+                    );
                 }
                 if request
                     .payload
@@ -286,14 +293,18 @@ fn bench_validation(c: &mut Criterion) {
                     .trim()
                     .is_empty()
                 {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "payload.objective.success_statement cannot be empty".into(),
-                    ));
+                    return Err(
+                        intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                            "payload.objective.success_statement cannot be empty".into(),
+                        ),
+                    );
                 }
                 if request.payload.objective.domain.trim().is_empty() {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "payload.objective.domain cannot be empty".into(),
-                    ));
+                    return Err(
+                        intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                            "payload.objective.domain cannot be empty".into(),
+                        ),
+                    );
                 }
                 Ok(())
             })();
@@ -302,34 +313,48 @@ fn bench_validation(c: &mut Criterion) {
     });
 
     // Validation that should fail (empty summary)
-    group.bench_with_input("invalid_empty_summary", &invalid_request_empty_summary, |b, request| {
-        b.iter(|| {
-            let result: Result<(), intent_rebase_types::IntentRebaseError> = (|| {
-                if request.payload.objective.summary.trim().is_empty() {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "payload.objective.summary cannot be empty".into(),
-                    ));
-                }
-                Ok(())
-            })();
-            criterion::black_box(result)
-        });
-    });
+    group.bench_with_input(
+        "invalid_empty_summary",
+        &invalid_request_empty_summary,
+        |b, request| {
+            b.iter(|| {
+                let result: Result<(), intent_rebase_types::IntentRebaseError> = (|| {
+                    if request.payload.objective.summary.trim().is_empty() {
+                        return Err(
+                            intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                                "payload.objective.summary cannot be empty".into(),
+                            ),
+                        );
+                    }
+                    Ok(())
+                })(
+                );
+                criterion::black_box(result)
+            });
+        },
+    );
 
     // Validation that should fail (nil workflow)
-    group.bench_with_input("invalid_nil_workflow", &invalid_request_nil_workflow, |b, request| {
-        b.iter(|| {
-            let result: Result<(), intent_rebase_types::IntentRebaseError> = (|| {
-                if request.workflow_id == Uuid::nil() {
-                    return Err(intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
-                        "workflow_id cannot be nil".into(),
-                    ));
-                }
-                Ok(())
-            })();
-            criterion::black_box(result)
-        });
-    });
+    group.bench_with_input(
+        "invalid_nil_workflow",
+        &invalid_request_nil_workflow,
+        |b, request| {
+            b.iter(|| {
+                let result: Result<(), intent_rebase_types::IntentRebaseError> = (|| {
+                    if request.workflow_id == Uuid::nil() {
+                        return Err(
+                            intent_rebase_types::IntentRebaseError::InvalidIngestRequest(
+                                "workflow_id cannot be nil".into(),
+                            ),
+                        );
+                    }
+                    Ok(())
+                })(
+                );
+                criterion::black_box(result)
+            });
+        },
+    );
 
     group.finish();
 }
@@ -342,6 +367,7 @@ fn bench_intent_service_create(c: &mut Criterion) {
     let service = IntentService::new(repo);
 
     let valid_request = intent_rebase_types::CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![intent_rebase_types::SourceRef {
             ref_type: "spec".to_string(),
@@ -421,16 +447,16 @@ fn bench_http_server(c: &mut Criterion) {
                 .with_policy_snapshot_count(3),
         );
         let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let forensic_bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+        let forensic_bundle_storage =
+            Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
         let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
             Arc::new(forensic_service::InMemoryForensicDataCollector::new());
-        let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> = Arc::new(
-            forensic_service::ForensicBundleService::new(
+        let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+            Arc::new(forensic_service::ForensicBundleService::new(
                 forensic_bundle_repo,
                 forensic_bundle_storage,
                 forensic_bundle_collector,
-            ),
-        );
+            ));
 
         let state = intent_api::AppState {
             service,
@@ -467,7 +493,9 @@ fn bench_http_server(c: &mut Criterion) {
 
         // Bind to ephemeral port using tokio
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let listener = rt.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let listener = rt
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
 
         // Spawn server in background thread
@@ -487,6 +515,7 @@ fn bench_http_server(c: &mut Criterion) {
 
     // Pre-serialize request to avoid serialization overhead in benchmark loop
     let create_request = intent_rebase_types::CreateIntentRequest {
+        tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![intent_rebase_types::SourceRef {
             ref_type: "spec".to_string(),

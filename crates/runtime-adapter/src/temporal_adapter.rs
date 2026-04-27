@@ -97,13 +97,10 @@ impl TemporalAdapter {
     pub async fn connect(config: TemporalAdapterConfig) -> AdapterResult<Self> {
         config.validate()?;
 
-        let url = config
-            .target_url
-            .parse::<Url>()
-            .map_err(|e| {
-                tracing::warn!(error = %e, "Invalid Temporal URL");
-                AdapterError::NotReady(format!("Invalid Temporal URL: {e}"))
-            })?;
+        let url = config.target_url.parse::<Url>().map_err(|e| {
+            tracing::warn!(error = %e, "Invalid Temporal URL");
+            AdapterError::NotReady(format!("Invalid Temporal URL: {e}"))
+        })?;
 
         let connection = Connection::connect(
             ConnectionOptions::new(url)
@@ -410,10 +407,7 @@ impl RuntimeAdapter for TemporalAdapter {
         })
     }
 
-    #[tracing::instrument(
-        name = "temporal.is_adapter_ready",
-        skip(self)
-    )]
+    #[tracing::instrument(name = "temporal.is_adapter_ready", skip(self))]
     async fn is_adapter_ready(&self) -> AdapterResult<AdapterStatus> {
         let mut service = self.client.connection().health_service();
         service

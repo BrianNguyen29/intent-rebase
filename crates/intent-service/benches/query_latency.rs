@@ -211,8 +211,8 @@ fn bench_approval_request_list_pending_by_intent(c: &mut Criterion) {
     for i in 0..10 {
         let request = ApprovalRequest::new_pending(
             intent_id,
-            i as i32,
-            i as i32 + 1,
+            i,
+            i + 1,
             workflow_id,
             tenant_id,
             "bench",

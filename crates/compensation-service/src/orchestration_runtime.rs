@@ -339,10 +339,11 @@ fn format_feasibility(f: crate::compensation_action::CompensationFeasibility) ->
 mod tests {
     use super::*;
     use crate::compensation_action::{
-        CompensationAction, CompensationFeasibility, RebaseContext,
-        StrategyType,
+        CompensationAction, CompensationFeasibility, RebaseContext, StrategyType,
     };
-    use crate::compensation_action_repo::{CompensationActionRepository, InMemoryCompensationActionRepository};
+    use crate::compensation_action_repo::{
+        CompensationActionRepository, InMemoryCompensationActionRepository,
+    };
     use crate::orchestration_run::RunStatus;
     use crate::orchestration_run_repo::InMemoryOrchestrationRunRepository;
     use std::sync::Arc;

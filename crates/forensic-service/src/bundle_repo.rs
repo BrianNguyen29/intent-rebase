@@ -419,11 +419,15 @@ mod tests {
             .await
             .unwrap();
 
-        let result = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Pending).await;
+        let result = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Pending)
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
 
-        let result = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Generating).await;
+        let result = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Generating)
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
     }
@@ -442,7 +446,9 @@ mod tests {
         let _bundle3 = create_test_bundle(tenant_id, BundlePurpose::ComplianceAudit);
         repo.create(_bundle3).await.unwrap();
 
-        let result = repo.list_by_tenant_and_purpose(tenant_id, BundlePurpose::ComplianceAudit).await;
+        let result = repo
+            .list_by_tenant_and_purpose(tenant_id, BundlePurpose::ComplianceAudit)
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 2);
     }
@@ -456,7 +462,9 @@ mod tests {
 
         repo.create(bundle).await.unwrap();
 
-        let result = repo.update_status(bundle_id, BundleStatus::Generating).await;
+        let result = repo
+            .update_status(bundle_id, BundleStatus::Generating)
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().status, BundleStatus::Generating);
     }
@@ -506,10 +514,14 @@ mod tests {
         repo.update_status(bundle_id, BundleStatus::Generating)
             .await
             .unwrap();
-        repo.update_status(bundle_id, BundleStatus::Ready).await.unwrap();
+        repo.update_status(bundle_id, BundleStatus::Ready)
+            .await
+            .unwrap();
 
         // Try invalid transition: Ready -> Generating
-        let result = repo.update_status(bundle_id, BundleStatus::Generating).await;
+        let result = repo
+            .update_status(bundle_id, BundleStatus::Generating)
+            .await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -528,7 +540,9 @@ mod tests {
         repo.update_status(bundle_id, BundleStatus::Generating)
             .await
             .unwrap();
-        repo.update_status(bundle_id, BundleStatus::Failed).await.unwrap();
+        repo.update_status(bundle_id, BundleStatus::Failed)
+            .await
+            .unwrap();
 
         // Try invalid transition: Failed -> Ready
         let result = repo.update_status(bundle_id, BundleStatus::Ready).await;
@@ -557,7 +571,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_status_not_found() {
         let repo = Arc::new(InMemoryBundleRepository::new());
-        let result = repo.update_status(Uuid::new_v4(), BundleStatus::Ready).await;
+        let result = repo
+            .update_status(Uuid::new_v4(), BundleStatus::Ready)
+            .await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -736,23 +752,45 @@ mod tests {
         repo.create(bundle).await.unwrap();
 
         // Initially in Pending
-        let pending = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Pending).await.unwrap();
+        let pending = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Pending)
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 1);
 
         // Transition to Generating
-        repo.update_status(bundle_id, BundleStatus::Generating).await.unwrap();
+        repo.update_status(bundle_id, BundleStatus::Generating)
+            .await
+            .unwrap();
 
-        let pending = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Pending).await.unwrap();
-        let generating = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Generating).await.unwrap();
+        let pending = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Pending)
+            .await
+            .unwrap();
+        let generating = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Generating)
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 0);
         assert_eq!(generating.len(), 1);
 
         // Transition to Ready
-        repo.update_status(bundle_id, BundleStatus::Ready).await.unwrap();
+        repo.update_status(bundle_id, BundleStatus::Ready)
+            .await
+            .unwrap();
 
-        let pending = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Pending).await.unwrap();
-        let generating = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Generating).await.unwrap();
-        let ready = repo.list_by_tenant_and_status(tenant_id, BundleStatus::Ready).await.unwrap();
+        let pending = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Pending)
+            .await
+            .unwrap();
+        let generating = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Generating)
+            .await
+            .unwrap();
+        let ready = repo
+            .list_by_tenant_and_status(tenant_id, BundleStatus::Ready)
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 0);
         assert_eq!(generating.len(), 0);
         assert_eq!(ready.len(), 1);

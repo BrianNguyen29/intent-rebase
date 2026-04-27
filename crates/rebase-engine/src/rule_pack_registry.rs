@@ -58,10 +58,7 @@ pub trait TenantRulePackRepository: Send + Sync {
 
     /// Get the active rule pack for a tenant.
     /// Returns the pack with Active status, or error if none exists.
-    async fn get_active_pack(
-        &self,
-        tenant_id: Uuid,
-    ) -> Result<RulePack, RulePackRegistryError>;
+    async fn get_active_pack(&self, tenant_id: Uuid) -> Result<RulePack, RulePackRegistryError>;
 
     /// Create a new rule pack for a tenant.
     /// The pack must have Active status initially.
@@ -93,7 +90,9 @@ pub trait TenantRulePackRepository: Send + Sync {
 pub struct InMemoryTenantRulePackRepository {
     /// Per-tenant rule pack storage.
     /// Structure: tenant_id -> (version -> pack)
-    packs: std::sync::RwLock<std::collections::HashMap<Uuid, std::collections::HashMap<RulePackVersion, RulePack>>>,
+    packs: std::sync::RwLock<
+        std::collections::HashMap<Uuid, std::collections::HashMap<RulePackVersion, RulePack>>,
+    >,
 }
 
 impl InMemoryTenantRulePackRepository {
@@ -124,7 +123,10 @@ impl TenantRulePackRepository for InMemoryTenantRulePackRepository {
             .unwrap_or_default();
 
         match status_filter {
-            Some(status) => Ok(tenant_packs.into_iter().filter(|p| p.status == status).collect()),
+            Some(status) => Ok(tenant_packs
+                .into_iter()
+                .filter(|p| p.status == status)
+                .collect()),
             None => Ok(tenant_packs),
         }
     }
@@ -144,23 +146,21 @@ impl TenantRulePackRepository for InMemoryTenantRulePackRepository {
         }
     }
 
-    async fn get_active_pack(
-        &self,
-        tenant_id: Uuid,
-    ) -> Result<RulePack, RulePackRegistryError> {
+    async fn get_active_pack(&self, tenant_id: Uuid) -> Result<RulePack, RulePackRegistryError> {
         let packs = self.packs.read().unwrap();
         let tenant_packs = packs.get(&tenant_id);
 
         match tenant_packs {
-            Some(packs_map) => {
-                packs_map.values()
-                    .find(|p| p.status == RulePackStatus::Active)
-                    .cloned()
-                    .ok_or_else(|| RulePackRegistryError::NotFound(format!(
+            Some(packs_map) => packs_map
+                .values()
+                .find(|p| p.status == RulePackStatus::Active)
+                .cloned()
+                .ok_or_else(|| {
+                    RulePackRegistryError::NotFound(format!(
                         "no active pack for tenant={}",
                         tenant_id
-                    )))
-            }
+                    ))
+                }),
             None => Err(RulePackRegistryError::NotFound(format!(
                 "no packs found for tenant={}",
                 tenant_id
@@ -177,7 +177,7 @@ impl TenantRulePackRepository for InMemoryTenantRulePackRepository {
         pack.status = RulePackStatus::Active;
 
         let mut packs = self.packs.write().unwrap();
-        let tenant_packs = packs.entry(tenant_id).or_insert_with(std::collections::HashMap::new);
+        let tenant_packs = packs.entry(tenant_id).or_default();
 
         // Check if version already exists
         if tenant_packs.contains_key(&pack.version) {
@@ -198,9 +198,9 @@ impl TenantRulePackRepository for InMemoryTenantRulePackRepository {
         new_status: RulePackStatus,
     ) -> Result<RulePack, RulePackRegistryError> {
         let mut packs = self.packs.write().unwrap();
-        let tenant_packs = packs.get_mut(&tenant_id).ok_or_else(|| {
-            RulePackRegistryError::NotFound(format!("tenant={}", tenant_id))
-        })?;
+        let tenant_packs = packs
+            .get_mut(&tenant_id)
+            .ok_or_else(|| RulePackRegistryError::NotFound(format!("tenant={}", tenant_id)))?;
 
         let pack = tenant_packs.get_mut(version).ok_or_else(|| {
             RulePackRegistryError::NotFound(format!("tenant={}, version={}", tenant_id, version))
@@ -211,10 +211,12 @@ impl TenantRulePackRepository for InMemoryTenantRulePackRepository {
             (RulePackStatus::Active, RulePackStatus::Deprecated) => {}
             (RulePackStatus::Active, RulePackStatus::Superseded) => {}
             (RulePackStatus::Deprecated, RulePackStatus::Active) => {}
-            _ => return Err(RulePackRegistryError::InvalidStatusTransition(format!(
-                "cannot transition from {:?} to {:?}",
-                pack.status, new_status
-            ))),
+            _ => {
+                return Err(RulePackRegistryError::InvalidStatusTransition(format!(
+                    "cannot transition from {:?} to {:?}",
+                    pack.status, new_status
+                )))
+            }
         }
 
         pack.status = new_status;
@@ -533,14 +535,21 @@ mod tenant_isolation_tests {
         let tenant_b = Uuid::new_v4();
 
         // Tenant A creates a pack
-        let pack = repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "secret-pack"))
+        let pack = repo
+            .create_pack(
+                tenant_a,
+                create_test_pack(tenant_a, "v1.0.0", "secret-pack"),
+            )
             .await
             .unwrap();
 
         // Tenant B tries to access tenant A's pack - should get NotFound
         let result = repo.get_pack(tenant_b, &pack.version).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RulePackRegistryError::NotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RulePackRegistryError::NotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -550,14 +559,20 @@ mod tenant_isolation_tests {
         let tenant_b = Uuid::new_v4();
 
         // Tenant A creates an active pack
-        repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "active-pack-a"))
-            .await
-            .unwrap();
+        repo.create_pack(
+            tenant_a,
+            create_test_pack(tenant_a, "v1.0.0", "active-pack-a"),
+        )
+        .await
+        .unwrap();
 
         // Tenant B has no active pack
         let result = repo.get_active_pack(tenant_b).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RulePackRegistryError::NotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RulePackRegistryError::NotFound(_)
+        ));
 
         // Tenant A should find their active pack
         let active = repo.get_active_pack(tenant_a).await;
@@ -572,17 +587,28 @@ mod tenant_isolation_tests {
         let tenant_b = Uuid::new_v4();
 
         // Tenant A creates a pack
-        let pack = repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "pack-to-deprecate"))
+        let pack = repo
+            .create_pack(
+                tenant_a,
+                create_test_pack(tenant_a, "v1.0.0", "pack-to-deprecate"),
+            )
             .await
             .unwrap();
 
         // Tenant B tries to deprecate tenant A's pack - should get NotFound
-        let result = repo.update_pack_status(tenant_b, &pack.version, RulePackStatus::Deprecated).await;
+        let result = repo
+            .update_pack_status(tenant_b, &pack.version, RulePackStatus::Deprecated)
+            .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RulePackRegistryError::NotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RulePackRegistryError::NotFound(_)
+        ));
 
         // Tenant A can deprecate their own pack
-        let deprecated = repo.update_pack_status(tenant_a, &pack.version, RulePackStatus::Deprecated).await;
+        let deprecated = repo
+            .update_pack_status(tenant_a, &pack.version, RulePackStatus::Deprecated)
+            .await;
         assert!(deprecated.is_ok());
         assert_eq!(deprecated.unwrap().status, RulePackStatus::Deprecated);
     }
@@ -620,23 +646,38 @@ mod tenant_isolation_tests {
         let tenant_b = Uuid::new_v4();
 
         // Tenant A creates active pack
-        repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "active-pack"))
-            .await
-            .unwrap();
+        repo.create_pack(
+            tenant_a,
+            create_test_pack(tenant_a, "v1.0.0", "active-pack"),
+        )
+        .await
+        .unwrap();
 
         // Tenant B creates pack then deprecates it (create_pack enforces Active, so use update)
-        let b_pack = repo.create_pack(tenant_b, create_test_pack(tenant_b, "v1.0.0", "deprecated-pack"))
+        let b_pack = repo
+            .create_pack(
+                tenant_b,
+                create_test_pack(tenant_b, "v1.0.0", "deprecated-pack"),
+            )
             .await
             .unwrap();
-        repo.update_pack_status(tenant_b, &b_pack.version, RulePackStatus::Deprecated).await.unwrap();
+        repo.update_pack_status(tenant_b, &b_pack.version, RulePackStatus::Deprecated)
+            .await
+            .unwrap();
 
         // Tenant A queries active packs - should only get their own active pack
-        let active_packs = repo.list_packs(tenant_a, Some(RulePackStatus::Active)).await.unwrap();
+        let active_packs = repo
+            .list_packs(tenant_a, Some(RulePackStatus::Active))
+            .await
+            .unwrap();
         assert_eq!(active_packs.len(), 1);
         assert_eq!(active_packs[0].name, "active-pack");
 
         // Tenant B queries deprecated packs - should only get their own deprecated pack
-        let deprecated_packs = repo.list_packs(tenant_b, Some(RulePackStatus::Deprecated)).await.unwrap();
+        let deprecated_packs = repo
+            .list_packs(tenant_b, Some(RulePackStatus::Deprecated))
+            .await
+            .unwrap();
         assert_eq!(deprecated_packs.len(), 1);
         assert_eq!(deprecated_packs[0].name, "deprecated-pack");
     }
@@ -656,10 +697,14 @@ mod tenant_isolation_tests {
             .unwrap();
 
         // But within a tenant, duplicate version is blocked
-        let result = repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "pack-a-dup"))
+        let result = repo
+            .create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "pack-a-dup"))
             .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RulePackRegistryError::VersionConflict(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RulePackRegistryError::VersionConflict(_)
+        ));
     }
 
     #[tokio::test]
@@ -667,17 +712,28 @@ mod tenant_isolation_tests {
         let repo = Arc::new(InMemoryTenantRulePackRepository::new());
         let tenant_a = Uuid::new_v4();
 
-        let pack = repo.create_pack(tenant_a, create_test_pack(tenant_a, "v1.0.0", "pack-to-transition"))
+        let pack = repo
+            .create_pack(
+                tenant_a,
+                create_test_pack(tenant_a, "v1.0.0", "pack-to-transition"),
+            )
             .await
             .unwrap();
 
         // Valid: Active -> Deprecated
-        let deprecated = repo.update_pack_status(tenant_a, &pack.version, RulePackStatus::Deprecated).await;
+        let deprecated = repo
+            .update_pack_status(tenant_a, &pack.version, RulePackStatus::Deprecated)
+            .await;
         assert!(deprecated.is_ok());
 
         // Invalid: Deprecated -> Draft (not a valid transition)
-        let result = repo.update_pack_status(tenant_a, &pack.version, RulePackStatus::Draft).await;
+        let result = repo
+            .update_pack_status(tenant_a, &pack.version, RulePackStatus::Draft)
+            .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RulePackRegistryError::InvalidStatusTransition(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RulePackRegistryError::InvalidStatusTransition(_)
+        ));
     }
 }

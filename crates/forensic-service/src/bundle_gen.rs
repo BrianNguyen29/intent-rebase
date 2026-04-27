@@ -92,7 +92,11 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             None,
         );
 
-        let created = self.repo.create(bundle).await.map_err(BundleGenError::Repository)?;
+        let created = self
+            .repo
+            .create(bundle)
+            .await
+            .map_err(BundleGenError::Repository)?;
 
         Ok(CreateBundleResponse {
             bundle: created,
@@ -114,9 +118,7 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             .update_status(bundle_id, BundleStatus::Generating)
             .await
             .map_err(|e| match e {
-                IntentRebaseError::ForensicBundleNotFound(id) => {
-                    BundleGenError::NotFound(id)
-                }
+                IntentRebaseError::ForensicBundleNotFound(id) => BundleGenError::NotFound(id),
                 IntentRebaseError::InvalidForensicBundleStatusTransition {
                     from_status,
                     to_status,
@@ -157,9 +159,7 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             .update_status(bundle_id, BundleStatus::Ready)
             .await
             .map_err(|e| match e {
-                IntentRebaseError::ForensicBundleNotFound(id) => {
-                    BundleGenError::NotFound(id)
-                }
+                IntentRebaseError::ForensicBundleNotFound(id) => BundleGenError::NotFound(id),
                 IntentRebaseError::InvalidForensicBundleStatusTransition {
                     from_status,
                     to_status,
@@ -199,9 +199,7 @@ impl<R: BundleRepository> BundleGenerationService<R> {
             .update_status(bundle_id, BundleStatus::Failed)
             .await
             .map_err(|e| match e {
-                IntentRebaseError::ForensicBundleNotFound(id) => {
-                    BundleGenError::NotFound(id)
-                }
+                IntentRebaseError::ForensicBundleNotFound(id) => BundleGenError::NotFound(id),
                 IntentRebaseError::InvalidForensicBundleStatusTransition {
                     from_status,
                     to_status,
@@ -246,13 +244,10 @@ impl<R: BundleRepository> BundleGenerationService<R> {
 
     /// Get a bundle by ID.
     pub async fn get_bundle(&self, bundle_id: Uuid) -> Result<ForensicBundle, BundleGenError> {
-        self.repo
-            .get(bundle_id)
-            .await
-            .map_err(|e| match e {
-                IntentRebaseError::ForensicBundleNotFound(id) => BundleGenError::NotFound(id),
-                _ => BundleGenError::Repository(e),
-            })
+        self.repo.get(bundle_id).await.map_err(|e| match e {
+            IntentRebaseError::ForensicBundleNotFound(id) => BundleGenError::NotFound(id),
+            _ => BundleGenError::Repository(e),
+        })
     }
 
     /// List all bundles for a tenant.
@@ -287,10 +282,7 @@ impl<R: BundleRepository> BundleGenerationService<R> {
     ///
     /// **Bounded slice scope:** Returns the bundle manifest only (no actual
     /// content collection). S3 storage and retrieval are Phase 4 scope.
-    pub async fn download_bundle(
-        &self,
-        bundle_id: Uuid,
-    ) -> Result<Vec<u8>, BundleGenError> {
+    pub async fn download_bundle(&self, bundle_id: Uuid) -> Result<Vec<u8>, BundleGenError> {
         let bundle = self.get_bundle(bundle_id).await?;
         serde_json::to_vec_pretty(&bundle)
             .map_err(|e| BundleGenError::Serialization(format!("JSON serialization failed: {}", e)))
@@ -328,7 +320,10 @@ mod tests {
 
         assert_eq!(response.bundle.tenant_id, tenant_id);
         assert_eq!(response.bundle.status, BundleStatus::Pending);
-        assert_eq!(response.bundle.purpose, BundlePurpose::IncidentInvestigation);
+        assert_eq!(
+            response.bundle.purpose,
+            BundlePurpose::IncidentInvestigation
+        );
     }
 
     #[tokio::test]
@@ -442,7 +437,7 @@ mod tests {
         let tenant_id = Uuid::new_v4();
 
         let request1 = create_test_request(tenant_id);
-        let resp1 = service.initiate_bundle(request1).await.unwrap();
+        let _resp1 = service.initiate_bundle(request1).await.unwrap();
 
         let request2 = create_test_request(tenant_id);
         let resp2 = service.initiate_bundle(request2).await.unwrap();
@@ -477,6 +472,9 @@ mod tests {
         // Try invalid transition: Pending -> Ready (must go through Generating)
         let result = service.transition_to_ready(bundle_id).await;
 
-        assert!(matches!(result, Err(BundleGenError::InvalidTransition { .. })));
+        assert!(matches!(
+            result,
+            Err(BundleGenError::InvalidTransition { .. })
+        ));
     }
 }
