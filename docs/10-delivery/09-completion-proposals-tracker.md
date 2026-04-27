@@ -121,7 +121,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Status** | 🔄 In Progress (Phase 3 Batch 3b bounded slice + P4 bounded generation/storage slice delivered) |
 | **Priority** | High |
 | **Owner** | Backend Lead |
-| **Suggested Next Step** | Bundle retrieval/download API; full replay capability; hash chain verification |
+| **Suggested Next Step** | Full replay capability; async generation orchestration; S3-backed retrieval and storage lifecycle hardening |
 | **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. **P4 bounded generation/storage slice delivered:** `POST /forensic/bundle` bounded synchronous path — ForensicDataCollector collects real data from intent/graph/audit repositories, BundleGeneratorService generates manifest with integrity hashes, BundleStorage persists bundle JSON to S3/MinIO, bundle status=Ready recorded in repository. |
 
 **Items:**
