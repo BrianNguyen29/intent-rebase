@@ -12,7 +12,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 
 | ID | Tiêu đề | Trạng thái | Phase |
 |----|---------|-----------|-------|
-| [ADR-01](./01-runtime-adapter.md) | Runtime Adapter Selection | **Proposed** | P0–P1 |
+| [ADR-01](./01-runtime-adapter.md) | Runtime Adapter Selection | **Accepted** | P0–P1 |
 | [ADR-02](./02-data-plane.md) | Data Plane Architecture | **Proposed** | P0–P1 |
 | [ADR-03](./03-external-api.md) | External API Protocol | **Proposed** | P0–P1 |
 | [ADR-04](./04-event-broker.md) | Event Broker Selection | **Proposed** | P0–P1 |

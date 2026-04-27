@@ -13,7 +13,7 @@
 - Section 10.2/10.4: Webhook schemas, Event streaming (runtime-apply integration)
 
 **Remaining Phase 1 Items (1):**
-- Section 7 migration integration tests (requires live DB in CI)
+- Section 7 migration integration tests — migration integration test (`crates/intent-service/tests/migration_integration.rs`) and CI job (`.github/workflows/ci.yml`) have been added; live CI confirmation pending
 
 ---
 
