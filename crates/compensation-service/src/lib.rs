@@ -12,6 +12,7 @@ pub mod compensation_action_repo;
 pub mod compensation_action_service;
 pub mod compensation_executor;
 pub mod compensation_planner;
+pub mod compensation_simulator;
 pub mod orchestration_run;
 pub mod orchestration_run_repo;
 pub mod orchestration_runtime;
@@ -45,6 +46,12 @@ pub use compensation_executor::{
 };
 pub use compensation_planner::{
     BoundedCompensationPlanner, CompensationPlanner, InMemoryCompensationPlanner,
+};
+pub use compensation_simulator::{
+    feasibility_to_effect_class, CompensationSimulator, MockCounterActionExecutor,
+    MockEscalationExecutor, MockFollowupNoticeExecutor, MockRollbackExecutor, ResidualRisk,
+    ResidualRiskLevel, SimulationConfig, SimulationMode, SimulationOutcome,
+    SimulationProbabilities, SimulationRecommendation, SimulationReport,
 };
 pub use orchestration_run::{
     OrchestrationActionDecision, OrchestrationRun, RunItemResult, RunStatus,

@@ -82,7 +82,7 @@ servers:
   - url: /v1
     description: Version 1 API
 
-  tags:
+tags:
   - name: intents
     description: Intent lifecycle operations
   - name: versions
@@ -597,6 +597,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListSideEffectsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/rebase-simulation:
+    get:
+      tags:
+        - compensation
+      summary: Run compensation simulation for a rebase
+      description: |
+        **N4-4 scope (bounded simulation slice):** Read-only mock simulation using
+        CompensationSimulator. Fetches side effects for the intent, constructs a
+        RebaseContext, and runs simulation to produce a SimulationReport with
+        predicted outcomes.
+
+        **Mode behavior:**
+        - `deterministic` (default): Valid strategy+feasibility combos always succeed
+        - `stochastic`: Outcomes are probabilistic based on effect class success rates
+
+        **This endpoint is READ-ONLY** - it only simulates compensation outcomes
+        using mock executors. It does not execute real compensation actions.
+      operationId: rebaseSimulation
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: from_version
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Source intent version before rebase
+        - name: to_version
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Target intent version after rebase
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [deterministic, stochastic]
+          description: Simulation mode - "deterministic" (default) or "stochastic"
+        - name: seed
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: uint64
+          description: RNG seed for stochastic mode reproducibility (optional)
+      responses:
+        '200':
+          description: Simulation completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationReport'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
@@ -2317,7 +2396,6 @@ paths:
                 $ref: '#/components/schemas/ForensicBundle'
         '400':
           description: Invalid status transition
->>>>>>> origin/main
           content:
             application/json:
               schema:
@@ -2456,7 +2534,6 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Bundle not found or tenant mismatch
->>>>>>> origin/main
           content:
             application/json:
               schema:
@@ -4511,9 +4588,6 @@ components:
           description: Number of actions not found
 
     ListBatchCandidatesResponse:
-          description: Count of DLQ candidate actions
-
-    ListBatchCandidatesResponse:
       type: object
       description: Phase 3 Batch 1 response for listing batch candidates across all categories
       properties:
@@ -4969,6 +5043,133 @@ components:
           nullable: true
           description: Execution result context captured after executor runs
 
+    # ----- Simulation Schemas (N4-4) -----
+    SimulationConfig:
+      type: object
+      description: Configuration for compensation simulation
+      properties:
+        mode:
+          type: string
+          enum: [deterministic, stochastic]
+          description: Simulation mode
+        seed:
+          type: integer
+          format: uint64
+          nullable: true
+          description: RNG seed for reproducibility (stochastic mode only)
+        probabilities:
+          $ref: '#/components/schemas/SimulationProbabilities'
+          nullable: true
+          description: Custom success probabilities by side effect class
+
+    SimulationProbabilities:
+      type: object
+      description: Success probabilities by side effect class (stochastic mode)
+      properties:
+        s1_internal_reversible:
+          type: number
+          format: float
+          default: 0.95
+          description: Success probability for S1 (InternalReversible) effects
+        s2_external_reversible:
+          type: number
+          format: float
+          default: 0.70
+          description: Success probability for S2 (ExternalReversible) effects
+        s3_external_partially_reversible:
+          type: number
+          format: float
+          default: 0.50
+          description: Success probability for S3 (ExternalPartiallyReversible) effects
+        s4_irreversible:
+          type: number
+          format: float
+          default: 0.10
+          description: Success probability for S4 (Irreversible) effects
+
+    ResidualRiskLevel:
+      type: string
+      enum: [low, medium, high]
+      description: Residual risk level after compensation attempt
+
+    ResidualRisk:
+      type: object
+      description: Residual risk after compensation
+      properties:
+        level:
+          $ref: '#/components/schemas/ResidualRiskLevel'
+        description:
+          type: string
+          description: Human-readable description of the residual risk
+        success_probability:
+          type: number
+          format: float
+          description: Probability of successful compensation (0.0 to 1.0)
+
+    SimulationRecommendation:
+      type: string
+      enum: [proceed_auto, proceed_manual, do_not_compensate, escalate]
+      description: Recommendation for compensation action
+
+    SimulationOutcome:
+      type: object
+      description: Outcome of a simulated compensation action
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: The action that was simulated
+        predicted_success:
+          type: boolean
+          description: Whether the simulation predicted success
+        success_probability:
+          type: number
+          format: float
+          description: Success probability used in simulation
+        error_code:
+          type: string
+          nullable: true
+          description: Error code if simulation predicted failure
+        error_detail:
+          type: string
+          nullable: true
+          description: Error detail if simulation predicted failure
+        residual_risk:
+          $ref: '#/components/schemas/ResidualRisk'
+        recommendation:
+          $ref: '#/components/schemas/SimulationRecommendation'
+        mode:
+          type: string
+          enum: [deterministic, stochastic]
+        simulated_at:
+          type: string
+          format: date-time
+
+    SimulationReport:
+      type: object
+      description: Aggregated report from a simulation run
+      properties:
+        total_actions:
+          type: integer
+          description: Total actions simulated
+        successful_count:
+          type: integer
+          description: Actions predicted to succeed
+        failed_count:
+          type: integer
+          description: Actions predicted to fail
+        outcomes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimulationOutcome'
+        overall_risk:
+          $ref: '#/components/schemas/ResidualRiskLevel'
+        config:
+          $ref: '#/components/schemas/SimulationConfig'
+        completed_at:
+          type: string
+          format: date-time
+
     # ----- Forensic Verification Schemas (Phase 3 Batch 3b) -----
     ForensicVerificationRequest:
       type: object
@@ -5113,7 +5314,44 @@ components:
       type: object
       required: [tenant_id, intent_id, time_range]
       properties:
-=======
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID for multi-tenancy isolation
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to generate archive for
+        time_range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: Start of time range
+            end:
+              type: string
+              format: date-time
+              description: End of time range
+        purpose:
+          type: string
+          enum: [incident_investigation, compliance_audit, legal]
+          default: incident_investigation
+          description: Purpose of the archive
+        include_artifacts:
+          type: boolean
+          default: true
+          description: Whether to include artifact entries
+        include_audit_events:
+          type: boolean
+          default: true
+          description: Whether to include audit event entries
+        include_policy_snapshots:
+          type: boolean
+          default: true
+          description: Whether to include policy snapshot entries
+
     # Forensic Bundle (Phase 3 Batch 3b P4 bounded slice)
     BundleStatus:
       type: string
@@ -5195,7 +5433,6 @@ components:
         created_by:
           type: string
           description: Actor who triggered bundle generation (or "system")
->>>>>>> origin/main
         tenant_id:
           type: string
           format: uuid
@@ -5256,13 +5493,6 @@ components:
           $ref: '#/components/schemas/BundleTimeRange'
         purpose:
           $ref: '#/components/schemas/BundlePurpose'
-        status:
-          $ref: '#/components/schemas/BundleStatus'
-        contents:
-          $ref: '#/components/schemas/BundleContents'
-        integrity:
-          $ref: '#/components/schemas/BundleIntegrity'
-
     CreateForensicBundleRequest:
       type: object
       required: [tenant_id, time_range, purpose, created_by]
@@ -5300,7 +5530,6 @@ components:
         total:
           type: integer
           description: Total number of bundles
->>>>>>> origin/main
 
     Error:
       type: object
