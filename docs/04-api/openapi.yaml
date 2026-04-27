@@ -5055,7 +5055,6 @@ components:
           description: Simulation mode
         seed:
           type: integer
-          format: uint64
           nullable: true
           description: RNG seed for reproducibility (stochastic mode only)
         probabilities:
