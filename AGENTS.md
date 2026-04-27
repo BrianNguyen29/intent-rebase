@@ -22,8 +22,8 @@ docker compose -f infrastructure/local/docker-compose.yml up -d
 - Services: **Postgres 16**, **NATS with JetStream**, **MinIO** (S3-compatible).
 - Copy `.env.example` to `.env` and update credentials for local dev.
 
-## Crates (10 members)
-`intent-rebase-types`, `intent-service`, `intent-api`, `rebase-engine`, `graph-service`, `runtime-adapter`, `rebase-orchestrator`, `compensation-service`, `forensic-service`, `intent-cli`
+## Crates (11 members)
+`intent-rebase-types`, `intent-service`, `intent-api`, `rebase-engine`, `graph-service`, `runtime-adapter`, `rebase-orchestrator`, `compensation-service`, `forensic-service`, `tenant-service`, `intent-cli`
 
 ## Repo-Specific Change Constraints
 1. **Intent schema changes** → must update ADR first (see `docs/13-adrs/`).

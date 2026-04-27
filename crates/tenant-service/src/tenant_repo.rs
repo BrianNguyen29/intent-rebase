@@ -178,8 +178,8 @@ impl TenantRepository for InMemoryTenantRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::tenant::TenantRegion;
+    use std::sync::Arc;
 
     fn create_test_tenant(slug: &str) -> Tenant {
         Tenant::new(
@@ -273,15 +273,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status() {
-        let repo = Arc:: new(InMemoryTenantRepository::new());
+        let repo = Arc::new(InMemoryTenantRepository::new());
         let tenant = create_test_tenant("acme");
         let id = tenant.id;
 
         repo.create(tenant).await.unwrap();
 
-        let result = repo
-            .update_status(id, TenantStatus::Active)
-            .await;
+        let result = repo.update_status(id, TenantStatus::Active).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().status, TenantStatus::Active);
     }
@@ -316,13 +314,17 @@ mod tests {
         repo.update_status(id, TenantStatus::Active).await.unwrap();
 
         // Active -> Suspended
-        repo.update_status(id, TenantStatus::Suspended).await.unwrap();
+        repo.update_status(id, TenantStatus::Suspended)
+            .await
+            .unwrap();
 
         // Suspended -> Active (reactivation)
         repo.update_status(id, TenantStatus::Active).await.unwrap();
 
         // Active -> Offboarding
-        repo.update_status(id, TenantStatus::Offboarding).await.unwrap();
+        repo.update_status(id, TenantStatus::Offboarding)
+            .await
+            .unwrap();
 
         let result = repo.get(id).await.unwrap();
         assert_eq!(result.status, TenantStatus::Offboarding);
