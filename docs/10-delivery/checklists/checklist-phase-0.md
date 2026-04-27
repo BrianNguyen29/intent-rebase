@@ -2,7 +2,7 @@
 
 **Exit Gate:** Phase 0 complete khi tất cả items bên dưới checked và có evidence.
 
-**Trạng thái:** `IN PROGRESS`  
+**Trạng thái:** `✓ Complete`  
 **Phase:** Phase 0  
 **Target Duration:** 2–4 tuần
 

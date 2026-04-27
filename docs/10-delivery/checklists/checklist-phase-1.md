@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 1 complete khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 0 exit gate passed.
 
-**Trạng thái:** `IN PROGRESS` (33/34 items complete — 97%)  
+**Trạng thái:** `✓ Complete`  
 **Phase:** Phase 1  
 **Target Duration:** 4–8 tuần
 

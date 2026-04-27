@@ -33,6 +33,39 @@
 
 ---
 
+## Status Vocabulary (Normalized)
+
+All deferral items use the following normalized status values:
+
+| Status | Meaning |
+|--------|---------|
+| **Open** | Work has not started; deferred to future phase |
+| **In Progress** | Work actively underway; bounded slice delivered but not complete |
+| **Bounded Delivered** | Bounded slice delivered within current phase scope; full scope deferred to future phase |
+| **Conditionally Complete** | Phase exit gate passed with explicit deferrals acknowledged and signed off |
+| **Closed** | All obligations met; deferral fully addressed |
+
+> **Note:** `Conditionally Complete` is the valid exit state for a phase with an explicit deferral register. It means the phase is functionally complete for its bounded scope, with remaining work catalogued and signed off.
+
+---
+
+## Exit Criteria
+
+A deferral item is considered **Closed** when:
+
+1. **The capability is delivered** — The original deferred capability (D-01 through D-10) is implemented and passes its acceptance criteria.
+2. **Risk is mitigated** — The "Risk If Delayed" column is addressed to a level acceptable to the original sign-off reviewers.
+3. **Evidence is recorded** — Implementation evidence is captured in the owning phase's checklist (e.g., Phase 3 Batch N checklist).
+4. **Sign-off is updated** — Original sign-off reviewers acknowledge the deferral is resolved, or a designated phase owner closes the item with documented rationale.
+
+**Process for closing a deferral:**
+
+1. Owner marks the item as `Closed` in this register with evidence links.
+2. Phase exit gate confirmation form is updated to reflect the resolution.
+3. If risk changed materially from original sign-off, re-confirmation from original reviewers is required.
+
+---
+
 ## Sign-off Readiness
 
 Phase 2b exit gate is now **CLOSED**. Phase 2b is **conditionally complete** with explicit Phase 3 deferrals — consistent with the Phase 2 exit gate definition in checklist-phase-2.md.

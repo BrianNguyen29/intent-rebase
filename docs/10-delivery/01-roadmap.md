@@ -32,7 +32,7 @@
 - forensic replay bundle
 - performance work
 
-> **Phase 3 Batch 1 delivered:** side effect ledger (model/query/idempotency/capture-on-write), compensation actions CRUD + approve/waive/execute APIs, DLQ, batch orchestration (approve/reapprove/execute), policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Full planner/executor/retry/rollback record gated on remaining Phase 2b exit.
+> **Phase 3 Batch 1 delivered:** side effect ledger (model/query/idempotency/capture-on-write), compensation actions CRUD + approve/waive/execute APIs, DLQ, batch orchestration (approve/reapprove/execute), policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Phase 2b exit is closed; full planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1 bounded slices.
 
 **Current status:** See [Current Project Status](./00-current-status.md) for a detailed snapshot of what is delivered and what remains open.
 

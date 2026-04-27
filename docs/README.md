@@ -91,6 +91,8 @@ Bộ tài liệu về audit, governance, compliance: audit event spec, provenanc
 - [10-delivery/checklists/](./10-delivery/checklists/README.md) — Tất cả phase checklists từ Phase 0 đến Phase 4
 - [Current Project Status](./10-delivery/00-current-status.md) — snapshot trạng thái hiện tại của dự án (đã deliver gì, còn gì open)
 - [10 Completion Proposals Tracker](./10-delivery/09-completion-proposals-tracker.md) — danh sách 10 proposal còn lại để hoàn thành dự án
+- [Intent Rebase Engine vs. Ferrum-Gate Comparison](./10-delivery/12-ferrum-gate-comparison.md) — positioning comparison between intent-rebase (intent lifecycle control plane) and ferrum-gate (tool-call governance/execution gate)
+- [Novelty Roadmap](./10-delivery/13-novelty-roadmap.md) — proposed differentiated feature extensions (N1–N6) for intent-rebase with anti-duplication gates vs ferrum-gate and prioritized phase recommendations
 
 ### Security & Compliance
 - [Audit & Governance Pack README](./14-governance/README.md) — Toàn bộ specs về audit, provenance, policy snapshots, authorization, tenant isolation, forensic bundles, và incident response

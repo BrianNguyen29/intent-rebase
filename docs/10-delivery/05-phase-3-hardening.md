@@ -13,7 +13,7 @@ Phase 3 builds on Phase 2b completion. Full execution is dependency-gated; howev
 
 *Gate: None — may start immediately. Must complete before Batch 1 starts.*
 
-**Status:** `IN PROGRESS — scaffold slice delivered, planning/admin items remain` ⚠️
+**Status:** `Batch 0 Complete` ✅ — scaffold and planning items delivered. Batch 1 and subsequent batches are gated on Phase 2b exit (Phase 2b exit is now CLOSED per [deferral register](./10-phase-2b-residual-risk-deferral-register.md)).
 
 | Item | Description | Notes |
 |------|-------------|-------|

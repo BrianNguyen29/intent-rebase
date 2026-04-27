@@ -15,7 +15,7 @@ See [`docs/README.md`](./docs/README.md) for the v1 documentation index, archite
 
 ## Phase 3 Status
 
-**Phase 3 Batch 1 delivered slices:** side effect ledger (model, query API, idempotency, capture-on-write), compensation actions query/approve/waive/execute APIs, DLQ API, batch approve/reapprove/execute, policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Full planner/executor/retry/rollback record gated on remaining Phase 2b exit.
+**Phase 3 Batch 1 delivered slices:** side effect ledger (model, query API, idempotency, capture-on-write), compensation actions query/approve/waive/execute APIs, DLQ API, batch approve/reapprove/execute, policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Phase 2b exit is closed; full planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1 bounded slices.
 
 ## Workspace Crates
 
@@ -30,6 +30,7 @@ See [`docs/README.md`](./docs/README.md) for the v1 documentation index, archite
 | `rebase-orchestrator` | Orchestration coordination |
 | `compensation-service` | Compensation action management |
 | `forensic-service` | Forensic bundle replay |
+| `tenant-service` | Multi-tenant onboarding and quota management |
 | `intent-cli` | CLI for orchestration runs |
 
 ## Deferred / Fixed Issues
