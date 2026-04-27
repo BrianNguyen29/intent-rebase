@@ -656,6 +656,42 @@
 
 ---
 
+## 8. Compensation Simulation (N4-4 — Bounded API Slice)
+
+**N4-4 Bounded Slice — GET /intents/{intent_id}/rebase-simulation Delivered**
+
+```
+[x] Rebase simulation endpoint (N4-4 bounded API slice — Phase 3)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (rebase_simulation handler at line 1414)
+    - Code: crates/intent-api/src/lib.rs (RebaseSimulationQuery struct with tenant_id, from_version, to_version, mode, seed)
+    - Code: crates/compensation-service/src/compensation_simulator.rs (CompensationSimulator with deterministic/stochastic modes)
+    - OpenAPI: docs/04-api/openapi.yaml (GET /intents/{intent_id}/rebase-simulation path definition)
+    - Tests: cargo test -p intent-api test_rebase_simulation_* (5 tests pass)
+    - Note: Read-only mock simulation. Does not execute real compensation actions.
+
+[x] Version ordering validation (N4-4 bounded slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (from_version >= to_version check returns BAD_REQUEST)
+    - Tests: cargo test -p intent-api test_rebase_simulation_invalid_version_ordering (passes)
+    - OpenAPI: docs/04-api/openapi.yaml (minimum: 1 on from_version and to_version)
+
+[x] Invalid mode fallback to deterministic (N4-4 bounded slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (invalid mode falls back to deterministic with warning log)
+    - Tests: cargo test -p intent-api test_rebase_simulation_invalid_mode_fallback (passes)
+
+[x] Stochastic mode with seed support (N4-4 bounded slice)
+    Evidence:
+    - Code: crates/intent-api/src/lib.rs (stochastic mode uses seed for reproducibility)
+    - Tests: cargo test -p intent-api test_rebase_simulation_stochastic_mode_with_seed (passes)
+
+[~] Full N4 scope (live executors in simulation mode, full outcome forecasting)
+    Note: N4-4 delivers bounded mock simulation API slice. Full N4 (live compensation execution in simulation mode, full outcome forecasting) remains Phase 4 scope.
+```
+
+---
+
 ## Exit Gate Confirmation
 
 ```

@@ -642,12 +642,14 @@ paths:
           required: true
           schema:
             type: integer
+            minimum: 1
           description: Source intent version before rebase
         - name: to_version
           in: query
           required: true
           schema:
             type: integer
+            minimum: 1
           description: Target intent version after rebase
         - name: mode
           in: query
@@ -661,7 +663,6 @@ paths:
           required: false
           schema:
             type: integer
-            format: uint64
           description: RNG seed for stochastic mode reproducibility (optional)
       responses:
         '200':

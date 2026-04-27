@@ -200,7 +200,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
 | **Suggested Next Step** | Proceed to Batch 2 observability + SRE hardening |
-| **Progress Notes** | Four bounded executors delivered: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). Audit trail events delivered. S2 planner/executor alignment resolved: S2ExternalReversible routes to CounterAction+SemiAutomatic. |
+| **Progress Notes** | Four bounded executors delivered: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible). Audit trail events delivered. S2 planner/executor alignment resolved: S2ExternalReversible routes to CounterAction+SemiAutomatic. N4-4 bounded simulation API slice delivered: `GET /intents/{intent_id}/rebase-simulation` with deterministic/stochastic mode, version ordering validation, and invalid-mode fallback to deterministic. Full N4 (live executors in simulation mode) remains Phase 4 scope. |
 
 **Items:**
 - [x] Side effect rollback record (compensation applied, compensation result) — ✅ delivered (Phase 3 Batch 1 bounded slice)
@@ -208,6 +208,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Four bounded compensation executors (RollbackExecutor, CounterActionExecutor, FollowupNoticeExecutor, EscalationExecutor) — ✅ delivered (Phase 3 Batch 1 bounded slice; each executor is strategy+feasibility-gated; acknowledges against side effect ledger; all other combos fail closed)
 - [x] Compensation audit trail (`compensation.planned`, `compensation.started`, `compensation.completed`, `compensation.failed`) — ✅ delivered (Phase 3 Batch 1 bounded slice)
 - [x] **S2 planner/executor alignment** — ✅ resolved: S2ExternalReversible now routes to CounterAction + SemiAutomatic, aligned with CounterActionExecutor gate
+- [x] N4-4 Compensation simulation API slice (`GET /intents/{intent_id}/rebase-simulation`) — ✅ delivered (Phase 3 bounded slice; deterministic/stochastic mode with seed; version ordering validation; invalid-mode fallback; read-only mock simulation; full N4 scope remains Phase 4)
 
 ---
 

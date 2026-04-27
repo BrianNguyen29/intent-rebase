@@ -1423,6 +1423,16 @@ async fn rebase_simulation(
         .await
         .map_err(ApiErrorResponse)?;
 
+    // Step 1b: Validate version ordering — from_version must be less than to_version
+    if query.from_version >= query.to_version {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!(
+                "from_version ({}) must be less than to_version ({})",
+                query.from_version, query.to_version
+            ),
+        )));
+    }
+
     // Step 2: Fetch side effects for this intent and tenant
     let side_effects = state
         .side_effect_service
@@ -10910,6 +10920,232 @@ mod tests {
             compensation_service::SimulationMode::Stochastic
         );
         assert_eq!(result.total_actions, 0); // No side effects
+    }
+
+    #[tokio::test]
+    async fn test_rebase_simulation_invalid_version_ordering() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Test with reversed version order (from_version > to_version) — should fail
+        let query = RebaseSimulationQuery {
+            tenant_id,
+            from_version: 2,
+            to_version: 1,
+            mode: None,
+            seed: None,
+        };
+
+        let err_response =
+            rebase_simulation(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .unwrap_err();
+
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_rebase_simulation_invalid_mode_fallback() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Run simulation with invalid mode — should fall back to deterministic
+        let query = RebaseSimulationQuery {
+            tenant_id,
+            from_version: 1,
+            to_version: 2,
+            mode: Some("invalid_mode".to_string()),
+            seed: None,
+        };
+
+        let result = rebase_simulation(State(state), Path(intent_id), axum::extract::Query(query))
+            .await
+            .expect("Invalid mode should fall back to deterministic");
+
+        // Verify fallback to deterministic mode
+        assert_eq!(
+            result.config.mode,
+            compensation_service::SimulationMode::Deterministic
+        );
     }
 
     // =========================================================================

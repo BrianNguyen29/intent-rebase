@@ -59,6 +59,13 @@
 ### Policy Gate
 - `GET /compensation-actions/policy-gate` and `GET /intents/{intent_id}/compensation-policy-gate` — read-only gate evaluation
 
+### Compensation Simulation (N4-4 — Bounded API Slice)
+- `GET /intents/{intent_id}/rebase-simulation` — read-only mock simulation using CompensationSimulator
+- Mode: `deterministic` (default) or `stochastic` with optional seed for reproducibility
+- Returns SimulationReport with predicted compensation outcomes based on side effects
+- **This endpoint is READ-ONLY** — does not execute real compensation actions
+- N4-4 bounded slice delivered; full N4 (full compensation simulation with live executors) remains Phase 4 scope
+
 ---
 
 ## Key Open Areas
