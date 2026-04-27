@@ -8752,7 +8752,7 @@ mod tests {
     async fn test_ingest_artifact_side_effect_tenant_isolation_cross_tenant_query() {
         // Test that side effects recorded by tenant A's artifact ingest
         // are NOT visible when tenant B queries by intent
-        use graph_service::{GraphRepository, InMemoryGraphRepository};
+        use graph_service::GraphRepository;
         use intent_rebase_types::{
             ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
         };
@@ -8839,7 +8839,7 @@ mod tests {
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_tenant_isolation_separate_intents() {
         // Test that side effects for different tenants are isolated even with same intent ID
-        use graph_service::{GraphRepository, InMemoryGraphRepository};
+        use graph_service::GraphRepository;
         use intent_rebase_types::{
             ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
         };

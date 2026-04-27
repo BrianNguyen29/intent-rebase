@@ -25,6 +25,7 @@
 use axum::Router;
 use rebase_orchestrator::RebaseOrchestrator;
 use reqwest::Client;
+#[allow(unused_imports)]
 use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ const SLO_P95_LATENCY_MS: u64 = 10_000; // p95 < 10s
 const SLO_ERROR_RATE: f64 = 0.01; // < 1% error rate
 
 /// Check if DATABASE_URL is set for SQLx load test
+#[allow(dead_code)]
 fn requires_database_url() -> bool {
     std::env::var("DATABASE_URL").is_ok()
 }
@@ -509,6 +511,7 @@ async fn test_load() {
 ///
 /// This is the production-like configuration that uses actual PostgreSQL
 /// via the DATABASE_URL environment variable.
+#[allow(dead_code)]
 fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
     use graph_service::{GraphService, InMemoryGraphRepository};
     use intent_service::{IntentService, SqlxIntentRepository};

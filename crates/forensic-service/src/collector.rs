@@ -151,7 +151,7 @@ impl ForensicDataCollector for InMemoryForensicDataCollector {
 
     async fn count_available(
         &self,
-        tenant_id: Option<Uuid>,
+        _tenant_id: Option<Uuid>,
         intent_ids: &[Uuid],
         time_range: &(DateTime<Utc>, DateTime<Utc>),
     ) -> Result<CollectionCounts, CollectorError> {

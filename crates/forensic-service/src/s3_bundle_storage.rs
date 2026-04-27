@@ -199,6 +199,6 @@ mod tests {
     fn test_s3_storage_location_unit() {
         // Placeholder test verifying the struct layout compiles.
         // Actual S3 operations require async initialization and a live MinIO.
-        let _ = println!("S3BundleStorage requires async initialization with live MinIO");
+        println!("S3BundleStorage requires async initialization with live MinIO");
     }
 }

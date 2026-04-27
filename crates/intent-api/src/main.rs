@@ -95,6 +95,17 @@ fn build_inmemory_router() -> Router {
         Arc::new(InMemoryForensicVerificationService::new());
     let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
         Arc::new(InMemoryForensicArchiveGenerator::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("dev-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ));
 
     // In-memory event publisher (no-op for dev)
     let event_publisher: Option<Arc<dyn EventPublisher>> =
@@ -113,6 +124,7 @@ fn build_inmemory_router() -> Router {
         event_publisher,
         forensic_service,
         forensic_archive_generator,
+        forensic_bundle_service,
     )
 }
 
@@ -163,6 +175,17 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
         Arc::new(InMemoryForensicVerificationService::new());
     let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
         Arc::new(InMemoryForensicArchiveGenerator::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("prod-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ));
 
     // No event publisher by default
     let event_publisher: Option<Arc<dyn EventPublisher>> = None;
@@ -178,6 +201,7 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
         event_publisher,
         forensic_service,
         forensic_archive_generator,
+        forensic_bundle_service,
     ))
 }
 

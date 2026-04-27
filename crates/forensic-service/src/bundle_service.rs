@@ -297,7 +297,7 @@ impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait
         };
 
         let gen_result = BundleGeneratorService::generate(gen_request);
-        let mut bundle = gen_result.bundle;
+        let bundle = gen_result.bundle;
 
         // Step 5: Serialize bundle to JSON and store to S3/MinIO
         let bundle_json = serde_json::to_vec(&bundle)
@@ -309,7 +309,7 @@ impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait
         self.repo
             .create(bundle.clone())
             .await
-            .map_err(|e| ForensicBundleServiceError::Repository(e))?;
+            .map_err(ForensicBundleServiceError::Repository)?;
 
         self.storage
             .put(bundle.bundle_id, bundle.tenant_id, &bundle_json)
@@ -455,9 +455,9 @@ mod tests {
 
         async fn count_available(
             &self,
-            tenant_id: Option<Uuid>,
+            _tenant_id: Option<Uuid>,
             intent_ids: &[Uuid],
-            time_range: &(DateTime<Utc>, DateTime<Utc>),
+            _time_range: &(DateTime<Utc>, DateTime<Utc>),
         ) -> Result<CollectionCounts, CollectorError> {
             Ok(CollectionCounts {
                 intent_count: intent_ids.len(),
