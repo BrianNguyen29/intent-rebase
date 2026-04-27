@@ -95,6 +95,14 @@ tags:
     description: Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
   - name: forensic
     description: Forensic verification endpoints (Phase 3 Batch 3b bounded slice)
+  - name: approvals
+    description: Approval request management (Phase 2b bounded slice)
+  - name: diff
+    description: Intent diff computation operations
+  - name: rebase
+    description: Rebase planning and application operations
+  - name: side-effects
+    description: Side effect capture and query operations
 
 paths:
   /intents:
@@ -5458,6 +5466,12 @@ components:
           enum: [incident_investigation, compliance_audit, legal]
           default: incident_investigation
           description: Purpose of the archive
+        status:
+          $ref: '#/components/schemas/BundleStatus'
+        contents:
+          $ref: '#/components/schemas/BundleContents'
+        integrity:
+          $ref: '#/components/schemas/BundleIntegrity'
         include_artifacts:
           type: boolean
           default: true

@@ -62,13 +62,14 @@ jobs:
   openapi-validate:
     name: OpenAPI Validate
     runs-on: ubuntu-latest
-    needs: [test]
     steps:
       - uses: actions/checkout@v4
-      - name: Validate OpenAPI spec
-        uses: docker://spectral/spectral:1.28.0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          args: lint docs/04-api/openapi.yaml --fail-on-severity=error
+          node-version: '20'
+      - name: Validate OpenAPI spec
+        run: npx --yes @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error
 
   build:
     name: Cargo Build

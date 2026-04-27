@@ -294,7 +294,7 @@
 
 [x] API change policy: OpenAPI spec must update with code
      Evidence:
-     - CI: openapi-validate job in .github/workflows/ci.yml (lines 62-71) running Spectral Docker action on every push/PR
+     - CI: openapi-validate job in .github/workflows/ci.yml running `npx @stoplight/spectral-cli` with `.spectral.yml` ruleset on every push/PR
      - Doc: ../../12-agents/01-agent-implementation-guide.md (updated)
 
 [x] Event contracts documented

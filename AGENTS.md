@@ -13,7 +13,7 @@ cargo test --workspace              # run all tests (inline in lib.rs, use tokio
 cargo build --workspace --release   # release build
 ```
 - **No Makefile/justfile**: use `cargo` directly.
-- CI also runs: `spectral lint docs/04-api/openapi.yaml --fail-on-severity=error` after tests.
+- CI also runs: `npx @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error` as a standalone OpenAPI validation job.
 
 ## Local Services
 ```bash
