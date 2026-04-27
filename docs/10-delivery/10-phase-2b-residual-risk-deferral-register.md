@@ -19,7 +19,7 @@
 | D-07 | Event schema versioning (v2 migration path) | v1 → v2 migration deferred to Phase 3 | P2 | All events use v1 schema. If breaking schema changes are needed before Phase 3, v2 migration would need to be expedited. Downstream consumers locked to v1 until Phase 3 migration. | **Acknowledge:** Events are v1 schema only. v2 migration is Phase 3. If schema evolution is needed before Phase 3, coordinate migration explicitly. |
 | D-08 | Dead-letter queue (DLQ) for failed event processing | Requires Phase 3 event-service with DLQ infrastructure | P2 | Failed event processing fails open (audit succeeds even if streaming fails). No DLQ means failed events are not retried or held for investigation until Phase 3. Silent failure risk in event streaming path. | **Acknowledge:** DLQ is not implemented in Phase 2b. Failed events fail open — audit is the source of truth; streaming failures are not retried or held. DLQ required before production-grade event streaming. |
 | D-09 | Full NATS-based event consumers (startup wiring, DLQ, retry, consumer groups) | Bounded in-memory consumer infrastructure used for testing only; Phase 2b intentionally scoped to abstraction layer | P2 | Only in-memory consumer buffer available for testing. No persistent NATS consumers, no consumer groups, no retry/DLQ. Production event-driven checkpoint creation and notification delivery require Phase 3 consumer infrastructure. | **Acknowledge:** In-memory consumer infrastructure is for testing only. Phase 3 NATS consumer infrastructure required before event-driven checkpoint creation or notification delivery is production-ready. |
-| D-10 | Policy snapshot write/revalidation API (S3 upload, write endpoints) | Phase 2b scope limited to read-only GET endpoints; write/revalidation requires Phase 3 workflow | P7 (Phase 3 Batch 1 Closure — Compensation Planner/Executor) | Policy snapshots can be read but not created or revalidated via API in Phase 2b. Snapshot creation relies on event-driven SnapshotCreatorConsumer with bounded scope data. Full scope accuracy requires Phase 3 intent scope access. | **Acknowledge:** Read-only policy snapshot API in Phase 2b. Write/revalidation requires Phase 3. SnapshotCreatorConsumer is event-driven with scope data limitations noted. |
+| D-10 | Policy snapshot write/revalidation API (S3 upload, write endpoints) | Phase 2b scope limited to read-only GET endpoints; write/revalidation requires Phase 3 workflow | Future (policy snapshot lifecycle — no assigned proposal) | Policy snapshots can be read but not created or revalidated via API in Phase 2b. Snapshot creation relies on event-driven SnapshotCreatorConsumer with bounded scope data. Full scope accuracy requires Phase 3 intent scope access. | **Acknowledge:** Read-only policy snapshot API in Phase 2b. Write/revalidation requires Phase 3. SnapshotCreatorConsumer is event-driven with scope data limitations noted. |
 
 ---
 
@@ -29,7 +29,7 @@
 |----------|-----|---------|
 | P2 — Phase 3 Batch 2 — Observability + SRE | D-01, D-02, D-03, D-06, D-07, D-08, D-09 | Artifact-service S3 integration, full notification delivery, event schema versioning, DLQ, NATS consumer infrastructure |
 | P4 — Phase 3 Batch 3b — Forensic Replay Bundle | D-04, D-05 | Intent version override replay, full replay compatibility |
-| P7 — Phase 3 Batch 1 Closure | D-10 | Policy snapshot write/revalidation API |
+| Future (policy snapshot lifecycle) | D-10 | Policy snapshot write/revalidation API |
 
 ---
 

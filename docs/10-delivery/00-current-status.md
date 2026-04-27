@@ -5,7 +5,9 @@
 **Current Phase:** Phase 3 — Compensation + Production Hardening, Batch 1 largely delivered.  
 **Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — all three reviewers (Product Owner, Security, Runtime Integration) have signed off as APPROVED with name/date pending documentation per user instruction. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.  
 **Phase 3 Batch 1 delivered:** Side effect ledger, compensation-actions CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot orchestration runtime (HTTP + CLI). Phase 2b exit is closed; bounded planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1.  
-**Production readiness:** Not yet production-ready. Phase 3 Batch 1 delivers bounded API surfaces; SRE hardening, tenant isolation, forensic replay, and performance work are still open.
+**Phase 3 Batch 2 status:** Bounded slices delivered (SLO definitions provisional, alerting rules, error budget panels, distributed tracing, benchmarks); external SRE sign-off gates remain.
+**Phase 3 Batch 3b status:** Forensic verification, bounded generation (POST /forensic/bundle with S3/MinIO), bounded export (POST /forensic/export), and bounded download (GET /forensic-bundles/{id}/download) slices delivered; full runtime replay, async orchestration, and S3-backed retrieval/storage lifecycle remain Phase 4 scope.
+**Production readiness:** Not yet production-ready. Phase 3 Batch 1 delivers bounded API surfaces; SRE hardening (external gates), tenant isolation, forensic replay (Phase 4), and performance work are still open.
 
 ---
 

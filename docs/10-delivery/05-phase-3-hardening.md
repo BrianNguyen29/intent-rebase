@@ -59,7 +59,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 
 *Gate: Compensation engine basic path verified. Phase 2b event streaming available.*
 
-**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered, Slice 7 (multi-window burn-rate alerting) delivered`
+**Status:** `Batch 2 IN PROGRESS — Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered, Slice 2 (tracing foundation) delivered, Slice 3 (alerting rules + runbook foundation) delivered, Slice 4 (rebase-engine sync benchmark) delivered, Slice 5 (error budget tracking panels) delivered, Slice 6 (graph + HTTP + DB benchmark harnesses) delivered, Slice 7 (multi-window burn-rate alerting) delivered, Slice 8 (forensic bundle generation API) delivered, Slice 9 (forensic bundle download) delivered — external SRE sign-off gates remain`
 
 ### Batch 2 Slice 1 (delivered)
 
@@ -188,9 +188,9 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 | 3-8 | Bundle generation: collect intent versions, artifacts, audit events, graph state from real services | ✅ P4 bounded slice delivered — ForensicDataCollector + real repository calls |
 | 3-9 | Bundle generation API: `POST /forensic/bundle` | ✅ P4 bounded slice delivered — bounded synchronous path: collect + generate manifest + persist to S3/MinIO + record Ready |
 | 3-10 | Bundle integrity verification (hash chain) | ✅ Phase 3 Batch 3b bounded slice delivered — verify_bundle_integrity function |
-| 3-11 | Bundle replay capability (replay bundle to reproduce state) | 🔄 Phase 4 scope — bounded replay verification surface (read-only integrity check) delivered |
+| 3-11 | Bundle replay capability (replay bundle to reproduce state) | 🔄 Phase 4 scope — bounded replay verification surface (read-only integrity check) delivered; full runtime replay is Phase 4 |
 | 3-12 | Bundle retention policy (configurable per tenant, compliance) | 🔄 Phase 4 scope — retention policy metadata model delivered; S3 lifecycle enforcement future work |
-| 3-13 | Forensic bundle export: `GET /forensic/bundles/{bundle_id}/download` | 🔄 bounded local/exportable download delivered; S3-backed retrieval is Phase 4 scope |
+| 3-13 | Forensic bundle export: `GET /forensic/bundles/{bundle_id}/download` | ✅ Phase 3 Batch 3b bounded slice delivered — bounded local/exportable download; S3-backed retrieval is Phase 4 scope |
 
 ---
 

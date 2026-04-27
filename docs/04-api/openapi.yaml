@@ -34,7 +34,7 @@ info:
 
     ## Bounded scope note
     Phase 3 Batch 1 delivers bounded slices of the compensation engine.
-    Full planner/executor/retry/rollback record are Batch 1+ scope, gated on Phase 2b exit.
+    Full planner/executor/retry/rollback record are Batch 1 scope (Phase 2b exit is closed).
 
     ## Implemented (Phase 1)
     - GET /health — Service health check

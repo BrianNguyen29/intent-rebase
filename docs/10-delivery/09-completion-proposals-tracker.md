@@ -3,7 +3,7 @@
 Tracks the 10 major work proposals required to move the Intent Rebase Engine from current state to full Phase 3 completion and Phase 4 entry. Each proposal is a logical grouping of related work, owned by a named role (not necessarily a specific person). Update status, progress, and next steps as work advances.
 
 > **Last updated:** April 2026  
-> **Gate:** Most proposals are gated on Phase 2b exit. Proposal 1 represents the Phase 2b exit itself.
+> **Gate:** Phase 2b exit gate is CLOSED (Phase 2b APPROVED — all three reviewers signed off). Most Phase 3 proposals are actively in progress. Phase 4 proposals are gated on Phase 3 exit.
 
 ---
 
@@ -30,7 +30,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 |-------|-------|
 | **ID** | P1 |
 | **Title** | Phase 2b Exit Gate |
-| **Purpose** | Complete Phase 2b to unblock Phase 3 Batch 2+. Phase 2b scope: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. |
+| **Purpose** | Phase 2b exit gate — completed and closed. Phase 2b scope: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. |
 | **Status** | ✅ **APPROVED — Phase 2b exit gate closed; name/date pending documentation per user instruction** |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
@@ -98,7 +98,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | Security / Platform |
 | **Suggested Next Step** | Data residency verification; broader artifact-service tenant coverage extension |
-| **Progress Notes** | Batch 3a gated on Phase 2b exit. Bounded slices delivered: P3-S1 (tenant isolation verification tests), P3-S2 (quota enforcement), P3-S3 (tenant-specific rule pack isolation), P3-S4 (tenant audit log separation via scoped audit query API), P3-S5 (tenant service scaffold + onboarding procedure skeleton). **Artifact ingest side-effect tenant isolation tests now pass in intent-api lib tests.** Data residency note added to threat model (bounded verification/planning — single-region today, target-region metadata exists, enforcement/routing is future work). Broader artifact-service coverage remains open. |
+| **Progress Notes** | Phase 2b exit is closed; Batch 3a is actively in progress. Bounded slices delivered: P3-S1 (tenant isolation verification tests), P3-S2 (quota enforcement), P3-S3 (tenant-specific rule pack isolation), P3-S4 (tenant audit log separation via scoped audit query API), P3-S5 (tenant service scaffold + onboarding procedure skeleton). **Artifact ingest side-effect tenant isolation tests now pass in intent-api lib tests.** Data residency note added to threat model (bounded verification/planning — single-region today, target-region metadata exists, enforcement/routing is future work). Broader artifact-service coverage remains open. |
 
 **Items:**
 - [x] Tenant isolation verification tests (cross-tenant access blocked, no data leakage) — P3-S1 bounded slice delivered
