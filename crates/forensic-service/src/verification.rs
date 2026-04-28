@@ -20,7 +20,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
+
+use super::collector::*;
 
 /// Purpose of the forensic verification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -356,6 +359,105 @@ impl ForensicVerificationService for InMemoryForensicVerificationService {
     }
 }
 
+/// Real forensic verification service using actual collector counts
+///
+/// This implementation delegates to `ForensicDataCollector::count_available`
+/// to get real counts from service repositories. It does NOT fabricate
+/// timestamps or artifact counts — these fields remain None when unavailable.
+///
+/// **Truthful semantics:**
+/// - Returns truthful status based on actual entity counts
+/// - `earliest_version`/`latest_version` are None (not available from count_available)
+/// - `has_artifact_traceability` is false (not available from count_available)
+/// - `coverage_complete` is false (not available from count_available)
+pub struct RealForensicVerificationService {
+    collector: Arc<dyn ForensicDataCollector>,
+}
+
+impl RealForensicVerificationService {
+    pub fn new(collector: Arc<dyn ForensicDataCollector>) -> Self {
+        Self { collector }
+    }
+}
+
+#[async_trait::async_trait]
+impl ForensicVerificationService for RealForensicVerificationService {
+    async fn verify(&self, request: ForensicVerificationRequest) -> ForensicVerificationResponse {
+        let mut response = ForensicVerificationResponse::new(
+            request.tenant_id,
+            request.intent_id,
+            request.time_range.clone(),
+            request.purpose,
+        );
+
+        let time_range = (request.time_range.start, request.time_range.end);
+        let intent_ids = &[request.intent_id];
+
+        // Delegate to real collector for counts
+        match self
+            .collector
+            .count_available(Some(request.tenant_id), intent_ids, &time_range)
+            .await
+        {
+            Ok(counts) => {
+                // Set intent coverage
+                response.intent_version_coverage.intent_exists = counts.intent_count > 0;
+                response.intent_version_coverage.version_count = counts.version_count;
+                // Note: earliest/latest_version not available from count_available — remain None
+                // Note: has_artifact_traceability not available from count_available — remain false
+
+                // Set artifact coverage if requested
+                if request.include_artifacts {
+                    // Artifact counts not available from count_available — use version_count as proxy
+                    // but mark coverage_complete as false since we don't have real artifact data
+                    response.artifact_coverage = Some(ArtifactCoverage {
+                        artifact_count: 0, // Not available from count_available
+                        artifacts_with_provenance: 0,
+                        coverage_complete: false,
+                    });
+                }
+
+                // Set audit event coverage if requested
+                if request.include_audit_events {
+                    response.audit_event_coverage = Some(AuditEventCoverage {
+                        event_count: counts.audit_event_count,
+                        // time_range_complete not available — remain false
+                        time_range_complete: false,
+                        first_event: None,
+                        last_event: None,
+                    });
+                }
+
+                // Set policy snapshot coverage if requested
+                if request.include_policy_snapshots {
+                    response.policy_snapshot_coverage = Some(PolicySnapshotCoverage {
+                        snapshot_count: counts.policy_snapshot_count,
+                        coverage_complete: false,
+                    });
+                }
+
+                // Set status based on actual counts
+                if counts.intent_count == 0 {
+                    response.status = VerificationStatus::Incomplete;
+                    response.status_reason =
+                        "No matching intents found for tenant in time range".to_string();
+                } else {
+                    response.status = VerificationStatus::Ready;
+                    response.status_reason =
+                        "All referenced entities exist and are within time range".to_string();
+                }
+            }
+            Err(e) => {
+                response.status = VerificationStatus::Incomplete;
+                response.status_reason = format!("Failed to verify: {}", e);
+            }
+        }
+
+        response.compute_estimated_count();
+        response
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +547,152 @@ mod tests {
             serde_json::from_str::<VerificationPurpose>("\"legal\"").unwrap(),
             VerificationPurpose::Legal
         );
+    }
+
+    #[tokio::test]
+    async fn test_real_verification_service_no_intents() {
+        use crate::collector::InMemoryForensicDataCollector;
+
+        let collector = Arc::new(InMemoryForensicDataCollector::new());
+        let service = RealForensicVerificationService::new(collector);
+
+        let request = ForensicVerificationRequest {
+            tenant_id: Uuid::new_v4(),
+            intent_id: Uuid::new_v4(),
+            time_range: VerificationTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: VerificationPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let response = service.verify(request).await;
+
+        assert_eq!(response.status, VerificationStatus::Incomplete);
+        assert!(response.status_reason.contains("No matching intents"));
+        assert_eq!(response.intent_version_coverage.intent_exists, false);
+        assert_eq!(response.intent_version_coverage.version_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_real_verification_service_with_intent_but_no_versions() {
+        use crate::collector::{
+            CollectedIntentData, CollectedVersionData, InMemoryForensicDataCollector,
+        };
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Create intent data but with versions outside the time range
+        let intent = CollectedIntentData {
+            intent_id,
+            tenant_id: Some(tenant_id),
+            name: format!("intent-{}", intent_id),
+            versions: vec![CollectedVersionData {
+                version_number: 1,
+                summary: "Old version".to_string(),
+                change_type: "create".to_string(),
+                created_at: Utc::now() - chrono::Duration::days(30), // Outside time range
+            }],
+            policy_snapshots: vec![],
+            audit_events: vec![],
+        };
+
+        let collector = Arc::new(InMemoryForensicDataCollector::new().with_intents(vec![intent]));
+        let service = RealForensicVerificationService::new(collector);
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: VerificationTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: VerificationPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let response = service.verify(request).await;
+
+        // Intent exists but no versions in time range
+        assert_eq!(response.status, VerificationStatus::Ready);
+        assert!(response
+            .status_reason
+            .contains("All referenced entities exist"));
+        assert_eq!(response.intent_version_coverage.intent_exists, true);
+        assert_eq!(response.intent_version_coverage.version_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_real_verification_service_maps_counts_correctly() {
+        use crate::collector::{
+            CollectedIntentData, CollectedVersionData, InMemoryForensicDataCollector,
+        };
+
+        let intent_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let intent = CollectedIntentData {
+            intent_id,
+            tenant_id: Some(tenant_id),
+            name: format!("intent-{}", intent_id),
+            versions: vec![
+                CollectedVersionData {
+                    version_number: 1,
+                    summary: "Version 1".to_string(),
+                    change_type: "create".to_string(),
+                    created_at: now - chrono::Duration::hours(2),
+                },
+                CollectedVersionData {
+                    version_number: 2,
+                    summary: "Version 2".to_string(),
+                    change_type: "update".to_string(),
+                    created_at: now - chrono::Duration::hours(1),
+                },
+            ],
+            policy_snapshots: vec![],
+            audit_events: vec![],
+        };
+
+        let collector = Arc::new(InMemoryForensicDataCollector::new().with_intents(vec![intent]));
+        let service = RealForensicVerificationService::new(collector);
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: VerificationTimeRange {
+                start: now - chrono::Duration::days(1),
+                end: now,
+            },
+            purpose: VerificationPurpose::ComplianceAudit,
+            include_artifacts: false,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let response = service.verify(request).await;
+
+        assert_eq!(response.status, VerificationStatus::Ready);
+        assert_eq!(response.intent_version_coverage.intent_exists, true);
+        assert_eq!(response.intent_version_coverage.version_count, 2);
+        // Timestamps not available from count_available
+        assert!(response.intent_version_coverage.earliest_version.is_none());
+        assert!(response.intent_version_coverage.latest_version.is_none());
+        // Artifact coverage not requested
+        assert!(response.artifact_coverage.is_none());
+        // Audit events requested but collector returns 0 (no events in intent)
+        assert!(response.audit_event_coverage.is_some());
+        assert_eq!(
+            response.audit_event_coverage.as_ref().unwrap().event_count,
+            0
+        );
+        // Policy snapshots not requested
+        assert!(response.policy_snapshot_coverage.is_none());
     }
 }

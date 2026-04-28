@@ -26,15 +26,17 @@ use compensation_service::{
 };
 use forensic_service::{
     ForensicArchiveGenerator, ForensicVerificationService, InMemoryForensicArchiveGenerator,
-    InMemoryForensicVerificationService,
+    InMemoryForensicVerificationService, RealForensicDataCollector,
+    RealForensicVerificationService,
 };
 use graph_service::{GraphService, InMemoryGraphRepository};
 use intent_api::{build_router, build_router_with_sql_audit_and_approval, init_tracing};
-use intent_rebase_types::{EventPublisher, InMemoryEventPublisher};
+use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
 use intent_service::{
     ApprovalRequestRepository, InMemoryApprovalRequestRepository, InMemoryCheckpointRepository,
     InMemoryIntentRepository, InMemoryPolicySnapshotRepository, IntentService,
     PolicySnapshotRepository, SqlxCheckpointRepository, SqlxIntentRepository,
+    SqlxPolicySnapshotRepository,
 };
 use rebase_orchestrator::RebaseOrchestrator;
 use runtime_adapter::MockAdapter;
@@ -135,7 +137,7 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
 
     // SQL-backed intent repository
     let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
-    let intent_service = Arc::new(IntentService::new(intent_repo));
+    let intent_service = Arc::new(IntentService::new(intent_repo.clone()));
 
     // In-memory graph repository (production graph service TBD)
     let graph_repo = Arc::new(InMemoryGraphRepository::new());
@@ -169,9 +171,18 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
         orchestration_run_repo,
     ));
 
-    // In-memory forensic services (production TBD)
+    // SQL-backed forensic verification service using real collector counts
+    let forensic_audit_repo: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(SqlxAuditRepository::new(pool.clone()));
+    let forensic_policy_repo: Arc<dyn PolicySnapshotRepository> =
+        Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
+    let forensic_collector = Arc::new(RealForensicDataCollector::new(
+        intent_repo.clone(),
+        forensic_audit_repo,
+        forensic_policy_repo,
+    ));
     let forensic_service: Arc<dyn ForensicVerificationService> =
-        Arc::new(InMemoryForensicVerificationService::new());
+        Arc::new(RealForensicVerificationService::new(forensic_collector));
     let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
         Arc::new(InMemoryForensicArchiveGenerator::new());
     let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());

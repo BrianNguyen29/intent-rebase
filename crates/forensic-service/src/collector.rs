@@ -167,11 +167,44 @@ impl ForensicDataCollector for InMemoryForensicDataCollector {
             .filter(|i| intent_ids.contains(&i.intent_id))
             .collect();
 
+        // Filter versions by time range (matching RealForensicDataCollector behavior)
+        let version_count: usize = filtered
+            .iter()
+            .map(|i| {
+                i.versions
+                    .iter()
+                    .filter(|v| v.created_at >= time_range.0 && v.created_at <= time_range.1)
+                    .count()
+            })
+            .sum();
+
+        // Filter audit events by time range
+        let audit_event_count: usize = filtered
+            .iter()
+            .map(|i| {
+                i.audit_events
+                    .iter()
+                    .filter(|e| e.occurred_at >= time_range.0 && e.occurred_at <= time_range.1)
+                    .count()
+            })
+            .sum();
+
+        // Filter policy snapshots by time range
+        let policy_snapshot_count: usize = filtered
+            .iter()
+            .map(|i| {
+                i.policy_snapshots
+                    .iter()
+                    .filter(|s| s.created_at >= time_range.0 && s.created_at <= time_range.1)
+                    .count()
+            })
+            .sum();
+
         Ok(CollectionCounts {
             intent_count: filtered.len(),
-            version_count: filtered.iter().map(|i| i.versions.len()).sum(),
-            audit_event_count: filtered.iter().map(|i| i.audit_events.len()).sum(),
-            policy_snapshot_count: filtered.iter().map(|i| i.policy_snapshots.len()).sum(),
+            version_count,
+            audit_event_count,
+            policy_snapshot_count,
         })
     }
 }
