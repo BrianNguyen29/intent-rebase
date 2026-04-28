@@ -19,10 +19,18 @@
 > - `GET /approval-requests/{id}/revalidate` — read-only scope comparison ✅
 > - `POST /approval-requests/{id}/expire` — manual expiry transition ✅
 > - `POST /approval-requests/trigger-reapproval` — bounded re-approval trigger ✅
+> - **Bounded invalidation**: `POST /approval-requests/trigger-reapproval` now cancels
+>   existing `Approved` approvals when creating a replacement `Pending` request ✅
+>
+> **Bounded Invalidation Approach:**
+> - Uses `Cancelled` status as a substitute for `Invalidated` (no DB migration required)
+> - Only `Approved` approvals for the same tenant+intent are cancelled
+> - New `Pending` replacement remains `Pending`
+> - `Pending`, `Rejected`, `Expired`, and `Cancelled` approvals are not affected
 >
 > **NOT YET IMPLEMENTED:**
 > - S3-backed immutable snapshot blobs (current `snapshot_uri` is `memory://` placeholder)
-> - Full approval invalidation orchestration
+> - Full approval invalidation orchestration (beyond bounded cancellation)
 > - Re-approval workflow queueing and notification delivery
 > - Risk-based invalidation rules (critical/high/medium/low)
 >
@@ -33,7 +41,7 @@
 ## Context
 
 When an intent changes, IRE must determine:
-1. **Which approvals are invalidated** — approvals granted under the old intent *(future)*
+1. **Which approvals are invalidated** — approvals granted under the old intent *(partial — bounded cancellation via `Cancelled` status implemented)*
 2. **Which scope is affected** — the boundary of what must be re-approved *(future)*
 3. **How to canonicalize the approval state** — creating a point-in-time snapshot of the approval policy *(partial — DB persistence implemented; S3 canonicalization future)*
 
