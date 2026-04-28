@@ -1323,12 +1323,33 @@ async fn rebase_apply(
             &apply_result.rationale,
         );
 
-        if let Err(e) = state
+        // Only proceed with cancellation if creation succeeded
+        match state
             .approval_request_repo
             .create_approval_request(approval_request)
             .await
         {
-            tracing::warn!("Failed to create approval_request record: {:?}", e);
+            Ok(created) => {
+                // Phase 2b bounded invalidation: cancel any existing Approved approvals
+                // for this intent+tenant when creating a new Pending request.
+                // Only Approved approvals are cancelled; Pending/Rejected/Expired are not affected.
+                let _cancelled_count = cancel_existing_approved_and_audit(
+                    &state.approval_request_repo,
+                    &state.audit_service,
+                    &state.event_publisher,
+                    intent_id,
+                    intent_head.intent.tenant_id,
+                    actor_id,
+                    request.from_version,
+                    request.to_version,
+                    &format!("{:?}", plan.decision_class),
+                    created.id,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create approval_request record: {:?}", e);
+            }
         }
     }
 
@@ -1674,6 +1695,90 @@ fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static s
         RuntimeExecutionStatus::Succeeded => "succeeded",
         RuntimeExecutionStatus::SucceededNoReplay => "succeeded_no_replay",
     }
+}
+
+// ============================================================================
+// Phase 2b: Approval Invalidation Helpers (bounded cancellation slice)
+// ============================================================================
+
+#[allow(clippy::too_many_arguments)]
+/// Cancel existing Approved approvals for an intent and emit cancellation audit event.
+///
+/// Phase 2b bounded invalidation: When creating a new pending approval request,
+/// any existing Approved approvals for the same tenant+intent are cancelled.
+/// Only Approved approvals are cancelled — Pending/Rejected/Expired are not affected.
+///
+/// This helper encapsulates the cancellation+cancel-audit pattern used by both
+/// trigger_reapproval and rebase_apply BlockedManualReview paths.
+///
+/// Returns the number of cancelled approvals (0 if none or on error).
+///
+/// Best-effort: errors are logged but do not fail the caller.
+async fn cancel_existing_approved_and_audit(
+    approval_repo: &Arc<dyn intent_service::ApprovalRequestRepository>,
+    audit_service: &Arc<dyn intent_rebase_types::AuditRepository>,
+    event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    actor_id: &str,
+    from_version: i32,
+    to_version: i32,
+    decision_class: &str,
+    new_approval_id: Uuid,
+) -> usize {
+    let cancellation_reason = format!(
+        "Superseded by new approval request {} due to rebase apply",
+        new_approval_id
+    );
+
+    let cancelled_count = match approval_repo
+        .cancel_approved_by_intent(intent_id, tenant_id, actor_id, &cancellation_reason)
+        .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::warn!("Failed to cancel existing approved approvals: {:?}", e);
+            return 0;
+        }
+    };
+
+    if cancelled_count > 0 {
+        let cancel_audit_payload = intent_rebase_types::ApprovalCancelledAuditPayload {
+            intent_id,
+            cancelled_version_from: from_version,
+            cancelled_version_to: to_version,
+            decision_class: decision_class.to_string(),
+            cancelled_by: actor_id.to_string(),
+            cancellation_reason,
+            cancelled_count,
+        };
+
+        let audit_payload_for_publish = cancel_audit_payload.clone();
+
+        if let Err(e) = audit_service
+            .record_approval_cancelled(
+                tenant_id,
+                actor_id,
+                intent_id,
+                cancel_audit_payload,
+                get_current_trace_context(),
+            )
+            .await
+        {
+            tracing::warn!("Failed to record ApprovalCancelled audit event: {:?}", e);
+        } else {
+            publish_audit_event(
+                event_publisher,
+                tenant_id,
+                "ApprovalCancelled",
+                &serde_json::to_value(audit_payload_for_publish)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+            )
+            .await;
+        }
+    }
+
+    cancelled_count
 }
 
 // ============================================================================
@@ -2340,47 +2445,21 @@ async fn trigger_reapproval(
         .map_err(ApiErrorResponse)?;
 
     // Step 4b: Cancel any existing Approved approvals for this intent+tenant
-    // This is the bounded invalidation substitute: Approved → Cancelled when
-    // trigger-reapproval creates a replacement Pending request.
+    // Uses cancel_existing_approved_and_audit helper to handle both cancellation and audit.
     // Only Approved approvals are cancelled; Pending/Rejected/Expired are not affected.
-    let cancellation_reason = format!(
-        "Superseded by new approval request {} due to scope change",
-        created.id
-    );
-    let cancelled_count = state
-        .approval_request_repo
-        .cancel_approved_by_intent(
-            request.intent_id,
-            intent_head.intent.tenant_id,
-            actor_id,
-            &cancellation_reason,
-        )
-        .await
-        .unwrap_or(0);
-
-    // If we cancelled any approvals, emit an audit event for the invalidation
-    if cancelled_count > 0 {
-        let cancel_audit_payload = intent_rebase_types::ApprovalCancelledAuditPayload {
-            intent_id: request.intent_id,
-            cancelled_version_from: request.original_version_from,
-            cancelled_version_to: request.current_version_to,
-            decision_class: "ScopeChange".to_string(),
-            cancelled_by: actor_id.to_string(),
-            cancellation_reason: cancellation_reason.clone(),
-            cancelled_count,
-        };
-
-        let _ = state
-            .audit_service
-            .record_approval_cancelled(
-                intent_head.intent.tenant_id,
-                actor_id,
-                request.intent_id,
-                cancel_audit_payload,
-                get_current_trace_context(),
-            )
-            .await;
-    }
+    let _cancelled_count = cancel_existing_approved_and_audit(
+        &state.approval_request_repo,
+        &state.audit_service,
+        &state.event_publisher,
+        request.intent_id,
+        intent_head.intent.tenant_id,
+        actor_id,
+        request.original_version_from,
+        request.current_version_to,
+        "ScopeChange",
+        created.id,
+    )
+    .await;
 
     // Step 5: Emit audit event (best-effort)
     let audit_payload = intent_rebase_types::ApprovalRequestedAuditPayload {
@@ -12997,6 +13076,436 @@ mod tests {
         // S1 + Automatic = success
         assert_eq!(result.successful_count, 1);
         assert_eq!(result.failed_count, 0);
+    }
+
+    // =========================================================================
+    // Phase 2b: Rebase Apply BlockedManualReview Invalidation Tests
+    //
+    // Tests for bounded approval cancellation in rebase_apply BlockedManualReview path.
+    // Verifies that when rebase_apply creates a Pending approval request for
+    // BlockedManualReview, existing Approved approvals for the same intent
+    // are cancelled using cancel_existing_approved_and_audit helper.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_cancel_existing_approved_and_audit_cancels_approved_approvals() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        // Create an intent to get tenant_id
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create an existing Approved approval request
+        let approved_request = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Previous approval",
+        );
+        let approved_id = approved_request.id;
+        state
+            .approval_request_repo
+            .create_approval_request(approved_request)
+            .await
+            .unwrap();
+        state
+            .approval_request_repo
+            .update_approval_request_status(
+                approved_id,
+                ApprovalRequestStatus::Approved,
+                "approver",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Verify it's Approved
+        let verified = state
+            .approval_request_repo
+            .get_approval_request(approved_id)
+            .await
+            .unwrap();
+        assert_eq!(verified.status, ApprovalRequestStatus::Approved);
+
+        // Create a new pending approval request (simulating what rebase_apply does)
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            2,
+            3,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call the helper to cancel existing Approved approvals
+        let cancelled_count = cancel_existing_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            intent_id,
+            tenant_id,
+            "external-api",
+            2,
+            3,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 1 approval
+        assert_eq!(cancelled_count, 1);
+
+        // The approved request should now be Cancelled
+        let cancelled = state
+            .approval_request_repo
+            .get_approval_request(approved_id)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status, ApprovalRequestStatus::Cancelled);
+
+        // The new pending request should still be Pending
+        let still_pending = state
+            .approval_request_repo
+            .get_approval_request(new_approval_id)
+            .await
+            .unwrap();
+        assert_eq!(still_pending.status, ApprovalRequestStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_existing_approved_and_audit_does_not_cancel_pending() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create a Pending approval request (not Approved)
+        let pending_request = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Pending approval",
+        );
+        let pending_id = pending_request.id;
+        state
+            .approval_request_repo
+            .create_approval_request(pending_request)
+            .await
+            .unwrap();
+
+        // Verify it's Pending
+        let verified = state
+            .approval_request_repo
+            .get_approval_request(pending_id)
+            .await
+            .unwrap();
+        assert_eq!(verified.status, ApprovalRequestStatus::Pending);
+
+        // Create a new pending approval request
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            2,
+            3,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call the helper
+        let cancelled_count = cancel_existing_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            intent_id,
+            tenant_id,
+            "external-api",
+            2,
+            3,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 0 approvals (pending not cancelled)
+        assert_eq!(cancelled_count, 0);
+
+        // The pending request should still be Pending
+        let still_pending = state
+            .approval_request_repo
+            .get_approval_request(pending_id)
+            .await
+            .unwrap();
+        assert_eq!(still_pending.status, ApprovalRequestStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_existing_approved_and_audit_returns_zero_when_none_exist() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+
+        let state = create_test_service();
+
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create a new pending approval request (no existing approvals)
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call the helper with intent that has no existing approvals
+        let cancelled_count = cancel_existing_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            intent_id,
+            tenant_id,
+            "external-api",
+            1,
+            2,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 0 approvals
+        assert_eq!(cancelled_count, 0);
     }
 
     // =========================================================================
