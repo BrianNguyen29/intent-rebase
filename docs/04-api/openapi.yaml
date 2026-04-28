@@ -26,11 +26,14 @@ info:
     - Orchestration dashboard and coordination view
     - Orchestration dry-run planner and batch approve/reapprove/execute
     - Single-shot orchestration runtime (HTTP + CLI)
+    - Compensation simulation: GET /intents/{intent_id}/rebase-simulation and POST /compensation-simulation/run (N4-4 bounded slice; commit fe2a1f6)
 
     ### Phase 3 Batch 3b — Forensic Replay Verification (bounded slice)
-    - Request-driven forensic bundle feasibility verification
-    - Coverage estimates for intent versions, artifacts, audit events, and policy snapshots
-    - Read-only verification/reporting only (no generation, storage, download, or replay)
+    - Request-driven forensic bundle feasibility verification with real entity counts (commit 7b05c5b)
+    - Forensic bundle generation with S3/MinIO persistence seam (POST /forensic/bundle)
+    - Forensic archive export (POST /forensic/export)
+    - Forensic bundle list and download (GET /forensic-bundles, GET /forensic-bundles/{id}/download)
+    - Read-only verification and integrity checking (no full runtime replay)
 
     ## Bounded scope note
     Phase 3 Batch 1 delivers bounded slices of the compensation engine.

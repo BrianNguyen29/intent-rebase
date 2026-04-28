@@ -1,9 +1,26 @@
 # ADR-05 — Observability Baseline
 
-**Status:** Proposed  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–P1  
+**Status:** Accepted — Partially implemented
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–P1
+
+---
+
+## Implementation Status
+
+### Implemented
+- OpenTelemetry instrumentation in intent-api, intent-service, rebase-engine
+- Prometheus metrics endpoint with intent version creation, rebase preview/apply counters and histograms
+- Structured JSON logging to stdout
+- Request ID middleware and W3C trace-context propagation
+- Bounded in-process OTEL propagation with optional OTLP export
+
+### Remaining Gaps
+- Jaeger/Zipkin integration not active
+- Full distributed tracing across Temporal gRPC boundary not implemented (Temporal SDK limitation)
+- Cross-process trace propagation via sqlx connection context not implemented
+- Loki log aggregation not configured
 
 ---
 

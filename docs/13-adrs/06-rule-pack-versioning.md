@@ -1,9 +1,23 @@
 # ADR-06 — Rule Pack Versioning
 
-**Status:** Proposed  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–P1  
+**Status:** Accepted — Partially implemented
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–P1
+
+---
+
+## Implementation Status
+
+### Implemented
+- RulePackVersion, RulePackRegistry in rebase-engine
+- TenantRulePackRepository trait with in-memory implementation
+- Rule pack versioning primitives (tenant isolation tests pass)
+
+### Remaining Gaps
+- S3 storage for rule pack blobs not implemented
+- Pack upload/management API not implemented
+- Rule evaluation engine not yet wired to pack versioning
 
 ---
 

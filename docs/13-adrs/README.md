@@ -13,12 +13,12 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 | ID | Tiêu đề | Trạng thái | Phase |
 |----|---------|-----------|-------|
 | [ADR-01](./01-runtime-adapter.md) | Runtime Adapter Selection | **Accepted** | P0–P1 |
-| [ADR-02](./02-data-plane.md) | Data Plane Architecture | **Proposed** | P0–P1 |
-| [ADR-03](./03-external-api.md) | External API Protocol | **Proposed** | P0–P1 |
-| [ADR-04](./04-event-broker.md) | Event Broker Selection | **Proposed** | P0–P1 |
-| [ADR-05](./05-observability-baseline.md) | Observability Baseline | **Proposed** | P0–P1 |
-| [ADR-06](./06-rule-pack-versioning.md) | Rule Pack Versioning | **Proposed** | P0–P1 |
-| [ADR-07](./07-approval-scope-canonicalization.md) | Approval Scope & Policy Snapshot Canonicalization | **Proposed** | P1 |
+| [ADR-02](./02-data-plane.md) | Data Plane Architecture | **Accepted — Partially implemented** | P0–P1 |
+| [ADR-03](./03-external-api.md) | External API Protocol | **Accepted — Partially implemented** | P0–P1 |
+| [ADR-04](./04-event-broker.md) | Event Broker Selection | **Accepted — Partially implemented** | P0–P1 |
+| [ADR-05](./05-observability-baseline.md) | Observability Baseline | **Accepted — Partially implemented** | P0–P1 |
+| [ADR-06](./06-rule-pack-versioning.md) | Rule Pack Versioning | **Accepted — Partially implemented** | P0–P1 |
+| [ADR-07](./07-approval-scope-canonicalization.md) | Approval Scope & Policy Snapshot Canonicalization | **Accepted — Partially implemented** | P1 |
 
 ---
 

@@ -1,9 +1,23 @@
 # ADR-04 — Event Broker Selection
 
-**Status:** Proposed (NATS recommended if no platform bias)  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–P1  
+**Status:** Accepted — Partially implemented (NATS recommended if no platform bias)
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–P1
+
+---
+
+## Implementation Status
+
+### Implemented
+- NATS JetStream configuration designed (streams for AUDIT_EVENTS, REBASE_SIGNALS, ARTIFACT_EVENTS)
+- Event publisher types defined in intent-rebase-types (EventEnvelope, PublishedEvent)
+- Trace context propagation in audit events and published event envelopes
+
+### Remaining Gaps
+- NATS JetStream producer/consumer wiring not fully implemented
+- Event streaming across service boundaries not yet active
+- Kafka fallback not implemented
 
 ---
 

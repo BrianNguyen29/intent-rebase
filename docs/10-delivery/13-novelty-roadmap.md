@@ -124,6 +124,7 @@ Before evaluating any candidate, it must pass these gates to avoid duplicating f
 
 **N4-4 Status — Bounded API Slice Delivered:**
 - `GET /intents/{intent_id}/rebase-simulation` — ✅ Delivered (Phase 3)
+- `POST /compensation-simulation/run` — ✅ Delivered (commit fe2a1f6; POST variant with request body)
 - Deterministic/stochastic mode with seed support — ✅ Delivered
 - Version ordering validation (from_version < to_version) — ✅ Delivered
 - Invalid mode fallback to deterministic — ✅ Delivered

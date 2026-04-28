@@ -1,9 +1,24 @@
 # ADR-02 — Data Plane Architecture
 
-**Status:** Proposed  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–1  
+**Status:** Accepted — Partially implemented
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–1
+
+---
+
+## Implementation Status
+
+### Implemented
+- PostgreSQL schema for intents, artifacts, dependency_graph, audit_events, approval_scope, policy_snapshots
+- S3-compatible artifact storage path scheme: `artifacts/{tenant}/{intent_id}/v{version}/`
+- Intent CRUD with version management via sqlx repository
+- Audit event append-only persistence via Postgres INSERT
+
+### Remaining Gaps
+- S3 forensic bundle storage lifecycle (Phase 3 Batch 3b uses local repository; S3 persistence is Phase 4 scope)
+- Cross-region replication for DR not configured
+- Rule pack S3 storage not yet implemented (Phase 2/3)
 
 ---
 

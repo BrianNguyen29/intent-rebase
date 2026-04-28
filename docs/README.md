@@ -1,6 +1,9 @@
-# Intent Rebase Engine — Production Kit
+# Intent Rebase Engine — Implementation Kit
 
-Bộ tài liệu này là một **implementation package ở mức production** cho dự án **Intent Rebase Engine (IRE)**: hệ thống quản lý phiên bản mục tiêu của người dùng, phát hiện thay đổi có ý nghĩa, tính tác động tới workflow/outputs/approvals/memory đang chạy, và **rebase** thực thi thay vì reset mù hoặc tiếp tục chạy theo intent cũ.
+> **Trạng thái:** Non-production / Integration-ready
+> Các tính năng được giao thực hiện theo các phase với bounded slices. Trạng thái production-ready yêu cầu Phase 3 exit gate và SRE/security sign-off còn pending.
+
+Bộ tài liệu này là một **implementation package** (chưa phải production) cho dự án **Intent Rebase Engine (IRE)**: hệ thống quản lý phiên bản mục tiêu của người dùng, phát hiện thay đổi có ý nghĩa, tính tác động tới workflow/outputs/approvals/memory đang chạy, và **rebase** thực thi thay vì reset mù hoặc tiếp tục chạy theo intent cũ.
 
 ## Mục đích của bộ tài liệu
 

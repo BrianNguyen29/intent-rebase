@@ -1,9 +1,26 @@
 # ADR-03 — External API Protocol
 
-**Status:** Proposed  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–1  
+**Status:** Accepted — Partially implemented
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–P1
+
+---
+
+## Implementation Status
+
+### Implemented
+- REST API for intent lifecycle (create/read/version), diff, rebase-preview, rebase-apply
+- OpenAPI 3.1 spec in `../../04-api/openapi.yaml`
+- GET /health, GET /ready, GET /metrics observability endpoints
+- Compensation action CRUD, approve/waive/execute, batch operations
+- Forensic verification, export, and bundle endpoints
+- Tenant-scoped query APIs
+
+### Remaining Gaps
+- Full authentication/authorization (JWT middleware implemented; external IdP integration pending)
+- Webhook delivery with retry/dead-letter not fully implemented
+- gRPC and GraphQL not yet implemented (Phase 4 scope)
 
 ---
 

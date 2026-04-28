@@ -2,9 +2,11 @@
 
 **Exit Gate:** Phase 0 complete khi tất cả items bên dưới checked và có evidence.
 
-**Trạng thái:** `✓ Complete`  
-**Phase:** Phase 0  
+**Trạng thái:** `⚠️ Phase 0 Foundations Complete (Evidence Verification Pending)`
+**Phase:** Phase 0
 **Target Duration:** 2–4 tuần
+
+> **Note:** Phase 0 foundational documents and scaffolding are in place. However, formal evidence verification (PR links, external sign-offs) may be pending or documented with placeholder links. See individual items for evidence status.
 
 ---
 
@@ -103,32 +105,32 @@
 [ ] ADR-02: Data Plane Architecture (Postgres + S3)
     Evidence:
     - Doc: ../../13-adrs/02-data-plane.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 
 [ ] ADR-03: External API Protocol (REST + Webhooks)
     Evidence:
     - Doc: ../../13-adrs/03-external-api.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 
 [ ] ADR-04: Event Broker Selection (NATS or Kafka)
     Evidence:
     - Doc: ../../13-adrs/04-event-broker.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 
 [ ] ADR-05: Observability Baseline (OpenTelemetry)
     Evidence:
     - Doc: ../../13-adrs/05-observability-baseline.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 
 [ ] ADR-06: Rule Pack Versioning
     Evidence:
     - Doc: ../../13-adrs/06-rule-pack-versioning.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 
 [ ] ADR-07: Approval Scope & Policy Snapshot Canonicalization
     Evidence:
     - Doc: ../../13-adrs/07-approval-scope-canonicalization.md
-    - Status: Accepted
+    - Status: Accepted — Partially implemented
 ```
 
 ---
