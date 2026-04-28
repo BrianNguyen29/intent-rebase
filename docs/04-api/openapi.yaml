@@ -1860,6 +1860,113 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /approval-requests/{approval_request_id}/expire:
+    post:
+      tags:
+        - approvals
+      summary: Expire an approval request
+      description: |
+        Manually expires a pending approval request.
+
+        **Phase 2b bounded slice:** Only updates status to expired and emits ApprovalExpired audit event.
+        Does NOT trigger re-approval workflow or resume/re-trigger apply.
+
+        **No automatic expiry:** This is a manual transition only. No background worker
+        or automatic expiry machinery exists in this slice.
+      operationId: expireApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpireApprovalRequestBody'
+      responses:
+        '200':
+          description: Approval request expired successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestResponse'
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Approval request is not in pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approval-requests/{approval_request_id}/revalidate:
+    get:
+      tags:
+        - approvals
+      summary: Check if approval remains valid
+      description: |
+        Phase 2b bounded read-only slice: Compares approval-basis snapshot scope_hash
+        with latest snapshot scope_hash for the same intent to determine if approval
+        remains valid.
+
+        **Comparison strategy:**
+        - Get the policy snapshot for the approval's `intent_version_from` (the approval basis)
+        - Get the latest policy snapshot for the same intent
+        - Compare scope_hash values: if different, approval is no longer valid
+
+        **Returns 200 with valid=false** if latest snapshot is missing (policy not yet computed
+        for current intent version) - this is NOT a 404, as the approval still exists
+        but validity cannot be determined without a latest snapshot.
+
+        **Returns 404 if:**
+        - Approval request not found
+        - Approval basis snapshot not found (should exist if approval exists)
+
+        **This endpoint is READ-ONLY** - it does not modify approval status or trigger workflows.
+      operationId: revalidateApprovalRequest
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Approval request ID
+      responses:
+        '200':
+          description: Revalidation check completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRevalidationResponse'
+        '404':
+          description: Approval request or approval basis snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /approval-requests/trigger-reapproval:
     post:
       tags:
@@ -4173,6 +4280,15 @@ components:
           nullable: true
           description: Optional notes from the rejector
 
+    ExpireApprovalRequestBody:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+          description: |
+            Optional reason for expiration. Defaults to "Approval time limit exceeded" if not provided.
+
     ApprovalRequestResponse:
       type: object
       required: [id, intent_id, status, resolved_by]
@@ -4249,6 +4365,38 @@ components:
         reason:
           type: string
           description: Human-readable reason for re-approval
+
+    ApprovalRevalidationResponse:
+      type: object
+      required: [approval_id, valid, reason, approval_basis_scope_hash, revalidation_required, intent_id, approval_basis_version]
+      properties:
+        approval_id:
+          type: string
+          format: uuid
+          description: ID of the approval request being revalidated
+        valid:
+          type: boolean
+          description: Whether the approval scope remains valid (scope_hash unchanged)
+        reason:
+          type: string
+          description: Human-readable reason for invalidation status
+        approval_basis_scope_hash:
+          type: string
+          description: The scope_hash at the time of original approval
+        current_scope_hash:
+          type: string
+          nullable: true
+          description: The current latest scope_hash for this intent (null if no latest snapshot exists)
+        revalidation_required:
+          type: boolean
+          description: Whether re-approval would be required (always true when valid=false)
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID this approval is for
+        approval_basis_version:
+          type: integer
+          description: Intent version when approval was originally granted
 
     # ----- Orchestration Dashboard (Phase 3 Batch 1) -----
     CompensationActionStatusCounts:
