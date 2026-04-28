@@ -1399,6 +1399,33 @@ pub struct RebaseSimulationQuery {
     pub seed: Option<u64>,
 }
 
+/// Request body for POST /compensation-simulation/run endpoint.
+///
+/// **N4-4 scope:** Bounded read-only compensation simulation using CompensationSimulator.
+/// This is READ-ONLY simulation - does not execute real compensation actions or mutate state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationSimulationRequest {
+    /// Intent ID to simulate compensation for (required)
+    pub intent_id: Uuid,
+    /// Tenant ID to scope the query (required)
+    pub tenant_id: Uuid,
+    /// Source intent version before rebase (required)
+    pub from_version: i32,
+    /// Target intent version after rebase (required)
+    pub to_version: i32,
+    /// Simulation mode: "deterministic" (default) or "stochastic"
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// RNG seed for stochastic mode reproducibility (optional, only used when mode=stochastic)
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Optional list of specific side effect IDs to simulate.
+    /// If provided, only these side effects are included in the simulation.
+    /// If not provided, all side effects for the intent are simulated.
+    #[serde(default)]
+    pub side_effect_ids: Option<Vec<Uuid>>,
+}
+
 /// GET /intents/{intent_id}/rebase-simulation - Run compensation simulation for a rebase
 ///
 /// **N4-4 scope:** Read-only mock simulation using CompensationSimulator.
@@ -1423,7 +1450,19 @@ async fn rebase_simulation(
         .await
         .map_err(ApiErrorResponse)?;
 
-    // Step 1b: Validate version ordering — from_version must be less than to_version
+    // Step 1b: Validate version bounds — both versions must be >= 1
+    if query.from_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("from_version ({}) must be >= 1", query.from_version),
+        )));
+    }
+    if query.to_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("to_version ({}) must be >= 1", query.to_version),
+        )));
+    }
+
+    // Step 1c: Validate version ordering — from_version must be less than to_version
     if query.from_version >= query.to_version {
         return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
             format!(
@@ -1481,6 +1520,118 @@ async fn rebase_simulation(
     let simulator = compensation_service::CompensationSimulator::with_config(sim_config);
     let report = simulator
         .simulate_side_effects(&side_effects, &rebase_context, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(report))
+}
+
+/// POST /compensation-simulation/run - Run compensation simulation for a rebase
+///
+/// **N4-4 scope:** Read-only mock simulation using CompensationSimulator.
+/// Fetches side effects for the intent, constructs a RebaseContext, and runs
+/// simulation to produce a SimulationReport with predicted outcomes.
+///
+/// This is the POST variant of the GET /intents/{intent_id}/rebase-simulation endpoint,
+/// accepting request body instead of query parameters.
+///
+/// **Mode behavior:**
+/// - `deterministic` (default): Valid strategy+feasibility combos always succeed
+/// - `stochastic`: Outcomes are probabilistic based on effect class success rates
+///
+/// **This endpoint is READ-ONLY** - it only simulates compensation outcomes
+/// using mock executors. It does not execute real compensation actions.
+async fn compensation_simulation_run(
+    State(state): State<AppState>,
+    Json(request): Json<CompensationSimulationRequest>,
+) -> Result<Json<compensation_service::SimulationReport>, ApiErrorResponse> {
+    // Step 1: Get intent head to verify intent exists and obtain workflow_id
+    let intent_head = state
+        .service
+        .get_intent_head(request.intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 1b: Validate version bounds — both versions must be >= 1
+    if request.from_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("from_version ({}) must be >= 1", request.from_version),
+        )));
+    }
+    if request.to_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("to_version ({}) must be >= 1", request.to_version),
+        )));
+    }
+
+    // Step 1c: Validate version ordering — from_version must be less than to_version
+    if request.from_version >= request.to_version {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!(
+                "from_version ({}) must be less than to_version ({})",
+                request.from_version, request.to_version
+            ),
+        )));
+    }
+
+    // Step 2: Fetch side effects for this intent and tenant
+    let all_side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(request.intent_id, request.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 2b: Filter by side_effect_ids if provided
+    let side_effects = if let Some(ref ids) = request.side_effect_ids {
+        all_side_effects
+            .into_iter()
+            .filter(|se| ids.contains(&se.id))
+            .collect()
+    } else {
+        all_side_effects
+    };
+
+    // Step 3: Construct RebaseContext using intent head's workflow_id
+    let rebase_context = compensation_service::RebaseContext::new(
+        request.intent_id,
+        request.from_version,
+        request.to_version,
+        intent_head.intent.workflow_id,
+    );
+
+    // Step 4: Create simulator config based on mode query param
+    let sim_config = match request.mode.as_deref() {
+        Some("stochastic") => {
+            if let Some(seed) = request.seed {
+                compensation_service::SimulationConfig::stochastic_seed(seed)
+            } else {
+                // Stochastic mode without seed uses system entropy
+                compensation_service::SimulationConfig::stochastic_seed(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0),
+                )
+            }
+        }
+        Some("deterministic") | None => {
+            // Default to deterministic mode
+            compensation_service::SimulationConfig::deterministic()
+        }
+        Some(invalid_mode) => {
+            // Invalid mode defaults to deterministic (safe fallback)
+            tracing::warn!(
+                "Invalid simulation mode '{}', defaulting to deterministic",
+                invalid_mode
+            );
+            compensation_service::SimulationConfig::deterministic()
+        }
+    };
+
+    // Step 5: Create simulator and run simulation
+    let simulator = compensation_service::CompensationSimulator::with_config(sim_config);
+    let report = simulator
+        .simulate_side_effects(&side_effects, &rebase_context, request.tenant_id)
         .await
         .map_err(ApiErrorResponse)?;
 
@@ -5335,6 +5486,11 @@ pub fn build_router(
             "/intents/{intent_id}/rebase-simulation",
             get(rebase_simulation),
         )
+        // N4-4 POST: Compensation simulation run endpoint (Phase 3 Batch 1 bounded simulation slice)
+        .route(
+            "/compensation-simulation/run",
+            post(compensation_simulation_run),
+        )
         // Orchestration dashboard endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/{intent_id}/orchestration-dashboard",
@@ -5602,6 +5758,11 @@ pub fn build_router_with_jwt_auth(
         .route(
             "/intents/{intent_id}/rebase-simulation",
             get(rebase_simulation),
+        )
+        // N4-4 POST: Compensation simulation run endpoint (Phase 3 Batch 1 bounded simulation slice)
+        .route(
+            "/compensation-simulation/run",
+            post(compensation_simulation_run),
         )
         // Orchestration dashboard endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
@@ -11035,6 +11196,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rebase_simulation_invalid_version_bounds() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Test with from_version = 0 (invalid, must be >= 1)
+        let query = RebaseSimulationQuery {
+            tenant_id,
+            from_version: 0,
+            to_version: 2,
+            mode: None,
+            seed: None,
+        };
+
+        let err_response = rebase_simulation(
+            State(state.clone()),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .unwrap_err();
+
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test with to_version = 0 (invalid, must be >= 1)
+        let query = RebaseSimulationQuery {
+            tenant_id,
+            from_version: 1,
+            to_version: 0,
+            mode: None,
+            seed: None,
+        };
+
+        let err_response = rebase_simulation(
+            State(state.clone()),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .unwrap_err();
+
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test with negative versions
+        let query = RebaseSimulationQuery {
+            tenant_id,
+            from_version: -1,
+            to_version: 2,
+            mode: None,
+            seed: None,
+        };
+
+        let err_response =
+            rebase_simulation(State(state), Path(intent_id), axum::extract::Query(query))
+                .await
+                .unwrap_err();
+
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn test_rebase_simulation_invalid_mode_fallback() {
         use intent_rebase_types::{
             AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
@@ -11146,6 +11459,682 @@ mod tests {
             result.config.mode,
             compensation_service::SimulationMode::Deterministic
         );
+    }
+
+    // =========================================================================
+    // N4-4 POST: Compensation Simulation Run Tests (Phase 3 Batch 1 bounded simulation slice)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_empty_side_effects() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Run simulation with POST request (no side effects)
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 1,
+            to_version: 2,
+            mode: Some("deterministic".to_string()),
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request))
+            .await
+            .expect("Should run simulation");
+
+        // With no side effects, report should have 0 total actions
+        assert_eq!(result.total_actions, 0);
+        assert_eq!(result.successful_count, 0);
+        assert_eq!(result.failed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_with_side_effects() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Record a side effect
+        state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S1InternalReversible,
+                "test_effect",
+                "test_target",
+            )
+            .await
+            .expect("Should record side effect");
+
+        // Run simulation with POST request
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 1,
+            to_version: 2,
+            mode: Some("deterministic".to_string()),
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request))
+            .await
+            .expect("Should run simulation");
+
+        // Report should have 1 action and it should succeed (S1 + Automatic)
+        assert_eq!(result.total_actions, 1);
+        assert_eq!(result.successful_count, 1);
+        assert_eq!(result.failed_count, 0);
+        assert!(result.outcomes[0].predicted_success);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_invalid_version_ordering() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Run simulation with reversed version order
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 2,
+            to_version: 1, // Invalid: from > to
+            mode: None,
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request)).await;
+
+        // Should return error for invalid version ordering
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_invalid_version_bounds() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Test with from_version = 0 (invalid, must be >= 1)
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 0,
+            to_version: 2,
+            mode: None,
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state.clone()), Json(request)).await;
+
+        // Should return error for invalid version bounds
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test with to_version = 0 (invalid, must be >= 1)
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 1,
+            to_version: 0,
+            mode: None,
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state.clone()), Json(request)).await;
+
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test with negative versions
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: -1,
+            to_version: 2,
+            mode: None,
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request)).await;
+
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_intent_not_found() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let non_existent_intent_id = Uuid::new_v4();
+
+        let request = CompensationSimulationRequest {
+            intent_id: non_existent_intent_id,
+            tenant_id,
+            from_version: 1,
+            to_version: 2,
+            mode: None,
+            seed: None,
+            side_effect_ids: None,
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request)).await;
+
+        // Should return error for non-existent intent
+        let err_response = result.unwrap_err();
+        let response = err_response.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_compensation_simulation_run_with_side_effect_ids_filter() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
+            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
+            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+        };
+
+        fn create_test_payload() -> IntentPayload {
+            IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test intent".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "testing".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec!["item1".to_string()],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Medium,
+                    urgency: Urgency::Medium,
+                    confidence: 0.9,
+                },
+            }
+        }
+
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let workflow_id = Uuid::new_v4();
+
+        // Create intent
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Create version 2
+        let version_request = CreateVersionRequest {
+            payload: create_test_payload(),
+            change_reason: "v2".to_string(),
+            change_channel: ChangeChannel::UserEdit,
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+        };
+        state
+            .service
+            .create_version(intent_id, version_request, None, None)
+            .await
+            .unwrap();
+
+        // Record two side effects
+        let se1 = state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S1InternalReversible,
+                "test_effect_1",
+                "test_target",
+            )
+            .await
+            .expect("Should record side effect 1");
+
+        let _se2 = state
+            .side_effect_service
+            .record_side_effect(
+                tenant_id,
+                intent_id,
+                1,
+                compensation_service::SideEffectClass::S2ExternalReversible,
+                "test_effect_2",
+                "test_target",
+            )
+            .await
+            .expect("Should record side effect 2");
+
+        // Run simulation with only first side effect ID
+        let request = CompensationSimulationRequest {
+            intent_id,
+            tenant_id,
+            from_version: 1,
+            to_version: 2,
+            mode: Some("deterministic".to_string()),
+            seed: None,
+            side_effect_ids: Some(vec![se1.id]), // Only simulate se1
+        };
+
+        let result = compensation_simulation_run(State(state), Json(request))
+            .await
+            .expect("Should run simulation");
+
+        // Report should only have 1 action (se1 only)
+        assert_eq!(result.total_actions, 1);
+        // S1 + Automatic = success
+        assert_eq!(result.successful_count, 1);
+        assert_eq!(result.failed_count, 0);
     }
 
     // =========================================================================

@@ -679,6 +679,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SimulationReport'
+        '400':
+          description: Invalid request - bad version bounds or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /compensation-simulation/run:
+    post:
+      tags:
+        - compensation
+      summary: Run compensation simulation for a rebase (POST variant)
+      description: |
+        **N4-4 scope (bounded simulation slice):** Read-only mock simulation using
+        CompensationSimulator. Fetches side effects for the intent, constructs a
+        RebaseContext, and runs simulation to produce a SimulationReport with
+        predicted outcomes.
+
+        This is the POST variant of GET /intents/{intent_id}/rebase-simulation,
+        accepting request body instead of query parameters. Provides the same
+        functionality with a more convenient request format.
+
+        **Mode behavior:**
+        - `deterministic` (default): Valid strategy+feasibility combos always succeed
+        - `stochastic`: Outcomes are probabilistic based on effect class success rates
+
+        **This endpoint is READ-ONLY** - it only simulates compensation outcomes
+        using mock executors. It does not execute real compensation actions.
+      operationId: compensationSimulationRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompensationSimulationRequest'
+      responses:
+        '200':
+          description: Simulation completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationReport'
+        '400':
+          description: Invalid request - bad version ordering or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: Intent not found
           content:
@@ -5177,6 +5237,44 @@ components:
         completed_at:
           type: string
           format: date-time
+
+    CompensationSimulationRequest:
+      type: object
+      required: [intent_id, tenant_id, from_version, to_version]
+      description: |
+        **N4-4 scope:** Request body for POST /compensation-simulation/run endpoint.
+        Bounded read-only compensation simulation using CompensationSimulator.
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to simulate compensation for
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID to scope the query
+        from_version:
+          type: integer
+          minimum: 1
+          description: Source intent version before rebase (must be less than to_version)
+        to_version:
+          type: integer
+          minimum: 1
+          description: Target intent version after rebase (must be greater than from_version)
+        mode:
+          type: string
+          enum: [deterministic, stochastic]
+          default: deterministic
+          description: Simulation mode - "deterministic" (default) or "stochastic"
+        seed:
+          type: integer
+          description: RNG seed for stochastic mode reproducibility (optional, only used when mode=stochastic)
+        side_effect_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Optional list of specific side effect IDs to simulate. If provided, only these side effects are included.
 
     # ----- Forensic Verification Schemas (Phase 3 Batch 3b) -----
     ForensicVerificationRequest:
