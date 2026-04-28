@@ -89,6 +89,7 @@ This project distinguishes between **non-production feature completion** and **p
 
 | Area | Status | Blocking |
 |------|--------|----------|
+| Approval invalidation (bounded) | ✅ Delivered | `trigger_reapproval` cancels Approved approvals; `rebase_apply` BlockedManualReview cancels Approved approvals; `Cancelled` status used as substitute for `Invalidated` |
 | Phase 2b exit gate | ✅ Closed | All three reviewers approved (name/date pending documentation) |
 | Side effect rollback record (compensation applied, result) | ✅ Delivered | Bounded: schema + repository for compensation applied/result fields |
 | Compensation planner (full — bounded delivered) | ✅ Delivered | Bounded planner: generates compensation plans from side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic (per class routing); fail-closed on unsupported strategy classes |

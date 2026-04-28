@@ -2397,7 +2397,7 @@ pub struct TriggerReapprovalResponse {
 ///
 /// **Scope limitations**:
 /// - Does NOT send notifications (Phase 3 external notification system)
-/// - Does NOT auto-invalidate existing approvals
+/// - Cancels existing Approved approvals for same tenant+intent (non-Approved statuses unaffected)
 /// - Does NOT trigger rebase or orchestration
 /// - Does NOT claim production readiness
 ///

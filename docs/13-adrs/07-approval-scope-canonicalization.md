@@ -19,8 +19,10 @@
 > - `GET /approval-requests/{id}/revalidate` — read-only scope comparison ✅
 > - `POST /approval-requests/{id}/expire` — manual expiry transition ✅
 > - `POST /approval-requests/trigger-reapproval` — bounded re-approval trigger ✅
-> - **Bounded invalidation**: `POST /approval-requests/trigger-reapproval` now cancels
+> - **Bounded invalidation**: `POST /approval-requests/trigger-reapproval` cancels
 >   existing `Approved` approvals when creating a replacement `Pending` request ✅
+>   Similarly, `rebase_apply` with `BlockedManualReview` outcome cancels existing
+>   `Approved` approvals for the same tenant+intent ✅
 >
 > **Bounded Invalidation Approach:**
 > - Uses `Cancelled` status as a substitute for `Invalidated` (no DB migration required)

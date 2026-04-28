@@ -1982,11 +1982,16 @@ paths:
         - If `original_scope_hash != current_scope_hash`: Creates new pending approval request
         - If `original_scope_hash == current_scope_hash`: Returns 400 Bad Request (no scope drift)
 
+        **Bounded invalidation:**
+        - When scope drift is detected, existing `Approved` approvals for the same tenant+intent
+          are cancelled (status → `Cancelled`) and a new `Pending` approval request is created.
+        - `Pending`, `Rejected`, `Expired`, and `Cancelled` approvals are not affected.
+
         **Scope limitations:**
         - Does NOT send notifications (Phase 3 external notification system)
-        - Does NOT auto-invalidate existing approvals
         - Does NOT trigger rebase or orchestration
         - Does NOT claim production readiness
+        - See ADR-07 for bounded implementation notes on approval cancellation
 
         **Use case:** Called by external systems that detect scope drift and need to
         trigger a new approval cycle while preserving audit trail.
