@@ -102,6 +102,14 @@ impl Default for InMemoryIntentRepository {
     }
 }
 
+/// Generates a default tenant ID for in-memory repository when no explicit tenant context is provided.
+///
+/// This is a fallback for Phase 1 in-memory repository only.
+/// In production with SQL-backed repository, tenant context should be extracted from auth middleware.
+fn generate_default_tenant_id() -> Uuid {
+    Uuid::new_v4()
+}
+
 #[async_trait]
 impl IntentRepository for InMemoryIntentRepository {
     async fn create_intent_tx(
@@ -110,7 +118,10 @@ impl IntentRepository for InMemoryIntentRepository {
     ) -> Result<CreateIntentResponse, IntentRebaseError> {
         let intent_id = Uuid::new_v4();
         let now = Utc::now();
-        let tenant_id = Uuid::new_v4(); // TODO: extract from auth context
+        // Use explicit tenant_id from request if provided; otherwise generate a default.
+        // In-memory repository has no auth context to extract tenant from.
+        // SQL-backed repository should use TenantResolver from sqlx_repository module.
+        let tenant_id = request.tenant_id.unwrap_or_else(generate_default_tenant_id);
 
         // Create the intent document
         let intent = Intent {
@@ -2073,5 +2084,117 @@ mod tests {
         // Verify v1.parent_version_id is still None
         let v1_after = service.get_version(intent_id, 1).await.unwrap();
         assert_eq!(v1_after.parent_version_id, None);
+    }
+
+    // === Tenant Context Tests ===
+
+    #[tokio::test]
+    async fn test_create_intent_preserves_explicit_tenant_id() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let explicit_tenant_id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let request = CreateIntentRequest {
+            tenant_id: Some(explicit_tenant_id),
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let result = service.create_intent(request).await;
+        assert!(result.is_ok());
+
+        let head = service
+            .get_intent_head(result.unwrap().intent_id)
+            .await
+            .unwrap();
+        // Explicit tenant_id must be preserved, not replaced with random UUID
+        assert_eq!(head.intent.tenant_id, explicit_tenant_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_intent_fallback_tenant_id_is_valid() {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        // Request with no explicit tenant_id (None)
+        let request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let result = service.create_intent(request).await;
+        assert!(result.is_ok());
+
+        let head = service
+            .get_intent_head(result.unwrap().intent_id)
+            .await
+            .unwrap();
+        // Fallback tenant_id must be non-nil and valid UUID
+        assert_ne!(head.intent.tenant_id, Uuid::nil());
+    }
+
+    #[tokio::test]
+    async fn test_create_intent_none_tenant_id_differs_each_call() {
+        // Verify that each call without explicit tenant_id gets a unique UUID
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let service = IntentService::new(repo.clone());
+
+        let request1 = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test1".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let request2 = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id: Uuid::new_v4(),
+            source_refs: vec![SourceRef {
+                ref_type: "spec".to_string(),
+                id: "spec://test2".to_string(),
+            }],
+            payload: create_test_payload(),
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test-user".to_string(),
+            },
+            tags: vec!["test".to_string()],
+        };
+
+        let result1 = service.create_intent(request1).await.unwrap();
+        let result2 = service.create_intent(request2).await.unwrap();
+
+        let head1 = service.get_intent_head(result1.intent_id).await.unwrap();
+        let head2 = service.get_intent_head(result2.intent_id).await.unwrap();
+
+        // Each intent without explicit tenant_id should get a unique tenant_id
+        assert_ne!(head1.intent.tenant_id, head2.intent.tenant_id);
     }
 }
