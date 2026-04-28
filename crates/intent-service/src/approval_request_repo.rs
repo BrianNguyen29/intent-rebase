@@ -167,6 +167,21 @@ pub trait ApprovalRequestRepository: Send + Sync {
         cancelled_by: &str,
         reason: &str,
     ) -> Result<usize, IntentRebaseError>;
+
+    /// Cancel specific Approved approval requests by their IDs (Slice 1 bounded slice).
+    ///
+    /// Used by classifier-driven targeted cancellation in rebase_apply.
+    /// Only cancels approvals that are BOTH in the provided IDs list AND in Approved status.
+    /// Other statuses (pending, rejected, expired, cancelled) are not affected.
+    ///
+    /// Returns the number of cancelled approval requests.
+    async fn cancel_approved_by_ids(
+        &self,
+        approval_ids: &[Uuid],
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError>;
 }
 
 /// In-memory approval request repository for Phase 2b bounded slice testing
@@ -398,6 +413,35 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
 
         for request in requests.values_mut() {
             if request.intent_id == intent_id
+                && request.tenant_id == tenant_id
+                && request.status == ApprovalRequestStatus::Approved
+            {
+                request.status = ApprovalRequestStatus::Cancelled;
+                request.updated_at = now;
+                request.resolved_at = Some(now);
+                request.resolved_by = Some(cancelled_by.to_string());
+                request.resolution_notes = Some(reason.to_string());
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    async fn cancel_approved_by_ids(
+        &self,
+        approval_ids: &[Uuid],
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        let mut requests = self.requests.write().await;
+        let now = Utc::now();
+        let mut count = 0;
+        let id_set: std::collections::HashSet<_> = approval_ids.iter().collect();
+
+        for request in requests.values_mut() {
+            if id_set.contains(&request.id)
                 && request.tenant_id == tenant_id
                 && request.status == ApprovalRequestStatus::Approved
             {
@@ -805,6 +849,61 @@ impl ApprovalRequestRepository for SqlxApprovalRequestRepository {
         .map_err(|e| {
             IntentRebaseError::StorageError(format!(
                 "cancel approved approval requests by intent: {}",
+                e
+            ))
+        })?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn cancel_approved_by_ids(
+        &self,
+        approval_ids: &[Uuid],
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        if approval_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now();
+
+        // Build the query with a IN clause for the IDs using array positioning
+        // sqlx uses 1-indexed positional parameters
+        // Order: $1=now, $2=cancelled_by, $3=reason, then IDs, then tenant_id
+        let num_ids = approval_ids.len();
+        let id_placeholders: Vec<String> = (1..=num_ids)
+            .map(|i| format!("${}", i + 3)) // IDs start at $4
+            .collect();
+        let in_clause = format!("({})", id_placeholders.join(", "));
+        // tenant_id comes after all IDs: $ (3 + num_ids + 1)
+        let tenant_idx = 3 + num_ids + 1;
+
+        let query = format!(
+            r#"
+            UPDATE approval_requests
+            SET status = 'cancelled',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE id IN {} AND tenant_id = ${} AND status = 'approved'
+            "#,
+            in_clause, tenant_idx
+        );
+
+        // Build the query with sqlx - order: now, cancelled_by, reason, ids..., tenant_id
+        let mut q = sqlx::query(&query);
+        q = q.bind(now).bind(cancelled_by).bind(reason);
+        for id in approval_ids {
+            q = q.bind(id);
+        }
+        q = q.bind(tenant_id);
+
+        let result = q.execute(&self.pool).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "cancel specific approved approval requests by ids: {}",
                 e
             ))
         })?;

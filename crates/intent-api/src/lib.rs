@@ -13,7 +13,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use graph_service::GraphService;
 use intent_rebase_types::{
-    get_current_trace_context, AffectedItemsPreview, CreateGraphEdgeRequest,
+    get_current_trace_context, AffectedItemsPreview, AffectedItemsStatus, CreateGraphEdgeRequest,
     CreateGraphNodeRequest, CreateIntentRequest, CreateIntentResponse, CreateVersionRequest,
     CreateVersionResponse, DiffRequest, EdgeType, GraphEdge, GraphNode, IntentHeadResponse,
     IntentRebaseError, IntentVersion, ListVersionsResponse, NodeType, PolicySnapshot,
@@ -23,7 +23,8 @@ use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{
-    DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier, SectionDecision,
+    classify_approvals, DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier,
+    SectionDecision,
 };
 use rebase_orchestrator::{
     apply_pipeline::ApplyOutcome, checkpoint_aligner::CheckpointAlignmentOutcome,
@@ -1330,22 +1331,143 @@ async fn rebase_apply(
             .await
         {
             Ok(created) => {
-                // Phase 2b bounded invalidation: cancel any existing Approved approvals
-                // for this intent+tenant when creating a new Pending request.
-                // Only Approved approvals are cancelled; Pending/Rejected/Expired are not affected.
-                let _cancelled_count = cancel_existing_approved_and_audit(
-                    &state.approval_request_repo,
-                    &state.audit_service,
-                    &state.event_publisher,
-                    intent_id,
-                    intent_head.intent.tenant_id,
-                    actor_id,
-                    request.from_version,
-                    request.to_version,
-                    &format!("{:?}", plan.decision_class),
-                    created.id,
-                )
-                .await;
+                // Slice 1 bounded targeted cancellation: Use classifier when graph data is available
+                //
+                // Check if graph data is available for targeted cancellation:
+                // - affected_items.status == Available indicates graph classification succeeded
+                // - Non-empty affected_approvals means we have specific approvals to target
+                //
+                // Fallback to flat cancellation when:
+                // - Graph data is unavailable (status == Unavailable)
+                // - No affected approvals identified
+                // - Classifier returns empty stale_ids
+                //
+                // This ensures no approvals remain valid due to missing graph/classifier data.
+                let use_classifier = plan.affected_items.status == AffectedItemsStatus::Available
+                    && !plan.affected_items.affected_approvals.is_empty();
+
+                if use_classifier {
+                    // Get all current approval IDs for the intent to pass to classifier
+                    match state
+                        .approval_request_repo
+                        .list_by_intent(intent_id, intent_head.intent.tenant_id)
+                        .await
+                    {
+                        Ok(current_approvals) => {
+                            // Extract approval IDs as strings for the classifier
+                            let current_approval_ids: Vec<String> =
+                                current_approvals.iter().map(|a| a.id.to_string()).collect();
+
+                            // Classify approvals to determine which are stale
+                            let classification = classify_approvals(&plan, &current_approval_ids);
+
+                            if !classification.stale_ids.is_empty() {
+                                // Use targeted cancellation with classifier-determined stale_ids
+                                tracing::debug!(
+                                    "Classifier identified {} stale approvals for targeted cancellation",
+                                    classification.stale_ids.len()
+                                );
+                                let cancelled_count = cancel_specific_approved_and_audit(
+                                    &state.approval_request_repo,
+                                    &state.audit_service,
+                                    &state.event_publisher,
+                                    &classification.stale_ids,
+                                    intent_id,
+                                    intent_head.intent.tenant_id,
+                                    actor_id,
+                                    request.from_version,
+                                    request.to_version,
+                                    &format!("{:?}", plan.decision_class),
+                                    created.id,
+                                )
+                                .await;
+
+                                // Fall back to flat cancellation if targeted cancellation cancelled
+                                // fewer approvals than expected. This handles the case where
+                                // external_ref.ref_id didn't correlate correctly with ApprovalRequest.id
+                                // (e.g., production graph not populated or ID mapping incomplete).
+                                if cancelled_count < classification.stale_ids.len() {
+                                    tracing::warn!(
+                                        "Targeted cancellation cancelled {} of {} expected approvals, falling back to flat cancellation",
+                                        cancelled_count,
+                                        classification.stale_ids.len()
+                                    );
+                                    let _fallback_count = cancel_existing_approved_and_audit(
+                                        &state.approval_request_repo,
+                                        &state.audit_service,
+                                        &state.event_publisher,
+                                        intent_id,
+                                        intent_head.intent.tenant_id,
+                                        actor_id,
+                                        request.from_version,
+                                        request.to_version,
+                                        &format!("{:?}", plan.decision_class),
+                                        created.id,
+                                    )
+                                    .await;
+                                }
+                            } else {
+                                // Classifier returned no stale_ids - fall back to flat cancellation
+                                // to ensure no approvals remain valid due to missing data
+                                tracing::debug!(
+                                    "Classifier returned empty stale_ids, falling back to flat cancellation"
+                                );
+                                let _cancelled_count = cancel_existing_approved_and_audit(
+                                    &state.approval_request_repo,
+                                    &state.audit_service,
+                                    &state.event_publisher,
+                                    intent_id,
+                                    intent_head.intent.tenant_id,
+                                    actor_id,
+                                    request.from_version,
+                                    request.to_version,
+                                    &format!("{:?}", plan.decision_class),
+                                    created.id,
+                                )
+                                .await;
+                            }
+                        }
+                        Err(e) => {
+                            // Failed to list approvals - fall back to flat cancellation
+                            tracing::warn!(
+                                "Failed to list approvals for classifier, falling back to flat cancellation: {:?}",
+                                e
+                            );
+                            let _cancelled_count = cancel_existing_approved_and_audit(
+                                &state.approval_request_repo,
+                                &state.audit_service,
+                                &state.event_publisher,
+                                intent_id,
+                                intent_head.intent.tenant_id,
+                                actor_id,
+                                request.from_version,
+                                request.to_version,
+                                &format!("{:?}", plan.decision_class),
+                                created.id,
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    // Graph data unavailable or no affected approvals - use flat cancellation fallback
+                    // This preserves existing behavior when classifier input is missing/uncertain
+                    tracing::debug!(
+                        "Graph data unavailable for targeted cancellation, using flat cancellation fallback"
+                    );
+                    let _cancelled_count = cancel_existing_approved_and_audit(
+                        &state.approval_request_repo,
+                        &state.audit_service,
+                        &state.event_publisher,
+                        intent_id,
+                        intent_head.intent.tenant_id,
+                        actor_id,
+                        request.from_version,
+                        request.to_version,
+                        &format!("{:?}", plan.decision_class),
+                        created.id,
+                    )
+                    .await;
+                }
             }
             Err(e) => {
                 tracing::warn!("Failed to create approval_request record: {:?}", e);
@@ -1738,6 +1860,109 @@ async fn cancel_existing_approved_and_audit(
         Ok(count) => count,
         Err(e) => {
             tracing::warn!("Failed to cancel existing approved approvals: {:?}", e);
+            return 0;
+        }
+    };
+
+    if cancelled_count > 0 {
+        let cancel_audit_payload = intent_rebase_types::ApprovalCancelledAuditPayload {
+            intent_id,
+            cancelled_version_from: from_version,
+            cancelled_version_to: to_version,
+            decision_class: decision_class.to_string(),
+            cancelled_by: actor_id.to_string(),
+            cancellation_reason,
+            cancelled_count,
+        };
+
+        let audit_payload_for_publish = cancel_audit_payload.clone();
+
+        if let Err(e) = audit_service
+            .record_approval_cancelled(
+                tenant_id,
+                actor_id,
+                intent_id,
+                cancel_audit_payload,
+                get_current_trace_context(),
+            )
+            .await
+        {
+            tracing::warn!("Failed to record ApprovalCancelled audit event: {:?}", e);
+        } else {
+            publish_audit_event(
+                event_publisher,
+                tenant_id,
+                "ApprovalCancelled",
+                &serde_json::to_value(audit_payload_for_publish)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+            )
+            .await;
+        }
+    }
+
+    cancelled_count
+}
+
+/// Cancel specific Approved approvals by their IDs and emit cancellation audit event.
+///
+/// Slice 1 bounded targeted cancellation: Uses classifier-driven stale_ids to cancel
+/// only the specific approvals that are affected by the rebase, rather than cancelling
+/// all approved approvals for the intent.
+///
+/// Only cancels approvals that are BOTH in the provided IDs AND in Approved status.
+/// Other statuses (pending, rejected, expired, cancelled) are not affected.
+///
+/// Returns the number of cancelled approvals (0 if none or on error).
+///
+/// Best-effort: errors are logged but do not fail the caller.
+async fn cancel_specific_approved_and_audit(
+    approval_repo: &Arc<dyn intent_service::ApprovalRequestRepository>,
+    audit_service: &Arc<dyn intent_rebase_types::AuditRepository>,
+    event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    stale_ids: &[String],
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    actor_id: &str,
+    from_version: i32,
+    to_version: i32,
+    decision_class: &str,
+    new_approval_id: Uuid,
+) -> usize {
+    if stale_ids.is_empty() {
+        return 0;
+    }
+
+    // Parse the stale_ids from strings to Uuids
+    // If any ID fails to parse, log and skip it
+    let parsed_ids: Vec<Uuid> = stale_ids
+        .iter()
+        .filter_map(|id_str| {
+            Uuid::parse_str(id_str)
+                .map_err(|e| {
+                    tracing::warn!("Failed to parse stale approval ID '{}': {}", id_str, e);
+                    e
+                })
+                .ok()
+        })
+        .collect();
+
+    if parsed_ids.is_empty() {
+        tracing::warn!("No valid stale approval IDs to cancel");
+        return 0;
+    }
+
+    let cancellation_reason = format!(
+        "Superseded by new approval request {} due to rebase apply (targeted cancellation)",
+        new_approval_id
+    );
+
+    let cancelled_count = match approval_repo
+        .cancel_approved_by_ids(&parsed_ids, tenant_id, actor_id, &cancellation_reason)
+        .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::warn!("Failed to cancel specific approved approvals: {:?}", e);
             return 0;
         }
     };
@@ -13506,6 +13731,499 @@ mod tests {
 
         // Should have cancelled 0 approvals
         assert_eq!(cancelled_count, 0);
+    }
+
+    // =========================================================================
+    // Slice 1: Targeted Approval Cancellation Tests
+    //
+    // Tests for classifier-driven targeted cancellation in rebase_apply.
+    // Verifies that cancel_specific_approved_and_audit correctly cancels
+    // only the specific approvals identified as stale by the classifier.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_cancel_specific_approved_and_audit_cancels_specific_approvals() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create two Approved approval requests
+        let approved_request1 = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Previous approval 1",
+        );
+        let approved_id1 = approved_request1.id;
+        state
+            .approval_request_repo
+            .create_approval_request(approved_request1)
+            .await
+            .unwrap();
+        state
+            .approval_request_repo
+            .update_approval_request_status(
+                approved_id1,
+                ApprovalRequestStatus::Approved,
+                "approver1",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let approved_request2 = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Previous approval 2",
+        );
+        let approved_id2 = approved_request2.id;
+        state
+            .approval_request_repo
+            .create_approval_request(approved_request2)
+            .await
+            .unwrap();
+        state
+            .approval_request_repo
+            .update_approval_request_status(
+                approved_id2,
+                ApprovalRequestStatus::Approved,
+                "approver2",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Create a new pending approval request
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            2,
+            3,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call targeted cancellation with only approved_id1 as stale
+        let stale_ids = vec![approved_id1.to_string()];
+        let cancelled_count = cancel_specific_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            &stale_ids,
+            intent_id,
+            tenant_id,
+            "external-api",
+            2,
+            3,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 1 approval (only the one in stale_ids)
+        assert_eq!(cancelled_count, 1);
+
+        // approved_id1 should now be Cancelled
+        let cancelled = state
+            .approval_request_repo
+            .get_approval_request(approved_id1)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status, ApprovalRequestStatus::Cancelled);
+
+        // approved_id2 should still be Approved (not in stale_ids)
+        let still_approved = state
+            .approval_request_repo
+            .get_approval_request(approved_id2)
+            .await
+            .unwrap();
+        assert_eq!(still_approved.status, ApprovalRequestStatus::Approved);
+
+        // The new pending request should still be Pending
+        let still_pending = state
+            .approval_request_repo
+            .get_approval_request(new_approval_id)
+            .await
+            .unwrap();
+        assert_eq!(still_pending.status, ApprovalRequestStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_specific_approved_and_audit_with_empty_stale_ids() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create an Approved approval request
+        let approved_request = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Previous approval",
+        );
+        let approved_id = approved_request.id;
+        state
+            .approval_request_repo
+            .create_approval_request(approved_request)
+            .await
+            .unwrap();
+        state
+            .approval_request_repo
+            .update_approval_request_status(
+                approved_id,
+                ApprovalRequestStatus::Approved,
+                "approver",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Create a new pending approval request
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            2,
+            3,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call targeted cancellation with empty stale_ids
+        let stale_ids: Vec<String> = vec![];
+        let cancelled_count = cancel_specific_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            &stale_ids,
+            intent_id,
+            tenant_id,
+            "external-api",
+            2,
+            3,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 0 approvals (empty stale_ids)
+        assert_eq!(cancelled_count, 0);
+
+        // The approved request should still be Approved
+        let still_approved = state
+            .approval_request_repo
+            .get_approval_request(approved_id)
+            .await
+            .unwrap();
+        assert_eq!(still_approved.status, ApprovalRequestStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_specific_approved_and_audit_only_cancels_approved_status() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        let workflow_id = Uuid::new_v4();
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_id = intent_head.intent.tenant_id;
+
+        // Create a Pending approval request (not Approved)
+        let pending_request = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            1,
+            2,
+            workflow_id,
+            tenant_id,
+            "external-api/previous",
+            "external-api",
+            "D",
+            "Previous approval",
+        );
+        let pending_id = pending_request.id;
+        state
+            .approval_request_repo
+            .create_approval_request(pending_request)
+            .await
+            .unwrap();
+        // Note: it's already Pending, don't call update_approval_request_status
+
+        // Create a new pending approval request
+        let new_approval = intent_service::ApprovalRequest::new_pending(
+            intent_id,
+            2,
+            3,
+            workflow_id,
+            tenant_id,
+            "external-api",
+            "external-api",
+            "D",
+            "New blocked rebase",
+        );
+        let new_approval_id = new_approval.id;
+        state
+            .approval_request_repo
+            .create_approval_request(new_approval)
+            .await
+            .unwrap();
+
+        // Call targeted cancellation with pending_id as stale (but it's Pending, not Approved)
+        let stale_ids = vec![pending_id.to_string()];
+        let cancelled_count = cancel_specific_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            &stale_ids,
+            intent_id,
+            tenant_id,
+            "external-api",
+            2,
+            3,
+            "D",
+            new_approval_id,
+        )
+        .await;
+
+        // Should have cancelled 0 approvals (only Approved can be cancelled)
+        assert_eq!(cancelled_count, 0);
+
+        // The pending request should still be Pending
+        let still_pending = state
+            .approval_request_repo
+            .get_approval_request(pending_id)
+            .await
+            .unwrap();
+        assert_eq!(still_pending.status, ApprovalRequestStatus::Pending);
     }
 
     // =========================================================================

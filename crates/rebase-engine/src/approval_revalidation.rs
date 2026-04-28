@@ -31,13 +31,28 @@ pub struct ApprovalRevalidationResult {
 
 /// Compute affected approval IDs from the plan's affected items preview
 ///
-/// Returns a set of node_id strings for approvals that are directly or transitively affected.
+/// Returns a set of correlation IDs for approvals that are directly or transitively affected.
+/// Uses `external_ref.ref_id` as the correlation key when available (this maps to
+/// `ApprovalRequest.id`), falling back to `node_id` (graph node UUID) when external_ref
+/// is not populated.
+///
+/// This ensures targeted cancellation can correctly correlate affected graph items
+/// with actual ApprovalRequest records.
 fn compute_affected_approval_ids(plan: &RebasePlan) -> Vec<String> {
     plan.affected_items
         .affected_approvals
         .iter()
         .filter(|item| item.impact != ClassificationImpact::Unchanged)
-        .map(|item| item.node_id.to_string())
+        .map(|item| {
+            // Prefer external_ref.ref_id as the correlation key when available.
+            // This maps to ApprovalRequest.id for targeted cancellation.
+            // Fall back to node_id (graph node UUID) when external_ref is absent.
+            if let Some(ref ext) = item.external_ref {
+                ext.ref_id.to_string()
+            } else {
+                item.node_id.to_string()
+            }
+        })
         .collect()
 }
 
@@ -535,5 +550,134 @@ mod tests {
 
         assert_eq!(result.revalidation_required.len(), 1);
         assert_eq!(result.revalidation_required[0].original_rule_id, "unknown");
+    }
+
+    // === External Ref Correlation Tests ===
+
+    #[test]
+    fn test_external_ref_ref_id_used_when_present() {
+        // When external_ref is present, external_ref.ref_id should be used as correlation ID
+        // (not node_id), because external_ref.ref_id maps to ApprovalRequest.id
+        let graph_node_id = Uuid::new_v4();
+        let approval_request_id = Uuid::new_v4(); // This is the actual ApprovalRequest.id
+
+        let affected_approvals = vec![AffectedItem {
+            node_id: graph_node_id,
+            label: "Approval With External Ref".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Has external reference".to_string(),
+            external_ref: Some(intent_rebase_types::ExternalRef {
+                ref_type: intent_rebase_types::ExternalRefType::Approval,
+                ref_id: approval_request_id,
+            }),
+        }];
+
+        let plan = create_plan_with_affected_approvals(DecisionClass::B, affected_approvals);
+
+        // The current_approvals contains the actual ApprovalRequest.id values
+        let current_approvals = vec![approval_request_id.to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // stale_ids should contain the approval_request_id (from external_ref.ref_id),
+        // NOT the graph_node_id
+        assert_eq!(result.stale_ids.len(), 1);
+        assert_eq!(result.stale_ids[0], approval_request_id.to_string());
+    }
+
+    #[test]
+    fn test_node_id_used_as_fallback_when_no_external_ref() {
+        // When external_ref is absent, node_id (graph node UUID) should be used
+        let graph_node_id = Uuid::new_v4();
+
+        let affected_approvals = vec![AffectedItem {
+            node_id: graph_node_id,
+            label: "Approval Without External Ref".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "No external reference".to_string(),
+            external_ref: None,
+        }];
+
+        let plan = create_plan_with_affected_approvals(DecisionClass::B, affected_approvals);
+
+        // When there's no external_ref, the current_approvals would need to match node_id
+        let current_approvals = vec![graph_node_id.to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // stale_ids should contain the graph_node_id (since no external_ref exists)
+        assert_eq!(result.stale_ids.len(), 1);
+        assert_eq!(result.stale_ids[0], graph_node_id.to_string());
+    }
+
+    #[test]
+    fn test_mixed_external_ref_and_node_id_fallback() {
+        // Test scenario where some affected items have external_ref and some don't
+        let graph_node_id_1 = Uuid::new_v4();
+        let approval_request_id = Uuid::new_v4();
+        let graph_node_id_2 = Uuid::new_v4();
+
+        let affected_approvals = vec![
+            AffectedItem {
+                node_id: graph_node_id_1,
+                label: "Approval With External Ref".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Has external reference".to_string(),
+                external_ref: Some(intent_rebase_types::ExternalRef {
+                    ref_type: intent_rebase_types::ExternalRefType::Approval,
+                    ref_id: approval_request_id,
+                }),
+            },
+            AffectedItem {
+                node_id: graph_node_id_2,
+                label: "Approval Without External Ref".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "No external reference".to_string(),
+                external_ref: None,
+            },
+        ];
+
+        let plan = create_plan_with_affected_approvals(DecisionClass::B, affected_approvals);
+
+        // current_approvals contains both the approval_request_id and graph_node_id_2
+        let current_approvals = vec![approval_request_id.to_string(), graph_node_id_2.to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Both should be marked stale: approval_request_id from external_ref,
+        // and graph_node_id_2 as fallback
+        assert_eq!(result.stale_ids.len(), 2);
+        assert!(result.stale_ids.contains(&approval_request_id.to_string()));
+        assert!(result.stale_ids.contains(&graph_node_id_2.to_string()));
+    }
+
+    #[test]
+    fn test_external_ref_with_different_node_id() {
+        // Verify that when external_ref.ref_id exists, it's used even if node_id differs
+        let graph_node_id = Uuid::new_v4();
+        let approval_request_id = Uuid::new_v4();
+
+        let affected_approvals = vec![AffectedItem {
+            node_id: graph_node_id,
+            label: "Approval With Different Node ID".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Node ID differs from approval request ID".to_string(),
+            external_ref: Some(intent_rebase_types::ExternalRef {
+                ref_type: intent_rebase_types::ExternalRefType::Approval,
+                ref_id: approval_request_id,
+            }),
+        }];
+
+        let plan = create_plan_with_affected_approvals(DecisionClass::C, affected_approvals);
+
+        // Only the approval_request_id is in current_approvals (graph_node_id is NOT)
+        let current_approvals = vec![approval_request_id.to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // The stale_ids should be approval_request_id (from external_ref.ref_id),
+        // NOT graph_node_id. This means the approval gets correctly identified as stale.
+        assert_eq!(result.stale_ids.len(), 1);
+        assert_eq!(result.stale_ids[0], approval_request_id.to_string());
     }
 }
