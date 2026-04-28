@@ -2229,6 +2229,173 @@ pub struct ListPolicySnapshotsResponse {
     pub total: usize,
 }
 
+// ============================================================================
+// ADR-07: Approval Revalidation/Re-approval API (Phase 2b bounded slice)
+// ============================================================================
+
+/// Request body for POST /approval-requests/trigger-reapproval
+///
+/// **ADR-07 bounded slice**: Creates a pending approval request when scope hashes differ.
+/// If scope hashes match, returns 400 Bad Request (no duplicate reapproval created).
+///
+/// **Scope**: Non-production bounded trigger — creates approval record and returns
+/// queue intent. Does NOT send notifications, trigger orchestration, or modify
+/// existing approval state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerReapprovalRequest {
+    /// Intent ID to request re-approval for
+    pub intent_id: Uuid,
+    /// Original intent version that was previously approved
+    pub original_version_from: i32,
+    /// Current intent version that requires re-approval
+    pub current_version_to: i32,
+    /// Scope hash at the time of original approval
+    pub original_scope_hash: String,
+    /// Current scope hash (computed from latest intent state)
+    pub current_scope_hash: String,
+    /// Human-readable reason for re-approval requirement
+    pub reapproval_reason: String,
+}
+
+/// Response for POST /approval-requests/trigger-reapproval
+///
+/// **ADR-07 bounded slice**: Returns created approval request metadata.
+/// notification_intent=true is advisory only — actual notification delivery
+/// is Phase 3 scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerReapprovalResponse {
+    /// ID of the newly created approval request
+    pub approval_request_id: Uuid,
+    /// Intent ID this approval request is for
+    pub intent_id: Uuid,
+    /// Original version that was previously approved
+    pub intent_version_from: i32,
+    /// Current version requiring re-approval
+    pub intent_version_to: i32,
+    /// Approval status (always "Pending" for newly created requests)
+    pub status: String,
+    /// Advisory flag indicating notification SHOULD be sent
+    /// Note: Actual notification delivery is Phase 3 scope
+    pub notification_intent: bool,
+    /// Human-readable reason for re-approval
+    pub reason: String,
+}
+
+/// POST /approval-requests/trigger-reapproval - Trigger re-approval for scope change
+///
+/// **ADR-07 bounded slice**: Creates a pending approval request when scope hashes differ.
+///
+/// **Behavior**:
+/// - If `original_scope_hash != current_scope_hash`: Creates new pending approval request
+/// - If `original_scope_hash == current_scope_hash`: Returns 400 Bad Request (no scope drift)
+/// - If intent not found: Returns 404
+///
+/// **Scope limitations**:
+/// - Does NOT send notifications (Phase 3 external notification system)
+/// - Does NOT auto-invalidate existing approvals
+/// - Does NOT trigger rebase or orchestration
+/// - Does NOT claim production readiness
+///
+/// **Use case**: Called by external systems that detect scope drift and need to
+/// trigger a new approval cycle while preserving audit trail.
+async fn trigger_reapproval(
+    State(state): State<AppState>,
+    Json(request): Json<TriggerReapprovalRequest>,
+) -> Result<(StatusCode, Json<TriggerReapprovalResponse>), ApiErrorResponse> {
+    // Step 1: Check if scope hashes match — if so, return 400 (no reapproval needed)
+    if request.original_scope_hash == request.current_scope_hash {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIngestRequest(
+            "Scope hashes match — no re-approval required".into(),
+        )));
+    }
+
+    // Step 2: Verify intent exists to get workflow_id and tenant_id
+    let intent_head = state
+        .service
+        .get_intent_head(request.intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 3: Create new pending approval request using existing primitives
+    // Actor attribution: external-api/trigger-reapproval
+    let actor_id = "external-api/trigger-reapproval";
+
+    let approval_request = ApprovalRequest::new_pending(
+        request.intent_id,
+        request.original_version_from,
+        request.current_version_to,
+        intent_head.intent.workflow_id,
+        intent_head.intent.tenant_id,
+        actor_id,
+        "external-api",
+        "ScopeChange",
+        &request.reapproval_reason,
+    );
+
+    // Step 4: Persist the approval request
+    let created = state
+        .approval_request_repo
+        .create_approval_request(approval_request)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 5: Emit audit event (best-effort)
+    let audit_payload = intent_rebase_types::ApprovalRequestedAuditPayload {
+        approval_request_id: created.id,
+        intent_id: request.intent_id,
+        intent_version_from: request.original_version_from,
+        intent_version_to: request.current_version_to,
+        decision_class: "ScopeChange".to_string(),
+        reapproval_reason: request.reapproval_reason.clone(),
+        original_scope_hash: request.original_scope_hash.clone(),
+        current_scope_hash: request.current_scope_hash.clone(),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_approval_requested(
+            intent_head.intent.tenant_id,
+            actor_id,
+            request.intent_id,
+            audit_payload,
+            get_current_trace_context(),
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ApprovalRequested audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            intent_head.intent.tenant_id,
+            "ApprovalRequested",
+            &serde_json::to_value(serde_json::json!({
+                "approval_request_id": created.id,
+                "intent_id": request.intent_id,
+                "intent_version_from": request.original_version_from,
+                "intent_version_to": request.current_version_to,
+                "reason": request.reapproval_reason
+            }))
+            .unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
+    }
+
+    // Step 6: Return response
+    Ok((
+        StatusCode::CREATED,
+        Json(TriggerReapprovalResponse {
+            approval_request_id: created.id,
+            intent_id: request.intent_id,
+            intent_version_from: request.original_version_from,
+            intent_version_to: request.current_version_to,
+            status: format!("{:?}", created.status),
+            notification_intent: true, // Advisory only — Phase 3 handles actual delivery
+            reason: request.reapproval_reason,
+        }),
+    ))
+}
+
 /// Response for approval revalidation (GET /approval-requests/{id}/revalidate)
 ///
 /// Bounded read-only scope comparison: compares approval-basis snapshot scope_hash
@@ -5606,6 +5773,11 @@ pub fn build_router(
             "/approval-requests/{approval_request_id}/revalidate",
             get(revalidate_approval_request),
         )
+        // ADR-07: POST trigger-reapproval - bounded re-approval trigger (Phase 2b)
+        .route(
+            "/approval-requests/trigger-reapproval",
+            post(trigger_reapproval),
+        )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
         .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
         .route(
@@ -5878,6 +6050,11 @@ pub fn build_router_with_jwt_auth(
         .route(
             "/approval-requests/{approval_request_id}/revalidate",
             get(revalidate_approval_request),
+        )
+        // ADR-07: POST trigger-reapproval - bounded re-approval trigger (Phase 2b)
+        .route(
+            "/approval-requests/trigger-reapproval",
+            post(trigger_reapproval),
         )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
         .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
@@ -8003,6 +8180,228 @@ mod tests {
 
         // Test revalidate - should return 404 because approval basis snapshot doesn't exist
         let result = revalidate_approval_request(State(state), Path(approval_id)).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // ADR-07: Approval Revalidation/Re-approval Trigger Tests (bounded slice)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_trigger_reapproval_creates_pending_approval_when_scope_differs() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+        use intent_service::ApprovalRequestStatus;
+
+        let state = create_test_service();
+
+        // Create an intent first (we need it to exist for get_intent_head to work)
+        let workflow_id = Uuid::new_v4();
+
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Call trigger_reapproval with different scope hashes
+        let request = TriggerReapprovalRequest {
+            intent_id,
+            original_version_from: 1,
+            current_version_to: 2,
+            original_scope_hash: "hash_v1".to_string(),
+            current_scope_hash: "hash_v2".to_string(), // Different hash
+            reapproval_reason: "Scope has changed since approval was granted".to_string(),
+        };
+
+        let result = trigger_reapproval(State(state.clone()), Json(request))
+            .await
+            .expect("trigger_reapproval should succeed when scope hashes differ");
+
+        // Verify response
+        assert_eq!(result.1.intent_id, intent_id);
+        assert_eq!(result.1.intent_version_from, 1);
+        assert_eq!(result.1.intent_version_to, 2);
+        assert_eq!(result.1.status, "Pending");
+        assert!(result.1.notification_intent); // Always true (advisory only)
+        assert_eq!(
+            result.1.reason,
+            "Scope has changed since approval was granted"
+        );
+
+        // Verify the approval request was created in the repository
+        let created_approval = state
+            .approval_request_repo
+            .get_approval_request(result.1.approval_request_id)
+            .await
+            .unwrap();
+        assert_eq!(created_approval.status, ApprovalRequestStatus::Pending);
+        assert_eq!(created_approval.intent_version_from, 1);
+        assert_eq!(created_approval.intent_version_to, 2);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_reapproval_returns_bad_request_when_scope_matches() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+
+        let state = create_test_service();
+
+        // Create an intent
+        let workflow_id = Uuid::new_v4();
+
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Call trigger_reapproval with SAME scope hashes (no drift)
+        let request = TriggerReapprovalRequest {
+            intent_id,
+            original_version_from: 1,
+            current_version_to: 2,
+            original_scope_hash: "same_hash".to_string(),
+            current_scope_hash: "same_hash".to_string(), // Same hash
+            reapproval_reason: "Should not trigger".to_string(),
+        };
+
+        let result = trigger_reapproval(State(state), Json(request)).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_reapproval_returns_not_found_when_intent_missing() {
+        let state = create_test_service();
+
+        let request = TriggerReapprovalRequest {
+            intent_id: Uuid::new_v4(), // Non-existent intent
+            original_version_from: 1,
+            current_version_to: 2,
+            original_scope_hash: "hash_v1".to_string(),
+            current_scope_hash: "hash_v2".to_string(),
+            reapproval_reason: "Test".to_string(),
+        };
+
+        let result = trigger_reapproval(State(state), Json(request)).await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();

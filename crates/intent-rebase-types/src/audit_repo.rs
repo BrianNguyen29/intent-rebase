@@ -6,10 +6,10 @@
 
 use super::{
     ApprovalCancelledAuditPayload, ApprovalExpiredAuditPayload, ApprovalGrantedAuditPayload,
-    ApprovalRevokedAuditPayload, AuditEvent, AuditEventType, CompensationCompletedAuditPayload,
-    CompensationFailedAuditPayload, CompensationPlannedAuditPayload,
-    CompensationStartedAuditPayload, IntentRebaseError, RebaseApplyAuditPayload,
-    RebaseApplyBlockedAuditPayload, ReplayAuditPayload, TraceContext,
+    ApprovalRequestedAuditPayload, ApprovalRevokedAuditPayload, AuditEvent, AuditEventType,
+    CompensationCompletedAuditPayload, CompensationFailedAuditPayload,
+    CompensationPlannedAuditPayload, CompensationStartedAuditPayload, IntentRebaseError,
+    RebaseApplyAuditPayload, RebaseApplyBlockedAuditPayload, ReplayAuditPayload, TraceContext,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -183,6 +183,55 @@ pub trait AuditRepository: Send + Sync {
             id: Uuid::new_v4(),
             tenant_id,
             event_type: AuditEventType::ApprovalGranted,
+            actor_id: actor_id.to_string(),
+            intent_id: Some(intent_id),
+            artifact_id: None,
+            payload: serde_json::to_value(payload).map_err(|e| {
+                IntentRebaseError::SerializationError(format!("audit payload: {}", e))
+            })?,
+            trace_id,
+            span_id,
+            occurred_at: Utc::now(),
+        };
+        self.create_audit_event(event).await
+    }
+
+    /// Record an ApprovalRequested audit event (ADR-07 bounded re-approval trigger slice)
+    ///
+    /// Phase 3 bounded trace continuity slice: accepts optional `TraceContext`.
+    async fn record_approval_requested(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalRequestedAuditPayload,
+        trace_context: TraceContext,
+    ) -> Result<(), IntentRebaseError> {
+        self.record_approval_requested_with_trace(
+            tenant_id,
+            actor_id,
+            intent_id,
+            payload,
+            trace_context.trace_id,
+            trace_context.span_id,
+        )
+        .await
+    }
+
+    /// Record an ApprovalRequested audit event with explicit trace context
+    async fn record_approval_requested_with_trace(
+        &self,
+        tenant_id: Uuid,
+        actor_id: &str,
+        intent_id: Uuid,
+        payload: ApprovalRequestedAuditPayload,
+        trace_id: Option<String>,
+        span_id: Option<String>,
+    ) -> Result<(), IntentRebaseError> {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::ApprovalRequested,
             actor_id: actor_id.to_string(),
             intent_id: Some(intent_id),
             artifact_id: None,
@@ -808,6 +857,7 @@ fn audit_event_type_to_string(event_type: &AuditEventType) -> &'static str {
         AuditEventType::RebaseApplied => "RebaseApplied",
         AuditEventType::RebaseApplyBlocked => "RebaseApplyBlocked",
         AuditEventType::ApprovalRequired => "ApprovalRequired",
+        AuditEventType::ApprovalRequested => "ApprovalRequested",
         AuditEventType::ApprovalGranted => "ApprovalGranted",
         AuditEventType::ApprovalRevoked => "ApprovalRevoked",
         AuditEventType::ApprovalCancelled => "ApprovalCancelled",
@@ -840,6 +890,7 @@ fn audit_event_type_from_string(s: &str) -> AuditEventType {
         "RebaseApplied" => AuditEventType::RebaseApplied,
         "RebaseApplyBlocked" => AuditEventType::RebaseApplyBlocked,
         "ApprovalRequired" => AuditEventType::ApprovalRequired,
+        "ApprovalRequested" => AuditEventType::ApprovalRequested,
         "ApprovalGranted" => AuditEventType::ApprovalGranted,
         "ApprovalRevoked" => AuditEventType::ApprovalRevoked,
         "ApprovalCancelled" => AuditEventType::ApprovalCancelled,

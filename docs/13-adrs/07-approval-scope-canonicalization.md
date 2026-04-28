@@ -12,15 +12,18 @@
 > **⚠️ Bounded Phase 2b Implementation**
 >
 > This ADR describes the **target design** for approval scope canonicalization.
-> The current Phase 2b implementation is **bounded** and includes only:
-> - PostgreSQL `policy_snapshot` table with scope fields
-> - Repository layer (in-memory + SQLx) for basic CRUD
-> - `scope_hash` computation for future change detection
+> The current Phase 2b implementation is **bounded** and includes:
+> - PostgreSQL `policy_snapshot` table with scope fields ✅
+> - Repository layer (in-memory + SQLx) for basic CRUD ✅
+> - `scope_hash` computation for change detection ✅
+> - `GET /approval-requests/{id}/revalidate` — read-only scope comparison ✅
+> - `POST /approval-requests/{id}/expire` — manual expiry transition ✅
+> - `POST /approval-requests/trigger-reapproval` — bounded re-approval trigger ✅
 >
 > **NOT YET IMPLEMENTED:**
 > - S3-backed immutable snapshot blobs (current `snapshot_uri` is `memory://` placeholder)
-> - Revalidation API and approval invalidation
-> - Re-approval workflow and queueing
+> - Full approval invalidation orchestration
+> - Re-approval workflow queueing and notification delivery
 > - Risk-based invalidation rules (critical/high/medium/low)
 >
 > See: [03-policy-snapshot-spec.md](../14-governance/03-policy-snapshot-spec.md) for current implementation boundaries.

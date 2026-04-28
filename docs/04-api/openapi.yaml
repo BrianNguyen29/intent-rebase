@@ -1860,6 +1860,62 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /approval-requests/trigger-reapproval:
+    post:
+      tags:
+        - approvals
+      summary: Trigger re-approval for scope change
+      description: |
+        Creates a pending approval request when scope hashes differ.
+
+        **ADR-07 bounded slice:** This endpoint creates a new approval request record
+        for re-approval when the approval scope has changed.
+
+        **Behavior:**
+        - If `original_scope_hash != current_scope_hash`: Creates new pending approval request
+        - If `original_scope_hash == current_scope_hash`: Returns 400 Bad Request (no scope drift)
+
+        **Scope limitations:**
+        - Does NOT send notifications (Phase 3 external notification system)
+        - Does NOT auto-invalidate existing approvals
+        - Does NOT trigger rebase or orchestration
+        - Does NOT claim production readiness
+
+        **Use case:** Called by external systems that detect scope drift and need to
+        trigger a new approval cycle while preserving audit trail.
+      operationId: triggerReapproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerReapprovalRequest'
+      responses:
+        '201':
+          description: Re-approval triggered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerReapprovalResponse'
+        '400':
+          description: Scope hashes match - no re-approval required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /health:
     get:
       tags:
@@ -4138,6 +4194,61 @@ components:
           resolution_notes:
             type: string
             nullable: true
+
+    # ----- ADR-07: Approval Revalidation/Re-approval Trigger (bounded slice) -----
+    TriggerReapprovalRequest:
+      type: object
+      required: [intent_id, original_version_from, current_version_to, original_scope_hash, current_scope_hash, reapproval_reason]
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID to request re-approval for
+        original_version_from:
+          type: integer
+          description: Original intent version that was previously approved
+        current_version_to:
+          type: integer
+          description: Current intent version that requires re-approval
+        original_scope_hash:
+          type: string
+          description: Scope hash at the time of original approval
+        current_scope_hash:
+          type: string
+          description: Current scope hash (computed from latest intent state)
+        reapproval_reason:
+          type: string
+          description: Human-readable reason for re-approval requirement
+
+    TriggerReapprovalResponse:
+      type: object
+      required: [approval_request_id, intent_id, intent_version_from, intent_version_to, status, notification_intent, reason]
+      properties:
+        approval_request_id:
+          type: string
+          format: uuid
+          description: ID of the newly created approval request
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID this approval request is for
+        intent_version_from:
+          type: integer
+          description: Original version that was previously approved
+        intent_version_to:
+          type: integer
+          description: Current version requiring re-approval
+        status:
+          type: string
+          description: Approval status (always "Pending" for newly created requests)
+        notification_intent:
+          type: boolean
+          description: |
+            Advisory flag indicating notification SHOULD be sent.
+            Note: Actual notification delivery is Phase 3 scope
+        reason:
+          type: string
+          description: Human-readable reason for re-approval
 
     # ----- Orchestration Dashboard (Phase 3 Batch 1) -----
     CompensationActionStatusCounts:

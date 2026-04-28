@@ -30,6 +30,8 @@ pub enum AuditEventType {
     RebaseApplied,
     RebaseApplyBlocked,
     ApprovalRequired,
+    /// ADR-07 bounded re-approval trigger slice: re-approval requested due to scope change
+    ApprovalRequested,
     ApprovalGranted,
     ApprovalRevoked,
     ApprovalCancelled,
@@ -88,6 +90,20 @@ pub struct RebaseApplyBlockedAuditPayload {
     pub rationale: String,
     pub requestor_id: String,
     pub requestor_type: String,
+}
+
+/// Payload for ApprovalRequested audit events (ADR-07 bounded re-approval trigger slice)
+/// This is emitted when a re-approval is triggered due to scope change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestedAuditPayload {
+    pub approval_request_id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub reapproval_reason: String,
+    pub original_scope_hash: String,
+    pub current_scope_hash: String,
 }
 
 /// Payload for ApprovalGranted audit events (Phase 2b bounded slice)
