@@ -13,6 +13,8 @@
 //! - `INTENT_API_BIND_ADDR` — Address to bind to (default: `0.0.0.0:8080`)
 //! - `RUST_LOG` — Logging filter (default: `info`)
 //! - `OTEL_EXPORTER_OTLP_ENDPOINT` — Optional OTLP endpoint for tracing export
+//! - `NATS_URL` — NATS server URL (optional, for event publishing)
+//! - `INTENT_API_NATS_CONSUMER` — Enable NATS consumer lifecycle (default: false, requires NATS_URL)
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -32,17 +34,20 @@ use forensic_service::{
 use graph_service::{GraphService, InMemoryGraphRepository};
 use intent_api::{
     build_router, build_router_with_sql_audit_and_approval, init_tracing,
-    nats_jetstream::JetStreamInitializer, NatsEventPublisher,
+    nats_jetstream::{JetStreamInitializer, NatsPullConsumerAdapter},
+    NatsEventPublisher,
 };
 use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
+use intent_service::event_consumer::CheckpointCreatorConsumer;
 use intent_service::{
-    ApprovalRequestRepository, InMemoryApprovalRequestRepository, InMemoryCheckpointRepository,
-    InMemoryIntentRepository, InMemoryPolicySnapshotRepository, IntentService,
-    PolicySnapshotRepository, SqlxCheckpointRepository, SqlxIntentRepository,
+    ApprovalRequestRepository, CheckpointService, InMemoryApprovalRequestRepository,
+    InMemoryCheckpointRepository, InMemoryIntentRepository, InMemoryPolicySnapshotRepository,
+    IntentService, PolicySnapshotRepository, SqlxCheckpointRepository, SqlxIntentRepository,
     SqlxPolicySnapshotRepository,
 };
 use rebase_orchestrator::RebaseOrchestrator;
 use runtime_adapter::MockAdapter;
+use tokio::sync::watch;
 
 /// Build an in-memory-based router for development/smoke testing
 fn build_inmemory_router() -> Router {
@@ -134,8 +139,13 @@ fn build_inmemory_router() -> Router {
     )
 }
 
-/// Build a SQL-backed router for production
-async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::error::Error>> {
+/// Build a SQL-backed router and return checkpoint service for NATS consumer.
+///
+/// Returns (router, checkpoint_service) when SQL mode is used.
+/// When falling back to in-memory, returns (router, None).
+async fn build_sql_router_with_consumer(
+    database_url: &str,
+) -> Result<(Router, Option<Arc<CheckpointService>>), Box<dyn std::error::Error>> {
     let pool = sqlx::PgPool::connect(database_url).await?;
 
     // SQL-backed intent repository
@@ -148,6 +158,7 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
 
     // SQL-backed checkpoint repository
     let checkpoint_repo = Arc::new(SqlxCheckpointRepository::new(pool.clone()));
+    let checkpoint_service = Arc::new(CheckpointService::new(checkpoint_repo.clone()));
     let runtime_adapter = Arc::new(MockAdapter::ready());
     let orchestrator = Arc::new(RebaseOrchestrator::new(
         checkpoint_repo,
@@ -237,7 +248,7 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
         }
     }
 
-    Ok(build_router_with_sql_audit_and_approval(
+    let router = build_router_with_sql_audit_and_approval(
         pool,
         intent_service,
         graph_service,
@@ -249,7 +260,9 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
-    ))
+    );
+
+    Ok((router, Some(checkpoint_service)))
 }
 
 #[tokio::main]
@@ -271,14 +284,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_default()
             .eq_ignore_ascii_case("true");
 
-    let router = if let Ok(database_url) = std::env::var("DATABASE_URL") {
+    // Check if NATS consumer is enabled
+    let nats_consumer_enabled = std::env::var("INTENT_API_NATS_CONSUMER")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true");
+
+    if nats_consumer_enabled {
+        tracing::info!(
+            "INTENT_API_NATS_CONSUMER=true — NATS consumer lifecycle enabled (bounded Phase 4 first slice)"
+        );
+    }
+
+    // Build router and get optional checkpoint service for NATS consumer
+    let (router, checkpoint_service) = if let Ok(database_url) = std::env::var("DATABASE_URL") {
         tracing::info!("DATABASE_URL set — using SQL-backed repositories");
         tracing::info!("Connecting to PostgreSQL...");
 
-        match build_sql_router(&database_url).await {
-            Ok(router) => {
+        match build_sql_router_with_consumer(&database_url).await {
+            Ok((router, checkpoint_service)) => {
                 tracing::info!("SQL-backed router initialized successfully");
-                router
+                (router, checkpoint_service)
             }
             Err(e) => {
                 tracing::error!("Failed to connect to database: {}", e);
@@ -288,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 tracing::warn!("Falling back to in-memory repositories");
                 tracing::warn!("Set DATABASE_URL properly for production use");
-                build_inmemory_router()
+                (build_inmemory_router(), None)
             }
         }
     } else {
@@ -301,13 +326,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("DATABASE_URL not set — using in-memory repositories");
         tracing::warn!("This is suitable for development/smoke testing only");
         tracing::warn!("Set DATABASE_URL for production deployments");
-        build_inmemory_router()
+        (build_inmemory_router(), None)
+    };
+
+    // Create shutdown channel for graceful shutdown
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Spawn NATS consumer task if enabled and NATS_URL is configured
+    let nats_consumer_handle = if nats_consumer_enabled && std::env::var("NATS_URL").is_ok() {
+        let nats_url = std::env::var("NATS_URL").unwrap();
+
+        // Get checkpoint service (required for CheckpointCreatorConsumer)
+        let checkpoint_service = match checkpoint_service {
+            Some(cs) => cs,
+            None => {
+                tracing::warn!(
+                    "INTENT_API_NATS_CONSUMER=true but no SQL-backed checkpoint repository available",
+                );
+                tracing::warn!("Falling back to in-memory checkpoint repository for consumer");
+                Arc::new(CheckpointService::new(Arc::new(
+                    InMemoryCheckpointRepository::new(),
+                )))
+            }
+        };
+
+        let consumer = Arc::new(CheckpointCreatorConsumer::new(checkpoint_service));
+
+        match start_nats_consumer(nats_url, consumer, shutdown_rx).await {
+            Ok(handle) => {
+                tracing::info!("NATS consumer lifecycle started (bounded Phase 4 first slice)");
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to start NATS consumer lifecycle: {} — continuing without consumer",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        if nats_consumer_enabled {
+            tracing::info!(
+                "INTENT_API_NATS_CONSUMER=true but NATS_URL not set — consumer not started"
+            );
+        }
+        None
     };
 
     tracing::info!("Intent API server starting on {}", bind_addr);
 
+    // Setup shutdown signal handler
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("Shutdown signal received — initiating graceful shutdown");
+        let _ = shutdown_tx_clone.send(true);
+    });
+
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, router).await?;
 
+    // Graceful shutdown: signal NATS consumer to stop
+    tracing::info!("HTTP server stopped — signaling NATS consumer shutdown");
+    let _ = shutdown_tx.send(true);
+
+    // Wait for NATS consumer to finish if it was started
+    if let Some(handle) = nats_consumer_handle {
+        tracing::info!("Waiting for NATS consumer to finish...");
+        let _ = handle.await;
+        tracing::info!("NATS consumer shutdown complete");
+    }
+
     Ok(())
+}
+
+/// Start the NATS consumer lifecycle with graceful shutdown support.
+///
+/// **Phase 4 bounded slice:**
+/// - Single consumer only (CheckpointCreatorConsumer)
+/// - No DLQ worker
+/// - No multi-consumer chain
+/// - Graceful shutdown via shutdown watch channel
+async fn start_nats_consumer(
+    nats_url: String,
+    consumer: Arc<dyn intent_rebase_types::EventConsumer>,
+    shutdown_rx: watch::Receiver<bool>,
+) -> Result<tokio::task::JoinHandle<()>, String> {
+    use tokio::time::{timeout, Duration};
+
+    tracing::info!("Connecting to NATS at {} for consumer lifecycle", nats_url);
+
+    // Connect to NATS with timeout
+    let client = timeout(Duration::from_secs(5), async_nats::connect(&nats_url))
+        .await
+        .map_err(|_| "NATS connection timed out after 5s".to_string())?
+        .map_err(|e| format!("NATS connection failed: {}", e))?;
+
+    // Create JetStream context
+    let jetstream = async_nats::jetstream::new(client);
+
+    // Create consumer adapter
+    let adapter = NatsPullConsumerAdapter::new(jetstream, "audit_events");
+
+    // Spawn the consumer poll loop
+    let handle = tokio::spawn(async move {
+        if let Err(e) = adapter.run(consumer, shutdown_rx).await {
+            tracing::error!("NATS consumer poll loop ended with error: {}", e);
+        } else {
+            tracing::info!("NATS consumer poll loop ended normally");
+        }
+    });
+
+    Ok(handle)
 }

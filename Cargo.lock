@@ -2507,6 +2507,7 @@ dependencies = [
  "compensation-service",
  "criterion",
  "forensic-service",
+ "futures-util",
  "graph-service",
  "http 1.4.0",
  "intent-rebase-types",

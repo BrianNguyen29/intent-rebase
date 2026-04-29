@@ -39,6 +39,9 @@ jsonwebtoken = "9"
 # JetStream streams/consumers/DLQ remain Phase 3 scope
 async-nats = "0.47"
 
+# For StreamExt trait (used in NATS consumer poll loop)
+futures-util = "0.3"
+
 # OTEL support (optional — inactive unless OTEL_EXPORTER_OTLP_ENDPOINT is set)
 opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true }
