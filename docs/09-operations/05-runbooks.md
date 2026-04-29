@@ -163,7 +163,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 ## RB11. DLQ Messages Found
 
 **Symptoms:**
-- DLQ depth alert fires (`dlq_messages_current > 10`)
+- DLQ depth alert fires (`intent_api_dlq_messages_current > 10`)
 - `nats stream ls` or `nats consumer ls` shows messages in DLQ subjects
 - Application logs show repeated delivery failures for same `Nats-Message-Name`
 
@@ -224,11 +224,11 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
    docker compose -f infrastructure/local/docker-compose.yml exec nats nats consumer ls audit_events
    ```
 3. Verify no new DLQ messages appearing during replay
-4. Check application metrics in Grafana (`dlq_messages_current`, `dlq_replay_total`, `dlq_replay_failures_total`)
+4. Check application metrics in Grafana (`intent_api_dlq_messages_current`, `intent_api_dlq_replay_total`, `intent_api_dlq_replay_failures_total`)
 
 **Prevention:**
-- Monitor `dlq_messages_current` metric (alert threshold: > 10 messages)
-- Monitor `dlq_message_age_seconds` (alert threshold: > 3600s = 1 hour)
+- Monitor `intent_api_dlq_messages_current` metric (alert threshold: > 10 messages)
+- Monitor `intent_api_dlq_message_age_seconds` (alert threshold: > 3600s = 1 hour)
 - Review DLQ messages weekly if volume is non-zero
 - Set `max_deliver` appropriately per message type (see `14-dlq-retry-design.md`)
 

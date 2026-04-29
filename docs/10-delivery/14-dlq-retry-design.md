@@ -1,7 +1,7 @@
 # DLQ / Retry Design
 
-**Status:** Proposed (Phase 3 — Not Implemented)
-**Phase:** Phase 3 bounded slice (design only; worker implementation gated)
+**Status:** Bounded/Partial/Deferred (Phase 3 design; runtime DLQ worker and alert deployment deferred to Phase 4)
+**Phase:** Phase 3 bounded — design documented, stubs defined; implementation deferred
 **Owner:** Backend Lead / Platform
 
 ---
