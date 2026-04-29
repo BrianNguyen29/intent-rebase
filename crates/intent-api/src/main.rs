@@ -34,7 +34,7 @@ use forensic_service::{
 use graph_service::{GraphService, InMemoryGraphRepository};
 use intent_api::{
     build_router, build_router_with_sql_audit_and_approval, init_tracing,
-    nats_jetstream::{JetStreamInitializer, NatsPullConsumerAdapter},
+    nats_jetstream::{ConsumerRegistry, ConsumerRegistryHandle, JetStreamInitializer},
     NatsEventPublisher,
 };
 use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
@@ -47,7 +47,6 @@ use intent_service::{
 };
 use rebase_orchestrator::RebaseOrchestrator;
 use runtime_adapter::MockAdapter;
-use tokio::sync::watch;
 
 /// Build an in-memory-based router for development/smoke testing
 fn build_inmemory_router() -> Router {
@@ -329,11 +328,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (build_inmemory_router(), None)
     };
 
-    // Create shutdown channel for graceful shutdown
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
-    // Spawn NATS consumer task if enabled and NATS_URL is configured
-    let nats_consumer_handle = if nats_consumer_enabled && std::env::var("NATS_URL").is_ok() {
+    // Spawn NATS consumer registry if enabled and NATS_URL is configured
+    // **Phase 4 bounded slice:** Only CheckpointCreatorConsumer is registered.
+    // SnapshotCreatorConsumer and DLQ worker are NOT enabled (Phase 4+ future scope).
+    let nats_consumer_handle: Option<ConsumerRegistryHandle> = if nats_consumer_enabled
+        && std::env::var("NATS_URL").is_ok()
+    {
         let nats_url = std::env::var("NATS_URL").unwrap();
 
         // Get checkpoint service (required for CheckpointCreatorConsumer)
@@ -341,8 +341,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(cs) => cs,
             None => {
                 tracing::warn!(
-                    "INTENT_API_NATS_CONSUMER=true but no SQL-backed checkpoint repository available",
-                );
+                        "INTENT_API_NATS_CONSUMER=true but no SQL-backed checkpoint repository available",
+                    );
                 tracing::warn!("Falling back to in-memory checkpoint repository for consumer");
                 Arc::new(CheckpointService::new(Arc::new(
                     InMemoryCheckpointRepository::new(),
@@ -350,16 +350,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let consumer = Arc::new(CheckpointCreatorConsumer::new(checkpoint_service));
+        // Build the consumer registry with CheckpointCreatorConsumer
+        // **Bounded:** Only checkpoint consumer enabled; room for future Snapshot/DLQ consumers
+        let registry_result = ConsumerRegistry::new().register(
+            "checkpoint_creator",
+            Arc::new(CheckpointCreatorConsumer::new(checkpoint_service)),
+            "audit_events",
+        );
 
-        match start_nats_consumer(nats_url, consumer, shutdown_rx).await {
-            Ok(handle) => {
-                tracing::info!("NATS consumer lifecycle started (bounded Phase 4 first slice)");
-                Some(handle)
+        match registry_result {
+            Ok(registry) => {
+                // Start all registered consumers
+                match registry.start_all(&nats_url).await {
+                    Ok(handle) => {
+                        tracing::info!(
+                                "NATS consumer registry started (bounded Phase 4 first slice: checkpoint_creator)"
+                            );
+                        Some(handle)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                                "Failed to start NATS consumer registry: {} — continuing without consumer",
+                                e
+                            );
+                        None
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(
-                    "Failed to start NATS consumer lifecycle: {} — continuing without consumer",
+                    "Failed to register NATS consumer: {} — continuing without consumer",
                     e
                 );
                 None
@@ -376,67 +396,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Intent API server starting on {}", bind_addr);
 
-    // Setup shutdown signal handler
-    let shutdown_tx_clone = shutdown_tx.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        tracing::info!("Shutdown signal received — initiating graceful shutdown");
-        let _ = shutdown_tx_clone.send(true);
-    });
-
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, router).await?;
-
-    // Graceful shutdown: signal NATS consumer to stop
-    tracing::info!("HTTP server stopped — signaling NATS consumer shutdown");
-    let _ = shutdown_tx.send(true);
 
     // Wait for NATS consumer to finish if it was started
     if let Some(handle) = nats_consumer_handle {
         tracing::info!("Waiting for NATS consumer to finish...");
-        let _ = handle.await;
+        // Signal consumers to stop via handle.shutdown() - this sends on the
+        // same watch channel that consumer poll loops are listening to
+        handle.shutdown();
+        handle.wait_for_all().await;
         tracing::info!("NATS consumer shutdown complete");
     }
 
     Ok(())
-}
-
-/// Start the NATS consumer lifecycle with graceful shutdown support.
-///
-/// **Phase 4 bounded slice:**
-/// - Single consumer only (CheckpointCreatorConsumer)
-/// - No DLQ worker
-/// - No multi-consumer chain
-/// - Graceful shutdown via shutdown watch channel
-async fn start_nats_consumer(
-    nats_url: String,
-    consumer: Arc<dyn intent_rebase_types::EventConsumer>,
-    shutdown_rx: watch::Receiver<bool>,
-) -> Result<tokio::task::JoinHandle<()>, String> {
-    use tokio::time::{timeout, Duration};
-
-    tracing::info!("Connecting to NATS at {} for consumer lifecycle", nats_url);
-
-    // Connect to NATS with timeout
-    let client = timeout(Duration::from_secs(5), async_nats::connect(&nats_url))
-        .await
-        .map_err(|_| "NATS connection timed out after 5s".to_string())?
-        .map_err(|e| format!("NATS connection failed: {}", e))?;
-
-    // Create JetStream context
-    let jetstream = async_nats::jetstream::new(client);
-
-    // Create consumer adapter
-    let adapter = NatsPullConsumerAdapter::new(jetstream, "audit_events");
-
-    // Spawn the consumer poll loop
-    let handle = tokio::spawn(async move {
-        if let Err(e) = adapter.run(consumer, shutdown_rx).await {
-            tracing::error!("NATS consumer poll loop ended with error: {}", e);
-        } else {
-            tracing::info!("NATS consumer poll loop ended normally");
-        }
-    });
-
-    Ok(handle)
 }
