@@ -229,22 +229,26 @@ done
 
 ### Metrics to Expose
 
+> **⚠️ Metric Naming Note:** All `intent_api_*` metrics listed below are defined as stubs in `crates/intent-api/src/metrics.rs`. They follow the `intent_api_` prefix convention used throughout the intent-api crate. These metrics are **designed but not yet instrumented** — DLQ worker implementation is Phase 4 scope (G1–G5 gates must pass first).
+
 | Metric | Description | Alert Threshold |
 |--------|-------------|-----------------|
-| `dlq_messages_total` | Total messages ever sent to DLQ | N/A (counter) |
-| `dlq_messages_current` | Current depth of DLQ | > 10 messages |
-| `dlq_message_age_seconds` | Age of oldest message in DLQ | > 1 hour |
-| `dlq_replay_total` | Total replay operations | N/A (counter) |
-| `dlq_replay_failures_total` | Failed replay attempts | > 0 |
+| `intent_api_dlq_messages_total` | Total messages ever sent to DLQ | N/A (counter) |
+| `intent_api_dlq_messages_current` | Current depth of DLQ | > 10 messages |
+| `intent_api_dlq_message_age_seconds` | Age of oldest message in DLQ | > 1 hour |
+| `intent_api_dlq_replay_total` | Total replay operations | N/A (counter) |
+| `intent_api_dlq_replay_failures_total` | Failed replay attempts | > 0 |
 
 ### Prometheus Alert Rules
+
+> **⚠️ Deployment Status:** These alert rules are **designed/deferred** — they are specified here for completeness but are NOT yet deployed to production. The DLQ worker implementation (which produces these metrics) is Phase 4 scope. Alert rules will be deployed once G1–G5 gates pass.
 
 ```yaml
 groups:
   - name: dlq_alerts
     rules:
       - alert: DLQDepthHigh
-        expr: dlq_messages_current > 10
+        expr: intent_api_dlq_messages_current > 10
         for: 5m
         labels:
           severity: warning
@@ -253,7 +257,7 @@ groups:
           description: "{{ $value }} messages in DLQ"
 
       - alert: DLQMessageStale
-        expr: dlq_message_age_seconds > 3600
+        expr: intent_api_dlq_message_age_seconds > 3600
         for: 5m
         labels:
           severity: critical
@@ -262,7 +266,7 @@ groups:
           description: "Oldest message in DLQ is {{ $value }} seconds old"
 
       - alert: DLQReplayFailures
-        expr: rate(dlq_replay_failures_total[5m]) > 0
+        expr: rate(intent_api_dlq_replay_failures_total[5m]) > 0
         for: 1m
         labels:
           severity: critical

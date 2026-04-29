@@ -28,37 +28,49 @@
 - retry if idempotent
 - escalate operator if irreversible/partial
 
-## RB5. Compensation failures
-- classify side effect severity
-- retry if idempotent
-- escalate operator if irreversible/partial
+---
+
+## RB6. Rebase stuck
+A rebase operation is stuck (no progress, not completing, not erroring) and the rebase plan is not advancing.
+
+**Symptoms:**
+- Rebase plan status remains `in_progress` or `pending` beyond expected duration
+- No new artifacts being produced
+- No error responses but plan not advancing
+- Worker pool appears idle despite pending rebase work
+
+**Diagnosis:**
+1. Check rebase-engine logs for stack traces or panics: `kubectl logs -l app=rebase-engine | grep -i "panicked\|thread.*panicked"`
+2. Inspect the rebase plan state in the database:
+   ```sql
+   SELECT id, intent_id, status, decision_class, created_at, updated_at
+   FROM rebase_plans
+   WHERE status IN ('in_progress', 'pending')
+   ORDER BY updated_at ASC
+   LIMIT 20;
+   ```
+3. Check if the runtime adapter is healthy and responsive
+4. Verify dependency services (graph-service, intent-service) are reachable
+
+**Mitigation:**
+1. **If engine panic detected:** Restart rebase-engine pods; existing plans resume from checkpoint if available
+2. **If dependency unavailable:** Route to preview-only mode per RB1 (diff service degraded); rebase-stuck is a subset of diff service degraded patterns
+3. **If plan legitimately blocked on upstream:** Set rebase plan status to `blocked_manual_review` and notify tenant
+4. **If indefinite hang with no clear cause:** Capture diagnostic bundle (intent versions, plan state, recent logs) and escalate to backend lead
+
+**Recovery:**
+- Plans with checkpoints can be resumed from the last known good state
+- Plans without checkpoints may need to be restarted from the diff baseline
+- Document root cause in incident tracker
+
+**Prevention:**
+- Ensure runtime adapter health checks are configured (see RB3)
+- Monitor rebase plan age: alert if any plan exceeds 30 minutes in `in_progress` status
+- Configure request timeouts on runtime adapter calls to prevent indefinite hangs
 
 ---
 
 ## Batch 2 Runbooks (Phase 3 Batch 2 Slice 3)
-
-### RB6. Rebase stuck / no response
-
-**Symptoms:**
-- Rebase preview or apply endpoint times out or returns no response
-- Latency histogram shows p95 > SLO threshold (10s for preview, 60s for apply)
-
-**Diagnosis:**
-1. Check `intent_api_rebase_preview_duration_seconds` and `intent_api_rebase_apply_duration_seconds` panels in Grafana
-2. Check rebase-engine logs for compute_diff or planner errors
-3. Verify graph-service connectivity and node count (large graphs > 1000 nodes can cause timeout)
-
-**Mitigation:**
-1. If specific intent is stuck: cancel the workflow via Temporal console
-2. If graph is large: enable preview-only mode for affected tenant
-3. Scale rebase-engine workers if CPU-bound
-4. If adapter is degraded: follow RB3 (Runtime adapter failing apply)
-
-**Recovery:**
-- Stuck rebase operations cannot be automatically retried
-- Operator may need to replay from a known-good checkpoint
-
----
 
 ### RB7. Approval backlog / stale approvals
 
@@ -129,11 +141,11 @@
 ### RB10. Error budget burn rate alert
 
 **Symptoms:**
-- Alert fires: `PreviewPathFastBurn` or `ApplyPathFastBurn`
+- Alert fires: one of `PreviewPathBurnRate1h`, `PreviewPathBurnRate6h`, `PreviewPathBurnRate3d` (preview path) or `ApplyPathBurnRate1h`, `ApplyPathBurnRate6h`, `ApplyPathBurnRate3d` (apply path)
 - Error budget panel shows rapid consumption
 
 **Diagnosis:**
-1. Check which SLO is being breached (preview availability vs apply availability)
+1. Check which SLO is being breached (preview availability vs apply availability) and which window is firing (1h = fast, 6h = sustained, 3d = chronic)
 2. Identify error patterns in logs: `status!="success"` on relevant counter
 
 **Mitigation:**
@@ -145,8 +157,6 @@
 - Error budgets recover over time if error rate returns to normal
 - If budget is exhausted: SLO is breached until error rate improves
 - Post-incident review should identify root cause
-
----
 
 ---
 
@@ -235,47 +245,7 @@
 | RebasePreviewHighLatency | Warning | Check graph size, consider preview-only mode |
 | RebaseApplyHighLatency | Warning | Check runtime adapter health |
 | CompensationDLQCandidatesElevated | Critical | Check DLQ, manual intervention likely needed |
-| DLQDepthHigh | Warning | Check DLQ, investigate message content |
-| DLQMessageStale | Critical | DLQ message > 1 hour old, investigate immediately |
-| PreviewPathFastBurn | Warning | Monitor, prepare incident if continues |
-| ApplyPathFastBurn | Critical | Open incident, prioritize fix |
-
----
-
-## RB6. Rebase stuck
-A rebase operation is stuck (no progress, not completing, not erroring) and the rebase plan is not advancing.
-
-**Symptoms:**
-- Rebase plan status remains `in_progress` or `pending` beyond expected duration
-- No new artifacts being produced
-- No error responses but plan not advancing
-- Worker pool appears idle despite pending rebase work
-
-**Diagnosis:**
-1. Check rebase-engine logs for stack traces or panics: `kubectl logs -l app=rebase-engine | grep -i "panicked\|thread.*panicked"`
-2. Inspect the rebase plan state in the database:
-   ```sql
-   SELECT id, intent_id, status, decision_class, created_at, updated_at
-   FROM rebase_plans
-   WHERE status IN ('in_progress', 'pending')
-   ORDER BY updated_at ASC
-   LIMIT 20;
-   ```
-3. Check if the runtime adapter is healthy and responsive
-4. Verify dependency services (graph-service, intent-service) are reachable
-
-**Mitigation:**
-1. **If engine panic detected:** Restart rebase-engine pods; existing plans resume from checkpoint if available
-2. **If dependency unavailable:** Route to preview-only mode per RB1 (diff service degraded); rebase-stuck is a subset of diff service degraded patterns
-3. **If plan legitimately blocked on upstream:** Set rebase plan status to `blocked_manual_review` and notify tenant
-4. **If indefinite hang with no clear cause:** Capture diagnostic bundle (intent versions, plan state, recent logs) and escalate to backend lead
-
-**Recovery:**
-- Plans with checkpoints can be resumed from the last known good state
-- Plans without checkpoints may need to be restarted from the diff baseline
-- Document root cause in incident tracker
-
-**Prevention:**
-- Ensure runtime adapter health checks are configured (see RB3)
-- Monitor rebase plan age: alert if any plan exceeds 30 minutes in `in_progress` status
-- Configure request timeouts on runtime adapter calls to prevent indefinite hangs
+| DLQDepthHigh | Warning | **Designed/deferred** — alert rule not deployed; see doc 14 DLQ design |
+| DLQMessageStale | Critical | **Designed/deferred** — alert rule not deployed; see doc 14 DLQ design |
+| PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
+| ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |

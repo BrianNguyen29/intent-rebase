@@ -188,7 +188,7 @@ cargo test --all-features -- --list | grep -i dlq
 | Field | Value |
 |-------|-------|
 | **Task** | Self-review SRE and security checklist items |
-| **Status** | 🔴 PENDING |
+| **Status** | 🟡 PARTIAL — Solo self-review completed; external SRE/security sign-off deferred |
 | **Owner** | Backend Lead (solo) |
 | **Evidence Required** | Annotated checklist with self-review notes |
 
@@ -221,8 +221,7 @@ Alerting:
 □ Prometheus rules in infrastructure/local/prometheus/rules/
 
 Runbooks:
-□ RB1-RB10 present in docs/09-operations/05-runbooks.md
-□ RB11 (DLQ) added in this plan
+□ RB1-RB11 present in docs/09-operations/05-runbooks.md (self-reviewed)
 
 Load Testing:
 □ L1/L2 evidence in docs/11-quality/load-test-results.md
