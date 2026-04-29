@@ -155,7 +155,7 @@ Tool: Manual test against docker-compose NATS
 Commands:
   # Start docker-compose NATS
   cd infrastructure/local && docker-compose up -d nats
-  
+
   # Verify DLQ subjects configured
    nats stream ls
    nats consumer ls audit_events

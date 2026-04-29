@@ -82,7 +82,7 @@ If Option A (wire S3BundleStorage into runtime) is desired, the following risks 
 **Option A Acknowledgement Template:**
 
 ```
-I acknowledge the following risks of wiring S3BundleStorage without 
+I acknowledge the following risks of wiring S3BundleStorage without
 lifecycle policies, Object Lock, chain-hash, or retention enforcement:
 
 □ R-1: No lifecycle policies — objects will not auto-expire

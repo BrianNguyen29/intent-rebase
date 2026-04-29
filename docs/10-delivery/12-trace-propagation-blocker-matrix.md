@@ -1,8 +1,8 @@
 # 12 — Cross-Process Trace Propagation Blocker Matrix
 
-**Status:** Proposed (Investigation Complete — Implementation Gated)  
-**Phase:** Phase 3+  
-**Owner:** SRE / Backend Lead  
+**Status:** Proposed (Investigation Complete — Implementation Gated)
+**Phase:** Phase 3+
+**Owner:** SRE / Backend Lead
 
 ---
 

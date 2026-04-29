@@ -1,8 +1,8 @@
 # 05 — S3/MinIO Snapshot Blob Specification
 
-**Status:** Proposed (Future — Not Implemented)  
-**Phase:** Phase 3+  
-**Owner:** Backend Lead / Platform  
+**Status:** Proposed (Future — Not Implemented)
+**Phase:** Phase 3+
+**Owner:** Backend Lead / Platform
 
 ---
 
