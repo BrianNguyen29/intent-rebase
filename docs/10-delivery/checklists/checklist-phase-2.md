@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 2 complete khi tất cả Phase 2-scoped items checked và có evidence; items explicitly deferred to Phase 3 with rationale do not block Phase 2 exit.  
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `PHASE 2 COMPLETE — GATE CLOSED` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered and externally signed off (Product Owner ✅, Security ✅, Runtime Integration ✅). All Phase 2b sign-offs recorded as APPROVED with name/date pending documentation per user instruction. Phase 3 entry is authorized.
+**Trạng thái:** `PHASE 2 COMPLETE — GATE CLOSED` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered and externally signed off (Product Owner ✅, Security ✅, Runtime Integration ✅). All Phase 2b sign-offs recorded as APPROVED — Brian Nguyen sole signer (personal project) on 2026-04-28. Phase 3 entry is authorized.
 **Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ | 2b exit gate CLOSED ✓)  
 **Target Duration:** 6–10 tuần
 
@@ -576,9 +576,9 @@ ALL ITEMS COMPLETE: ☑ Yes (all Phase 2-scoped items complete; remaining unchec
 
 Phase 2 Exit Gate Review Date: 2026-04-11
 Reviewed By: External sign-off complete (Product Owner ✅ | Security ✅ | Runtime Integration ✅)
-Product Owner Sign-off: APPROVED — name pending / date pending
-Security Sign-off: APPROVED — name pending / date pending
-Runtime Integration Sign-off: APPROVED — name pending / date pending
+Product Owner Sign-off: APPROVED — Brian Nguyen / 2026-04-28
+Security Sign-off: APPROVED — Brian Nguyen / 2026-04-28
+Runtime Integration Sign-off: APPROVED — Brian Nguyen / 2026-04-28
 
 Required sign-off packet:
 - **📋 Phase 2b External Sign-Off Packet:** [11-phase-2b-sign-off-packet.md](../11-phase-2b-sign-off-packet.md) — contains scope reviewed, evidence package, Phase 3 deferrals, per-role review questions/acceptance prompts, and final decision capture

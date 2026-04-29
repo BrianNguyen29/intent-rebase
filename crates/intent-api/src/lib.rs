@@ -44,9 +44,18 @@ use validator::Validate;
 #[cfg(feature = "jwt-auth")]
 pub mod auth;
 
+/// NATS event publisher module (Phase 2b bounded core publisher slice)
+pub mod nats_event_publisher;
+
+/// NATS JetStream module (Phase 3 bounded slice)
+pub mod nats_jetstream;
+
 // Re-export auth types for convenience when jwt-auth feature is enabled
 #[cfg(feature = "jwt-auth")]
 pub use auth::{generate_test_token, AuthConfig, Claims};
+
+// Re-export NATS event publisher for use in main.rs and testing
+pub use nats_event_publisher::NatsEventPublisher;
 
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
@@ -105,6 +114,45 @@ fn record_rebase_preview_duration(duration_secs: f64, graph_size: &'static str) 
 fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
     metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class)
         .record(duration_secs);
+}
+
+// =============================================================================
+// DLQ Metric Helper Functions (Phase 3 DLQ design stubs — G3 evidence)
+// =============================================================================
+// NOTE: These are metric STUBS for DLQ monitoring design.
+// Actual instrumentation requires DLQ worker implementation (Phase 4).
+// No DLQ worker exists yet; these helpers are defined but not called.
+//
+// G3 Status: Stubs compile ✓ — runtime DLQ emissions await worker/lifecycle wiring.
+
+/// Record current DLQ depth (number of messages in dead-letter queue)
+#[allow(dead_code)]
+fn record_dlq_messages_current(count: f64) {
+    metrics::gauge!("intent_api_dlq_messages_current").set(count);
+}
+
+/// Record age of oldest message in DLQ (seconds)
+#[allow(dead_code)]
+fn record_dlq_message_age_seconds(age_secs: f64) {
+    metrics::gauge!("intent_api_dlq_message_age_seconds").set(age_secs);
+}
+
+/// Record DLQ replay operation
+#[allow(dead_code)]
+fn record_dlq_replay(status: &'static str) {
+    metrics::counter!("intent_api_dlq_replay_total", "status" => status).increment(1);
+}
+
+/// Record failed DLQ replay attempt
+#[allow(dead_code)]
+fn record_dlq_replay_failure() {
+    metrics::counter!("intent_api_dlq_replay_failures_total").increment(1);
+}
+
+/// Record message sent to DLQ
+#[allow(dead_code)]
+fn record_dlq_message() {
+    metrics::counter!("intent_api_dlq_messages_total").increment(1);
 }
 
 /// Response for diff computation including version context, diff, and risk
@@ -1372,13 +1420,15 @@ async fn rebase_apply(
                                     &state.audit_service,
                                     &state.event_publisher,
                                     &classification.stale_ids,
-                                    intent_id,
-                                    intent_head.intent.tenant_id,
-                                    actor_id,
-                                    request.from_version,
-                                    request.to_version,
-                                    &format!("{:?}", plan.decision_class),
-                                    created.id,
+                                    CancelApprovalContext {
+                                        intent_id,
+                                        tenant_id: intent_head.intent.tenant_id,
+                                        actor_id: actor_id.to_string(),
+                                        from_version: request.from_version,
+                                        to_version: request.to_version,
+                                        decision_class: format!("{:?}", plan.decision_class),
+                                        new_approval_id: created.id,
+                                    },
                                 )
                                 .await;
 
@@ -1903,6 +1953,18 @@ async fn cancel_existing_approved_and_audit(
     cancelled_count
 }
 
+/// Context for targeted approval cancellation during rebase.
+#[derive(Debug, Clone)]
+struct CancelApprovalContext {
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    actor_id: String,
+    from_version: i32,
+    to_version: i32,
+    decision_class: String,
+    new_approval_id: Uuid,
+}
+
 /// Cancel specific Approved approvals by their IDs and emit cancellation audit event.
 ///
 /// Slice 1 bounded targeted cancellation: Uses classifier-driven stale_ids to cancel
@@ -1920,13 +1982,7 @@ async fn cancel_specific_approved_and_audit(
     audit_service: &Arc<dyn intent_rebase_types::AuditRepository>,
     event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     stale_ids: &[String],
-    intent_id: Uuid,
-    tenant_id: Uuid,
-    actor_id: &str,
-    from_version: i32,
-    to_version: i32,
-    decision_class: &str,
-    new_approval_id: Uuid,
+    ctx: CancelApprovalContext,
 ) -> usize {
     if stale_ids.is_empty() {
         return 0;
@@ -1953,11 +2009,16 @@ async fn cancel_specific_approved_and_audit(
 
     let cancellation_reason = format!(
         "Superseded by new approval request {} due to rebase apply (targeted cancellation)",
-        new_approval_id
+        ctx.new_approval_id
     );
 
     let cancelled_count = match approval_repo
-        .cancel_approved_by_ids(&parsed_ids, tenant_id, actor_id, &cancellation_reason)
+        .cancel_approved_by_ids(
+            &parsed_ids,
+            ctx.tenant_id,
+            &ctx.actor_id,
+            &cancellation_reason,
+        )
         .await
     {
         Ok(count) => count,
@@ -1969,11 +2030,11 @@ async fn cancel_specific_approved_and_audit(
 
     if cancelled_count > 0 {
         let cancel_audit_payload = intent_rebase_types::ApprovalCancelledAuditPayload {
-            intent_id,
-            cancelled_version_from: from_version,
-            cancelled_version_to: to_version,
-            decision_class: decision_class.to_string(),
-            cancelled_by: actor_id.to_string(),
+            intent_id: ctx.intent_id,
+            cancelled_version_from: ctx.from_version,
+            cancelled_version_to: ctx.to_version,
+            decision_class: ctx.decision_class.clone(),
+            cancelled_by: ctx.actor_id.clone(),
             cancellation_reason,
             cancelled_count,
         };
@@ -1982,9 +2043,9 @@ async fn cancel_specific_approved_and_audit(
 
         if let Err(e) = audit_service
             .record_approval_cancelled(
-                tenant_id,
-                actor_id,
-                intent_id,
+                ctx.tenant_id,
+                &ctx.actor_id,
+                ctx.intent_id,
                 cancel_audit_payload,
                 get_current_trace_context(),
             )
@@ -1994,7 +2055,7 @@ async fn cancel_specific_approved_and_audit(
         } else {
             publish_audit_event(
                 event_publisher,
-                tenant_id,
+                ctx.tenant_id,
                 "ApprovalCancelled",
                 &serde_json::to_value(audit_payload_for_publish)
                     .unwrap_or_else(|_| serde_json::json!({})),
@@ -2022,9 +2083,9 @@ async fn cancel_specific_approved_and_audit(
 /// - When event_publisher fails, the overall operation continues
 ///
 /// **Phase 3 items** (not implemented in Phase 2b):
-/// - Consumers (checkpoint-creator, snapshot-creator, notifier)
+/// - Consumers (checkpoint-creator, snapshot-creator, notifier) — JetStream pull consumer now available
 /// - Dead-letter queue (DLQ) for failed event processing
-/// - Real NATS JetStream integration (only InMemoryEventPublisher is available)
+/// - Consumer startup wiring and lifecycle management
 async fn publish_audit_event(
     event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     tenant_id: uuid::Uuid,
@@ -13897,13 +13958,15 @@ mod tests {
             &state.audit_service,
             &state.event_publisher,
             &stale_ids,
-            intent_id,
-            tenant_id,
-            "external-api",
-            2,
-            3,
-            "D",
-            new_approval_id,
+            CancelApprovalContext {
+                intent_id,
+                tenant_id,
+                actor_id: "external-api".to_string(),
+                from_version: 2,
+                to_version: 3,
+                decision_class: "D".to_string(),
+                new_approval_id,
+            },
         )
         .await;
 
@@ -14063,13 +14126,15 @@ mod tests {
             &state.audit_service,
             &state.event_publisher,
             &stale_ids,
-            intent_id,
-            tenant_id,
-            "external-api",
-            2,
-            3,
-            "D",
-            new_approval_id,
+            CancelApprovalContext {
+                intent_id,
+                tenant_id,
+                actor_id: "external-api".to_string(),
+                from_version: 2,
+                to_version: 3,
+                decision_class: "D".to_string(),
+                new_approval_id,
+            },
         )
         .await;
 
@@ -14204,13 +14269,15 @@ mod tests {
             &state.audit_service,
             &state.event_publisher,
             &stale_ids,
-            intent_id,
-            tenant_id,
-            "external-api",
-            2,
-            3,
-            "D",
-            new_approval_id,
+            CancelApprovalContext {
+                intent_id,
+                tenant_id,
+                actor_id: "external-api".to_string(),
+                from_version: 2,
+                to_version: 3,
+                decision_class: "D".to_string(),
+                new_approval_id,
+            },
         )
         .await;
 

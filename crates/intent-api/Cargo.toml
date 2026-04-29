@@ -34,6 +34,11 @@ chrono = { workspace = true }
 sqlx = { workspace = true }
 jsonwebtoken = "9"
 
+# NATS client (Phase 2b bounded core publisher slice)
+# Uses async-nats for proper tokio integration with core publish (no JetStream)
+# JetStream streams/consumers/DLQ remain Phase 3 scope
+async-nats = "0.47"
+
 # OTEL support (optional — inactive unless OTEL_EXPORTER_OTLP_ENDPOINT is set)
 opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true }
@@ -45,6 +50,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 axum = { workspace = true }
 tokio = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+# Environment variable scoping for deterministic parallel tests
+temp-env = "0.3"
 
 [[bench]]
 name = "http_handlers"

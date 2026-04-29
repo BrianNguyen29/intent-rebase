@@ -573,7 +573,7 @@ mod tests {
 
         assert_eq!(response.status, VerificationStatus::Incomplete);
         assert!(response.status_reason.contains("No matching intents"));
-        assert_eq!(response.intent_version_coverage.intent_exists, false);
+        assert!(!response.intent_version_coverage.intent_exists);
         assert_eq!(response.intent_version_coverage.version_count, 0);
     }
 
@@ -624,7 +624,7 @@ mod tests {
         assert!(response
             .status_reason
             .contains("All referenced entities exist"));
-        assert_eq!(response.intent_version_coverage.intent_exists, true);
+        assert!(response.intent_version_coverage.intent_exists);
         assert_eq!(response.intent_version_coverage.version_count, 0);
     }
 
@@ -679,7 +679,7 @@ mod tests {
         let response = service.verify(request).await;
 
         assert_eq!(response.status, VerificationStatus::Ready);
-        assert_eq!(response.intent_version_coverage.intent_exists, true);
+        assert!(response.intent_version_coverage.intent_exists);
         assert_eq!(response.intent_version_coverage.version_count, 2);
         // Timestamps not available from count_available
         assert!(response.intent_version_coverage.earliest_version.is_none());

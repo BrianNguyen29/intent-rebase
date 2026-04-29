@@ -259,17 +259,31 @@ impl intent_rebase_types::EventConsumer for CheckpointCreatorConsumer {
 /// - Works with in-memory events only (no NATS subscription)
 /// - Does NOT retry logic (Phase 3 DLQ)
 /// - Does NOT implement consumer startup wiring (Phase 3)
-/// - Uses `memory://` URI placeholder (S3 upload is Phase 3)
+/// - Uses configured SnapshotStorage (InMemorySnapshotStorage by default, S3SnapshotStorage when configured)
 pub struct SnapshotCreatorConsumer {
     /// Policy snapshot repository for persisting snapshots
     policy_snapshot_repo: Arc<dyn PolicySnapshotRepository>,
+    /// Snapshot storage for blob persistence (S3 or InMemory)
+    snapshot_storage: Arc<dyn crate::s3_snapshot_storage::SnapshotStorage>,
 }
 
 impl SnapshotCreatorConsumer {
-    /// Create a new SnapshotCreatorConsumer with the given repository.
+    /// Create a new SnapshotCreatorConsumer with the given repository and default InMemory storage.
     pub fn new(policy_snapshot_repo: Arc<dyn PolicySnapshotRepository>) -> Self {
+        Self::with_storage(
+            policy_snapshot_repo,
+            Arc::new(crate::s3_snapshot_storage::InMemorySnapshotStorage::new()),
+        )
+    }
+
+    /// Create a new SnapshotCreatorConsumer with the given repository and custom storage.
+    pub fn with_storage(
+        policy_snapshot_repo: Arc<dyn PolicySnapshotRepository>,
+        snapshot_storage: Arc<dyn crate::s3_snapshot_storage::SnapshotStorage>,
+    ) -> Self {
         Self {
             policy_snapshot_repo,
+            snapshot_storage,
         }
     }
 
@@ -428,14 +442,50 @@ impl intent_rebase_types::EventConsumer for SnapshotCreatorConsumer {
         let rule_pack_version = Self::extract_rule_pack_version(event);
         let scope_definition = Self::build_scope_definition(event);
 
-        // Create the policy snapshot
-        let snapshot = PolicySnapshot::new(
+        // Create the policy snapshot with placeholder URI
+        let mut snapshot = PolicySnapshot::new(
             tenant_id,
             intent_id,
             intent_version,
             rule_pack_version,
             scope_definition,
         );
+
+        // Phase 3 bounded slice: Upload blob to configured storage (S3 or InMemory fallback)
+        // Serialize snapshot to JSON for blob storage
+        let blob_bytes = match serde_json::to_vec(&snapshot) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(
+                    "SnapshotCreatorConsumer: failed to serialize snapshot: {}",
+                    e
+                );
+                return ConsumeResult::Failed {
+                    reason: format!("snapshot serialization failed: {}", e),
+                };
+            }
+        };
+
+        // Store blob and get actual URI (s3://... or memory://...)
+        match self.snapshot_storage.put(&snapshot, &blob_bytes).await {
+            Ok(uri) => {
+                tracing::debug!(
+                    "SnapshotCreatorConsumer: stored blob at '{}' for intent {} v{}",
+                    uri,
+                    intent_id,
+                    intent_version
+                );
+                // Update snapshot_uri with actual storage URI (replaces placeholder)
+                snapshot.snapshot_uri = uri;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "SnapshotCreatorConsumer: failed to store blob, using placeholder URI: {:?}",
+                    e
+                );
+                // Continue with placeholder URI - this is intentional fail-open behavior
+            }
+        }
 
         match self.policy_snapshot_repo.create_snapshot(snapshot).await {
             Ok(created) => {

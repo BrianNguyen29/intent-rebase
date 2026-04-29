@@ -25,7 +25,9 @@ use metrics::{
 
 /// Intent API metrics definitions
 pub mod intent_api {
-    use super::*;
+    use metrics::{
+        Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, Opts,
+    };
 
     /// Counter for intent version creation attempts
     pub fn intent_version_created_total() -> CounterVec {
@@ -167,6 +169,92 @@ pub mod intent_api {
         )
         .expect("Failed to create errors_total counter")
     }
+
+    // =========================================================================
+    // DLQ Metrics (Phase 3 DLQ design stubs — G3 evidence)
+    // =========================================================================
+    // NOTE: These are metric STUBS for DLQ monitoring design.
+    // Actual instrumentation requires DLQ worker implementation (Phase 4).
+    // Gauge/counter labels follow Prometheus best practices.
+
+    /// Gauge for current DLQ depth (number of messages in DLQ)
+    ///
+    /// Alert threshold: > 10 messages
+    /// Usage: `metrics::gauge!("intent_api_dlq_messages_current").set(value)`
+    pub fn dlq_messages_current() -> GaugeVec {
+        GaugeVec::new(
+            Opts::new(
+                "intent_api_dlq_messages_current",
+                "Current depth of DLQ (number of messages in dead-letter queue)",
+            )
+            .const_label("service", "intent-api"),
+            &[],
+        )
+        .expect("Failed to create dlq_messages_current gauge")
+    }
+
+    /// Gauge for age of oldest message in DLQ (seconds)
+    ///
+    /// Alert threshold: > 3600s (1 hour)
+    /// Usage: `metrics::gauge!("intent_api_dlq_message_age_seconds").set(value)`
+    pub fn dlq_message_age_seconds() -> GaugeVec {
+        GaugeVec::new(
+            Opts::new(
+                "intent_api_dlq_message_age_seconds",
+                "Age of oldest message in DLQ in seconds",
+            )
+            .const_label("service", "intent-api"),
+            &[],
+        )
+        .expect("Failed to create dlq_message_age_seconds gauge")
+    }
+
+    /// Counter for total replay operations
+    ///
+    /// Usage: `metrics::counter!("intent_api_dlq_replay_total", "status" => status).increment(1)`
+    pub fn dlq_replay_total() -> CounterVec {
+        CounterVec::new(
+            Opts::new(
+                "intent_api_dlq_replay_total",
+                "Total DLQ replay operations",
+            )
+            .const_label("service", "intent-api"),
+            &["status"],
+        )
+        .expect("Failed to create dlq_replay_total counter")
+    }
+
+    /// Counter for failed replay attempts
+    ///
+    /// Alert threshold: > 0
+    /// Usage: `metrics::counter!("intent_api_dlq_replay_failures_total").increment(1)`
+    pub fn dlq_replay_failures_total() -> CounterVec {
+        CounterVec::new(
+            Opts::new(
+                "intent_api_dlq_replay_failures_total",
+                "Total failed DLQ replay attempts",
+            )
+            .const_label("service", "intent-api"),
+            &[],
+        )
+        .expect("Failed to create dlq_replay_failures_total counter")
+    }
+
+    /// Counter for total messages ever sent to DLQ
+    ///
+    /// N/A (counter — monotonic)
+    /// Usage: `metrics::counter!("intent_api_dlq_messages_total").increment(1)`
+    pub fn dlq_messages_total() -> CounterVec {
+        CounterVec::new(
+            Opts::new(
+                "intent_api_dlq_messages_total",
+                "Total messages ever sent to DLQ",
+            )
+            .const_label("service", "intent-api"),
+            &[],
+        )
+        .expect("Failed to create dlq_messages_total counter")
+    }
 }
 
 /// Compensation service metrics definitions
@@ -205,44 +293,63 @@ pub mod compensation {
 pub fn register_metrics(registry: &Registry) {
     // Intent API metrics
     registry
-        .register(intent_version_created_total())
+        .register(intent_api::intent_version_created_total())
         .expect("Failed to register intent_version_created_total");
     registry
-        .register(rebase_preview_total())
+        .register(intent_api::rebase_preview_total())
         .expect("Failed to register rebase_preview_total");
     registry
-        .register(rebase_apply_total())
+        .register(intent_api::rebase_apply_total())
         .expect("Failed to register rebase_apply_total");
     registry
-        .register(audit_append_total())
+        .register(intent_api::audit_append_total())
         .expect("Failed to register audit_append_total");
     registry
-        .register(diff_duration_seconds())
+        .register(intent_api::diff_duration_seconds())
         .expect("Failed to register diff_duration_seconds");
     registry
-        .register(rebase_preview_duration_seconds())
+        .register(intent_api::rebase_preview_duration_seconds())
         .expect("Failed to register rebase_preview_duration_seconds");
     registry
-        .register(rebase_apply_duration_seconds())
+        .register(intent_api::rebase_apply_duration_seconds())
         .expect("Failed to register rebase_apply_duration_seconds");
     registry
-        .register(approval_wait_duration_seconds())
+        .register(intent_api::approval_wait_duration_seconds())
         .expect("Failed to register approval_wait_duration_seconds");
     registry
-        .register(error_budget_remaining())
+        .register(intent_api::error_budget_remaining())
         .expect("Failed to register error_budget_remaining");
     registry
-        .register(requests_total())
+        .register(intent_api::requests_total())
         .expect("Failed to register requests_total");
     registry
-        .register(errors_total())
+        .register(intent_api::errors_total())
         .expect("Failed to register errors_total");
+
+    // DLQ metrics (Phase 3 DLQ design stubs — G3 evidence)
+    // NOTE: These are metric STUBS for DLQ monitoring design.
+    // Actual instrumentation requires DLQ worker implementation (Phase 4).
+    registry
+        .register(intent_api::dlq_messages_current())
+        .expect("Failed to register dlq_messages_current");
+    registry
+        .register(intent_api::dlq_message_age_seconds())
+        .expect("Failed to register dlq_message_age_seconds");
+    registry
+        .register(intent_api::dlq_replay_total())
+        .expect("Failed to register dlq_replay_total");
+    registry
+        .register(intent_api::dlq_replay_failures_total())
+        .expect("Failed to register dlq_replay_failures_total");
+    registry
+        .register(intent_api::dlq_messages_total())
+        .expect("Failed to register dlq_messages_total");
 
     // Compensation service metrics
     registry
-        .register(action_executed_total())
+        .register(compensation::action_executed_total())
         .expect("Failed to register compensation_action_executed_total");
     registry
-        .register(execution_duration_seconds())
+        .register(compensation::execution_duration_seconds())
         .expect("Failed to register execution_duration_seconds");
 }

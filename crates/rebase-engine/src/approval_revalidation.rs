@@ -62,8 +62,20 @@ fn compute_affected_approval_ids(plan: &RebasePlan) -> Vec<String> {
 /// approvals, and returns an `ApprovalRevalidationResult` describing which
 /// approvals need revalidation and with what strategy.
 ///
+/// # Risk Tier Rules (ADR-07)
+///
+/// - **Critical**: Full invalidation of all current approvals (unless DecisionClass::E)
+/// - **High**: Partial invalidation using affected approval IDs/external_ref correlation
+/// - **Medium**: Log + notify; no approval cancellation
+/// - **Low**: No approval impact
+///
+/// # Decision Class Override
+///
+/// DecisionClass::E always takes precedence over risk tier and results in
+/// Deferred strategy with manual review required.
+///
 /// # Arguments
-/// * `plan` - The rebase plan containing decision class and affected items
+/// * `plan` - The rebase plan containing decision class, risk tier, and affected items
 /// * `current_approvals` - Slice of approval node IDs (as strings) that are currently active
 ///
 /// # Returns
@@ -76,6 +88,16 @@ pub fn classify_approvals(
     plan: &RebasePlan,
     current_approvals: &[String],
 ) -> ApprovalRevalidationResult {
+    // DecisionClass::E overrides risk tier - always Deferred with manual review
+    if plan.decision_class == DecisionClass::E {
+        return ApprovalRevalidationResult {
+            strategy: RevalidationStrategy::Deferred,
+            stale_ids: vec![],
+            revalidation_required: vec![],
+            requires_manual_review: true,
+        };
+    }
+
     let affected_ids = compute_affected_approval_ids(plan);
     // stale_ids is the intersection of affected approvals and current approvals
     // Only approvals that BOTH exist (current_approvals) AND are affected should be marked stale
@@ -86,12 +108,67 @@ pub fn classify_approvals(
         .cloned()
         .collect();
 
+    // ADR-07 risk tier rules applied before decision class logic
+    match plan.risk_tier {
+        // Critical: Full invalidation of all current approvals
+        RiskTier::Critical => {
+            return ApprovalRevalidationResult {
+                strategy: RevalidationStrategy::Full,
+                stale_ids: current_approvals.to_vec(),
+                revalidation_required: vec![],
+                requires_manual_review: true,
+            };
+        }
+
+        // Medium: Log + notify; no approval cancellation
+        RiskTier::Medium => {
+            return ApprovalRevalidationResult {
+                strategy: RevalidationStrategy::LogNotify,
+                stale_ids: vec![],
+                revalidation_required: vec![],
+                requires_manual_review: false,
+            };
+        }
+
+        // Low: No approval impact
+        RiskTier::Low => {
+            return ApprovalRevalidationResult {
+                strategy: RevalidationStrategy::Incremental,
+                stale_ids: vec![],
+                revalidation_required: vec![],
+                requires_manual_review: false,
+            };
+        }
+
+        // High: Partial invalidation using affected approval IDs (proceed to decision class)
+        RiskTier::High => {}
+    }
+
+    // For High risk tier with decision class A, we still want incremental/partial behavior
+    // not full Drop. High risk means partial invalidation of affected items only.
+    let use_incremental_for_high_a =
+        plan.risk_tier == RiskTier::High && plan.decision_class == DecisionClass::A;
+
     match plan.decision_class {
         // Class A: No semantic changes - all approvals are stale, strategy=Drop
+        // Exception: High risk tier uses incremental/partial invalidation instead
         DecisionClass::A => {
-            let stale_ids: Vec<String> = current_approvals.to_vec();
+            let stale_ids: Vec<String> = if use_incremental_for_high_a {
+                // High risk: partial invalidation of affected items only
+                affected_ids
+                    .iter()
+                    .filter(|id| current_approval_set.contains(id))
+                    .cloned()
+                    .collect()
+            } else {
+                current_approvals.to_vec()
+            };
             ApprovalRevalidationResult {
-                strategy: RevalidationStrategy::Drop,
+                strategy: if use_incremental_for_high_a {
+                    RevalidationStrategy::Incremental
+                } else {
+                    RevalidationStrategy::Drop
+                },
                 stale_ids,
                 revalidation_required: vec![],
                 requires_manual_review: false,
@@ -201,7 +278,16 @@ mod tests {
     use intent_rebase_types::{AffectedItem, AffectedItemsPreview, AffectedItemsStatus};
     use uuid::Uuid;
 
-    fn create_test_plan(decision_class: DecisionClass) -> RebasePlan {
+    fn create_test_plan_with_risk(
+        decision_class: DecisionClass,
+        risk_tier: RiskTier,
+    ) -> RebasePlan {
+        let risk_level = match risk_tier {
+            RiskTier::Low => 1,
+            RiskTier::Medium => 2,
+            RiskTier::High => 3,
+            RiskTier::Critical => 4,
+        };
         RebasePlan {
             decision_class,
             rationale: "Test plan".to_string(),
@@ -209,8 +295,8 @@ mod tests {
             affected_items: AffectedItemsPreview::unavailable(),
             deferred: DeferredFields::default(),
             manual_review_recommended: false,
-            risk_tier: RiskTier::Low,
-            risk_level: 1,
+            risk_tier,
+            risk_level,
         }
     }
 
@@ -218,6 +304,26 @@ mod tests {
         decision_class: DecisionClass,
         affected_approvals: Vec<AffectedItem>,
     ) -> RebasePlan {
+        // Default to High risk for standard decision class tests.
+        // See create_test_plan for rationale.
+        create_plan_with_affected_approvals_and_risk(
+            decision_class,
+            affected_approvals,
+            RiskTier::High,
+        )
+    }
+
+    fn create_plan_with_affected_approvals_and_risk(
+        decision_class: DecisionClass,
+        affected_approvals: Vec<AffectedItem>,
+        risk_tier: RiskTier,
+    ) -> RebasePlan {
+        let risk_level = match risk_tier {
+            RiskTier::Low => 1,
+            RiskTier::Medium => 2,
+            RiskTier::High => 3,
+            RiskTier::Critical => 4,
+        };
         RebasePlan {
             decision_class,
             rationale: "Test plan".to_string(),
@@ -230,8 +336,8 @@ mod tests {
             },
             deferred: DeferredFields::default(),
             manual_review_recommended: false,
-            risk_tier: RiskTier::Low,
-            risk_level: 1,
+            risk_tier,
+            risk_level,
         }
     }
 
@@ -239,28 +345,31 @@ mod tests {
 
     #[test]
     fn test_class_a_all_approvals_stale() {
-        let plan = create_test_plan(DecisionClass::A);
+        // With ADR-07 risk semantics, only Critical risk marks ALL approvals stale.
+        // High risk + Class A uses incremental (partial) invalidation.
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Critical);
         let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
 
         let result = classify_approvals(&plan, &current_approvals);
 
-        assert_eq!(result.strategy, RevalidationStrategy::Drop);
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
         assert_eq!(result.stale_ids, vec!["approval-1", "approval-2"]);
         assert!(result.revalidation_required.is_empty());
-        assert!(!result.requires_manual_review);
+        assert!(result.requires_manual_review);
     }
 
     #[test]
     fn test_class_a_empty_approvals() {
-        let plan = create_test_plan(DecisionClass::A);
+        // With Critical risk and empty approvals, should return Full with empty stale_ids
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Critical);
         let current_approvals: Vec<String> = vec![];
 
         let result = classify_approvals(&plan, &current_approvals);
 
-        assert_eq!(result.strategy, RevalidationStrategy::Drop);
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
         assert!(result.stale_ids.is_empty());
         assert!(result.revalidation_required.is_empty());
-        assert!(!result.requires_manual_review);
+        assert!(result.requires_manual_review);
     }
 
     // === Decision Class B Tests ===
@@ -679,5 +788,397 @@ mod tests {
         // NOT graph_node_id. This means the approval gets correctly identified as stale.
         assert_eq!(result.stale_ids.len(), 1);
         assert_eq!(result.stale_ids[0], approval_request_id.to_string());
+    }
+
+    // === Risk Tier Tests (ADR-07) ===
+
+    #[test]
+    fn test_critical_risk_marks_all_approvals_stale() {
+        // Critical risk should invalidate ALL current approvals regardless of decision class
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Critical);
+        let current_approvals = vec![
+            "approval-1".to_string(),
+            "approval-2".to_string(),
+            "approval-3".to_string(),
+        ];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
+        assert_eq!(
+            result.stale_ids,
+            vec!["approval-1", "approval-2", "approval-3"]
+        );
+        assert!(result.requires_manual_review);
+        assert!(result.revalidation_required.is_empty());
+    }
+
+    #[test]
+    fn test_critical_risk_overrides_class_b() {
+        // Critical risk should override decision class B
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::B,
+            vec![AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Critical,
+        );
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Critical should mark ALL approvals stale, not just affected ones
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
+        assert_eq!(result.stale_ids, vec!["approval-1", "approval-2"]);
+        assert!(result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_critical_risk_overrides_class_c() {
+        // Critical risk should override decision class C
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::C,
+            vec![AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Critical,
+        );
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
+        assert_eq!(result.stale_ids, vec!["approval-1", "approval-2"]);
+    }
+
+    #[test]
+    fn test_class_e_overrides_critical_risk() {
+        // DecisionClass::E should override Critical risk tier
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::E,
+            vec![AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Critical,
+        );
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // E class should always be Deferred regardless of risk tier
+        assert_eq!(result.strategy, RevalidationStrategy::Deferred);
+        assert!(result.stale_ids.is_empty());
+        assert!(result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_class_e_overrides_high_risk() {
+        // DecisionClass::E should override High risk tier
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::E,
+            vec![AffectedItem {
+                node_id: Uuid::new_v4(),
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::High,
+        );
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Deferred);
+        assert!(result.stale_ids.is_empty());
+        assert!(result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_class_e_overrides_medium_risk() {
+        // DecisionClass::E should override Medium risk tier
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::E,
+            vec![],
+            RiskTier::Medium,
+        );
+        let current_approvals = vec!["approval-1".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Deferred);
+        assert!(result.stale_ids.is_empty());
+        assert!(result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_class_e_overrides_low_risk() {
+        // DecisionClass::E should override Low risk tier
+        let plan =
+            create_plan_with_affected_approvals_and_risk(DecisionClass::E, vec![], RiskTier::Low);
+        let current_approvals = vec!["approval-1".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Deferred);
+        assert!(result.stale_ids.is_empty());
+        assert!(result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_high_risk_partial_invalidation_class_a() {
+        // High risk with Class A should use incremental (partial) invalidation, not full Drop
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::A,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::High,
+        );
+        let current_approvals = vec![
+            affected_id.to_string(),
+            "unaffected-1".to_string(),
+            "unaffected-2".to_string(),
+        ];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // High risk + Class A should be incremental, not Drop
+        // Only affected approvals should be stale, not all
+        assert_eq!(result.strategy, RevalidationStrategy::Incremental);
+        assert_eq!(result.stale_ids, vec![affected_id.to_string()]);
+        assert!(!result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_high_risk_with_class_b() {
+        // High risk with Class B should use incremental (partial) invalidation
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::B,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::High,
+        );
+        let current_approvals = vec![affected_id.to_string(), "unaffected".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Incremental);
+        assert_eq!(result.stale_ids, vec![affected_id.to_string()]);
+    }
+
+    #[test]
+    fn test_high_risk_with_class_c() {
+        // High risk with Class C should use full (but only of affected)
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::C,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::High,
+        );
+        let current_approvals = vec![affected_id.to_string(), "unaffected".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
+        assert_eq!(result.stale_ids, vec![affected_id.to_string()]);
+        assert!(!result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_medium_risk_no_cancellation() {
+        // Medium risk should LogNotify and NOT cancel any approvals
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::B,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Medium,
+        );
+        let current_approvals = vec![affected_id.to_string(), "other".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Medium risk should NOT cancel any approvals
+        assert_eq!(result.strategy, RevalidationStrategy::LogNotify);
+        assert!(result.stale_ids.is_empty());
+        assert!(!result.requires_manual_review);
+        assert!(result.revalidation_required.is_empty());
+    }
+
+    #[test]
+    fn test_medium_risk_with_class_a() {
+        // Medium risk with Class A should still LogNotify, not Drop
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Medium);
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Medium should LogNotify regardless of decision class
+        assert_eq!(result.strategy, RevalidationStrategy::LogNotify);
+        assert!(result.stale_ids.is_empty());
+        assert!(!result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_medium_risk_with_class_d() {
+        // Medium risk with Class D should still LogNotify (no cancellation)
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::D,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Medium,
+        );
+        let current_approvals = vec![affected_id.to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Even Class D + Medium should LogNotify
+        assert_eq!(result.strategy, RevalidationStrategy::LogNotify);
+        assert!(result.stale_ids.is_empty());
+        // Class D normally requires manual review, but Medium takes precedence
+        assert!(!result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_low_risk_no_approval_impact() {
+        // Low risk should have no approval impact
+        let affected_id = Uuid::new_v4();
+        let plan = create_plan_with_affected_approvals_and_risk(
+            DecisionClass::B,
+            vec![AffectedItem {
+                node_id: affected_id,
+                label: "Affected".to_string(),
+                impact: ClassificationImpact::Direct,
+                reason: "Directly affected".to_string(),
+                external_ref: None,
+            }],
+            RiskTier::Low,
+        );
+        let current_approvals = vec![affected_id.to_string(), "other".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Low risk should have no impact on approvals
+        assert_eq!(result.strategy, RevalidationStrategy::Incremental);
+        assert!(result.stale_ids.is_empty());
+        assert!(!result.requires_manual_review);
+        assert!(result.revalidation_required.is_empty());
+    }
+
+    #[test]
+    fn test_low_risk_with_class_a() {
+        // Low risk with Class A should have no approval impact
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Low);
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Low risk should not drop approvals even for Class A
+        assert!(result.stale_ids.is_empty());
+        assert!(!result.requires_manual_review);
+    }
+
+    #[test]
+    fn test_risk_tier_is_respected_before_decision_class() {
+        // Verify risk tier takes precedence over decision class for critical scenarios
+        // Critical + A should not behave like Class A (Drop) but like Critical (Full)
+        let plan = create_test_plan_with_risk(DecisionClass::A, RiskTier::Critical);
+        let current_approvals = vec!["approval-1".to_string(), "approval-2".to_string()];
+
+        let result = classify_approvals(&plan, &current_approvals);
+
+        // Should be Critical behavior (Full), not Class A behavior (Drop)
+        assert_eq!(result.strategy, RevalidationStrategy::Full);
+        assert_eq!(result.stale_ids, vec!["approval-1", "approval-2"]);
+    }
+
+    #[test]
+    fn test_all_risk_tiers_deterministic() {
+        // Same input should always produce same output
+        let affected_id = Uuid::new_v4();
+        let affected_approvals = vec![AffectedItem {
+            node_id: affected_id,
+            label: "Test".to_string(),
+            impact: ClassificationImpact::Direct,
+            reason: "Test".to_string(),
+            external_ref: None,
+        }];
+
+        for risk_tier in [
+            RiskTier::Low,
+            RiskTier::Medium,
+            RiskTier::High,
+            RiskTier::Critical,
+        ] {
+            for decision_class in [
+                DecisionClass::A,
+                DecisionClass::B,
+                DecisionClass::C,
+                DecisionClass::D,
+            ] {
+                // Skip E since it always returns the same result
+                let plan = create_plan_with_affected_approvals_and_risk(
+                    decision_class,
+                    affected_approvals.clone(),
+                    risk_tier.clone(),
+                );
+                let current_approvals = vec![affected_id.to_string()];
+
+                let result1 = classify_approvals(&plan, &current_approvals);
+                let result2 = classify_approvals(&plan, &current_approvals);
+
+                assert_eq!(
+                    result1.strategy, result2.strategy,
+                    "Strategy mismatch for {:?} + {:?}",
+                    risk_tier, decision_class
+                );
+                assert_eq!(result1.stale_ids, result2.stale_ids);
+                assert_eq!(
+                    result1.requires_manual_review,
+                    result2.requires_manual_review
+                );
+            }
+        }
     }
 }

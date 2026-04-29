@@ -106,6 +106,83 @@ pub fn from_span_context(span_context: &SpanContext) -> TraceContext {
     }
 }
 
+// =============================================================================
+// W3C Traceparent Parsing (Phase 3 bounded trace continuity slice)
+// =============================================================================
+
+/// Error type for malformed traceparent headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceparentError {
+    /// traceparent header value is empty
+    Empty,
+    /// Invalid format (wrong number of components)
+    InvalidFormat,
+    /// Invalid version field (not "00")
+    InvalidVersion,
+    /// trace_id is not valid hex or wrong length (must be 32 chars)
+    InvalidTraceId,
+    /// span_id is not valid hex or wrong length (must be 16 chars)
+    InvalidSpanId,
+    /// trace_flags is not valid hex or wrong length (must be 2 chars)
+    InvalidTraceFlags,
+}
+
+/// W3C traceparent header parser.
+///
+/// Format: `version-trace_id-span_id-trace_flags`
+/// Example: `00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01`
+///
+/// Phase 3 bounded trace continuity slice: Parses native NATS `traceparent` header
+/// into `TraceContext` for correlation. Rejects malformed headers.
+///
+/// **Validation rules:**
+/// - Version must be "00" (only version supported)
+/// - trace_id must be exactly 32 hex characters (0-9, a-f, A-F)
+/// - span_id must be exactly 16 hex characters (0-9, a-f, A-F)
+/// - trace_flags must be exactly 2 hex characters (0-9, a-f, A-F)
+/// - Per W3C spec, implementations SHOULD accept uppercase hex digits (we accept both)
+pub fn parse_traceparent(value: &str) -> Result<TraceContext, TraceparentError> {
+    if value.is_empty() {
+        return Err(TraceparentError::Empty);
+    }
+
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() != 4 {
+        return Err(TraceparentError::InvalidFormat);
+    }
+
+    let [version, trace_id, span_id, trace_flags] = parts.as_slice() else {
+        return Err(TraceparentError::InvalidFormat);
+    };
+
+    // Version must be "00" (W3C trace-context version)
+    if *version != "00" {
+        return Err(TraceparentError::InvalidVersion);
+    }
+
+    // trace_id: exactly 32 hex characters (W3C hexdig: DIGIT / "a" / "f")
+    // Per W3C spec: implementations SHOULD accept uppercase and convert to lowercase.
+    // For this bounded Phase 3 implementation, we accept valid hex digits (case-insensitive).
+    if trace_id.len() != 32 || !trace_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(TraceparentError::InvalidTraceId);
+    }
+
+    // span_id: exactly 16 hex characters
+    if span_id.len() != 16 || !span_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(TraceparentError::InvalidSpanId);
+    }
+
+    // trace_flags: exactly 2 hex characters
+    if trace_flags.len() != 2 || !trace_flags.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(TraceparentError::InvalidTraceFlags);
+    }
+
+    Ok(TraceContext {
+        trace_id: Some(trace_id.to_string()),
+        span_id: Some(span_id.to_string()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +221,171 @@ mod tests {
         // This may or may not be None depending on whether other code has initialized the global
         // The important thing is it doesn't panic
         println!("Current trace context: {:?}", ctx);
+    }
+
+    // =====================================================================
+    // W3C Traceparent Parsing Tests (Phase 3 bounded trace continuity slice)
+    // =====================================================================
+
+    #[test]
+    fn test_parse_traceparent_valid() {
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        assert_eq!(
+            ctx.trace_id,
+            Some("0af7651916cd43dd8448eb211c80319c".to_string())
+        );
+        assert_eq!(ctx.span_id, Some("b7ad6b7169203331".to_string()));
+    }
+
+    #[test]
+    fn test_parse_traceparent_valid_unsampled() {
+        // trace_flags "00" means not sampled
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00");
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        assert_eq!(
+            ctx.trace_id,
+            Some("0af7651916cd43dd8448eb211c80319c".to_string())
+        );
+        assert_eq!(ctx.span_id, Some("b7ad6b7169203331".to_string()));
+    }
+
+    #[test]
+    fn test_parse_traceparent_empty() {
+        let result = parse_traceparent("");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::Empty);
+    }
+
+    #[test]
+    fn test_parse_traceparent_invalid_format_too_few_parts() {
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidFormat);
+    }
+
+    #[test]
+    fn test_parse_traceparent_invalid_format_too_many_parts() {
+        let result =
+            parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidFormat);
+    }
+
+    #[test]
+    fn test_parse_traceparent_invalid_version() {
+        // Version "FF" is not supported
+        let result = parse_traceparent("FF-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidVersion);
+    }
+
+    #[test]
+    fn test_parse_traceparent_trace_id_too_short() {
+        // 31 chars instead of 32
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319-b7ad6b7169203331-01");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidTraceId);
+    }
+
+    #[test]
+    fn test_parse_traceparent_trace_id_invalid_hex() {
+        // Contains 'g' which is not a hex character
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319g-b7ad6b7169203331-01");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidTraceId);
+    }
+
+    #[test]
+    fn test_parse_traceparent_trace_id_uppercase() {
+        // W3C spec says we SHOULD accept uppercase hex digits and convert to lowercase.
+        // For this bounded implementation, we accept uppercase as valid hex.
+        let result = parse_traceparent("00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01");
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        // Note: we accept uppercase but don't convert it
+        assert_eq!(
+            ctx.trace_id,
+            Some("0AF7651916CD43DD8448EB211C80319C".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_traceparent_span_id_too_short() {
+        // 15 chars instead of 16
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b716920333-01");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidSpanId);
+    }
+
+    #[test]
+    fn test_parse_traceparent_span_id_invalid_hex() {
+        // Contains 'z' which is not a hex character
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b716920333z-01");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidSpanId);
+    }
+
+    #[test]
+    fn test_parse_traceparent_span_id_uppercase() {
+        // W3C spec says we SHOULD accept uppercase hex digits.
+        // For this bounded implementation, we accept uppercase as valid hex.
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-B7AD6B7169203331-01");
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        assert_eq!(ctx.span_id, Some("B7AD6B7169203331".to_string()));
+    }
+
+    #[test]
+    fn test_parse_traceparent_flags_too_short() {
+        // 1 char instead of 2
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-1");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidTraceFlags);
+    }
+
+    #[test]
+    fn test_parse_traceparent_flags_invalid_hex() {
+        // Contains 'z' which is not a hex character
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-g1");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TraceparentError::InvalidTraceFlags);
+    }
+
+    #[test]
+    fn test_parse_traceparent_flags_uppercase() {
+        // W3C spec says we SHOULD accept uppercase hex digits.
+        // For this bounded implementation, we accept uppercase as valid hex.
+        let result = parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-A1");
+        // Note: We don't validate trace_flags format beyond being valid hex (01 is sampled, 00 is not)
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_traceparent_all_zeros() {
+        // Valid: all zeros trace_id and span_id
+        let result = parse_traceparent("00-00000000000000000000000000000000-0000000000000000-01");
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        assert_eq!(
+            ctx.trace_id,
+            Some("00000000000000000000000000000000".to_string())
+        );
+        assert_eq!(ctx.span_id, Some("0000000000000000".to_string()));
+    }
+
+    #[test]
+    fn test_parse_traceparent_roundtrip() {
+        // Parse a traceparent, verify we get the expected TraceContext
+        let original = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        let ctx = parse_traceparent(original).unwrap();
+        assert!(ctx.is_some());
+        assert_eq!(
+            ctx.trace_id.as_ref().unwrap(),
+            "0af7651916cd43dd8448eb211c80319c"
+        );
+        assert_eq!(ctx.span_id.as_ref().unwrap(), "b7ad6b7169203331");
     }
 }

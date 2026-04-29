@@ -3,10 +3,10 @@
 ## Executive Summary
 
 **Current Phase:** Phase 3 — Compensation + Production Hardening, Batch 1 largely delivered.  
-**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — all three reviewers (Product Owner, Security, Runtime Integration) have signed off as APPROVED with name/date pending documentation per user instruction. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.  
+**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — Brian Nguyen (sole signer, personal project) signed off as APPROVED for all three reviewer roles (Product Owner, Security, Runtime Integration) on 2026-04-28. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.
 **Phase 3 Batch 1 delivered:** Side effect ledger, compensation-actions CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, single-shot orchestration runtime (HTTP + CLI), and POST /compensation-simulation/run (commit fe2a1f6). Tenant context hardening delivered (commit de2d80d). Phase 2b exit is closed; bounded planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1.
 **Phase 3 Batch 2 status:** Bounded slices delivered (SLO definitions provisional, alerting rules, error budget panels, distributed tracing, benchmarks); external SRE sign-off gates remain.
-**Phase 3 Batch 3b status:** Forensic verification with real entity counts (commit 7b05c5b), bounded generation (POST /forensic/bundle with S3/MinIO), bounded export (POST /forensic/export), and bounded download (GET /forensic-bundles/{id}/download) slices delivered; full runtime replay, async orchestration, and S3-backed retrieval/storage lifecycle remain Phase 4 scope.
+**Phase 3 Batch 3b status:** Forensic verification with real entity counts (commit 7b05c5b), bounded generation (POST /forensic/bundle with in-memory storage; S3BundleStorage seam exists), bounded export (POST /forensic/export), and bounded download slices delivered; S3-backed retrieval/storage lifecycle and full runtime replay remain Phase 4 scope.
 **Production readiness:** Not yet production-ready. Phase 3 Batch 1 delivers bounded API surfaces; SRE hardening (external gates), tenant isolation verification, forensic replay (Phase 4), and performance work are still open.
 
 ---
@@ -90,7 +90,7 @@ This project distinguishes between **non-production feature completion** and **p
 | Area | Status | Blocking |
 |------|--------|----------|
 | Approval invalidation (bounded) | ✅ Delivered | `trigger_reapproval` cancels Approved approvals; `rebase_apply` BlockedManualReview cancels Approved approvals; `Cancelled` status used as substitute for `Invalidated` |
-| Phase 2b exit gate | ✅ Closed | All three reviewers approved (name/date pending documentation) |
+| Phase 2b exit gate | ✅ Closed | Brian Nguyen (sole signer, personal project) approved all three roles — 2026-04-28 |
 | Side effect rollback record (compensation applied, result) | ✅ Delivered | Bounded: schema + repository for compensation applied/result fields |
 | Compensation planner (full — bounded delivered) | ✅ Delivered | Bounded planner: generates compensation plans from side effects using class-based strategy routing; S2 plans route to CounterAction+SemiAutomatic (per class routing); fail-closed on unsupported strategy classes |
 | Compensation executor (four bounded executors — Rollback/CounterAction/FollowupNotice/Escalation) | ✅ Delivered | Bounded: RollbackExecutor (Rollback+Automatic), CounterActionExecutor (CounterAction+SemiAutomatic), FollowupNoticeExecutor (FollowupNotice+ManualOnly), EscalationExecutor (Escalation+NotPossible); fail-closed on non-matching combos; S2 planner/executor alignment resolved (S2ExternalReversible routes to CounterAction+SemiAutomatic) |
@@ -100,7 +100,7 @@ This project distinguishes between **non-production feature completion** and **p
 | Performance benchmarks | 🔄 In Progress | Bounded slices delivered: rebase-engine sync bench, graph traversal bench, DB bench, HTTP server bench with in-memory repos; full production load testing remains open |
 | Runbooks | 🔄 In Progress | RB6-RB10 delivered (rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn) |
 | Tenant isolation verification tests | 🔄 In Progress | Bounded slices delivered: P3-S1 (tenant isolation tests), P3-S2 (quota enforcement), P3-S3 (rule pack isolation), P3-S4 (audit query isolation), P3-S5 (tenant service scaffold) |
-| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface; **bundle generation + storage (POST /forensic/bundle with S3/MinIO) now delivered; list bundles (GET /forensic/bundles) and download from S3 (GET /forensic/bundles/{id}/download) now delivered as bounded API surfaces**; full replay remains open |
+| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface; **bundle generation (POST /forensic/bundle) delivered with in-memory storage at runtime; S3BundleStorage seam exists but not wired; list bundles (GET /forensic/bundles) and download API surfaces delivered as bounded in-memory; S3-backed retrieval/storage lifecycle remains Phase 4 scope**; full replay remains open |
 | Threat model v2, penetration testing | 🔄 In Progress | Threat model v2 documented; pen test scope defined (planning artifact only); pen test execution and external security review remain open |
 | Load testing | 🔄 In Progress | Bounded HTTP load harness delivered (intent-api HTTP server with in-memory repos); full production load testing remains gated on P5 full completion |
 
@@ -133,10 +133,26 @@ cargo clippy --all-features -- -D warnings
 
 ---
 
+## Prioritized Next Steps
+
+| Priority | Area | Action | Owner |
+|----------|------|--------|-------|
+| **P0** | Phase 2b sign-off | Close Phase2b sign-off name/date documentation | Backend Lead |
+| **P0/P1** | NATS consumer lifecycle | Implement NATS consumer subscription lifecycle; gate on DLQ design approval (G1-G5) | Backend Lead / SRE |
+| **P1** | Forensic S3BundleStorage | Wire S3BundleStorage into forensic-service runtime OR keep docs demoted | Backend Lead |
+| **P1** | S3 snapshot production | Complete S3 snapshot production lifecycle (Object Lock/chain-hash deferred to Phase 4) | Backend Lead |
+| **P1** | Production readiness | Production load testing + SRE/Security external sign-offs | SRE / Security |
+| **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |
+
+> **Note:** Local validation evidence (current uncommitted set): `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, targeted tests for nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic, `git diff --check` passed. Full `cargo test --workspace` and remote CI not claimed.
+
+---
+
 ## Related Docs
 
 - [Roadmap](./01-roadmap.md)
 - [Phase 3 Hardening Plan](./05-phase-3-hardening.md)
 - [Phase 3 Batch 0 Execution](./06-phase-3-batch-0-execution.md)
 - [Phase 3 Checklist](./checklists/checklist-phase-3.md)
+- [Phase 3 Completion Execution Plan](./15-phase-3-completion-execution-plan.md)
 - [10 Completion Proposals Tracker](./09-completion-proposals-tracker.md)

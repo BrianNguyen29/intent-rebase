@@ -154,9 +154,11 @@ Ten items (D-01 through D-10) are explicitly deferred to Phase 3. All are docume
 
 | Reviewer | Decision | Name | Date | Notes |
 |----------|----------|------|------|-------|
-| Product Owner | ✅ APPROVED | name pending | date pending | Scope acceptable; Phase 3 deferrals correctly categorized and owned |
-| Security | ✅ APPROVED | name pending | date pending | No blocking security findings not explicitly documented as Phase 3 deferrals |
-| Runtime Integration | ✅ APPROVED | name pending | date pending | Runtime integration surfaces correctly designed; Phase 3 integration gaps correctly deferred |
+| Product Owner | ✅ APPROVED | Brian Nguyen | 2026-04-28 | Scope acceptable; Phase 3 deferrals correctly categorized and owned |
+| Security | ✅ APPROVED | Brian Nguyen | 2026-04-28 | No blocking security findings not explicitly documented as Phase 3 deferrals |
+| Runtime Integration | ✅ APPROVED | Brian Nguyen | 2026-04-28 | Runtime integration surfaces correctly designed; Phase 3 integration gaps correctly deferred |
+
+> **Note:** This is a personal project with a single signer (Brian Nguyen) acting as Product Owner, Security, and Runtime Integration reviewer. All three role sign-offs are fulfilled by the same individual.
 
 ### Blocking Issues (if any — must be resolved before Phase 2b is closed)
 
@@ -173,8 +175,8 @@ Ten items (D-01 through D-10) are explicitly deferred to Phase 3. All are docume
 ### Phase 2b Exit Confirmation
 
 ```
-Phase 2b Exit Date: date pending (Phase 2b exit gate formally closed upon reviewer signature dates)
-Phase 2b Exit Gate: CLOSED — all three reviewers signed off (name/date pending documentation)
+Phase 2b Exit Date: 2026-04-28
+Phase 2b Exit Gate: CLOSED — all three reviewers signed off (Brian Nguyen, single-signer personal project)
 Phase 3 entry: AUTHORIZED — Phase 2b exit gate passed
 ```
 
@@ -182,7 +184,7 @@ Phase 3 entry: AUTHORIZED — Phase 2b exit gate passed
 
 ## 6. Updated Status
 
-> **Phase 2b status:** `APPROVED — external sign-off complete; name/date pending documentation`  
+> **Phase 2b status:** `APPROVED — external sign-off complete; Brian Nguyen (single signer, personal project)`
 > **Phase 2b exit gate:** `CLOSED`  
 > **Phase 3 entry:** `AUTHORIZED`
 

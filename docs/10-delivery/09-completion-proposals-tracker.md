@@ -11,7 +11,7 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (name/date pending) | Critical |
+| [P1](#p1--phase-2b-exit-gate) | Phase 2b Exit Gate | ✅ Approved (Brian Nguyen / 2026-04-28 — single-signer) | Critical |
 | [P2](#p2--phase-3-batch-2--observability--sre) | Phase 3 Batch 2 — Observability + SRE | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7, Slice 8, Slice 9 delivered) | High |
 | [P3](#p3--phase-3-batch-3a--tenant-isolation-hardening) | Phase 3 Batch 3a — Tenant Isolation Hardening | 🔄 In Progress (bounded slices delivered: P3-S1, P3-S2, P3-S3, P3-S4, P3-S5) | High |
 | [P4](#p4--phase-3-batch-3b--forensic-replay-bundle) | Phase 3 Batch 3b — Forensic Replay Bundle | 🔄 In Progress (bounded verification slice delivered) | High |
@@ -31,11 +31,11 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | **ID** | P1 |
 | **Title** | Phase 2b Exit Gate |
 | **Purpose** | Phase 2b exit gate — completed and closed. Phase 2b scope: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. |
-| **Status** | ✅ **APPROVED — Phase 2b exit gate closed; name/date pending documentation per user instruction** |
+| **Status** | ✅ **APPROVED — Phase 2b exit gate closed; Brian Nguyen sole signer (2026-04-28)** |
 | **Priority** | Critical |
 | **Owner** | Backend Lead |
 | **Suggested Next Step** | Phase 3 Batch 2+ work is now unblocked — begin P2 (Phase 3 Batch 2 — Observability + SRE) |
-| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b Slice A (evidence verification) complete — all gates green. **Slice B (residual risk & Phase 3 deferral register) delivered — see [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md).** **Phase 2b is APPROVED — Product Owner ✅, Security ✅, Runtime Integration ✅ — name/date pending documentation per user instruction. Phase 2b exit gate CLOSED. Phase 3 Batch 2+ is now unblocked.** **Bounded approval invalidation wired:** `trigger_reapproval` endpoint cancels existing `Approved` approvals (status → `Cancelled`) when creating a replacement `Pending` request; `rebase_apply` with `BlockedManualReview` outcome also cancels existing `Approved` approvals for the same tenant+intent. Approval revalidation classifier exists but is not yet wired into the pipeline. Notifications/NATS, risk-based invalidation rules, immutable S3 snapshot blobs (currently `memory://` placeholder), and cross-process trace propagation remain future/deferred work.** |
+| **Progress Notes** | Phase 2a runtime adapter delivered. Phase 2b Slice A (evidence verification) complete — all gates green. **Slice B (residual risk & Phase 3 deferral register) delivered — see [Phase 2b Residual Risk & Phase 3 Deferral Register](./10-phase-2b-residual-risk-deferral-register.md).** **Phase 2b is APPROVED — Brian Nguyen sole signer (personal project) signed off on all three roles (Product Owner, Security, Runtime Integration) on 2026-04-28. Phase 2b exit gate CLOSED. Phase 3 Batch 2+ is now unblocked.** **Bounded approval invalidation wired:** `trigger_reapproval` endpoint cancels existing `Approved` approvals (status → `Cancelled`) when creating a replacement `Pending` request; `rebase_apply` with `BlockedManualReview` outcome also cancels existing `Approved` approvals for the same tenant+intent. Approval revalidation classifier (`classify_approvals`) is wired in intent-api via `crates/intent-api/src/lib.rs`. Risk-based invalidation rules in `crates/rebase-engine/src/approval_revalidation.rs`. Notifications/NATS, DLQ/retry worker, immutable S3 snapshot blobs (currently `memory://` placeholder), and cross-process trace propagation remain future/deferred work.** |
 
 ### Slice A — Evidence Verification ✅ GREEN
 
@@ -58,11 +58,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P2 |
 | **Title** | Phase 3 Batch 2 — Observability + SRE |
 | **Purpose** | Deliver SLO definitions, alerting rules, error budget tracking, distributed tracing across Phase 2→3, performance benchmarks, and runbooks for common failure scenarios. |
-| **Status** | 🔄 In Progress (Slice 1, Slice 2, Slice 3, Slice 4, Slice 5, Slice 6, Slice 7, Slice 8, Slice 9 delivered) |
+| **Status** | 🔄 In Progress (Slice 1–9 delivered; Slice B delivered; Slice C, D documented) |
 | **Priority** | High |
 | **Owner** | SRE / Platform |
-| **Suggested Next Step** | Cross-process trace propagation investigated and deferred (SDK limitation); production load testing; SRE approval gate |
-| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths. Batch 2 Slice 8 (bounded Temporal adapter tracing) delivered. Batch 2 Slice 9 (bounded sqlx repository tracing) delivered.
+| **Suggested Next Step** | Slice B delivered: production load testing; SRE approval gate |
+| **Progress Notes** | Batch 2 Slice 1 (SLO foundation + Grafana dashboard scaffold) delivered. Batch 2 Slice 2 (bounded OTEL propagation) delivered: request-id middleware, service method instrumentation, optional OTLP export (when OTEL_EXPORTER_OTLP_ENDPOINT is set), W3C trace context extraction from inbound requests, traceparent/tracestate response headers, background task span propagation. Batch 2 Slice 3 (alerting rules + runbook foundation) delivered: Prometheus alerting rules, Alertmanager config, Grafana provisioning, metrics instrumentation now active (metrics-exporter-prometheus 0.18.1 with metrics 0.24), runbook scenarios RB6-RB10. Batch 2 Slice 4 (rebase-engine sync benchmark) delivered: criterion-based benchmark harness, sync diff + plan across low/medium/high complexity (~490ns-4.2µs observed, all well under 100ms target). Batch 2 Slice 5 (error budget tracking panels) delivered: preview + apply 1h burn-rate stat panels backed by intent_api_rebase_preview_requests_total and intent_api_rebase_apply_requests_total. Batch 2 Slice 6 (graph + HTTP + DB benchmarks) delivered: graph traversal (BFS, path finding, cycle detection), intent-api sync path (diff compute, validation), and intent-service DB operations (live run: p50 25ms create_intent, 1.6ms create_version, <1ms get_intent/get_versions_by_intent against live Postgres). Batch 2 Slice 7 (multi-window burn-rate alerting) delivered: 1h/6h/3d burn-rate alerting rules for preview and apply paths. Batch 2 Slice 8 (bounded Temporal adapter tracing) delivered. Batch 2 Slice 9 (bounded sqlx repository tracing) delivered. **Slice B (NATS publisher + bounded JetStream seam) delivered:** async-nats 0.47 decision complete, core publisher emits W3C traceparent, bounded JetStream stream initializer is wired fail-safe, and `NatsPullConsumerAdapter` provides native traceparent extraction; consumer lifecycle and DLQ/retry worker remain open (see [12-trace-propagation-blocker-matrix.md](./12-trace-propagation-blocker-matrix.md)). **Slice C (S3/MinIO snapshot blob spec) documented:** target design for S3-backed immutable blob storage with key structure, JSON format, upload/retrieval contract, retention/lifecycle, and memory:// migration path (see [S3 snapshot blob spec](../14-governance/05-s3-snapshot-blob-spec.md)). **Slice D (trace blocker matrix) delivered:** detailed blocker matrix documents Temporal SDK, sqlx, NATS publisher/consumer, and HTTP forwarding blockers with unblock conditions (see [12-trace-propagation-blocker-matrix.md](./12-trace-propagation-blocker-matrix.md)).
 
 **Items:**
 - [x] SLO definitions (intent processing latency, rebase latency, approval wait time) — Batch 2 Slice 1
@@ -82,7 +82,10 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [x] Phase 3 bounded trace continuity (trace_id/span_id in audit events and published event envelopes) — delivered
 - [x] Phase 3 bounded Temporal adapter tracing (local span correlation around Temporal gRPC calls) — Batch 2 Slice 8 delivered
 - [x] Phase 3 bounded sqlx repository tracing (local span correlation around high-value sqlx transactions: create_intent_tx, create_version_with_occ) — delivered
-- [ ] Cross-process trace propagation across all service boundaries — investigated and deferred: Temporal SDK lacks per-request gRPC metadata injection (shared `Arc<RwLock>` race); sqlx lacks per-query context propagation; NATS publisher not yet implemented. Revisit when temporalio-client adds interceptor support or upgrades to a version with per-request metadata.
+- [ ] Cross-process trace propagation across all service boundaries — **Slice B PARTIALLY RESOLVED:** See [12-trace-propagation-blocker-matrix.md](./12-trace-propagation-blocker-matrix.md) for full blocker analysis. Temporal SDK (B-01), sqlx (B-02), NATS publisher (B-03 — partially resolved), NATS consumer (B-04 — Phase 3 scope), HTTP forwarding (B-05). Slice B publisher side delivered; JetStream consumers remain Phase 3.
+- [x] Slice B (bounded NATS core publisher) — ✅ DELIVERED: async-nats 0.47 + core publish, NatsEventPublisher with W3C trace-context header injection, fail-open, bounded timeouts. JetStream consumers/DLQ remain Phase 3. See [12-trace-propagation-blocker-matrix.md](./12-trace-propagation-blocker-matrix.md) § B-03.
+- [ ] Slice C (S3/MinIO snapshot blob spec) — ✅ Document delivered: see [05-s3-snapshot-blob-spec.md](../14-governance/05-s3-snapshot-blob-spec.md) (target design, not implemented).
+- [ ] Slice D (trace propagation blocker matrix) — ✅ Document delivered: see [12-trace-propagation-blocker-matrix.md](./12-trace-propagation-blocker-matrix.md).
 - [ ] Full production load testing (bounded HTTP load harness delivered — intent-api HTTP server benchmark with in-memory repos; full production load testing remains gated on P2 full completion)
 
 ---
@@ -122,14 +125,14 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **Priority** | High |
 | **Owner** | Backend Lead |
 | **Suggested Next Step** | Full replay capability; async generation orchestration; S3-backed retrieval and storage lifecycle hardening |
-| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. **P4 bounded generation/storage slice delivered:** `POST /forensic/bundle` bounded synchronous path — ForensicDataCollector collects real data from intent/graph/audit repositories, BundleGeneratorService generates manifest with integrity hashes, BundleStorage persists bundle JSON to S3/MinIO, bundle status=Ready recorded in repository. |
+| **Progress Notes** | **Phase 3 Batch 3b bounded slice delivered:** forensic-service with ForensicVerificationService trait, InMemoryForensicVerificationService, request/response types, and coverage structs. API endpoint `POST /forensic/verify` integrated in intent-api with tests. OpenAPI documentation updated. **P4 bounded generation/storage slice delivered:** `POST /forensic/bundle` bounded synchronous path — ForensicDataCollector collects real data from intent/graph/audit repositories, BundleGeneratorService generates manifest with integrity hashes, InMemoryBundleStorage persists bundle JSON in-memory at runtime (S3BundleStorage seam exists but is not wired; S3 lifecycle/retrieval deferred to Phase 4), bundle status=Ready recorded in repository. |
 
 **Items:**
 - [x] Forensic bundle model (`bundle_id`, `intent_id`, `time_range`, `contents`) — ✅ Batch 0 scaffold delivered
 - [x] Forensic verification API: `POST /forensic/verify` (bounded request-driven verification) — ✅ Phase 3 Batch 3b bounded slice delivered
 - [x] Forensic archive export API: `POST /forensic/export` (bounded in-memory generation with scaffolded data) — ✅ Phase 3 Batch 3b bounded slice delivered
 - [x] Bundle generation: collect intent versions, artifacts, audit events, graph state from real services — ✅ P4 bounded slice delivered (ForensicDataCollector + real repository calls)
-- [x] Bundle generation API: `POST /forensic/bundle` (role: `forensic-access`) — ✅ P4 bounded slice delivered; bounded synchronous path with real collection + S3/MinIO persistence seam
+- [x] Bundle generation API: `POST /forensic/bundle` (role: `forensic-access`) — ✅ P4 bounded slice delivered; bounded synchronous path with real collection + in-memory storage (S3BundleStorage seam deferred to Phase 4)
 - [x] Bundle integrity verification (hash chain) — ✅ Phase 3 Batch 3b bounded slice delivered (verify_bundle_integrity function)
 - [ ] Bundle replay capability (replay bundle to reproduce state)
 - [ ] Bundle retention policy (configurable per tenant, compliance) — retention policy metadata model delivered; S3 lifecycle enforcement remains Phase 4+ scope
@@ -281,6 +284,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| April 2026 | (orchestrator) | P2 updated: Slice B marked delivered for bounded NATS publisher + bounded JetStream seam; consumer lifecycle and DLQ/retry worker remain open; Slice C (S3/MinIO snapshot blob spec) documented; Slice D (trace propagation blocker matrix) documented; cross-process trace propagation item updated with blocker matrix reference |
 | April 2026 | (orchestrator) | P2 updated: cross-process trace propagation investigated and deferred (Temporal SDK limitation, sqlx limitation, NATS not yet implemented) |
 | April 2026 | (owner) | Initial creation |
 
@@ -291,4 +295,5 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 - [Current Project Status](./00-current-status.md)
 - [Roadmap](./01-roadmap.md)
 - [Phase 3 Hardening Plan](./05-phase-3-hardening.md)
+- [Phase 3 Completion Execution Plan](./15-phase-3-completion-execution-plan.md)
 - [Phase 3 Checklist](./checklists/checklist-phase-3.md)

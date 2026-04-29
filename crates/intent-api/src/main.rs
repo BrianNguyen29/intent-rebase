@@ -30,7 +30,10 @@ use forensic_service::{
     RealForensicVerificationService,
 };
 use graph_service::{GraphService, InMemoryGraphRepository};
-use intent_api::{build_router, build_router_with_sql_audit_and_approval, init_tracing};
+use intent_api::{
+    build_router, build_router_with_sql_audit_and_approval, init_tracing,
+    nats_jetstream::JetStreamInitializer, NatsEventPublisher,
+};
 use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
 use intent_service::{
     ApprovalRequestRepository, InMemoryApprovalRequestRepository, InMemoryCheckpointRepository,
@@ -197,8 +200,42 @@ async fn build_sql_router(database_url: &str) -> Result<Router, Box<dyn std::err
             forensic_bundle_collector,
         ));
 
-    // No event publisher by default
-    let event_publisher: Option<Arc<dyn EventPublisher>> = None;
+    // Phase 2b bounded core publisher: NATS event publisher when NATS_URL is configured
+    // Uses async-nats with core publish (no JetStream). Fails open on connection/publish errors.
+    let event_publisher: Option<Arc<dyn EventPublisher>> = if std::env::var("NATS_URL").is_ok() {
+        tracing::info!("NATS_URL configured — enabling NATS event publisher");
+        Some(Arc::new(NatsEventPublisher::new()) as Arc<dyn EventPublisher>)
+    } else {
+        tracing::info!(
+            "NATS_URL not set — event publishing disabled (use InMemoryEventPublisher for testing)"
+        );
+        None
+    };
+
+    // Phase 3 bounded JetStream initialization: ensure audit_events stream exists when NATS_URL is configured.
+    // Fail-safe: if NATS is unavailable, log warning and continue without JetStream.
+    // This is intentional bounded behavior — NATS unavailability should not crash the service.
+    if std::env::var("NATS_URL").is_ok() {
+        let nats_url = std::env::var("NATS_URL").unwrap();
+        let jetstream_initializer = JetStreamInitializer::new();
+        match jetstream_initializer.ensure_stream(&nats_url).await {
+            Ok(jetstream_ctx) => {
+                tracing::info!(
+                    "JetStream stream '{}' ready (subject: {})",
+                    jetstream_initializer.stream_name(),
+                    jetstream_initializer.subject_filter()
+                );
+                // JetStream context is available for future consumer use (Phase 3 consumer wiring deferred)
+                let _ = jetstream_ctx;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "JetStream initialization failed (NATS may be unavailable): {} — continuing without JetStream",
+                    e
+                );
+            }
+        }
+    }
 
     Ok(build_router_with_sql_audit_and_approval(
         pool,

@@ -148,6 +148,82 @@
 
 ---
 
+---
+
+## RB11. DLQ Messages Found
+
+**Symptoms:**
+- DLQ depth alert fires (`dlq_messages_current > 10`)
+- `nats stream ls` or `nats consumer ls` shows messages in DLQ subjects
+- Application logs show repeated delivery failures for same `Nats-Message-Name`
+
+> **Note:** DLQ routing via JetStream consumer `dead_letter` configuration is a **future
+> decision**. The current `NatsPullConsumerAdapter` aligns with the G2 retry config
+> (`max_deliver=3`, `ack_wait=30s`) without automatic DLQ routing. If DLQ routing is desired, it requires either:
+> - Server-side/CLI consumer configuration with `dead_letter` subject
+> - Application-level manual routing to a DLQ subject
+>
+> async-nats 0.47 does not expose a Rust `dead_letter` field on consumer config.
+> See `crates/intent-api/src/nats_jetstream.rs` for current bounded behavior.
+
+**Diagnosis:**
+1. Inspect DLQ subject count:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats stream ls
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats consumer ls audit_events
+   ```
+2. Pull sample DLQ message to inspect:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats consumer next "audit_events" --subject audit.events.v1.approval.events.DLQ --json
+   ```
+   > **Note:** DLQ subject naming follows `audit.events.v1.{event_type}.DLQ` convention
+   > (not `ire.*` — that naming is legacy and not current).
+3. Check message headers for:
+   - `Nats-Deliver-Count` (delivery attempt count)
+   - `Nats-Message-Name` (correlation ID for logs)
+   - `Nats-Orig-Subject` (original subject before DLQ)
+4. Check application logs for the `Nats-Message-Name` correlation
+
+**Mitigation:**
+1. If transient failure (network timeout, DB connection):
+   - Replay immediately or after short delay
+   ```bash
+   # Direct replay to original subject
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats pub audit.events.v1.approval.events --header "Nats-Replay: true" <payload.json>
+   ```
+   > **Note:** The stream is `audit_events` with subject filter `audit.events.v1.>`.
+   > Legacy commands using `ire.*` subjects or `INTENT_EVENTS` stream are not current.
+2. If bug in consumer code:
+   - Fix consumer code FIRST
+   - Then replay DLQ messages
+3. If poison message (malformed payload):
+   - **Do NOT replay** until payload is fixed
+   - Investigate root cause of malformation
+4. If downstream system outage:
+   - Wait for downstream recovery
+   - Then replay DLQ messages
+
+**Recovery:**
+1. Monitor DLQ depth after replay:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats stream ls
+   # DLQ depth should return to 0
+   ```
+2. Watch consumer lag:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml exec nats nats consumer ls audit_events
+   ```
+3. Verify no new DLQ messages appearing during replay
+4. Check application metrics in Grafana (`dlq_messages_current`, `dlq_replay_total`, `dlq_replay_failures_total`)
+
+**Prevention:**
+- Monitor `dlq_messages_current` metric (alert threshold: > 10 messages)
+- Monitor `dlq_message_age_seconds` (alert threshold: > 3600s = 1 hour)
+- Review DLQ messages weekly if volume is non-zero
+- Set `max_deliver` appropriately per message type (see `14-dlq-retry-design.md`)
+
+---
+
 ## On-Call Quick Reference
 
 | Alert | Severity | Immediate Action |
@@ -159,6 +235,8 @@
 | RebasePreviewHighLatency | Warning | Check graph size, consider preview-only mode |
 | RebaseApplyHighLatency | Warning | Check runtime adapter health |
 | CompensationDLQCandidatesElevated | Critical | Check DLQ, manual intervention likely needed |
+| DLQDepthHigh | Warning | Check DLQ, investigate message content |
+| DLQMessageStale | Critical | DLQ message > 1 hour old, investigate immediately |
 | PreviewPathFastBurn | Warning | Monitor, prepare incident if continues |
 | ApplyPathFastBurn | Critical | Open incident, prioritize fix |
 

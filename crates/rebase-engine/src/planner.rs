@@ -231,6 +231,8 @@ pub enum RevalidationStrategy {
     Incremental,
     /// Stale approvals to be dropped
     Drop,
+    /// Log change and notify approvers; no approval cancellation (Medium risk)
+    LogNotify,
 }
 
 /// Compensation action readiness for apply phase

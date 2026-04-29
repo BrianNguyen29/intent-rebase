@@ -3,7 +3,7 @@
 **Exit Gate:** Phase 3 exit gate khi tất cả items checked và có evidence.  
 **Prerequisite:** Phase 2b exit gate passed. Phase 2b scope includes: runtime adapter external implementation, apply endpoint, risk classification, graph update, replay API, event streaming. Phase 3 Batch 0 (hardening planning and scaffold prep) may proceed in parallel while Phase 2b is in progress — see [05-phase-3-hardening.md](../05-phase-3-hardening.md) for batch structure.
 
-**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED, BATCH 2 IN PROGRESS WITH BOUNDED SLICES DELIVERED (EXTERNAL GATES REMAIN), BATCH 3b BOUNDED FORENSIC VERIFICATION + GENERATION + EXPORT + DOWNLOAD SLICES DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Formal planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1 (Phase 2b exit is closed). Batch 2 bounded slices delivered with external gates (SRE sign-off) remaining. Batch 3b forensic verification (POST /forensic/verify), bounded generation (POST /forensic/bundle with S3/MinIO), bounded export (POST /forensic/export), and bounded download (GET /forensic-bundles/{id}/download) slices delivered; full runtime replay, async orchestration, and S3-backed retrieval/storage lifecycle remain Phase 4 scope. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.
+**Trạng thái:** `BATCH 0 COMPLETE, BATCH 1 LARGELY DELIVERED, BATCH 2 IN PROGRESS WITH BOUNDED SLICES DELIVERED (EXTERNAL GATES REMAIN), BATCH 3b BOUNDED FORENSIC VERIFICATION + GENERATION + EXPORT + DOWNLOAD SLICES DELIVERED` — Batch 0 code scaffolds and planning items complete. Batch 1 side effect ledger, compensation action CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, and single-shot runtime (HTTP + CLI) all delivered. Formal planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1 (Phase 2b exit is closed). Batch 2 bounded slices delivered with external gates (SRE sign-off) remaining. Batch 3b forensic verification (POST /forensic/verify), bounded generation (POST /forensic/bundle with in-memory storage; S3BundleStorage seam exists but not wired), bounded export (POST /forensic/export), and bounded download slices delivered; S3-backed retrieval/storage lifecycle and full runtime replay remain Phase 4 scope. See [05-phase-3-hardening.md](../05-phase-3-hardening.md) for the current execution split.
 **Phase:** Phase 3
 **Target Duration:** 6–10 tuần
 
@@ -457,7 +457,7 @@
     - Doc: docs/14-governance/10-forensic-bundle.md (updated scope marker)
     - Note: Bounded slice delivers content collection types (IntentVersionsForHash, ArtifactsForHash, ApprovalsForHash, AuditEventsForHash, PolicySnapshotsForHash) and deterministic SHA-256 integrity hashing. No S3 storage, no generation API, no replay.
 
-[x] Bundle generation API: `POST /forensic/bundle` — P4 bounded slice (bounded synchronous path with real collection + S3/MinIO persistence seam)
+[x] Bundle generation API: `POST /forensic/bundle` — P4 bounded slice (bounded synchronous path with real collection + in-memory storage; S3BundleStorage seam deferred to Phase 4)
     Evidence:
     - Code: crates/forensic-service/src/bundle_service.rs (ForensicBundleService with create_bundle method)
     - Code: crates/forensic-service/src/real_collector.rs (ForensicDataCollector — real repository calls)
@@ -466,7 +466,7 @@
     - Code: crates/intent-api/src/lib.rs (create_forensic_bundle handler at POST /forensic/bundle)
     - Tests: cargo test -p forensic-service --all-features (bundle generation + storage tests)
     - Tests: cargo test -p intent-api --all-features (forensic bundle endpoint tests)
-    - Note: Bounded synchronous path: (1) ForensicDataCollector collects real data from intent/graph/audit repositories, (2) BundleGeneratorService generates manifest with integrity hashes, (3) BundleStorage persists bundle JSON to S3/MinIO, (4) bundle status=Ready recorded in repository. NOT claimed: async job orchestration, download-from-storage, full replay, hash chain verification.
+    - Note: Bounded synchronous path: (1) ForensicDataCollector collects real data from intent/graph/audit repositories, (2) BundleGeneratorService generates manifest with integrity hashes, (3) InMemoryBundleStorage persists bundle JSON in-memory at runtime (S3BundleStorage seam exists but not wired), (4) bundle status=Ready recorded in repository. NOT claimed: S3 persistence, async job orchestration, download-from-storage, full replay, hash chain verification.
 
 [x] Bundle integrity verification (hash chain) — P4 bounded slice
     Evidence:

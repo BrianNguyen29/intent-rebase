@@ -7,6 +7,7 @@ pub mod approval_request_repo;
 pub mod checkpoint_repo;
 pub mod event_consumer;
 pub mod policy_snapshot_repo;
+pub mod s3_snapshot_storage;
 pub mod sqlx_repository;
 
 use async_trait::async_trait;
@@ -32,6 +33,9 @@ pub use checkpoint_repo::{
 };
 pub use policy_snapshot_repo::{
     InMemoryPolicySnapshotRepository, PolicySnapshotRepository, SqlxPolicySnapshotRepository,
+};
+pub use s3_snapshot_storage::{
+    InMemorySnapshotStorage, S3SnapshotStorage, SnapshotStorage, SnapshotStorageError,
 };
 pub use sqlx_repository::SqlxIntentRepository;
 

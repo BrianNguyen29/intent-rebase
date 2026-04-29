@@ -44,8 +44,10 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 http = "1.0"
 
-# NATS
-nats = "0.33"
+# NATS (async-nats for Phase 2b bounded core publisher slice)
+# Note: nats = "0.33" removed — replaced with async-nats for proper tokio integration
+# JetStream streams/consumers remain Phase 3 scope
+async-nats = "0.47"
 
 # S3 / object store
 aws-config = "1.0"
