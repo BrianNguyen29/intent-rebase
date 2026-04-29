@@ -235,3 +235,53 @@ groups:
         annotations:
           summary: "Apply path 3d burn rate elevated — chronic degradation"
           description: "Apply 3d error rate is {{ $value | printf \"%.3f\" }}% (threshold: 1.6%). Chronic elevation indicates sustained quality degradation."
+
+  # ============================================================
+  # DLQ Alerts — Phase 3 Batch 2 Slice 3
+  # Scope: local/staging only — production alerting requires external SRE routing/signoff
+  # Metric names: intent_api_dlq_* (stubs exist in crates/intent-api/src/metrics.rs)
+  # ============================================================
+  - name: intent_api_dlq
+    interval: 30s
+    rules:
+      # DLQ depth above threshold — indicates message backlog
+      - alert: DLQDepthHigh
+        expr: intent_api_dlq_messages_current > 10
+        for: 5m
+        labels:
+          severity: warning
+          slo: dlq
+          scope: local-staging
+        annotations:
+          summary: "DLQ depth is elevated — investigation required"
+          description: "{{ $value }} messages in DLQ (threshold: 10). See RB11 for investigation procedure."
+          runbook: "docs/09-operations/05-runbooks.md#rb11-dlq-messages-found"
+          scope: "local/staging — production alerting requires external SRE routing"
+
+      # Oldest DLQ message exceeds 1 hour — indicates stalled messages
+      - alert: DLQMessageStale
+        expr: intent_api_dlq_message_age_seconds > 3600
+        for: 5m
+        labels:
+          severity: critical
+          slo: dlq
+          scope: local-staging
+        annotations:
+          summary: "DLQ message older than 1 hour — urgent investigation"
+          description: "Oldest DLQ message is {{ $value | printf \"%.0f\" }} seconds old (threshold: 3600s). See RB11."
+          runbook: "docs/09-operations/05-runbooks.md#rb11-dlq-messages-found"
+          scope: "local/staging — production alerting requires external SRE routing"
+
+      # Replay failures detected — indicates replay pipeline issues
+      - alert: DLQReplayFailures
+        expr: rate(intent_api_dlq_replay_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          slo: dlq
+          scope: local-staging
+        annotations:
+          summary: "DLQ replay failures detected"
+          description: "DLQ replay failure rate is {{ $value | printf \"%.2f\" }} per second. Immediate attention required."
+          runbook: "docs/09-operations/05-runbooks.md#rb11-dlq-messages-found"
+          scope: "local/staging — production alerting requires external SRE routing"

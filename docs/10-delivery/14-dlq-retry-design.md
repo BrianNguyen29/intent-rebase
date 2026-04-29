@@ -256,7 +256,7 @@ done
 
 ### Prometheus Alert Rules
 
-> **⚠️ Deployment Status:** These alert rules are **designed/deferred** — they are specified here for completeness but are NOT yet deployed to production. The DLQ worker implementation (which produces these metrics) is Phase 4 scope. Alert rules will be deployed once G1–G5 gates pass.
+> **⚠️ Deployment Status:** Alert rules are **deployed to local/staging** (`infrastructure/local/prometheus/rules/intent_api_alerts.yml`). The DLQ worker implementation (which produces these metrics) is Phase 4 scope — DLQ metric stubs compile but runtime emissions await worker lifecycle wiring. **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
 
 ```yaml
 groups:

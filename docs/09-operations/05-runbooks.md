@@ -162,6 +162,8 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 
 ## RB11. DLQ Messages Found
 
+> **⚠️ Deployment Status:** DLQ alert rules (`DLQDepthHigh`, `DLQMessageStale`, `DLQReplayFailures`) are **deployed to local/staging** (`infrastructure/local/prometheus/rules/intent_api_alerts.yml`). **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
+
 **Symptoms:**
 - DLQ depth alert fires (`intent_api_dlq_messages_current > 10`)
 - `nats stream ls` or `nats consumer ls` shows messages in DLQ subjects
@@ -245,7 +247,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 | RebasePreviewHighLatency | Warning | Check graph size, consider preview-only mode |
 | RebaseApplyHighLatency | Warning | Check runtime adapter health |
 | CompensationDLQCandidatesElevated | Critical | Check DLQ, manual intervention likely needed |
-| DLQDepthHigh | Warning | **Designed/deferred** — alert rule not deployed; see doc 14 DLQ design |
-| DLQMessageStale | Critical | **Designed/deferred** — alert rule not deployed; see doc 14 DLQ design |
+| DLQDepthHigh | Warning | DLQ depth elevated (> 10 messages) — see RB11 |
+| DLQMessageStale | Critical | DLQ message older than 1h — see RB11 |
 | PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |

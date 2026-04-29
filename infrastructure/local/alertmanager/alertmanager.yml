@@ -16,6 +16,11 @@ route:
   repeat_interval: 12h
   receiver: 'null'
   routes:
+    # DLQ alerts route to DLQ-specific receiver (local/staging placeholder)
+    - match:
+        slo: dlq
+      receiver: 'dlq-alerts'
+      continue: true
     # Critical alerts go to critical receiver
     - match:
         severity: critical
@@ -39,6 +44,13 @@ inhibit_rules:
 receivers:
   - name: 'null'
     # No-op receiver — alerts are logged but not routed
+
+  - name: 'dlq-alerts'
+    # DLQ alerts receiver — local/staging placeholder
+    # In production: replace with PagerDuty/OpsGenie routing to SRE on-call
+    webhook_configs:
+      - url: 'http://localhost:9001/webhook'
+        send_resolved: true
 
   - name: 'critical-alerts'
     # In production: configure PagerDuty, Slack, email, etc.
