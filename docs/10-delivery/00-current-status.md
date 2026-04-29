@@ -144,7 +144,7 @@ cargo clippy --all-features -- -D warnings
 | **P1** | Production readiness | Production load testing + SRE/Security external sign-offs | SRE / Security |
 | **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |
 
-> **Note:** Local validation evidence (current uncommitted set): `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, targeted tests for nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic, `git diff --check` passed. Full `cargo test --workspace` and remote CI not claimed.
+> **Note:** Local Phase 3 bounded commits pushed to origin/main (head 7e2c5df). Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. Remote GitHub Actions CI run 25091419020 shows `startup_failure` — remote CI not passing. Production readiness is not claimed.
 
 ---
 
