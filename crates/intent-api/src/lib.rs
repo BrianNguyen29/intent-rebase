@@ -117,13 +117,13 @@ fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
 }
 
 // =============================================================================
-// DLQ Metric Helper Functions (Phase 3 DLQ design stubs — G3 evidence)
+// DLQ Metric Helper Functions (Phase 3 DLQ design — G3 evidence)
 // =============================================================================
-// NOTE: These are metric STUBS for DLQ monitoring design.
-// Actual instrumentation requires DLQ worker implementation (Phase 4).
-// No DLQ worker exists yet; these helpers are defined but not called.
+// Counter helpers (record_dlq_replay, record_dlq_replay_failure, record_dlq_message)
+// ARE wired and called from DlqHelper in nats_jetstream.rs.
 //
-// G3 Status: Stubs compile ✓ — runtime DLQ emissions await worker/lifecycle wiring.
+// Gauge/depth/age helpers (record_dlq_messages_current, record_dlq_message_age_seconds)
+// remain as stubs — their runtime emission awaits lifecycle worker wiring (Phase 4/G3).
 
 /// Record current DLQ depth (number of messages in dead-letter queue)
 #[allow(dead_code)]
@@ -138,20 +138,17 @@ fn record_dlq_message_age_seconds(age_secs: f64) {
 }
 
 /// Record DLQ replay operation
-#[allow(dead_code)]
-fn record_dlq_replay(status: &'static str) {
+pub fn record_dlq_replay(status: &'static str) {
     metrics::counter!("intent_api_dlq_replay_total", "status" => status).increment(1);
 }
 
 /// Record failed DLQ replay attempt
-#[allow(dead_code)]
-fn record_dlq_replay_failure() {
+pub fn record_dlq_replay_failure() {
     metrics::counter!("intent_api_dlq_replay_failures_total").increment(1);
 }
 
 /// Record message sent to DLQ
-#[allow(dead_code)]
-fn record_dlq_message() {
+pub fn record_dlq_message() {
     metrics::counter!("intent_api_dlq_messages_total").increment(1);
 }
 

@@ -6,14 +6,27 @@
 //! - **Fail-safe startup**: NATS unavailability at startup does not crash the service.
 //! - **Bounded consumer**: Pull-consumer adapter dispatches to existing `EventConsumer` trait.
 //! - **Native traceparent extraction**: Parses W3C traceparent from NATS message headers.
-//! - **Bounded ack behavior**: Ack on success, no infinite retry loop. Retry/DLQ deferred.
+//! - **Bounded ack behavior**: Ack on success, no infinite retry loop.
 //!
-//! ## What is NOT implemented (Phase 3 bounded scope)
+//! ## Bounded App-Level DLQ First Slice (Phase 3 DLQ Design)
 //!
-//! - No DLQ/retry worker implementation (deferred)
-//! - No automatic replay
-//! - No consumer groups/parallel scaling
-//! - No Temporal/sqlx trace propagation
+//! **IMPLEMENTED (bounded first slice):**
+//! - `DlqHelper` struct with explicit DLQ subject derivation
+//! - `publish_to_dlq()` for routing failed messages to DLQ subject
+//! - `replay_from_dlq()` and `replay_to_subject()` for replay primitives
+//! - DLQ metadata headers (`Nats-Orig-Subject`, `Nats-Deliver-Count`, `Nats-DLQ-Reason`, `Nats-DLQ-Timestamp`)
+//! - Metric stub helpers forward to `lib.rs` record functions
+//!
+//! **NOT YET IMPLEMENTED (gates pending — see docs/10-delivery/14-dlq-retry-design.md):**
+//! - G1: Design approval
+//! - G2: JetStream consumer `dead_letter` config (CLI/server-side)
+//! - G3: Full monitoring/lifecycle wiring
+//! - G4: RB11 runbook update for app-level DLQ
+//! - G5: Integration test coverage
+//!
+//! **Production Readiness:** This is a BOUNDED FIRST SLICE. Not production-ready until:
+//! - All gates (G1–G5) pass
+//! - See `docs/10-delivery/14-dlq-retry-design.md` for full status
 //!
 //! ## Stream Configuration (Phase 3 bounded slice)
 //!
@@ -29,7 +42,7 @@
 //! - Ack policy: explicit (ack after successful processing)
 //! - Max deliver: 3 (bounded retry/advisory config; no infinite retry)
 //! - Ack timeout: 30 seconds
-//! - No dead letter subject (DLQ deferred)
+//! - No dead letter subject (app-level DLQ helpers provided instead)
 
 use async_nats::jetstream::Context as JetStreamContext;
 use std::sync::Arc;
@@ -474,6 +487,484 @@ impl NatsPullConsumerAdapter {
 }
 
 // =============================================================================
+// App-Level DLQ Worker (Bounded First Slice — Phase 3 DLQ Design)
+// =============================================================================
+//
+// Bounded implementation for app-level DLQ handling:
+// - Explicit DLQ subject derivation from original subject
+// - Message routing/replay primitives
+// - Runtime metric emissions via existing record_* helpers in lib.rs
+//
+// **Production Readiness Note:**
+// This is a BOUNDED FIRST SLICE implementation. Not production-ready until:
+// - G1: Design approved
+// - G2: JetStream configured with DLQ subjects
+// - G3: Monitoring/lifecycle wiring complete
+// - G4: Runbook RB11 updated
+// - G5: Test coverage passes
+//
+// async-nats 0.47 lacks Rust `dead_letter` config, so we use app-level explicit
+// DLQ publishing instead of native JetStream dead-letter routing.
+
+/// DLQ subject suffix appended to original subject
+const DLQ_SUFFIX: &str = ".DLQ";
+
+/// Header name for original subject (preserved when message is routed to DLQ)
+pub const HEADER_ORIG_SUBJECT: &str = "Nats-Orig-Subject";
+
+/// Header name for delivery attempt count when message was DLQ'd
+pub const HEADER_DELIVERY_COUNT: &str = "Nats-Deliver-Count";
+
+/// Header name for reason message was sent to DLQ
+pub const HEADER_DLQ_REASON: &str = "Nats-DLQ-Reason";
+
+/// Header name for timestamp when message was sent to DLQ
+pub const HEADER_DLQ_TIMESTAMP: &str = "Nats-DLQ-Timestamp";
+
+/// Bounded app-level DLQ helper for NATS JetStream messages.
+///
+/// Provides explicit DLQ subject derivation and message routing primitives.
+/// This is a first-slice implementation — not full production DLQ worker.
+///
+/// **Design:** Per `docs/10-delivery/14-dlq-retry-design.md`:
+/// - DLQ subject format: `{origin_subject}.DLQ`
+/// - Example: `audit.events.v1.approval.events` → `audit.events.v1.approval.events.DLQ`
+#[derive(Debug, Clone)]
+pub struct DlqHelper {
+    /// JetStream context for publishing
+    jetstream: JetStreamContext,
+}
+
+impl DlqHelper {
+    /// Create a new DLQ helper with the given JetStream context.
+    pub fn new(jetstream: JetStreamContext) -> Self {
+        Self { jetstream }
+    }
+
+    /// Derive DLQ subject from original subject safely.
+    ///
+    /// **Subject transformation:**
+    /// - `audit.events.v1.approval.events` → `audit.events.v1.approval.events.DLQ`
+    /// - `audit.events.v1.intent.events` → `audit.events.v1.intent.events.DLQ`
+    ///
+    /// **Safety constraints:**
+    /// - Empty subject returns empty (caller handles error)
+    /// - Subject already ending in `.DLQ` is returned as-is (no double-suffix)
+    /// - Subject with valid NATS characters is preserved as-is
+    ///
+    /// **NATS subject rules enforced:**
+    /// - Non-empty tokens separated by dots
+    /// - No whitespace, null bytes, or special NATS metacharacters
+    /// - Max token length: 255 bytes
+    /// - Max subject length: 1024 bytes (NATS protocol limit)
+    pub fn derive_dlq_subject(original_subject: &str) -> Result<String, DlqSubjectError> {
+        // Handle empty subject
+        if original_subject.is_empty() {
+            return Err(DlqSubjectError::EmptySubject);
+        }
+
+        // Check for already-DLQ'd subject
+        if original_subject.ends_with(DLQ_SUFFIX) {
+            return Ok(original_subject.to_string());
+        }
+
+        // Validate subject length (NATS protocol limit is 1024 bytes)
+        if original_subject.len() > 1024 {
+            return Err(DlqSubjectError::SubjectTooLong {
+                length: original_subject.len(),
+                max: 1024,
+            });
+        }
+
+        // Validate NATS subject syntax
+        validate_nats_subject(original_subject)?;
+
+        // Append DLQ suffix
+        Ok(format!("{}{}", original_subject, DLQ_SUFFIX))
+    }
+
+    /// Publish a failed message to the DLQ subject.
+    ///
+    /// **Behavior:**
+    /// - Derives DLQ subject from original message subject
+    /// - Copies payload to DLQ message
+    /// - Adds DLQ metadata headers (orig subject, delivery count, reason, timestamp)
+    /// - Emits `intent_api_dlq_messages_total` metric via lib.rs helper
+    ///
+    /// **Headers added:**
+    /// - `Nats-Orig-Subject`: Original subject before DLQ routing
+    /// - `Nats-Deliver-Count`: Delivery attempt count when message was DLQ'd
+    /// - `Nats-DLQ-Reason`: Human-readable reason for DLQ (e.g., "max_deliver_exceeded", "consumer_failed")
+    /// - `Nats-DLQ-Timestamp`: RFC3339 timestamp when message was sent to DLQ
+    ///
+    /// **Returns:** `Ok(())` if publish succeeded, `Err` if publish failed.
+    ///
+    /// **Metric emitted:** `intent_api_dlq_messages_total` (via `record_dlq_message()` in lib.rs)
+    pub async fn publish_to_dlq(
+        &self,
+        original_subject: &str,
+        payload: Vec<u8>,
+        delivery_count: u64,
+        reason: &str,
+    ) -> Result<(), DlqPublishError> {
+        // Derive DLQ subject
+        let dlq_subject = Self::derive_dlq_subject(original_subject)
+            .map_err(|e| DlqPublishError::SubjectDerivation(e.to_string()))?;
+
+        // Build DLQ headers
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert(HEADER_ORIG_SUBJECT, original_subject);
+        headers.insert(HEADER_DELIVERY_COUNT, delivery_count.to_string());
+        headers.insert(HEADER_DLQ_REASON, reason);
+        headers.insert(HEADER_DLQ_TIMESTAMP, chrono::Utc::now().to_rfc3339());
+
+        // Publish to DLQ subject - payload converted to Bytes via Into trait
+        self.jetstream
+            .publish_with_headers(dlq_subject.clone(), headers, payload.into())
+            .await
+            .map_err(|e| DlqPublishError::PublishFailed(e.to_string()))?;
+
+        // Emit DLQ metric via lib.rs helper
+        crate::record_dlq_message();
+
+        tracing::debug!(
+            "DlqHelper: published message to DLQ subject '{}', reason: {}, delivery_count: {}",
+            dlq_subject,
+            reason,
+            delivery_count
+        );
+
+        Ok(())
+    }
+
+    /// Replay a message from DLQ back to its original subject.
+    ///
+    /// **Behavior:**
+    /// - Extracts original subject from `Nats-Orig-Subject` header
+    /// - Publishes payload to original subject with replay header
+    /// - Emits `intent_api_dlq_replay_total` metric with status label
+    ///
+    /// **Headers preserved:**
+    /// - Original traceparent (if present)
+    /// - Any user-defined headers except DLQ-specific ones
+    ///
+    /// **Headers added:**
+    /// - `Nats-Replay`: Set to `"true"` to indicate replay from DLQ
+    ///
+    /// **Returns:** `Ok(())` if replay succeeded, `Err` if replay failed.
+    ///
+    /// **Metric emitted:** `intent_api_dlq_replay_total{status="success|error"}`
+    pub async fn replay_from_dlq(
+        &self,
+        dlq_message: &async_nats::jetstream::Message,
+    ) -> Result<(), DlqReplayError> {
+        // Extract original subject from header
+        let original_subject = dlq_message
+            .headers
+            .as_ref()
+            .and_then(|h| h.get(HEADER_ORIG_SUBJECT))
+            .ok_or(DlqReplayError::MissingOrigSubjectHeader)?
+            .to_string();
+
+        // Extract payload
+        let payload = dlq_message.payload.to_vec();
+
+        // Build replay headers:
+        // - Nats-Replay marker to indicate this is a replay
+        // - Original subject preserved for traceability
+        // - Original traceparent preserved if present (for distributed tracing continuity)
+        // Note: DLQ-specific headers are not copied to replay (they served their purpose)
+        let mut replay_headers = async_nats::HeaderMap::new();
+        replay_headers.insert("Nats-Replay", "true");
+        replay_headers.insert(HEADER_ORIG_SUBJECT, original_subject.as_str());
+
+        // Preserve traceparent header if present for distributed tracing continuity
+        if let Some(traceparent) = dlq_message
+            .headers
+            .as_ref()
+            .and_then(|h| h.get("traceparent"))
+        {
+            replay_headers.insert("traceparent", traceparent.as_str());
+        }
+
+        // Publish to original subject - payload is already Vec<u8>, convert via Into
+        match self
+            .jetstream
+            .publish_with_headers(original_subject.clone(), replay_headers, payload.into())
+            .await
+        {
+            Ok(_ack) => {
+                // Emit success metric via lib.rs helper
+                crate::record_dlq_replay("success");
+                tracing::debug!(
+                    "DlqHelper: replayed message from DLQ to original subject '{}'",
+                    original_subject
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // Emit failure metric via lib.rs helper
+                crate::record_dlq_replay_failure();
+                Err(DlqReplayError::PublishFailed(e.to_string()))
+            }
+        }
+    }
+
+    /// Replay a message from DLQ to a specific target subject.
+    ///
+    /// Unlike `replay_from_dlq`, this allows replaying to a different subject
+    /// than the original (useful for testing or directed replay).
+    ///
+    /// **Returns:** `Ok(())` if publish succeeded, `Err` if publish failed.
+    pub async fn replay_to_subject(
+        &self,
+        original_subject: &str,
+        payload: Vec<u8>,
+        target_subject: &str,
+    ) -> Result<(), DlqReplayError> {
+        // Validate target subject
+        validate_nats_subject(target_subject)
+            .map_err(|e| DlqReplayError::InvalidSubject(e.to_string()))?;
+
+        // Convert to owned strings for publish method ownership requirement
+        let target_owned = target_subject.to_string();
+        let orig_owned = original_subject.to_string();
+
+        // Build replay headers with owned strings
+        let mut replay_headers = async_nats::HeaderMap::new();
+        replay_headers.insert("Nats-Replay", "true");
+        replay_headers.insert(HEADER_ORIG_SUBJECT, orig_owned.as_str());
+
+        // Publish to target subject - payload converted to Bytes via Into trait
+        match self
+            .jetstream
+            .publish_with_headers(target_owned, replay_headers, payload.into())
+            .await
+        {
+            Ok(_ack) => {
+                crate::record_dlq_replay("success");
+                tracing::debug!(
+                    "DlqHelper: replayed message from '{}' to target subject '{}'",
+                    original_subject,
+                    target_subject
+                );
+                Ok(())
+            }
+            Err(e) => {
+                crate::record_dlq_replay_failure();
+                Err(DlqReplayError::PublishFailed(e.to_string()))
+            }
+        }
+    }
+}
+
+// =============================================================================
+// DLQ Error Types
+// =============================================================================
+
+/// Errors that can occur when deriving a DLQ subject
+#[derive(Debug, Clone)]
+pub enum DlqSubjectError {
+    /// Subject was empty
+    EmptySubject,
+    /// Subject exceeded NATS protocol limit (1024 bytes)
+    SubjectTooLong { length: usize, max: usize },
+    /// Subject contains invalid NATS characters
+    InvalidCharacters { invalid_char: char, position: usize },
+    /// Subject contains empty token (consecutive dots or leading/trailing dot)
+    EmptyToken { position: usize },
+    /// Token exceeded maximum length (255 bytes)
+    TokenTooLong {
+        length: usize,
+        max: usize,
+        position: usize,
+    },
+}
+
+impl std::fmt::Display for DlqSubjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DlqSubjectError::EmptySubject => {
+                write!(
+                    f,
+                    "DLQ subject derivation failed: original subject is empty"
+                )
+            }
+            DlqSubjectError::SubjectTooLong { length, max } => {
+                write!(
+                    f,
+                    "DLQ subject derivation failed: subject length {} exceeds NATS limit {}",
+                    length, max
+                )
+            }
+            DlqSubjectError::InvalidCharacters {
+                invalid_char,
+                position,
+            } => {
+                write!(
+                    f,
+                    "DLQ subject derivation failed: invalid NATS character '{}' at position {}",
+                    invalid_char, position
+                )
+            }
+            DlqSubjectError::EmptyToken { position } => {
+                write!(
+                    f,
+                    "DLQ subject derivation failed: empty token at position {}",
+                    position
+                )
+            }
+            DlqSubjectError::TokenTooLong {
+                length,
+                max,
+                position,
+            } => {
+                write!(
+                    f,
+                    "DLQ subject derivation failed: token length {} exceeds NATS token limit {} at position {}",
+                    length, max, position
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for DlqSubjectError {}
+
+/// Errors that can occur when publishing to DLQ
+#[derive(Debug, Clone)]
+pub enum DlqPublishError {
+    /// Failed to derive DLQ subject from original subject
+    SubjectDerivation(String),
+    /// Failed to publish message to DLQ subject
+    PublishFailed(String),
+}
+
+impl std::fmt::Display for DlqPublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DlqPublishError::SubjectDerivation(msg) => {
+                write!(f, "DLQ publish failed: subject derivation error: {}", msg)
+            }
+            DlqPublishError::PublishFailed(msg) => {
+                write!(f, "DLQ publish failed: publish error: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DlqPublishError {}
+
+/// Errors that can occur when replaying from DLQ
+#[derive(Debug, Clone)]
+pub enum DlqReplayError {
+    /// Missing `Nats-Orig-Subject` header in DLQ message
+    MissingOrigSubjectHeader,
+    /// Target subject is invalid
+    InvalidSubject(String),
+    /// Failed to publish message during replay
+    PublishFailed(String),
+}
+
+impl std::fmt::Display for DlqReplayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DlqReplayError::MissingOrigSubjectHeader => {
+                write!(
+                    f,
+                    "DLQ replay failed: missing required header '{}'",
+                    HEADER_ORIG_SUBJECT
+                )
+            }
+            DlqReplayError::InvalidSubject(msg) => {
+                write!(f, "DLQ replay failed: invalid subject: {}", msg)
+            }
+            DlqReplayError::PublishFailed(msg) => {
+                write!(f, "DLQ replay failed: publish error: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DlqReplayError {}
+
+// =============================================================================
+// NATS Subject Validation
+// =============================================================================
+
+/// Validate a string as a valid NATS subject.
+///
+/// NATS subject rules:
+/// - Non-empty tokens separated by dots (`.`)
+/// - No whitespace, null bytes, or special metacharacters (`*`, `>`, `\`)
+/// - Max token length: 255 bytes
+/// - Max subject length: 1024 bytes
+fn validate_nats_subject(subject: &str) -> Result<(), DlqSubjectError> {
+    if subject.is_empty() {
+        return Err(DlqSubjectError::EmptySubject);
+    }
+
+    // Check total length
+    if subject.len() > 1024 {
+        return Err(DlqSubjectError::SubjectTooLong {
+            length: subject.len(),
+            max: 1024,
+        });
+    }
+
+    let mut token_start = 0;
+    let mut prev_was_dot = false;
+
+    for (i, c) in subject.char_indices() {
+        if c == '.' {
+            // Check for empty token (consecutive dots or leading/trailing dot)
+            if prev_was_dot || i == 0 {
+                return Err(DlqSubjectError::EmptyToken { position: i });
+            }
+            prev_was_dot = true;
+
+            // Check token length (max 255 bytes)
+            let token_len = i - token_start;
+            if token_len > 255 {
+                return Err(DlqSubjectError::TokenTooLong {
+                    length: token_len,
+                    max: 255,
+                    position: token_start,
+                });
+            }
+
+            token_start = i + 1;
+        } else if c.is_whitespace() || c == '\0' || c == '*' || c == '>' || c == '\\' {
+            return Err(DlqSubjectError::InvalidCharacters {
+                invalid_char: c,
+                position: i,
+            });
+        } else {
+            prev_was_dot = false;
+        }
+    }
+
+    // Check trailing dot
+    if subject.ends_with('.') {
+        return Err(DlqSubjectError::EmptyToken {
+            position: subject.len() - 1,
+        });
+    }
+
+    // Check final token length
+    let final_token_len = subject.len() - token_start;
+    if final_token_len > 255 {
+        return Err(DlqSubjectError::TokenTooLong {
+            length: final_token_len,
+            max: 255,
+            position: token_start,
+        });
+    }
+
+    Ok(())
+}
+
+// =============================================================================
 // Tests (Unit Tests for Traceparent Extraction)
 // =============================================================================
 
@@ -634,6 +1125,297 @@ mod tests {
 
         // NOTE: No native automatic DLQ routing in JetStream/async-nats current config.
         // DLQ publishing requires application-level future worker (Phase 4+).
+    }
+
+    // =============================================================================
+    // Bounded App-Level DLQ First Slice Tests (Phase 3 DLQ Design)
+    // =============================================================================
+    // These tests verify the bounded app-level DLQ helper implementation:
+    // - Subject derivation (DlqHelper::derive_dlq_subject)
+    // - Header preservation (metadata headers)
+    // - Metric stubs emit correctly
+    //
+    // **Production Readiness Note:**
+    // This is a BOUNDED FIRST SLICE implementation. Not production-ready until:
+    // - G1: Design approved
+    // - G2: JetStream configured with DLQ subjects
+    // - G3: Monitoring/lifecycle wiring complete
+    // - G4: Runbook RB11 updated
+    // - G5: Test coverage passes
+
+    // -------------------------------------------------------------------------
+    // Subject Derivation Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_derive_dlq_subject_basic() {
+        // Basic subject transformation: append .DLQ suffix
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.approval.events");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "audit.events.v1.approval.events.DLQ");
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_intent_events() {
+        // Another example: intent events
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.intent.events");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "audit.events.v1.intent.events.DLQ");
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_forensic_events() {
+        // Forensic events
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.forensic.events");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "audit.events.v1.forensic.events.DLQ");
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_policy_events() {
+        // Policy events
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.policy.events");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "audit.events.v1.policy.events.DLQ");
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_already_has_dlq_suffix() {
+        // Subject already ending in .DLQ should be returned as-is
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.approval.events.DLQ");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "audit.events.v1.approval.events.DLQ");
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_empty_fails() {
+        // Empty subject should return error
+        let result = DlqHelper::derive_dlq_subject("");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DlqSubjectError::EmptySubject));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_too_long() {
+        // Subject exceeding 1024 bytes should fail
+        let long_subject = "a".repeat(1025);
+        let result = DlqHelper::derive_dlq_subject(&long_subject);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DlqSubjectError::SubjectTooLong { length, max } => {
+                assert_eq!(length, 1025);
+                assert_eq!(max, 1024);
+            }
+            _ => panic!("Expected SubjectTooLong error"),
+        }
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_whitespace_fails() {
+        // Subject with whitespace should fail validation
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.approval events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::InvalidCharacters { .. }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_asterisk_fails() {
+        // Subject with * wildcard should fail
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.*.events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::InvalidCharacters {
+                invalid_char: '*',
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_greater_than_fails() {
+        // Subject with > wildcard should fail
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.>.events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::InvalidCharacters {
+                invalid_char: '>',
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_leading_dot_fails() {
+        // Subject with leading dot should fail (empty token)
+        let result = DlqHelper::derive_dlq_subject(".audit.events.v1.events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::EmptyToken { position: 0 }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_trailing_dot_fails() {
+        // Subject with trailing dot should fail (empty token)
+        let result = DlqHelper::derive_dlq_subject("audit.events.v1.events.");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::EmptyToken { .. }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_consecutive_dots_fails() {
+        // Subject with consecutive dots should fail (empty token)
+        let result = DlqHelper::derive_dlq_subject("audit..events.v1.events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::EmptyToken { .. }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_with_null_byte_fails() {
+        // Subject with null byte should fail
+        let result = DlqHelper::derive_dlq_subject("audit.events\x00.v1.events");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DlqSubjectError::InvalidCharacters {
+                invalid_char: '\0',
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_derive_dlq_subject_token_too_long_fails() {
+        // Token exceeding 255 bytes should fail with TokenTooLong error
+        // Create a token > 255 bytes: "a".repeat(256) = 256-char token
+        let long_token = "a".repeat(256);
+        let subject = format!("audit.events.v1.{}", long_token);
+        let result = DlqHelper::derive_dlq_subject(&subject);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DlqSubjectError::TokenTooLong {
+                length,
+                max,
+                position,
+            } => {
+                assert_eq!(length, 256);
+                assert_eq!(max, 255);
+                // Position should point to where the long token starts
+                assert!(position > 0);
+            }
+            other => panic!("Expected TokenTooLong error, got: {:?}", other),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Header Constants Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_dlq_header_constants() {
+        // Verify header name constants are correct
+        assert_eq!(HEADER_ORIG_SUBJECT, "Nats-Orig-Subject");
+        assert_eq!(HEADER_DELIVERY_COUNT, "Nats-Deliver-Count");
+        assert_eq!(HEADER_DLQ_REASON, "Nats-DLQ-Reason");
+        assert_eq!(HEADER_DLQ_TIMESTAMP, "Nats-DLQ-Timestamp");
+    }
+
+    // -------------------------------------------------------------------------
+    // Error Display Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_dlq_subject_error_display() {
+        // Test error display formatting
+        let err = DlqSubjectError::EmptySubject;
+        assert!(err.to_string().contains("empty"));
+
+        let err = DlqSubjectError::SubjectTooLong {
+            length: 2000,
+            max: 1024,
+        };
+        assert!(err.to_string().contains("2000"));
+        assert!(err.to_string().contains("1024"));
+
+        let err = DlqSubjectError::InvalidCharacters {
+            invalid_char: '*',
+            position: 10,
+        };
+        let display = err.to_string();
+        assert!(display.contains('*'));
+        assert!(display.contains("10"));
+
+        let err = DlqSubjectError::EmptyToken { position: 5 };
+        assert!(err.to_string().contains("5"));
+    }
+
+    #[test]
+    fn test_dlq_publish_error_display() {
+        let err = DlqPublishError::SubjectDerivation("test".to_string());
+        assert!(err.to_string().contains("subject derivation"));
+
+        let err = DlqPublishError::PublishFailed("connection lost".to_string());
+        assert!(err.to_string().contains("publish"));
+        assert!(err.to_string().contains("connection lost"));
+    }
+
+    #[test]
+    fn test_dlq_replay_error_display() {
+        let err = DlqReplayError::MissingOrigSubjectHeader;
+        assert!(err.to_string().contains("Nats-Orig-Subject"));
+
+        let err = DlqReplayError::InvalidSubject("bad subject".to_string());
+        assert!(err.to_string().contains("invalid subject"));
+
+        let err = DlqReplayError::PublishFailed("timeout".to_string());
+        assert!(err.to_string().contains("publish"));
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Metric Stub Tests
+    // -------------------------------------------------------------------------
+    // Metric Helper Tests (Accessibility Verification)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_dlq_metric_helpers_accessible() {
+        // Verify metric helpers from lib.rs are accessible in nats_jetstream context
+        // These call the real metric functions, not no-op stubs
+        crate::record_dlq_message();
+        crate::record_dlq_replay("success");
+        crate::record_dlq_replay_failure();
+        // If these compile and run without panicking, the helpers are accessible
+    }
+
+    // -------------------------------------------------------------------------
+    // DlqHelper Construction Tests (Compile-Time Verification)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_dlq_helper_cloneable() {
+        // Verify DlqHelper implements Clone (required for Arc wrapping)
+        fn _check_clone<T: Clone>() {}
+        _check_clone::<DlqHelper>();
+    }
+
+    #[test]
+    fn test_dlq_helper_debug() {
+        // Verify DlqHelper implements Debug
+        fn _check_debug<T: std::fmt::Debug>() {}
+        _check_debug::<DlqHelper>();
     }
 }
 

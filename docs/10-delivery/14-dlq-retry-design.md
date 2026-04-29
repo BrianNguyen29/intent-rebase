@@ -1,7 +1,7 @@
 # DLQ / Retry Design
 
-**Status:** Bounded/Partial/Deferred (Phase 3 design; runtime DLQ worker and alert deployment deferred to Phase 4)
-**Phase:** Phase 3 bounded — design documented, stubs defined; implementation deferred
+**Status:** Bounded First Slice Exists (Phase 3 DLQ design; app-level DLQ helpers implemented; production DLQ worker not fully production-ready until G1–G5 gates pass)
+**Phase:** Phase 3 bounded — design documented, bounded first slice implemented
 **Owner:** Backend Lead / Platform
 
 ---
@@ -12,7 +12,7 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 
 > **⚠️ Production Readiness Warning**
 >
-> This specification describes **design for future implementation**. No DLQ worker code exists yet. Do not claim production-ready retry/DLQ handling until this design is approved and implemented.
+> A **bounded app-level DLQ first slice** is now implemented in `crates/intent-api/src/nats_jetstream.rs` (`DlqHelper` struct). This is NOT a full production DLQ worker. Do not claim production-ready retry/DLQ handling until G1–G5 gates pass as documented in this spec.
 
 ---
 
@@ -25,11 +25,21 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 - Dead-letter routing rules
 - Manual replay policy and procedure
 - DLQ monitoring and alerting strategy
-- **Design doc only** — no worker implementation
+- **BOUNDED FIRST SLICE**: App-level DLQ helpers implemented (`DlqHelper`)
+  - Subject derivation (`derive_dlq_subject()`)
+  - Publish to DLQ (`publish_to_dlq()`)
+  - Replay primitives (`replay_from_dlq()`, `replay_to_subject()`)
+  - DLQ metadata headers
+  - Metric stubs (forward to `lib.rs` helpers)
 
 ### Out of Scope (Phase 4+)
 
-- Automatic DLQ replay worker (gated on this design approval)
+- G1: Design approval (pending)
+- G2: JetStream consumer `dead_letter` config (CLI/server-side)
+- G3: Full monitoring/lifecycle wiring
+- G4: RB11 runbook update for app-level DLQ
+- G5: Integration test coverage
+- Automatic DLQ replay worker (gated on gate approvals)
 - Retry with exponential backoff (future enhancement)
 - Per-message-type retry policies (future enhancement)
 - DLQ message transformation before replay
@@ -43,8 +53,13 @@ The Intent Rebase Engine uses NATS with JetStream for event-driven workflows. Wh
 ### Current State
 
 - Phase 2b bounded NATS core publisher delivered (`async-nats` 0.47 + core publish)
-- JetStream consumers and DLQ routing are Phase 3 scope
-- No retry worker exists
+- JetStream consumers and bounded app-level DLQ helpers delivered
+- **BOUNDED FIRST SLICE**: `DlqHelper` struct exists in `nats_jetstream.rs`
+  - `derive_dlq_subject()` — safe subject transformation with validation
+  - `publish_to_dlq()` — route failed messages to DLQ subject
+  - `replay_from_dlq()` / `replay_to_subject()` — replay primitives
+  - Metric stubs forward to `lib.rs` record functions
+- Production DLQ worker NOT YET production-ready (G1–G5 gates pending)
 
 ### Dependencies
 
