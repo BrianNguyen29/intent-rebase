@@ -15,6 +15,9 @@
 //! - `OTEL_EXPORTER_OTLP_ENDPOINT` — Optional OTLP endpoint for tracing export
 //! - `NATS_URL` — NATS server URL (optional, for event publishing)
 //! - `INTENT_API_NATS_CONSUMER` — Enable NATS consumer lifecycle (default: false, requires NATS_URL)
+//! - `INTENT_API_REQUIRE_JWT` — Require JWT authentication (default: false)
+//!   - When true, fails startup if JWT_SECRET is missing or weak
+//!   - When false (default), uses dev fallback secret if JWT_SECRET not set
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -292,6 +295,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(
             "INTENT_API_NATS_CONSUMER=true — NATS consumer lifecycle enabled (bounded Phase 4 first slice)"
         );
+    }
+
+    // =============================================================================
+    // Phase 2b: JWT Production Guard (bounded auth first slice)
+    // =============================================================================
+    //
+    // INTENT_API_REQUIRE_JWT=true activates production JWT guard:
+    // - Fails startup if JWT_SECRET is missing
+    // - Fails startup if JWT_SECRET is too short (< 32 bytes for HS256)
+    // - Fails startup if JWT_SECRET matches known weak patterns
+    //
+    // When INTENT_API_REQUIRE_JWT is false/unset, dev fallback is used (backwards compatible).
+    //
+    // This guard is a scaffold — full JWT→SQL RLS enforcement remains pending.
+    let jwt_required = std::env::var("INTENT_API_REQUIRE_JWT")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true");
+
+    if jwt_required {
+        tracing::info!("INTENT_API_REQUIRE_JWT=true — activating JWT production guard");
+        use intent_api::AuthConfig;
+
+        match AuthConfig::from_env() {
+            Ok(config) => {
+                if config.is_production_ready() {
+                    tracing::info!(
+                        "JWT production guard passed: JWT_SECRET is properly configured"
+                    );
+                } else {
+                    return Err("INTENT_API_REQUIRE_JWT=true but JWT_SECRET is not production-ready: \
+                         secret is too short or matches weak patterns. \
+                         Set a strong JWT_SECRET (≥32 bytes, not containing 'dev', 'secret', 'password', etc.)"
+                    .into());
+                }
+            }
+            Err(e) => {
+                return Err(format!(
+                    "INTENT_API_REQUIRE_JWT=true but JWT configuration failed: {}",
+                    e
+                )
+                .into());
+            }
+        }
     }
 
     // Build router and get optional checkpoint service for NATS consumer

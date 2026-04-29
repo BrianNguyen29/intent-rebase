@@ -52,7 +52,10 @@ pub mod nats_jetstream;
 
 // Re-export auth types for convenience when jwt-auth feature is enabled
 #[cfg(feature = "jwt-auth")]
-pub use auth::{generate_test_token, AuthConfig, Claims};
+pub use auth::{
+    generate_test_token, rls_reset_tenant_context_sql, rls_set_tenant_context_sql,
+    validate_tenant_id_for_rls, AuthConfig, AuthConfigError, Claims,
+};
 
 // Re-export NATS event publisher for use in main.rs and testing
 pub use nats_event_publisher::NatsEventPublisher;
