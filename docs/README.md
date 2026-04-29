@@ -71,6 +71,17 @@ Checklist exit gates cho từng phase (Phase 0–4). Mỗi phase có danh sách 
 Bộ tài liệu về audit, governance, compliance: audit event spec, provenance spec, policy snapshot spec, approval scope & revalidation, immutable retention/tamper resistance, threat model v2, authz matrix, tenant isolation, data handling/redaction, forensic bundle, incident freeze, replay compatibility, residual risk spec.
 → Xem: [14-governance/README.md](./14-governance/README.md)
 
+### Production-Hardening Evidence Templates (`09-operations/`)
+Bộ tài liệu cung cấp **procedure templates và plans** cho production-hardening evidence — không phải executed production evidence. Các templates hỗ trợ Phase 3 exit gate và external review prep:
+- [Backup & Restore Procedures](./09-operations/07-backup-restore.md) — PostgreSQL, NATS/JetStream, MinIO/S3 backup/restore playbooks (RPO=1h, RTO=30m targets)
+- [Secrets Inventory & Rotation](./09-operations/08-secrets-inventory.md) — Known secrets inventory và rotation procedure templates
+- [Observability Evidence Checklist](./09-operations/09-observability-evidence-checklist.md) — Metrics, Prometheus, Grafana, Alertmanager, traces evidence collection procedure (local docker-compose)
+- [External SRE/Security Review Packet](./09-operations/10-external-review-packet.md) — Template for requesting external SRE và security review
+- [Pen Test & Load Test Packet](./09-operations/11-pen-load-test-packet.md) — Templates cho pen test và load test execution (L1/L2 local completed; L3-L5 pending)
+- [S3 Option B Decision](./14-governance/05b-s3-option-b-decision.md) — S3 storage decision record (Standard storage; Object Lock deferred to Phase 4+)
+
+→ Xem: [09-operations/README.md](./09-operations/README.md) (nếu có)
+
 ## Tài liệu nên đọc theo thứ tự
 
 1. `01-product/01-product-thesis.md`
