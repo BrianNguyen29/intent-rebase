@@ -1,0 +1,196 @@
+# ============================================================
+# Staging Environment — Docker Compose Scaffold
+# ============================================================
+#
+# NOT PRODUCTION — This is a staging scaffold for local validation
+# and staging-like evidence collection. Requires external SRE/security/
+# load/pen testing gates to pass before any production consideration.
+#
+# Key differences from local dev:
+# - Staging-specific container naming and prefixes
+# - Port offsets to avoid conflicts with local dev stack
+# - Health checks enabled for all services
+# - Production-like resource limits (commented, informational)
+# - No observability stack by default (toggle with --profile observability)
+#
+# DO NOT: Claim this as production-ready or equivalent to production
+# DO NOT: Use production credentials here
+# ============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: intent-rebase-staging-postgres
+    environment:
+      POSTGRES_USER: intent_rebase_staging
+      # DO NOT use default values in production — replace via env vars
+      POSTGRES_PASSWORD: "${STAGING_POSTGRES_PASSWORD}"
+      POSTGRES_DB: intent_rebase_staging
+    ports:
+      - "5433:5432"   # Offset from local dev (5432) to avoid conflict
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intent_rebase_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Informational resource limits (uncomment for production-like)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1.0'
+    #       memory: 1G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: intent-rebase-staging-nats
+    ports:
+      - "4223:4222"   # Offset from local dev (4222) to avoid conflict
+      - "8223:8222"   # Offset from local dev (8222) to avoid conflict
+      - "6223:6222"   # Offset from local dev (6222) to avoid conflict
+    command: ["--js", "--max_memory_store=256MiB", "--max_file_store=1GiB"]
+    volumes:
+      - staging_nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    # Informational resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.5'
+    #       memory: 256M
+
+  minio:
+    image: minio/minio:latest
+    container_name: intent-rebase-staging-minio
+    environment:
+      MINIO_ROOT_USER: "${STAGING_MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${STAGING_MINIO_ROOT_PASSWORD}"
+    ports:
+      - "9002:9000"   # Offset from local dev (9000) to avoid conflict
+      - "9003:9001"   # Offset from local dev (9001) to avoid conflict
+    command: server /data --console-address ":9001"
+    volumes:
+      - staging_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================
+  # Observability Stack (optional — enable with --profile observability)
+  # ============================================================
+
+  intent-api:
+    image: nginx:alpine
+    container_name: intent-rebase-staging-api-metrics
+    ports:
+      - "8081:8080"   # Offset from local dev (8080) to avoid conflict
+    volumes:
+      - ./intent-api-metrics.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    profiles:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: intent-rebase-staging-prometheus
+    ports:
+      - "9091:9090"   # Offset from local dev (9090) to avoid conflict
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - staging_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    profiles:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: intent-rebase-staging-alertmanager
+    ports:
+      - "9094:9093"   # Offset from local dev (9093) to avoid conflict
+      - "9095:9094"   # Offset from local dev (9094) to avoid conflict
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - staging_alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.console.libraries=/usr/share/alertmanager/console_libraries'
+      - '--web.console.templates=/usr/share/alertmanager/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: intent-rebase-staging-grafana
+    ports:
+      - "3001:3000"   # Offset from local dev (3000) to avoid conflict
+    environment:
+      - GF_SECURITY_ADMIN_USER=${STAGING_GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${STAGING_GRAFANA_PASSWORD:-staging_admin_change_me}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+    volumes:
+      - staging_grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
+    profiles:
+      - observability
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  staging_postgres_data:
+  staging_nats_data:
+  staging_minio_data:
+  staging_prometheus_data:
+  staging_alertmanager_data:
+  staging_grafana_data:

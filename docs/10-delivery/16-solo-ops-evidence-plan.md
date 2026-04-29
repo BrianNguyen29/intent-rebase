@@ -408,10 +408,12 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | Field | Value |
 |-------|-------|
 | **Task** | Collect L3 staging-like evidence with docker-compose |
-| **Status** | 🔴 PENDING |
+| **Status** | 🟡 STAGING SCAFFOLD EXISTS — evidence collection pending |
 | **Owner** | Backend Lead (solo) |
-| **Prerequisites** | docker-compose full stack running |
+| **Prerequisites** | `infrastructure/staging/docker-compose.yml` created; docker-compose full stack running |
 | **Tools** | k6 or custom harness |
+
+**Staging Scaffold:** `infrastructure/staging/docker-compose.yml` exists with staging-specific container naming, port offsets (5433, 4223, 9002, etc.), and safe credential placeholders. This is local docker-compose (staging-like) — NOT production-equivalent.
 
 **Staging Evidence Plan:**
 
@@ -419,7 +421,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 |-------|-------|-------------|--------|
 | L1 | HTTP harness, in-memory | Local binary | ✅ DELIVERED |
 | L2 | SQLx-backed, docker-compose Postgres | Local docker | ✅ DELIVERED |
-| L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🔴 PENDING |
+| L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🟡 SCAFFOLD EXISTS — evidence collection pending |
 | L4 | Full stack with observability | docker-compose + Prometheus | 🔴 PENDING |
 | L5 | Production load | Production infra | 🔴 BLOCKED |
 
