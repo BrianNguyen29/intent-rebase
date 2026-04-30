@@ -185,16 +185,23 @@ cargo clippy --all-features -- -D warnings
 
 ## Prioritized Next Steps
 
+For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Backlog](./17-production-readiness-backlog.md).
+
 | Priority | Area | Action | Owner |
 |----------|------|--------|-------|
-| **P0** | Phase 2b sign-off | Close Phase2b sign-off name/date documentation | Backend Lead |
-| **P0/P1** | NATS consumer lifecycle | NATS consumer subscription lifecycle (first slice implemented — bounded ACK-all); gate remaining DLQ/multi-consumer work on DLQ design approval (G1-G5) | Backend Lead / SRE |
-| **P1** | Forensic S3BundleStorage | Wire S3BundleStorage into forensic-service runtime OR keep docs demoted | Backend Lead |
-| **P1** | S3 snapshot production | Complete S3 snapshot production lifecycle (Object Lock/chain-hash deferred to Phase 4) | Backend Lead |
-| **P1** | Production readiness | Production load testing + SRE/Security external sign-offs | SRE / Security |
+| **P0** | Remote CI startup_failure | Investigate and resolve GitHub Actions startup_failure | Backend Lead |
+| **P0** | Full RLS coverage | Wire `RlsTenantContext` into SQL query execution path | Backend Lead |
+| **P1** | External SRE sign-off | Obtain external SRE review and approval | SRE |
+| **P1** | External security sign-off | Obtain external security review and approval | Security |
+| **P1** | Production infra | Provision and verify production infrastructure | SRE |
+| **P1** | Load testing (L3-L5) | Execute staged and production load tests | SRE |
+| **P1** | Penetration testing | Engage external pen test and remediate findings | Security |
+| **P2** | DLQ/NATS lifecycle | Implement full DLQ replay worker (after G1-G5 gates) | Backend Lead |
+| **P2** | Panic hardening | Add panic handlers and graceful degradation | Backend Lead |
+| **P2** | Cross-process trace propagation | Revisit when Temporal SDK supports safe per-request gRPC metadata injection | Backend Lead / SRE |
 | **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |
 
-> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. Latest observed GitHub Actions push runs report `startup_failure` before jobs are created — remote CI is not passing. Production readiness is not claimed.
+> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. Latest observed GitHub Actions push runs report `startup_failure` before jobs are created — remote CI is not passing. Smoke workflow is a stub (`echo hello`). Production readiness is not claimed.
 
 ---
 
@@ -206,3 +213,5 @@ cargo clippy --all-features -- -D warnings
 - [Phase 3 Checklist](./checklists/checklist-phase-3.md)
 - [Phase 3 Completion Execution Plan](./15-phase-3-completion-execution-plan.md)
 - [10 Completion Proposals Tracker](./09-completion-proposals-tracker.md)
+- [Production Readiness Backlog](./17-production-readiness-backlog.md) — P0/P1/P2 blockers for production deployment
+- [CI/CD](../09-operations/02-ci-cd.md) — Actual vs aspirational CI/CD pipeline state
