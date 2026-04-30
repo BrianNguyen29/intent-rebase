@@ -81,6 +81,16 @@ pub trait IntentRepository: Send + Sync {
     /// Get intent with FOR UPDATE lock (for OCC workflows)
     /// Returns (intent, row_version) tuple
     async fn get_intent_for_update(&self, id: Uuid) -> Result<(Intent, i32), IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxIntentRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxIntentRepository> {
+        None
+    }
 }
 
 /// In-memory implementation for testing and Phase 1
@@ -310,6 +320,9 @@ pub struct IntentService {
     audit_repo: Option<Arc<dyn AuditRepository>>,
     /// System actor ID used for system-initiated cancellations
     system_actor_id: String,
+    /// Phase 3 P3-S5: Optional RLS-aware pool for tenant-scoped transactions.
+    /// When Some, RLS-aware methods are available for JWT-authenticated requests.
+    rls_pool: Option<graph_service::RlsAwarePool>,
 }
 
 impl IntentService {
@@ -320,6 +333,7 @@ impl IntentService {
             approval_repo: None,
             audit_repo: None,
             system_actor_id: "intent-service/system".to_string(),
+            rls_pool: None,
         }
     }
 
@@ -334,6 +348,7 @@ impl IntentService {
             approval_repo: None,
             audit_repo: None,
             system_actor_id: "intent-service/system".to_string(),
+            rls_pool: None,
         }
     }
 
@@ -351,6 +366,7 @@ impl IntentService {
             approval_repo: Some(approval_repo),
             audit_repo: Some(audit_repo),
             system_actor_id: "intent-service/system".to_string(),
+            rls_pool: None,
         }
     }
 
@@ -367,7 +383,18 @@ impl IntentService {
             approval_repo: Some(approval_repo),
             audit_repo: Some(audit_repo),
             system_actor_id: "intent-service/system".to_string(),
+            rls_pool: None,
         }
+    }
+
+    /// Set the RLS-aware pool for tenant-scoped transactions.
+    ///
+    /// Phase 3 P3-S5: Enables RLS-aware methods for JWT-authenticated requests.
+    /// This should be called after constructing the service when using SQL-backed
+    /// repositories with RLS enabled.
+    pub fn with_rls_pool(mut self, pool: graph_service::RlsAwarePool) -> Self {
+        self.rls_pool = Some(pool);
+        self
     }
 
     /// Create a new intent with initial version (transactional)
@@ -452,6 +479,188 @@ impl IntentService {
         }
 
         Ok(result)
+    }
+
+    // =============================================================================
+    // RLS-aware methods (Phase 3 P3-S5 bounded slice)
+    // =============================================================================
+
+    /// Returns true if RLS pool is configured.
+    pub fn has_rls_pool(&self) -> bool {
+        self.rls_pool.is_some()
+    }
+
+    /// Create a new intent with initial version using RLS-aware transaction.
+    ///
+    /// Phase 3 P3-S5: This method wraps intent creation in an RLS-set transaction
+    /// when `rls_pool` is configured. The tenant_id is extracted from the JWT claims
+    /// and validated before beginning the transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - `rls_pool` is not configured (caller should fall back to non-RLS)
+    /// - tenant_id is nil (RLS validation failure)
+    /// - Transaction fails to begin or commit
+    /// - Intent creation fails
+    #[tracing::instrument(skip(self, request))]
+    pub async fn create_intent_with_rls(
+        &self,
+        request: CreateIntentRequest,
+        tenant_id: Uuid,
+    ) -> Result<CreateIntentResponse, IntentRebaseError> {
+        let rls_pool = self
+            .rls_pool
+            .as_ref()
+            .ok_or_else(|| IntentRebaseError::Internal("RLS pool not configured".to_string()))?;
+
+        // Validate tenant_id for RLS use
+        intent_rebase_types::rls::validate_tenant_id_for_rls(tenant_id).map_err(|e| {
+            IntentRebaseError::Internal(format!("invalid tenant_id for RLS: {}", e))
+        })?;
+
+        let mut tx = rls_pool.begin_with_tenant(tenant_id).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to begin RLS transaction: {}", e))
+        })?;
+
+        // Get the SQL repository and create intent within the transaction
+        let sql_repo = self.repo.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal("RLS requires SQL-backed repository".to_string())
+        })?;
+
+        let result = sql_repo
+            .create_intent_with_tx(&mut tx, request, tenant_id)
+            .await;
+
+        match result {
+            Ok(response) => {
+                tx.commit().await.map_err(|e| {
+                    IntentRebaseError::StorageError(format!(
+                        "failed to commit RLS transaction: {}",
+                        e
+                    ))
+                })?;
+                Ok(response)
+            }
+            Err(e) => {
+                // Transaction will be rolled back on drop, but we log the error
+                tracing::error!(error = %e, "RLS intent creation failed, rolling back transaction");
+                Err(e)
+            }
+        }
+    }
+
+    /// Create a new version of an existing intent using RLS-aware transaction.
+    ///
+    /// Phase 3 P3-S5: This method wraps version creation in an RLS-set transaction
+    /// when `rls_pool` is configured. The tenant_id is extracted from the JWT claims
+    /// and validated before beginning the transaction.
+    ///
+    /// If `expected_version` and `expected_row_version` are provided (non-zero), performs OCC check.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - `rls_pool` is not configured (caller should fall back to non-RLS)
+    /// - tenant_id is nil (RLS validation failure)
+    /// - Transaction fails to begin or commit
+    /// - Intent not found or version creation fails
+    #[tracing::instrument(skip(self, request))]
+    pub async fn create_version_with_rls(
+        &self,
+        intent_id: Uuid,
+        request: CreateVersionRequest,
+        expected_version: Option<i32>,
+        expected_row_version: Option<i32>,
+        tenant_id: Uuid,
+    ) -> Result<CreateVersionResponse, IntentRebaseError> {
+        let rls_pool = self
+            .rls_pool
+            .as_ref()
+            .ok_or_else(|| IntentRebaseError::Internal("RLS pool not configured".to_string()))?;
+
+        // Validate tenant_id for RLS use
+        intent_rebase_types::rls::validate_tenant_id_for_rls(tenant_id).map_err(|e| {
+            IntentRebaseError::Internal(format!("invalid tenant_id for RLS: {}", e))
+        })?;
+
+        let mut tx = rls_pool.begin_with_tenant(tenant_id).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to begin RLS transaction: {}", e))
+        })?;
+
+        // Get the SQL repository
+        let sql_repo = self.repo.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal("RLS requires SQL-backed repository".to_string())
+        })?;
+
+        // First get the intent to check current version
+        let (intent, row_version) = self.repo.get_intent_for_update(intent_id).await?;
+        let exp_ver = expected_version.unwrap_or(intent.current_version);
+        let exp_row_ver = expected_row_version.unwrap_or(row_version);
+
+        // Capture old version number for potential approval cancellation
+        let old_version = intent.current_version;
+
+        let result = sql_repo
+            .create_version_with_tx(&mut tx, intent_id, request, exp_ver, exp_row_ver)
+            .await;
+
+        match result {
+            Ok(version_result) => {
+                // Phase 2b: Cancel pending approvals if configured
+                if let Some(approval_repo) = &self.approval_repo {
+                    let cancellation_reason = format!(
+                        "Intent version changed from v{} to v{}",
+                        old_version, version_result.version_number
+                    );
+
+                    let cancelled_count = approval_repo
+                        .cancel_pending_by_intent(
+                            intent_id,
+                            tenant_id,
+                            &self.system_actor_id,
+                            &cancellation_reason,
+                        )
+                        .await
+                        .unwrap_or(0);
+
+                    if cancelled_count > 0 {
+                        if let Some(audit_repo) = &self.audit_repo {
+                            let audit_payload = ApprovalCancelledAuditPayload {
+                                intent_id,
+                                cancelled_version_from: old_version,
+                                cancelled_version_to: version_result.version_number,
+                                decision_class: "D/E".to_string(),
+                                cancelled_by: self.system_actor_id.clone(),
+                                cancellation_reason,
+                                cancelled_count,
+                            };
+                            let _ = audit_repo
+                                .record_approval_cancelled(
+                                    tenant_id,
+                                    &self.system_actor_id,
+                                    intent_id,
+                                    audit_payload,
+                                    get_current_trace_context(),
+                                )
+                                .await;
+                        }
+                    }
+                }
+
+                tx.commit().await.map_err(|e| {
+                    IntentRebaseError::StorageError(format!(
+                        "failed to commit RLS transaction: {}",
+                        e
+                    ))
+                })?;
+                Ok(version_result)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "RLS version creation failed, rolling back transaction");
+                Err(e)
+            }
+        }
     }
 
     /// Get the current (head) version of an intent

@@ -89,6 +89,16 @@ pub trait CompensationActionRepository: Send + Sync {
         action_id: Uuid,
         lock_version: i32,
     ) -> Result<CompensationAction, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxCompensationActionRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxCompensationActionRepository> {
+        None
+    }
 }
 
 /// In-memory implementation for testing and Phase 3 Batch 1.
@@ -855,6 +865,10 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
                 }
             }
         }
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxCompensationActionRepository> {
+        Some(self)
     }
 }
 

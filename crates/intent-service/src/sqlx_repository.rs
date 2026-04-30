@@ -184,6 +184,201 @@ impl SqlxIntentRepository {
         Ok(result)
     }
 
+    // =============================================================================
+    // RLS-aware methods (Phase 3 P3-S5 bounded slice)
+    // =============================================================================
+
+    /// Create a new intent with initial version using an external RLS-aware transaction.
+    ///
+    /// This method is used by RLS-wrapped handlers where the transaction is created
+    /// by `RlsAwarePool::begin_with_tenant` which sets the RLS tenant context before
+    /// any operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `request` - The create intent request
+    /// * `tenant_id` - The tenant ID extracted from JWT claims (validated by caller)
+    #[tracing::instrument(
+        name = "sqlx_repo.create_intent_with_tx",
+        skip(self, tx, request),
+        fields(intent_id)
+    )]
+    pub async fn create_intent_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: CreateIntentRequest,
+        tenant_id: Uuid,
+    ) -> Result<CreateIntentResponse, IntentRebaseError> {
+        let intent_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        // Insert intent
+        let source_refs_json = serde_json::to_value(&request.source_refs)
+            .map_err(|e| IntentRebaseError::SerializationError(format!("source_refs: {}", e)))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO intents (intent_id, tenant_id, workflow_id, current_version, status,
+                created_at, created_by_actor_type, created_by_actor_id, source_refs, tags, row_version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1)
+            "#,
+        )
+        .bind(intent_id)
+        .bind(tenant_id)
+        .bind(request.workflow_id)
+        .bind(1)
+        .bind("active")
+        .bind(now)
+        .bind(&request.created_by.actor_type)
+        .bind(&request.created_by.actor_id)
+        .bind(source_refs_json)
+        .bind(&request.tags)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert intent: {}", e)))?;
+
+        // Create initial version
+        let version_id = Uuid::new_v4();
+        let payload_hash = compute_payload_hash(&request.payload);
+        let payload_json = serde_json::to_value(&request.payload)
+            .map_err(|e| IntentRebaseError::SerializationError(format!("payload: {}", e)))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO intent_versions (intent_version_id, intent_id, version_number,
+                parent_version_id, created_at, created_by_actor_type, created_by_actor_id,
+                change_reason, change_channel, status, hash, payload)
+            VALUES ($1, $2, 1, NULL, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(version_id)
+        .bind(intent_id)
+        .bind(now)
+        .bind(&request.created_by.actor_type)
+        .bind(&request.created_by.actor_id)
+        .bind("Initial creation")
+        .bind("user_edit")
+        .bind("active")
+        .bind(&payload_hash)
+        .bind(payload_json)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert version: {}", e)))?;
+
+        Ok(CreateIntentResponse {
+            intent_id,
+            current_version: 1,
+            status: IntentStatus::Active,
+        })
+    }
+
+    /// Create a new version with optimistic concurrency control using an external transaction.
+    ///
+    /// This method is used by RLS-wrapped handlers where the transaction is created
+    /// by `RlsAwarePool::begin_with_tenant` which sets the RLS tenant context before
+    /// any operations.
+    ///
+    /// Uses transactional compare-and-swap on `intents.current_version` with row_version bump.
+    /// If the intent has been modified since it was read, returns `ConcurrencyConflict`.
+    #[tracing::instrument(name = "sqlx_repo.create_version_with_tx", skip(self, tx, request))]
+    pub async fn create_version_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        intent_id: Uuid,
+        request: CreateVersionRequest,
+        expected_version: i32,
+        expected_row_version: i32,
+    ) -> Result<CreateVersionResponse, IntentRebaseError> {
+        // Check current version with OCC
+        let row = sqlx::query(
+            r#"
+            SELECT current_version, row_version
+            FROM intents
+            WHERE intent_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(intent_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch intent: {}", e)))?;
+
+        let row = row.ok_or(IntentRebaseError::IntentNotFound(intent_id))?;
+
+        let current_version: i32 = row.get("current_version");
+        let current_row_version: i32 = row.get("row_version");
+
+        // OCC check: version must match what caller expected
+        if current_version != expected_version {
+            return Err(IntentRebaseError::ConcurrencyConflict(intent_id));
+        }
+
+        if current_row_version != expected_row_version {
+            return Err(IntentRebaseError::ConcurrencyConflict(intent_id));
+        }
+
+        let new_version_number = current_version + 1;
+        let now = Utc::now();
+        let payload_hash = compute_payload_hash(&request.payload);
+        let payload_json = serde_json::to_value(&request.payload)
+            .map_err(|e| IntentRebaseError::SerializationError(format!("payload: {}", e)))?;
+
+        // Insert new version
+        let version_id = Uuid::new_v4();
+        let change_channel_str = change_channel_to_string(&request.change_channel);
+
+        sqlx::query(
+            r#"
+            INSERT INTO intent_versions (intent_version_id, intent_id, version_number,
+                parent_version_id, created_at, created_by_actor_type, created_by_actor_id,
+                change_reason, change_channel, status, hash, payload)
+            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(version_id)
+        .bind(intent_id)
+        .bind(new_version_number)
+        .bind(now)
+        .bind(&request.created_by.actor_type)
+        .bind(&request.created_by.actor_id)
+        .bind(&request.change_reason)
+        .bind(change_channel_str)
+        .bind("active")
+        .bind(&payload_hash)
+        .bind(payload_json)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert version: {}", e)))?;
+
+        // Update intent's current version with OCC
+        let updated = sqlx::query(
+            r#"
+            UPDATE intents
+            SET current_version = $1, row_version = row_version + 1
+            WHERE intent_id = $2 AND row_version = $3
+            "#,
+        )
+        .bind(new_version_number)
+        .bind(intent_id)
+        .bind(expected_row_version)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("update intent: {}", e)))?;
+
+        if updated.rows_affected() == 0 {
+            return Err(IntentRebaseError::ConcurrencyConflict(intent_id));
+        }
+
+        Ok(CreateVersionResponse {
+            intent_version_id: version_id,
+            intent_id,
+            version_number: new_version_number,
+            status: VersionStatus::Active,
+        })
+    }
+
     /// Create a new version with optimistic concurrency control
     ///
     /// Uses transactional compare-and-swap on `intents.current_version` with row_version bump.
@@ -497,6 +692,10 @@ impl IntentRepository for SqlxIntentRepository {
             }
             None => Err(IntentRebaseError::IntentNotFound(id)),
         }
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxIntentRepository> {
+        Some(self)
     }
 }
 
