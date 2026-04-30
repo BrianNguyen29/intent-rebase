@@ -309,6 +309,10 @@ pub struct AppState {
     /// bundle generation, and S3/MinIO persistence. Orchestrates the full
     /// generate→store→record cycle.
     pub forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    /// Phase 3 P3-S5 (bounded slice): RLS-aware PostgreSQL pool for tenant-scoped
+    /// transaction wrapping. When Some, create_graph_node uses this to wrap node
+    /// creation in RLS-set transactions. When None, falls back to non-RLS path.
+    pub rls_pool: Option<graph_service::RlsAwarePool>,
     pub start_time: Instant,
 }
 
@@ -1007,6 +1011,87 @@ pub struct ListGraphEdgesQuery {
 }
 
 /// POST /v1/graph/nodes - Create a new graph node
+///
+/// Phase 3 P3-S5 bounded slice: When `state.rls_pool` is Some AND valid JWT claims
+/// are present, this handler uses RLS-aware transaction wrapping for tenant isolation.
+/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
+///
+/// When jwt-auth feature is disabled, this handler uses the non-RLS path only.
+#[cfg(feature = "jwt-auth")]
+async fn create_graph_node(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<CreateGraphNodeRequest>,
+) -> Result<(StatusCode, Json<GraphNode>), ApiErrorResponse> {
+    // Check if RLS path is available (pool exists AND JWT claims present)
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        // Tenant mismatch rejection: JWT tenant must match request tenant
+        if rls_claims.tenant_id != request.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("create_graph_node: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+
+        // Use RLS-aware transaction
+        let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
+        let mut tx = match tx_result {
+            Ok(tx) => tx,
+            Err(e) => {
+                return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "failed to begin RLS transaction: {}",
+                    e
+                ))));
+            }
+        };
+
+        // Get the SQL repo and create node within the transaction
+        if let Some(sql_repo) = state.graph_service.repo().as_sqlx_repo() {
+            let node_result = sql_repo.create_node_with_tx(&mut tx, request).await;
+            let node = match node_result {
+                Ok(node) => node,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "RLS node creation failed: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let commit_result = tx.commit().await;
+            if let Err(e) = commit_result {
+                return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                    "failed to commit RLS transaction: {}",
+                    e
+                ))));
+            }
+
+            tracing::debug!(
+                "create_graph_node: RLS path success for tenant_id={}",
+                rls_claims.tenant_id
+            );
+            return Ok((StatusCode::CREATED, Json(node)));
+        } else {
+            // Fallback to non-RLS if repo doesn't support SQL
+            tracing::warn!(
+                "create_graph_node: rls_pool set but repo doesn't support SQL, falling back"
+            );
+        }
+    }
+
+    // Non-RLS path (no JWT claims or rls_pool is None)
+    state
+        .graph_service
+        .add_node(request)
+        .await
+        .map(|node| (StatusCode::CREATED, Json(node)))
+        .map_err(ApiErrorResponse)
+}
+
+/// POST /v1/graph/nodes - Create a new graph node (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn create_graph_node(
     State(state): State<AppState>,
     Json(request): Json<CreateGraphNodeRequest>,
@@ -6018,6 +6103,7 @@ pub fn build_router(
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     let state = AppState {
         service,
@@ -6034,6 +6120,7 @@ pub fn build_router(
         forensic_archive_generator,
         forensic_bundle_service,
         start_time: Instant::now(),
+        rls_pool,
     };
 
     Router::new()
@@ -6312,6 +6399,7 @@ pub fn build_router_with_jwt_auth(
         forensic_archive_generator,
         forensic_bundle_service,
         start_time: Instant::now(),
+        rls_pool: None,
     };
 
     Router::new()
@@ -6568,8 +6656,12 @@ pub fn build_router_with_sql_audit_and_approval(
     let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> = Arc::new(
         intent_service::SqlxApprovalRequestRepository::new(pool.clone()),
     );
-    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> =
-        Arc::new(intent_service::SqlxPolicySnapshotRepository::new(pool));
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
+        intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
+    );
+
+    // Create RLS-aware pool for tenant-scoped graph node creation
+    let rls_pool = Some(graph_service::RlsAwarePool::new(pool));
 
     build_router(
         service,
@@ -6585,7 +6677,66 @@ pub fn build_router_with_sql_audit_and_approval(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        rls_pool,
     )
+}
+
+/// Build the router with SQL-backed audit and approval repositories AND JWT authentication.
+///
+/// This is the production bootstrap helper for deployments that require both SQL-backed
+/// repositories and JWT authentication. Use this when `INTENT_API_REQUIRE_JWT=true`.
+///
+/// Requires `jwt-auth` feature to be enabled.
+#[cfg(feature = "jwt-auth")]
+#[allow(clippy::too_many_arguments)]
+pub fn build_router_with_sql_audit_and_approval_jwt(
+    pool: sqlx::PgPool,
+    service: Arc<IntentService>,
+    graph_service: Arc<GraphService>,
+    side_effect_service: Arc<compensation_service::SideEffectService>,
+    compensation_action_service: Arc<compensation_service::CompensationActionService>,
+    orchestration_runtime: Arc<compensation_service::OrchestrationRuntime>,
+    orchestrator: Arc<RebaseOrchestrator>,
+    event_publisher: Option<Arc<dyn intent_rebase_types::EventPublisher>>,
+    forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
+    forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
+    forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    auth_config: auth::AuthConfig,
+) -> Router {
+    // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
+    let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
+    let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> = Arc::new(
+        intent_service::SqlxApprovalRequestRepository::new(pool.clone()),
+    );
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
+        intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
+    );
+
+    // Create RLS-aware pool for tenant-scoped graph node creation
+    let rls_pool = Some(graph_service::RlsAwarePool::new(pool));
+
+    let router = build_router(
+        service,
+        graph_service,
+        side_effect_service,
+        compensation_action_service,
+        orchestration_runtime,
+        orchestrator,
+        audit_service,
+        approval_request_repo,
+        policy_snapshot_repo,
+        event_publisher,
+        forensic_service,
+        forensic_archive_generator,
+        forensic_bundle_service,
+        rls_pool,
+    );
+
+    // Apply JWT middleware
+    router.layer(axum::middleware::from_fn(move |request, next| {
+        jwt_auth_async(auth_config.clone(), request, next)
+    }))
 }
 
 #[cfg(test)]
@@ -6667,6 +6818,7 @@ mod tests {
             forensic_archive_generator: forensic_archive_gen,
             forensic_bundle_service: forensic_bundle_svc,
             start_time: Instant::now(),
+            rls_pool: None,
         }
     }
 
@@ -7270,6 +7422,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         };
 
         // Create an intent
@@ -7485,6 +7638,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         };
 
         // Create a test intent
@@ -9297,6 +9451,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         }
     }
 
@@ -9450,6 +9605,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
+            None,
         );
         // Router builds successfully - this verifies the signature change works
     }
@@ -9539,6 +9695,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         };
 
         // Create artifact request with the IntentVersion dependency and matching tenant/workflow IDs
@@ -10416,6 +10573,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         };
         (state, side_effect_repo, graph_repo)
     }
@@ -10706,6 +10864,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         }
     }
 
@@ -11668,6 +11827,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            rls_pool: None,
         };
 
         let request = ForensicExportRequest {

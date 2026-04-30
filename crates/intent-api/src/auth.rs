@@ -3,6 +3,11 @@
 //! This module provides JWT authentication when the `jwt-auth` feature is enabled.
 //! Use `build_router_with_jwt_auth` instead of `build_router` to enable JWT authentication.
 
+use axum::{
+    extract::FromRequestParts,
+    http::{request::Parts, StatusCode},
+    response::IntoResponse,
+};
 use jsonwebtoken::Algorithm;
 use serde::{Deserialize, Serialize};
 
@@ -174,60 +179,161 @@ impl std::fmt::Display for AuthConfigError {
 impl std::error::Error for AuthConfigError {}
 
 // ============================================================================
-// RLS Session Context Helper
+// RLS Tenant Claims Extractor (Phase 3 P3-S5 Bounded Slice)
 // ============================================================================
 
-/// PostgreSQL session setting name for tenant context
-const RLS_TENANT_SETTING: &str = "app.current_tenant_id";
+/// Re-export RLS helpers from intent-rebase-types for backward compatibility.
+/// These were moved to intent-rebase-types to allow sharing across crates.
+pub use intent_rebase_types::rls::{
+    rls_reset_tenant_context_sql, rls_set_tenant_context_sql, validate_tenant_id_for_rls,
+    RlsTenantContext,
+};
 
-/// Generates a SQL statement to safely set the RLS tenant context for a session.
-///
-/// This helper constructs the proper `SET LOCAL` or `SET` command to configure
-/// the `app.current_tenant_id` session variable used by RLS policies.
-///
-/// # Security Notes
-///
-/// - Uses parameterized UUID to prevent SQL injection
-/// - The UUID is validated before being embedded in the SQL
-/// - RLS policies check `NULL` tenant_id as bypass (superuser/migration access)
-/// - Always use `SET LOCAL` for transaction-scoped context
-///
-/// # Example
-///
-/// ```sql
-/// -- Set tenant context for current session (transaction-scoped with SET LOCAL)
-/// SET LOCAL app.current_tenant_id = '550e8400-e29b-41d4-a716-446655440000';
-///
-/// -- Then subsequent queries in the same transaction will be tenant-scoped
-/// SELECT * FROM intents WHERE tenant_id = current_tenant_id();
-/// ```
-pub fn rls_set_tenant_context_sql(tenant_id: uuid::Uuid) -> String {
-    format!("SET LOCAL {} = '{}'", RLS_TENANT_SETTING, tenant_id)
+/// Extension to store RlsTenantClaims in axum request extensions.
+/// This is set by the JWT auth middleware after validating the token.
+#[derive(Clone, Debug)]
+pub struct RlsTenantClaims {
+    /// The validated tenant ID from the JWT token (guaranteed non-nil)
+    pub tenant_id: uuid::Uuid,
+    /// The full claims from the JWT token
+    pub claims: Claims,
 }
 
-/// Generates a SQL statement to reset the RLS tenant context.
-///
-/// Use this at the end of a transaction or when switching tenants.
-/// The `RESET` command clears the session variable.
-pub fn rls_reset_tenant_context_sql() -> String {
-    format!("RESET {}", RLS_TENANT_SETTING)
-}
-
-/// Validates that a tenant_id UUID is safe to use in RLS context.
-///
-/// Returns `Err` with explanation if the UUID is not valid for RLS use.
-pub fn validate_tenant_id_for_rls(tenant_id: uuid::Uuid) -> Result<(), String> {
-    // Check for nil UUID which is used as sentinel/default
-    if tenant_id == uuid::Uuid::nil() {
-        return Err(
-            "Nil UUID (00000000-0000-0000-0000-000000000000) cannot be used as tenant_id \
-             for RLS context; it is reserved as the default/sentinel value"
-                .into(),
-        );
+impl RlsTenantClaims {
+    /// Creates a new RlsTenantClaims from a Claims struct.
+    ///
+    /// The tenant_id is parsed from claims.tenant_id and validated for RLS use.
+    /// Returns error if the tenant_id is not a valid UUID or is the nil UUID.
+    pub fn new(claims: Claims) -> Result<Self, String> {
+        let tenant_uuid = uuid::Uuid::parse_str(&claims.tenant_id)
+            .map_err(|e| format!("tenant_id in JWT is not a valid UUID: {}", e))?;
+        validate_tenant_id_for_rls(tenant_uuid)?;
+        Ok(Self {
+            tenant_id: tenant_uuid,
+            claims,
+        })
     }
 
-    // Additional validation could go here (e.g., format checks, range checks)
-    Ok(())
+    /// Creates a new RlsTenantClaims without validation (for testing or internal use).
+    #[cfg(test)]
+    pub fn new_unchecked(tenant_id: uuid::Uuid, claims: Claims) -> Self {
+        Self { tenant_id, claims }
+    }
+}
+
+/// Error type for RlsTenantClaims extraction failures.
+#[derive(Debug)]
+pub struct RlsTenantClaimsExtractionError(pub String);
+
+impl std::fmt::Display for RlsTenantClaimsExtractionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RlsTenantClaims extraction failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for RlsTenantClaimsExtractionError {}
+
+impl IntoResponse for RlsTenantClaimsExtractionError {
+    fn into_response(self) -> axum::response::Response {
+        let body = crate::ApiError {
+            error: crate::ErrorDetails {
+                code: "UNAUTHORIZED".to_string(),
+                message: self.0,
+                retryable: false,
+                details: None,
+            },
+        };
+        (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+    }
+}
+
+/// Error type for tenant mismatch detection.
+#[derive(Debug)]
+pub struct TenantMismatchError {
+    pub jwt_tenant_id: uuid::Uuid,
+    pub request_tenant_id: uuid::Uuid,
+}
+
+impl std::fmt::Display for TenantMismatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+            self.jwt_tenant_id, self.request_tenant_id
+        )
+    }
+}
+
+impl std::error::Error for TenantMismatchError {}
+
+impl IntoResponse for TenantMismatchError {
+    fn into_response(self) -> axum::response::Response {
+        let body = crate::ApiError {
+            error: crate::ErrorDetails {
+                code: "TENANT_MISMATCH".to_string(),
+                message: self.to_string(),
+                retryable: false,
+                details: None,
+            },
+        };
+        (StatusCode::FORBIDDEN, axum::Json(body)).into_response()
+    }
+}
+
+/// Extracts RlsTenantClaims from request extensions.
+///
+/// This is used in handlers to get the validated JWT tenant claims.
+/// The claims must have been inserted by the jwt_auth_async middleware.
+#[async_trait::async_trait]
+impl<S> FromRequestParts<S> for RlsTenantClaims
+where
+    S: Clone + Send + Sync,
+{
+    type Rejection = RlsTenantClaimsExtractionError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<Claims>()
+            .ok_or(RlsTenantClaimsExtractionError(
+                "JWT claims not found in request extensions. Ensure JWT auth middleware is applied."
+                    .into(),
+            ))
+            .and_then(|claims| {
+                RlsTenantClaims::new(claims.clone()).map_err(RlsTenantClaimsExtractionError)
+            })
+    }
+}
+
+/// Optional RLS tenant claims extractor.
+///
+/// Returns `Some(RlsTenantClaims)` when valid JWT claims are present in extensions.
+/// Returns `None` when no JWT claims are found (no auth, invalid token, etc.).
+///
+/// This allows handlers to gracefully fall back to non-RLS paths when JWT auth
+/// is not present, rather than returning 401/403.
+#[derive(Clone, Debug)]
+pub struct OptionalRlsTenantClaims(pub Option<RlsTenantClaims>);
+
+#[async_trait::async_trait]
+impl<S> FromRequestParts<S> for OptionalRlsTenantClaims
+where
+    S: Clone + Send + Sync,
+{
+    type Rejection = RlsTenantClaimsExtractionError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let claims = parts.extensions.get::<Claims>();
+        match claims {
+            Some(claims) => {
+                match RlsTenantClaims::new(claims.clone()) {
+                    Ok(rls_claims) => Ok(OptionalRlsTenantClaims(Some(rls_claims))),
+                    Err(_) => Ok(OptionalRlsTenantClaims(None)), // Invalid tenant_id in claims, but treat as no JWT
+                }
+            }
+            None => Ok(OptionalRlsTenantClaims(None)),
+        }
+    }
 }
 
 /// JWT token generation utility (for testing and dev)
@@ -325,7 +431,7 @@ mod tests {
     }
 
     // =====================================================================
-    // RLS Helper Tests
+    // RLS Helper Tests (re-exported from intent-rebase-types)
     // =====================================================================
 
     #[test]
@@ -357,6 +463,112 @@ mod tests {
         let valid_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let result = validate_tenant_id_for_rls(valid_uuid);
         assert!(result.is_ok());
+    }
+
+    // =====================================================================
+    // RlsTenantContext Tests (re-exported from intent-rebase-types)
+    // =====================================================================
+
+    #[test]
+    fn test_rls_tenant_context_new_valid() {
+        let tenant_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let ctx = RlsTenantContext::new(tenant_id);
+        assert!(ctx.is_ok());
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.tenant_id(), tenant_id);
+    }
+
+    #[test]
+    fn test_rls_tenant_context_new_nil_rejected() {
+        let nil_uuid = uuid::Uuid::nil();
+        let ctx = RlsTenantContext::new(nil_uuid);
+        assert!(ctx.is_err());
+        assert!(ctx.unwrap_err().contains("Nil UUID"));
+    }
+
+    #[test]
+    fn test_rls_tenant_context_clone() {
+        let tenant_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let ctx = RlsTenantContext::new(tenant_id).unwrap();
+        let ctx_clone = ctx.clone();
+        assert_eq!(ctx.tenant_id(), ctx_clone.tenant_id());
+    }
+
+    #[test]
+    fn test_rls_tenant_context_debug() {
+        let tenant_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let ctx = RlsTenantContext::new(tenant_id).unwrap();
+        let debug_str = format!("{:?}", ctx);
+        assert!(debug_str.contains("RlsTenantContext"));
+        assert!(debug_str.contains("550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    // =====================================================================
+    // RlsTenantClaims Tests
+    // =====================================================================
+
+    #[test]
+    fn test_rls_tenant_claims_new_valid() {
+        let claims = Claims {
+            sub: "user-1".to_string(),
+            tenant_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            roles: vec!["admin".to_string()],
+            exp: 9999999999,
+            iat: 0,
+        };
+        let result = RlsTenantClaims::new(claims.clone());
+        assert!(result.is_ok());
+        let tenant_claims = result.unwrap();
+        assert_eq!(
+            tenant_claims.tenant_id,
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+        assert_eq!(tenant_claims.claims.sub, "user-1");
+    }
+
+    #[test]
+    fn test_rls_tenant_claims_new_nil_rejected() {
+        let claims = Claims {
+            sub: "user-1".to_string(),
+            tenant_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            roles: vec![],
+            exp: 9999999999,
+            iat: 0,
+        };
+        let result = RlsTenantClaims::new(claims);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Nil UUID"));
+    }
+
+    #[test]
+    fn test_rls_tenant_claims_new_invalid_uuid() {
+        let claims = Claims {
+            sub: "user-1".to_string(),
+            tenant_id: "not-a-valid-uuid".to_string(),
+            roles: vec![],
+            exp: 9999999999,
+            iat: 0,
+        };
+        let result = RlsTenantClaims::new(claims);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not a valid UUID"));
+    }
+
+    #[test]
+    fn test_rls_tenant_claims_new_unchecked() {
+        let tenant_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let claims = Claims {
+            sub: "user-1".to_string(),
+            tenant_id: tenant_id.to_string(),
+            roles: vec![],
+            exp: 9999999999,
+            iat: 0,
+        };
+        let tenant_claims = RlsTenantClaims::new_unchecked(tenant_id, claims.clone());
+        assert_eq!(tenant_claims.tenant_id, tenant_id);
+        assert_eq!(tenant_claims.claims.sub, "user-1");
     }
 
     // =====================================================================

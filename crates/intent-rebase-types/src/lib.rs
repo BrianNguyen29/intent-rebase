@@ -14,6 +14,7 @@ pub mod intent;
 pub mod policy_snapshot;
 pub mod quota;
 pub mod retention_verification;
+pub mod rls;
 pub mod trace_context;
 
 pub use artifact::*;
@@ -26,4 +27,5 @@ pub use graph::*;
 pub use intent::*;
 pub use policy_snapshot::*;
 pub use quota::*;
+pub use rls::*;
 pub use trace_context::*;

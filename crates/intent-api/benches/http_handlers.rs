@@ -473,6 +473,7 @@ fn bench_http_server(c: &mut Criterion) {
             forensic_archive_generator: forensic_archive_gen,
             forensic_bundle_service: forensic_bundle_svc,
             start_time: std::time::Instant::now(),
+            rls_pool: None,
         };
 
         let app = intent_api::build_router(
@@ -489,6 +490,7 @@ fn bench_http_server(c: &mut Criterion) {
             state.forensic_service.clone(),
             state.forensic_archive_generator.clone(),
             state.forensic_bundle_service.clone(),
+            None,
         );
 
         // Bind to ephemeral port using tokio

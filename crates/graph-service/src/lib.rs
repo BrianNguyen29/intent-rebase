@@ -19,6 +19,8 @@ use intent_rebase_types::{
     GraphPath, IngestorResult, IntentRebaseError, NodeState, NodeType, PropagationConfig,
     ReachabilityResult, SideEffectIngestRequest, TraversalOptions, DEFAULT_PROPAGATION_CONFIG,
 };
+use sqlx::postgres::{PgPool, PgRow};
+use sqlx::Row;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -60,6 +62,16 @@ pub trait GraphRepository: Send + Sync {
     async fn list_edges_from(&self, node_id: Uuid) -> Result<Vec<GraphEdge>, IntentRebaseError>;
     async fn list_edges_to(&self, node_id: Uuid) -> Result<Vec<GraphEdge>, IntentRebaseError>;
     async fn delete_edge(&self, id: Uuid) -> Result<(), IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxGraphRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxGraphRepository> {
+        None
+    }
 }
 
 /// Unified graph state to prevent lock-order inversion deadlocks.
@@ -339,6 +351,852 @@ impl GraphRepository for InMemoryGraphRepository {
     }
 }
 
+// =============================================================================
+// RlsAwarePool — RLS-aware PostgreSQL connection pool wrapper
+// =============================================================================
+
+/// RLS-aware pool wrapper that provides tenant-scoped transaction support.
+///
+/// This wrapper around `sqlx::PgPool` provides the `begin_with_tenant` method
+/// that starts a transaction and sets the RLS tenant context via `SET LOCAL`.
+///
+/// **Bounded scope:** This is the first slice of RLS transaction wrapping.
+/// Only `begin_with_tenant` is provided - full pool wrapper with all pool
+/// methods remains future scope.
+///
+/// # Usage
+///
+/// ```ignore
+/// let pool = RlsAwarePool::new(pg_pool);
+/// let tenant_id = uuid::Uuid::parse_str("...").unwrap();
+///
+/// let mut tx = pool.begin_with_tenant(tenant_id).await?;
+/// // Transaction is now tenant-scoped via RLS
+/// // ... use tx for queries ...
+/// tx.commit().await?;
+/// ```
+#[derive(Clone)]
+pub struct RlsAwarePool {
+    pool: PgPool,
+}
+
+impl RlsAwarePool {
+    /// Create a new RlsAwarePool wrapping the given PgPool.
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Begin a new RLS-aware transaction for the given tenant.
+    ///
+    /// This starts a PostgreSQL transaction and sets the RLS tenant context
+    /// via `SET LOCAL app.current_tenant_id = '<tenant_id>'`.
+    ///
+    /// The tenant_id is validated before use - nil UUIDs are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tenant_id is nil (reserved sentinel value)
+    /// - The transaction cannot be started
+    /// - The RLS context cannot be set
+    pub async fn begin_with_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, IntentRebaseError> {
+        // Validate tenant_id for RLS use
+        intent_rebase_types::rls::validate_tenant_id_for_rls(tenant_id).map_err(|e| {
+            IntentRebaseError::Internal(format!("invalid tenant_id for RLS: {}", e))
+        })?;
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to begin transaction: {}", e))
+        })?;
+
+        // Set RLS tenant context
+        let sql = intent_rebase_types::rls::rls_set_tenant_context_sql(tenant_id);
+        sqlx::query(&sql).execute(&mut *tx).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to set RLS context: {}", e))
+        })?;
+
+        Ok(tx)
+    }
+
+    /// Returns a reference to the underlying PgPool.
+    ///
+    /// This is provided for cases where the full pool API is needed
+    /// (e.g., for non-RLS operations or administrative tasks).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
+// =============================================================================
+// SqlxGraphRepository — SQL-backed graph storage
+// =============================================================================
+
+/// SQL-backed implementation of GraphRepository
+///
+/// Phase 2b bounded slice: Core CRUD operations against existing graph_nodes/graph_edges
+/// tables. Does NOT implement traversal operations (find_reachable, find_path, detect_cycles)
+/// which require application-level graph algorithms; those remain on GraphService using
+/// the repository's list_* methods.
+///
+/// Bounded gaps:
+/// - No transaction-based consistency checks (DB trigger enforces node existence)
+/// - No bulk operations
+/// - No pagination on list operations
+pub struct SqlxGraphRepository {
+    pool: PgPool,
+}
+
+impl SqlxGraphRepository {
+    /// Create a new SqlxGraphRepository
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Convert a database row to a GraphNode domain object
+    fn row_to_node(&self, row: PgRow) -> Result<GraphNode, IntentRebaseError> {
+        let external_ref_type: Option<String> = row.get("external_ref_type");
+        let external_ref_id: Option<Uuid> = row.get("external_ref_id");
+        let node_type_str: String = row.get("node_type");
+        let state_str: String = row.get("state");
+        let properties: serde_json::Value = row.get("properties");
+
+        let external_ref = match (&external_ref_type, &external_ref_id) {
+            (Some(ref_type), Some(ref_id)) => {
+                let rt = external_ref_type_from_string(ref_type)?;
+                Some(ExternalRef {
+                    ref_type: rt,
+                    ref_id: *ref_id,
+                })
+            }
+            (None, None) => None,
+            _ => {
+                return Err(IntentRebaseError::Internal(
+                    "graph node has partial external ref: both type and id must be set or both unset"
+                        .to_string(),
+                ));
+            }
+        };
+
+        Ok(GraphNode {
+            id: row.get("node_id"),
+            tenant_id: row.get("tenant_id"),
+            workflow_id: row.get("workflow_id"),
+            node_type: node_type_from_string(&node_type_str)?,
+            external_ref,
+            label: row.get("label"),
+            state: node_state_from_string(&state_str)?,
+            properties,
+            created_at: row.get("created_at"),
+        })
+    }
+
+    /// Convert a database row to a GraphEdge domain object
+    fn row_to_edge(&self, row: PgRow) -> Result<GraphEdge, IntentRebaseError> {
+        let edge_type_str: String = row.get("edge_type");
+        let properties: serde_json::Value = row.get("properties");
+
+        Ok(GraphEdge {
+            id: row.get("edge_id"),
+            tenant_id: row.get("tenant_id"),
+            workflow_id: row.get("workflow_id"),
+            from_node_id: row.get("from_node_id"),
+            to_node_id: row.get("to_node_id"),
+            edge_type: edge_type_from_string(&edge_type_str)?,
+            properties,
+            created_at: row.get("created_at"),
+        })
+    }
+
+    /// Create a graph node within an external transaction.
+    ///
+    /// This method is used for RLS-wrapped operations where the transaction
+    /// is created by `RlsAwarePool::begin_with_tenant` which sets the RLS
+    /// tenant context before any operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `request` - The create node request
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert fails or if the transaction is invalid.
+    pub async fn create_node_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: CreateGraphNodeRequest,
+    ) -> Result<GraphNode, IntentRebaseError> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let (external_ref_type, external_ref_id) = match &request.external_ref {
+            Some(eref) => {
+                let rt = external_ref_type_to_string(&eref.ref_type);
+                (Some(rt), Some(eref.ref_id))
+            }
+            None => (None, None),
+        };
+
+        let node_type_str = node_type_to_string(&request.node_type);
+        let state_str = node_state_to_string(&NodeState::Active);
+        let properties = serde_json::to_value(request.properties.unwrap_or(serde_json::json!({})))
+            .map_err(|e| {
+                IntentRebaseError::SerializationError(format!("node properties: {}", e))
+            })?;
+
+        let node_properties = properties.clone();
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_nodes (node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(id)
+        .bind(request.tenant_id)
+        .bind(request.workflow_id)
+        .bind(node_type_str)
+        .bind(external_ref_type)
+        .bind(external_ref_id)
+        .bind(&request.label)
+        .bind(state_str)
+        .bind(properties)
+        .bind(now)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert graph node: {}", e)))?;
+
+        let node = GraphNode {
+            id,
+            tenant_id: request.tenant_id,
+            workflow_id: request.workflow_id,
+            node_type: request.node_type,
+            external_ref: request.external_ref,
+            label: request.label,
+            state: NodeState::Active,
+            properties: node_properties,
+            created_at: now,
+        };
+
+        Ok(node)
+    }
+}
+
+#[async_trait]
+impl GraphRepository for SqlxGraphRepository {
+    async fn create_node(
+        &self,
+        request: CreateGraphNodeRequest,
+    ) -> Result<GraphNode, IntentRebaseError> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let (external_ref_type, external_ref_id) = match &request.external_ref {
+            Some(eref) => {
+                let rt = external_ref_type_to_string(&eref.ref_type);
+                (Some(rt), Some(eref.ref_id))
+            }
+            None => (None, None),
+        };
+
+        let node_type_str = node_type_to_string(&request.node_type);
+        let state_str = node_state_to_string(&NodeState::Active);
+        let properties = serde_json::to_value(request.properties.unwrap_or(serde_json::json!({})))
+            .map_err(|e| {
+                IntentRebaseError::SerializationError(format!("node properties: {}", e))
+            })?;
+
+        let node_properties = properties.clone();
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_nodes (node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(id)
+        .bind(request.tenant_id)
+        .bind(request.workflow_id)
+        .bind(node_type_str)
+        .bind(external_ref_type)
+        .bind(external_ref_id)
+        .bind(&request.label)
+        .bind(state_str)
+        .bind(properties)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert graph node: {}", e)))?;
+
+        let node = GraphNode {
+            id,
+            tenant_id: request.tenant_id,
+            workflow_id: request.workflow_id,
+            node_type: request.node_type,
+            external_ref: request.external_ref,
+            label: request.label,
+            state: NodeState::Active,
+            properties: node_properties,
+            created_at: now,
+        };
+
+        Ok(node)
+    }
+
+    async fn get_node(&self, id: Uuid) -> Result<GraphNode, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+            FROM graph_nodes
+            WHERE node_id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch graph node: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_node(r),
+            None => Err(IntentRebaseError::GraphNodeNotFound(id)),
+        }
+    }
+
+    async fn list_nodes(
+        &self,
+        filter: GraphNodeFilter,
+    ) -> Result<Vec<GraphNode>, IntentRebaseError> {
+        // Extract filter values upfront to avoid move issues
+        let tenant_id = filter.tenant_id;
+        let workflow_id = filter.workflow_id;
+        let node_type = filter.node_type;
+        let state = filter.state;
+
+        // Build query with optional filters
+        let rows = if let (Some(tid), Some(wid), Some(nt), Some(st)) = (&tenant_id, &workflow_id, &node_type, &state) {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE tenant_id = $1 AND workflow_id = $2 AND node_type = $3 AND state = $4
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(*tid)
+            .bind(*wid)
+            .bind(node_type_to_string(nt))
+            .bind(node_state_to_string(st))
+            .fetch_all(&self.pool)
+            .await
+        } else if let (Some(tid), Some(wid), Some(nt)) = (&tenant_id, &workflow_id, &node_type) {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE tenant_id = $1 AND workflow_id = $2 AND node_type = $3
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(*tid)
+            .bind(*wid)
+            .bind(node_type_to_string(nt))
+            .fetch_all(&self.pool)
+            .await
+        } else if let (Some(tid), Some(wid)) = (&tenant_id, &workflow_id) {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE tenant_id = $1 AND workflow_id = $2
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(*tid)
+            .bind(*wid)
+            .fetch_all(&self.pool)
+            .await
+        } else if let Some(tid) = &tenant_id {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE tenant_id = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(*tid)
+            .fetch_all(&self.pool)
+            .await
+        } else if let Some(wid) = &workflow_id {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE workflow_id = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(*wid)
+            .fetch_all(&self.pool)
+            .await
+        } else if let Some(nt) = &node_type {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE node_type = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(node_type_to_string(nt))
+            .fetch_all(&self.pool)
+            .await
+        } else if let Some(st) = &state {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE state = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(node_state_to_string(st))
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                ORDER BY created_at DESC
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+        }
+        .map_err(|e| IntentRebaseError::StorageError(format!("list graph nodes: {}", e)))?;
+
+        rows.into_iter().map(|r| self.row_to_node(r)).collect()
+    }
+
+    async fn update_node_state(
+        &self,
+        id: Uuid,
+        state: NodeState,
+    ) -> Result<GraphNode, IntentRebaseError> {
+        let now = Utc::now();
+        let state_str = node_state_to_string(&state);
+
+        let result = sqlx::query(
+            r#"
+            UPDATE graph_nodes SET state = $1, updated_at = $2 WHERE node_id = $3
+            "#,
+        )
+        .bind(state_str)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("update node state: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(IntentRebaseError::GraphNodeNotFound(id));
+        }
+
+        self.get_node(id).await
+    }
+
+    async fn create_edge(
+        &self,
+        request: CreateGraphEdgeRequest,
+    ) -> Result<GraphEdge, IntentRebaseError> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        // DB trigger will validate node existence and tenant/workflow consistency
+        let edge_type_str = edge_type_to_string(&request.edge_type);
+        let properties = serde_json::to_value(request.properties.unwrap_or(serde_json::json!({})))
+            .map_err(|e| {
+                IntentRebaseError::SerializationError(format!("edge properties: {}", e))
+            })?;
+
+        let edge_properties = properties.clone();
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_edges (edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(request.tenant_id)
+        .bind(request.workflow_id)
+        .bind(request.from_node_id)
+        .bind(request.to_node_id)
+        .bind(edge_type_str)
+        .bind(properties)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert graph edge: {}", e)))?;
+
+        Ok(GraphEdge {
+            id,
+            tenant_id: request.tenant_id,
+            workflow_id: request.workflow_id,
+            from_node_id: request.from_node_id,
+            to_node_id: request.to_node_id,
+            edge_type: request.edge_type,
+            properties: edge_properties,
+            created_at: now,
+        })
+    }
+
+    async fn get_edge(&self, id: Uuid) -> Result<GraphEdge, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+            FROM graph_edges
+            WHERE edge_id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch graph edge: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_edge(r),
+            None => Err(IntentRebaseError::GraphEdgeNotFound(id)),
+        }
+    }
+
+    async fn list_edges(
+        &self,
+        filter: GraphEdgeFilter,
+    ) -> Result<Vec<GraphEdge>, IntentRebaseError> {
+        // Build query with optional filters - simplified approach for type inference
+        // Extract filter values upfront to avoid move issues
+        let tenant_id = filter.tenant_id;
+        let workflow_id = filter.workflow_id;
+        let from_node_id = filter.from_node_id;
+        let to_node_id = filter.to_node_id;
+        let edge_type = filter.edge_type;
+
+        let rows =
+            if let (Some(tid), Some(wid), Some(fnid), Some(tnid), Some(et)) =
+                (&tenant_id, &workflow_id, &from_node_id, &to_node_id, &edge_type)
+            {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE tenant_id = $1 AND workflow_id = $2 AND from_node_id = $3 AND to_node_id = $4 AND edge_type = $5
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tid)
+                .bind(*wid)
+                .bind(*fnid)
+                .bind(*tnid)
+                .bind(edge_type_to_string(et))
+                .fetch_all(&self.pool)
+                .await
+            } else if let (Some(tid), Some(wid), Some(fnid), Some(tnid)) =
+                (&tenant_id, &workflow_id, &from_node_id, &to_node_id)
+            {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE tenant_id = $1 AND workflow_id = $2 AND from_node_id = $3 AND to_node_id = $4
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tid)
+                .bind(*wid)
+                .bind(*fnid)
+                .bind(*tnid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let (Some(tid), Some(wid), Some(fnid)) =
+                (&tenant_id, &workflow_id, &from_node_id)
+            {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE tenant_id = $1 AND workflow_id = $2 AND from_node_id = $3
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tid)
+                .bind(*wid)
+                .bind(*fnid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let (Some(tid), Some(wid)) = (&tenant_id, &workflow_id) {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE tenant_id = $1 AND workflow_id = $2
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tid)
+                .bind(*wid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let Some(tid) = &tenant_id {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE tenant_id = $1
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let Some(fnid) = &from_node_id {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE from_node_id = $1
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*fnid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let Some(tnid) = &to_node_id {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE to_node_id = $1
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(*tnid)
+                .fetch_all(&self.pool)
+                .await
+            } else if let Some(et) = &edge_type {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    WHERE edge_type = $1
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .bind(edge_type_to_string(et))
+                .fetch_all(&self.pool)
+                .await
+            } else {
+                sqlx::query(
+                    r#"
+                    SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+                    FROM graph_edges
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+            .map_err(|e| IntentRebaseError::StorageError(format!("list graph edges: {}", e)))?;
+
+        rows.into_iter().map(|r| self.row_to_edge(r)).collect()
+    }
+
+    async fn list_edges_from(&self, node_id: Uuid) -> Result<Vec<GraphEdge>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+            FROM graph_edges
+            WHERE from_node_id = $1
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(node_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("list edges from: {}", e)))?;
+
+        rows.into_iter().map(|r| self.row_to_edge(r)).collect()
+    }
+
+    async fn list_edges_to(&self, node_id: Uuid) -> Result<Vec<GraphEdge>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at
+            FROM graph_edges
+            WHERE to_node_id = $1
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(node_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("list edges to: {}", e)))?;
+
+        rows.into_iter().map(|r| self.row_to_edge(r)).collect()
+    }
+
+    async fn delete_edge(&self, id: Uuid) -> Result<(), IntentRebaseError> {
+        let result = sqlx::query("DELETE FROM graph_edges WHERE edge_id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| IntentRebaseError::StorageError(format!("delete edge: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(IntentRebaseError::GraphEdgeNotFound(id));
+        }
+
+        Ok(())
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxGraphRepository> {
+        Some(self)
+    }
+}
+
+// =============================================================================
+// Type conversion helpers for SQL serialization
+// =============================================================================
+
+fn node_type_to_string(node_type: &NodeType) -> String {
+    match node_type {
+        NodeType::Intent => "intent".to_string(),
+        NodeType::IntentVersion => "intent_version".to_string(),
+        NodeType::Artifact => "artifact".to_string(),
+        NodeType::Approval => "approval".to_string(),
+        NodeType::PolicySnapshot => "policy_snapshot".to_string(),
+        NodeType::SideEffect => "side_effect".to_string(),
+        NodeType::Checkpoint => "checkpoint".to_string(),
+        NodeType::Workflow => "workflow".to_string(),
+        NodeType::Generic => "generic".to_string(),
+    }
+}
+
+fn node_type_from_string(s: &str) -> Result<NodeType, IntentRebaseError> {
+    match s {
+        "intent" => Ok(NodeType::Intent),
+        "intent_version" => Ok(NodeType::IntentVersion),
+        "artifact" => Ok(NodeType::Artifact),
+        "approval" => Ok(NodeType::Approval),
+        "policy_snapshot" => Ok(NodeType::PolicySnapshot),
+        "side_effect" => Ok(NodeType::SideEffect),
+        "checkpoint" => Ok(NodeType::Checkpoint),
+        "workflow" => Ok(NodeType::Workflow),
+        "generic" => Ok(NodeType::Generic),
+        _ => Err(IntentRebaseError::Internal(format!(
+            "unknown node type: {}",
+            s
+        ))),
+    }
+}
+
+fn node_state_to_string(state: &NodeState) -> String {
+    match state {
+        NodeState::Active => "active".to_string(),
+        NodeState::Stale => "stale".to_string(),
+        NodeState::Invalid => "invalid".to_string(),
+        NodeState::Archived => "archived".to_string(),
+    }
+}
+
+fn node_state_from_string(s: &str) -> Result<NodeState, IntentRebaseError> {
+    match s {
+        "active" => Ok(NodeState::Active),
+        "stale" => Ok(NodeState::Stale),
+        "invalid" => Ok(NodeState::Invalid),
+        "archived" => Ok(NodeState::Archived),
+        _ => Err(IntentRebaseError::Internal(format!(
+            "unknown node state: {}",
+            s
+        ))),
+    }
+}
+
+fn edge_type_to_string(edge_type: &EdgeType) -> String {
+    match edge_type {
+        EdgeType::DependsOn => "depends_on".to_string(),
+        EdgeType::Produces => "produces".to_string(),
+        EdgeType::Approves => "approves".to_string(),
+        EdgeType::Triggers => "triggers".to_string(),
+        EdgeType::Defines => "defines".to_string(),
+        EdgeType::GeneratedFrom => "generated_from".to_string(),
+        EdgeType::ValidatedBy => "validated_by".to_string(),
+        EdgeType::GovernedBy => "governed_by".to_string(),
+        EdgeType::DerivedFrom => "derived_from".to_string(),
+        EdgeType::StoredIn => "stored_in".to_string(),
+        EdgeType::Supersedes => "supersedes".to_string(),
+        EdgeType::Blocks => "blocks".to_string(),
+        EdgeType::Compensates => "compensates".to_string(),
+    }
+}
+
+fn edge_type_from_string(s: &str) -> Result<EdgeType, IntentRebaseError> {
+    match s {
+        "depends_on" => Ok(EdgeType::DependsOn),
+        "produces" => Ok(EdgeType::Produces),
+        "approves" => Ok(EdgeType::Approves),
+        "triggers" => Ok(EdgeType::Triggers),
+        "defines" => Ok(EdgeType::Defines),
+        "generated_from" => Ok(EdgeType::GeneratedFrom),
+        "validated_by" => Ok(EdgeType::ValidatedBy),
+        "governed_by" => Ok(EdgeType::GovernedBy),
+        "derived_from" => Ok(EdgeType::DerivedFrom),
+        "stored_in" => Ok(EdgeType::StoredIn),
+        "supersedes" => Ok(EdgeType::Supersedes),
+        "blocks" => Ok(EdgeType::Blocks),
+        "compensates" => Ok(EdgeType::Compensates),
+        _ => Err(IntentRebaseError::Internal(format!(
+            "unknown edge type: {}",
+            s
+        ))),
+    }
+}
+
+fn external_ref_type_to_string(ref_type: &ExternalRefType) -> String {
+    match ref_type {
+        ExternalRefType::Intent => "intent".to_string(),
+        ExternalRefType::IntentVersion => "intent_version".to_string(),
+        ExternalRefType::Artifact => "artifact".to_string(),
+        ExternalRefType::Approval => "approval".to_string(),
+        ExternalRefType::PolicySnapshot => "policy_snapshot".to_string(),
+        ExternalRefType::SideEffect => "side_effect".to_string(),
+        ExternalRefType::Checkpoint => "checkpoint".to_string(),
+    }
+}
+
+fn external_ref_type_from_string(s: &str) -> Result<ExternalRefType, IntentRebaseError> {
+    match s {
+        "intent" => Ok(ExternalRefType::Intent),
+        "intent_version" => Ok(ExternalRefType::IntentVersion),
+        "artifact" => Ok(ExternalRefType::Artifact),
+        "approval" => Ok(ExternalRefType::Approval),
+        "policy_snapshot" => Ok(ExternalRefType::PolicySnapshot),
+        "side_effect" => Ok(ExternalRefType::SideEffect),
+        "checkpoint" => Ok(ExternalRefType::Checkpoint),
+        _ => Err(IntentRebaseError::Internal(format!(
+            "unknown external ref type: {}",
+            s
+        ))),
+    }
+}
+
 /// GraphService handles graph lifecycle operations
 #[derive(Clone)]
 pub struct GraphService {
@@ -348,6 +1206,14 @@ pub struct GraphService {
 impl GraphService {
     pub fn new(repo: Arc<dyn GraphRepository>) -> Self {
         Self { repo }
+    }
+
+    /// Returns a reference to the underlying repository.
+    ///
+    /// This is used for RLS-aware operations that require direct access
+    /// to the underlying SQL repository.
+    pub fn repo(&self) -> &Arc<dyn GraphRepository> {
+        &self.repo
     }
 
     /// Add a node to the graph
@@ -5323,5 +6189,308 @@ mod tests {
         // Should classify only SideEffect (config takes precedence)
         assert_eq!(result.classified_nodes.len(), 1);
         assert_eq!(result.classified_nodes[0].node.id, se1.id);
+    }
+}
+
+// =============================================================================
+// SqlxGraphRepository tests (require live Postgres)
+// =============================================================================
+
+#[cfg(test)]
+mod sqlx_graph_repository_tests {
+    use super::*;
+    use intent_rebase_types::{ExternalRef, ExternalRefType};
+
+    fn create_test_node_request() -> CreateGraphNodeRequest {
+        CreateGraphNodeRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            node_type: NodeType::Intent,
+            external_ref: Some(ExternalRef {
+                ref_type: ExternalRefType::Intent,
+                ref_id: Uuid::new_v4(),
+            }),
+            label: "Test Intent Node".to_string(),
+            properties: Some(serde_json::json!({"priority": "high"})),
+        }
+    }
+
+    fn create_test_edge_request_with_ids(
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+        from_node_id: Uuid,
+        to_node_id: Uuid,
+    ) -> CreateGraphEdgeRequest {
+        CreateGraphEdgeRequest {
+            tenant_id,
+            workflow_id,
+            from_node_id,
+            to_node_id,
+            edge_type: EdgeType::DependsOn,
+            properties: Some(serde_json::json!({"reason": "test"})),
+        }
+    }
+
+    // Integration tests requiring live Postgres - marked #[ignore]
+    // Run with: cargo test --test integration -- --ignored
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_sqlx_graph_repository_create_and_get_node() {
+        // Skip if no DATABASE_URL
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) if !url.is_empty() => url,
+            _ => return,
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let repo = SqlxGraphRepository::new(pool);
+        let service = GraphService::new(Arc::new(repo));
+
+        let request = create_test_node_request();
+        let created = service.add_node(request.clone()).await.unwrap();
+
+        assert_eq!(created.label, request.label);
+        assert_eq!(created.node_type, request.node_type);
+
+        // Get by ID
+        let retrieved = service.get_node(created.id).await.unwrap();
+        assert_eq!(retrieved.id, created.id);
+        assert_eq!(retrieved.label, created.label);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_sqlx_graph_repository_create_and_get_edge() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) if !url.is_empty() => url,
+            _ => return,
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let repo = SqlxGraphRepository::new(pool);
+        let service = GraphService::new(Arc::new(repo));
+
+        // Create two nodes with SAME tenant/workflow (required for edge creation)
+        let node1 = service.add_node(create_test_node_request()).await.unwrap();
+        let mut request2 = create_test_node_request();
+        request2.tenant_id = node1.tenant_id;
+        request2.workflow_id = node1.workflow_id;
+        request2.external_ref = Some(ExternalRef {
+            ref_type: ExternalRefType::IntentVersion,
+            ref_id: Uuid::new_v4(),
+        });
+        let node2 = service.add_node(request2).await.unwrap();
+
+        // Create edge
+        let edge_request = create_test_edge_request_with_ids(
+            node1.tenant_id,
+            node1.workflow_id,
+            node1.id,
+            node2.id,
+        );
+        let created = service.add_edge(edge_request.clone()).await.unwrap();
+
+        assert_eq!(created.from_node_id, node1.id);
+        assert_eq!(created.to_node_id, node2.id);
+        assert_eq!(created.edge_type, EdgeType::DependsOn);
+
+        // Get by ID
+        let retrieved = service.get_edge(created.id).await.unwrap();
+        assert_eq!(retrieved.id, created.id);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_sqlx_graph_repository_list_edges_from_and_to() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) if !url.is_empty() => url,
+            _ => return,
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let repo = SqlxGraphRepository::new(pool);
+        let service = GraphService::new(Arc::new(repo));
+
+        // Create three nodes: A -> B -> C
+        let node_a = service.add_node(create_test_node_request()).await.unwrap();
+        let mut node_b_req = create_test_node_request();
+        node_b_req.tenant_id = node_a.tenant_id;
+        node_b_req.workflow_id = node_a.workflow_id;
+        node_b_req.external_ref = Some(ExternalRef {
+            ref_type: ExternalRefType::IntentVersion,
+            ref_id: Uuid::new_v4(),
+        });
+        let node_b = service.add_node(node_b_req).await.unwrap();
+        let mut node_c_req = create_test_node_request();
+        node_c_req.tenant_id = node_a.tenant_id;
+        node_c_req.workflow_id = node_a.workflow_id;
+        node_c_req.external_ref = Some(ExternalRef {
+            ref_type: ExternalRefType::Artifact,
+            ref_id: Uuid::new_v4(),
+        });
+        let node_c = service.add_node(node_c_req).await.unwrap();
+
+        // A -> B
+        let edge_ab = create_test_edge_request_with_ids(
+            node_a.tenant_id,
+            node_a.workflow_id,
+            node_a.id,
+            node_b.id,
+        );
+        service.add_edge(edge_ab).await.unwrap();
+
+        // B -> C
+        let edge_bc = create_test_edge_request_with_ids(
+            node_a.tenant_id,
+            node_a.workflow_id,
+            node_b.id,
+            node_c.id,
+        );
+        service.add_edge(edge_bc).await.unwrap();
+
+        // Check edges from A
+        let edges_from_a = service.list_edges_from(node_a.id).await.unwrap();
+        assert_eq!(edges_from_a.len(), 1);
+        assert_eq!(edges_from_a[0].to_node_id, node_b.id);
+
+        // Check edges to C
+        let edges_to_c = service.list_edges_to(node_c.id).await.unwrap();
+        assert_eq!(edges_to_c.len(), 1);
+        assert_eq!(edges_to_c[0].from_node_id, node_b.id);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_sqlx_graph_repository_delete_edge() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) if !url.is_empty() => url,
+            _ => return,
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let repo = SqlxGraphRepository::new(pool);
+        let service = GraphService::new(Arc::new(repo));
+
+        // Create nodes
+        let node1 = service.add_node(create_test_node_request()).await.unwrap();
+        let mut node2_req = create_test_node_request();
+        node2_req.tenant_id = node1.tenant_id;
+        node2_req.workflow_id = node1.workflow_id;
+        let node2 = service.add_node(node2_req).await.unwrap();
+
+        // Create edge
+        let edge_request = create_test_edge_request_with_ids(
+            node1.tenant_id,
+            node1.workflow_id,
+            node1.id,
+            node2.id,
+        );
+        let edge = service.add_edge(edge_request).await.unwrap();
+
+        // Delete it
+        let result = service.delete_edge(edge.id).await;
+        assert!(result.is_ok());
+
+        // Verify it's gone
+        let get_result = service.get_edge(edge.id).await;
+        assert!(get_result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_sqlx_graph_repository_update_node_state() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) if !url.is_empty() => url,
+            _ => return,
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let repo = SqlxGraphRepository::new(pool);
+        let service = GraphService::new(Arc::new(repo));
+
+        let node = service.add_node(create_test_node_request()).await.unwrap();
+        assert_eq!(node.state, NodeState::Active);
+
+        let updated = service
+            .update_node_state(node.id, NodeState::Stale)
+            .await
+            .unwrap();
+        assert_eq!(updated.state, NodeState::Stale);
+    }
+
+    // Unit tests for type conversion helpers (no DB required)
+
+    #[test]
+    fn test_node_type_to_from_string() {
+        for node_type in [
+            NodeType::Intent,
+            NodeType::IntentVersion,
+            NodeType::Artifact,
+            NodeType::Approval,
+            NodeType::PolicySnapshot,
+            NodeType::SideEffect,
+            NodeType::Checkpoint,
+            NodeType::Workflow,
+            NodeType::Generic,
+        ] {
+            let s = node_type_to_string(&node_type);
+            let round_trip = node_type_from_string(&s).unwrap();
+            assert_eq!(node_type, round_trip);
+        }
+    }
+
+    #[test]
+    fn test_edge_type_to_from_string() {
+        for edge_type in [
+            EdgeType::DependsOn,
+            EdgeType::Produces,
+            EdgeType::Approves,
+            EdgeType::Triggers,
+            EdgeType::Defines,
+            EdgeType::GeneratedFrom,
+            EdgeType::ValidatedBy,
+            EdgeType::GovernedBy,
+            EdgeType::DerivedFrom,
+            EdgeType::StoredIn,
+            EdgeType::Supersedes,
+            EdgeType::Blocks,
+            EdgeType::Compensates,
+        ] {
+            let s = edge_type_to_string(&edge_type);
+            let round_trip = edge_type_from_string(&s).unwrap();
+            assert_eq!(edge_type, round_trip);
+        }
+    }
+
+    #[test]
+    fn test_node_state_to_from_string() {
+        for state in [
+            NodeState::Active,
+            NodeState::Stale,
+            NodeState::Invalid,
+            NodeState::Archived,
+        ] {
+            let s = node_state_to_string(&state);
+            let round_trip = node_state_from_string(&s).unwrap();
+            assert_eq!(state, round_trip);
+        }
+    }
+
+    #[test]
+    fn test_external_ref_type_to_from_string() {
+        for ref_type in [
+            ExternalRefType::Intent,
+            ExternalRefType::IntentVersion,
+            ExternalRefType::Artifact,
+            ExternalRefType::Approval,
+            ExternalRefType::PolicySnapshot,
+            ExternalRefType::SideEffect,
+            ExternalRefType::Checkpoint,
+        ] {
+            let s = external_ref_type_to_string(&ref_type);
+            let round_trip = external_ref_type_from_string(&s).unwrap();
+            assert_eq!(ref_type, round_trip);
+        }
     }
 }
