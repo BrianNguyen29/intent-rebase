@@ -4394,8 +4394,9 @@ async fn approve_compensation_action(
 
 /// POST /compensation-actions/{action_id}/waive - Waive a pending compensation action
 ///
-/// Phase 3 Batch 1 (bounded execution slice): Transitions a Pending compensation action
-/// to Waived status, marking it as intentionally skipped.
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates tenant ownership before waiving the action.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
 ///
 /// **Transition rules:**
 /// - Only Pending actions can be waived
@@ -4406,6 +4407,47 @@ async fn approve_compensation_action(
 /// - Returns 409 Conflict if lock_version doesn't match
 ///
 /// **This slice:** Waived actions are terminal. No reactivation path exists.
+#[cfg(feature = "jwt-auth")]
+async fn waive_compensation_action(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<WaiveCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5: Fetch action to get its tenant_id for validation
+    let action = state
+        .compensation_action_service
+        .get_action(action_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if action.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match action tenant_id ({})",
+                rls_claims.tenant_id, action.tenant_id
+            );
+            tracing::warn!("waive_compensation_action: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let updated = state
+        .compensation_action_service
+        .waive_action(action_id, body.lock_version, body.waived_by.as_deref())
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
+}
+
+/// POST /compensation-actions/{action_id}/waive - Waive a pending compensation action (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn waive_compensation_action(
     State(state): State<AppState>,
     Path(action_id): Path<Uuid>,
@@ -4624,8 +4666,9 @@ async fn list_batch_candidates(
 
 /// POST /compensation-actions/{action_id}/reapprove - Manually reapprove a failed action
 ///
-/// Phase 3 Batch 1 (bounded manual retry slice): Transitions a Failed compensation
-/// action back to Pending status, enabling it to be approved and executed again.
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates tenant ownership before reapproving the action.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
 ///
 /// **Policy gates (fail closed):**
 /// - Action must be in Failed status
@@ -4641,6 +4684,47 @@ async fn list_batch_candidates(
 /// **Note:** This does NOT reset the attempt_count. The action retains its
 /// failure history. Reapproval just allows another execution attempt within
 /// the retry budget.
+#[cfg(feature = "jwt-auth")]
+async fn reapprove_compensation_action(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(action_id): Path<Uuid>,
+    Json(body): Json<ReapproveCompensationActionBody>,
+) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5: Fetch action to get its tenant_id for validation
+    let action = state
+        .compensation_action_service
+        .get_action(action_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if action.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match action tenant_id ({})",
+                rls_claims.tenant_id, action.tenant_id
+            );
+            tracing::warn!("reapprove_compensation_action: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let updated = state
+        .compensation_action_service
+        .reapprove_action(action_id, body.lock_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(CompensationActionResponse::from(updated)))
+}
+
+/// POST /compensation-actions/{action_id}/reapprove - Manually reapprove a failed action (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn reapprove_compensation_action(
     State(state): State<AppState>,
     Path(action_id): Path<Uuid>,
@@ -5655,8 +5739,9 @@ async fn orchestration_dry_run(
 
 /// POST /compensation-actions/batch-approve - Batch approve compensation actions
 ///
-/// Phase 3 Batch 1 (bounded manual orchestration slice): Approves multiple Pending
-/// compensation actions with partial-success semantics.
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates that ALL actions belong to the JWT's tenant before processing.
+/// Fails closed if ANY action has a different tenant; fails open when JWT is absent.
 ///
 /// **Bounded partial-success semantics:**
 /// - If an action_id is not found, it's recorded as `not_found` and continues
@@ -5670,6 +5755,134 @@ async fn orchestration_dry_run(
 ///
 /// **No background worker or queue claiming:**
 /// This is a direct service method that processes actions sequentially.
+#[cfg(feature = "jwt-auth")]
+async fn batch_approve_compensation_actions(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
+    // Fail-closed if ANY action has a different tenant
+    if let Some(rls_claims) = optional_rls_claims {
+        // Fetch all actions to validate tenant ownership
+        for action_id in &request.action_ids {
+            match state
+                .compensation_action_service
+                .get_action(*action_id)
+                .await
+            {
+                Ok(action) => {
+                    if action.tenant_id != rls_claims.tenant_id {
+                        let msg = format!(
+                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
+                            rls_claims.tenant_id, action_id, action.tenant_id
+                        );
+                        tracing::warn!(
+                            "batch_approve_compensation_actions: tenant mismatch rejection for action {}",
+                            action_id
+                        );
+                        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+                    }
+                }
+                Err(IntentRebaseError::CompensationActionNotFound(_)) => {
+                    // Action not found - batch_approve will handle this as not_found
+                    continue;
+                }
+                Err(e) => {
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
+        // All actions validated - use JWT's tenant_id for the batch operation
+        let result = state
+            .compensation_action_service
+            .batch_approve(
+                rls_claims.tenant_id,
+                request.action_ids,
+                request.initiated_by.as_deref(),
+            )
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let outcomes = result
+            .outcomes
+            .into_iter()
+            .map(|o| {
+                let (result, error) = match &o.result {
+                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                    Err(e) => (None, Some(e.clone())),
+                };
+                BatchItemOutcomeResponse {
+                    action_id: o.action_id,
+                    success: o.success,
+                    result,
+                    error,
+                }
+            })
+            .collect();
+
+        let response = BatchOrchestrationResponse {
+            outcomes,
+            not_found: result.not_found,
+            summary: BatchOrchestrationSummaryResponse {
+                total: result.summary.total,
+                succeeded: result.summary.succeeded,
+                failed: result.summary.failed,
+                not_found: result.summary.not_found,
+            },
+        };
+
+        return Ok(Json(response));
+    }
+
+    // Non-JWT path (backward compatible): use query param tenant_id
+    let result = state
+        .compensation_action_service
+        .batch_approve(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-approve - Batch approve compensation actions (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler uses the query param tenant_id.
+#[cfg(not(feature = "jwt-auth"))]
 async fn batch_approve_compensation_actions(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
@@ -5718,8 +5931,9 @@ async fn batch_approve_compensation_actions(
 
 /// POST /compensation-actions/batch-reapprove - Batch reapprove compensation actions
 ///
-/// Phase 3 Batch 1 (bounded manual orchestration slice): Reapproves multiple Failed
-/// compensation actions that are eligible for retry, with partial-success semantics.
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates that ALL actions belong to the JWT's tenant before processing.
+/// Fails closed if ANY action has a different tenant; fails open when JWT is absent.
 ///
 /// **Bounded partial-success semantics:** Same as batch_approve.
 ///
@@ -5727,6 +5941,126 @@ async fn batch_approve_compensation_actions(
 /// - Action must be in Failed status
 /// - Action must have remaining retry budget
 /// - Error code must be retryable
+#[cfg(feature = "jwt-auth")]
+async fn batch_reapprove_compensation_actions(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
+    // Fail-closed if ANY action has a different tenant
+    if let Some(rls_claims) = optional_rls_claims {
+        // Fetch all actions to validate tenant ownership
+        for action_id in &request.action_ids {
+            match state
+                .compensation_action_service
+                .get_action(*action_id)
+                .await
+            {
+                Ok(action) => {
+                    if action.tenant_id != rls_claims.tenant_id {
+                        let msg = format!(
+                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
+                            rls_claims.tenant_id, action_id, action.tenant_id
+                        );
+                        tracing::warn!(
+                            "batch_reapprove_compensation_actions: tenant mismatch rejection for action {}",
+                            action_id
+                        );
+                        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+                    }
+                }
+                Err(IntentRebaseError::CompensationActionNotFound(_)) => {
+                    // Action not found - batch_reapprove will handle this as not_found
+                    continue;
+                }
+                Err(e) => {
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
+        // All actions validated - use JWT's tenant_id for the batch operation
+        let result = state
+            .compensation_action_service
+            .batch_reapprove(rls_claims.tenant_id, request.action_ids)
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let outcomes = result
+            .outcomes
+            .into_iter()
+            .map(|o| {
+                let (result, error) = match &o.result {
+                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                    Err(e) => (None, Some(e.clone())),
+                };
+                BatchItemOutcomeResponse {
+                    action_id: o.action_id,
+                    success: o.success,
+                    result,
+                    error,
+                }
+            })
+            .collect();
+
+        let response = BatchOrchestrationResponse {
+            outcomes,
+            not_found: result.not_found,
+            summary: BatchOrchestrationSummaryResponse {
+                total: result.summary.total,
+                succeeded: result.summary.succeeded,
+                failed: result.summary.failed,
+                not_found: result.summary.not_found,
+            },
+        };
+
+        return Ok(Json(response));
+    }
+
+    // Non-JWT path (backward compatible): use query param tenant_id
+    let result = state
+        .compensation_action_service
+        .batch_reapprove(query.tenant_id, request.action_ids)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-reapprove - Batch reapprove compensation actions (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler uses the query param tenant_id.
+#[cfg(not(feature = "jwt-auth"))]
 async fn batch_reapprove_compensation_actions(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
@@ -5771,12 +6105,141 @@ async fn batch_reapprove_compensation_actions(
 
 /// POST /compensation-actions/batch-execute - Batch execute compensation actions
 ///
-/// Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple Approved
-/// compensation actions that are auto-executable, with partial-success semantics.
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates that ALL actions belong to the JWT's tenant before processing.
+/// Fails closed if ANY action has a different tenant; fails open when JWT is absent.
 ///
 /// **Bounded partial-success semantics:** Same as batch_approve.
 ///
 /// **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+#[cfg(feature = "jwt-auth")]
+async fn batch_execute_compensation_actions(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<BatchOrchestrationRequest>,
+) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
+    // Fail-closed if ANY action has a different tenant
+    if let Some(rls_claims) = optional_rls_claims {
+        // Fetch all actions to validate tenant ownership
+        for action_id in &request.action_ids {
+            match state
+                .compensation_action_service
+                .get_action(*action_id)
+                .await
+            {
+                Ok(action) => {
+                    if action.tenant_id != rls_claims.tenant_id {
+                        let msg = format!(
+                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
+                            rls_claims.tenant_id, action_id, action.tenant_id
+                        );
+                        tracing::warn!(
+                            "batch_execute_compensation_actions: tenant mismatch rejection for action {}",
+                            action_id
+                        );
+                        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+                    }
+                }
+                Err(IntentRebaseError::CompensationActionNotFound(_)) => {
+                    // Action not found - batch_execute will handle this as not_found
+                    continue;
+                }
+                Err(e) => {
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
+        // All actions validated - use JWT's tenant_id for the batch operation
+        let result = state
+            .compensation_action_service
+            .batch_execute(
+                rls_claims.tenant_id,
+                request.action_ids,
+                request.initiated_by.as_deref(),
+            )
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let outcomes = result
+            .outcomes
+            .into_iter()
+            .map(|o| {
+                let (result, error) = match &o.result {
+                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                    Err(e) => (None, Some(e.clone())),
+                };
+                BatchItemOutcomeResponse {
+                    action_id: o.action_id,
+                    success: o.success,
+                    result,
+                    error,
+                }
+            })
+            .collect();
+
+        let response = BatchOrchestrationResponse {
+            outcomes,
+            not_found: result.not_found,
+            summary: BatchOrchestrationSummaryResponse {
+                total: result.summary.total,
+                succeeded: result.summary.succeeded,
+                failed: result.summary.failed,
+                not_found: result.summary.not_found,
+            },
+        };
+
+        return Ok(Json(response));
+    }
+
+    // Non-JWT path (backward compatible): use query param tenant_id
+    let result = state
+        .compensation_action_service
+        .batch_execute(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by.as_deref(),
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    let response = BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/batch-execute - Batch execute compensation actions (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler uses the query param tenant_id.
+#[cfg(not(feature = "jwt-auth"))]
 async fn batch_execute_compensation_actions(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
@@ -11472,6 +11935,7 @@ mod tests {
 
     // === Compensation Action API Tests ===
 
+    #[cfg(not(feature = "jwt-auth"))]
     fn create_test_service_with_executor() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
         let graph_repo = Arc::new(InMemoryGraphRepository::new());
@@ -11584,6 +12048,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_waive_compensation_action_success() {
         let state = create_test_service_with_executor();
@@ -15498,5 +15963,597 @@ mod tests {
         );
         let response = result.unwrap();
         assert_eq!(response.status, "executed");
+    }
+
+    // -------------------------------------------------------------------------
+    // waive_compensation_action Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_waive_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to waive with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = WaiveCompensationActionBody {
+            lock_version: created.lock_version,
+            waived_by: Some("test-waiver".to_string()),
+        };
+
+        let result = waive_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_waive_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Waive with TenantA (matching)
+        let request = WaiveCompensationActionBody {
+            lock_version: created.lock_version,
+            waived_by: Some("test-waiver".to_string()),
+        };
+
+        let result = waive_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "waived");
+    }
+
+    // -------------------------------------------------------------------------
+    // reapprove_compensation_action Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_reapprove_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        // (can't easily create a Failed action through normal flow in test)
+        use compensation_service::CompensationStatus;
+        let failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Try to reapprove with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = ReapproveCompensationActionBody {
+            lock_version: failed_action.lock_version,
+        };
+
+        let result = reapprove_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reapprove_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        use compensation_service::CompensationStatus;
+        let failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Reapprove with TenantA (matching)
+        let request = ReapproveCompensationActionBody {
+            lock_version: failed_action.lock_version,
+        };
+
+        let result = reapprove_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "pending");
+    }
+
+    // -------------------------------------------------------------------------
+    // batch_approve_compensation_actions Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_batch_approve_compensation_actions_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to batch approve with TenantB (mismatch) - request includes the action
+        let tenant_b = Uuid::new_v4();
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_approve_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_b,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized (fail-closed on tenant mismatch)
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batch_approve_compensation_actions_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Batch approve with TenantA (matching)
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_approve_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_a,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // batch_reapprove_compensation_actions Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_batch_reapprove_compensation_actions_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        use compensation_service::CompensationStatus;
+        let _failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Try to batch reapprove with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_reapprove_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_b,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized (fail-closed on tenant mismatch)
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batch_reapprove_compensation_actions_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        use compensation_service::CompensationStatus;
+        let _failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Batch reapprove with TenantA (matching)
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_reapprove_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_a,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // batch_execute_compensation_actions Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_batch_execute_compensation_actions_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create an Approved compensation action with TenantA
+        // Must be Approved + Automatic feasibility for batch_execute
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic, // Must be Automatic for execute
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Approved status (necessary for batch_execute)
+        use compensation_service::CompensationStatus;
+        let _approved_action = state
+            .compensation_action_service
+            .update_status(
+                created.id,
+                CompensationStatus::Approved,
+                created.lock_version,
+            )
+            .await
+            .unwrap();
+
+        // Try to batch execute with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_execute_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_b,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized (fail-closed on tenant mismatch)
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batch_execute_compensation_actions_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create an Approved compensation action with TenantA
+        // Must be Approved + Automatic feasibility for batch_execute
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic, // Must be Automatic for execute
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Approved status (necessary for batch_execute)
+        use compensation_service::CompensationStatus;
+        let _approved_action = state
+            .compensation_action_service
+            .update_status(
+                created.id,
+                CompensationStatus::Approved,
+                created.lock_version,
+            )
+            .await
+            .unwrap();
+
+        // Batch execute with TenantA (matching)
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = batch_execute_compensation_actions(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            axum::extract::Query(OrchestrationQuery {
+                tenant_id: tenant_a,
+            }),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
     }
 }
