@@ -156,15 +156,25 @@ pub trait ForensicBundleServiceTrait: Send + Sync {
 /// cycle in one synchronous call. For large bundles, this may be slow.
 /// Async job orchestration for large bundles is NOT in this slice.
 #[derive(Clone)]
-pub struct ForensicBundleService<R: BundleRepository, S: BundleStorage> {
+pub struct ForensicBundleService<R: BundleRepository> {
     repo: Arc<R>,
-    storage: Arc<S>,
+    storage: Arc<dyn BundleStorage>,
     collector: Arc<dyn ForensicDataCollector>,
 }
 
-impl<R: BundleRepository, S: BundleStorage> ForensicBundleService<R, S> {
+impl<R: BundleRepository> ForensicBundleService<R> {
     /// Create a new forensic bundle service.
-    pub fn new(repo: Arc<R>, storage: Arc<S>, collector: Arc<dyn ForensicDataCollector>) -> Self {
+    ///
+    /// The storage parameter accepts `Arc<dyn BundleStorage>`, enabling runtime
+    /// selection between InMemoryBundleStorage and S3BundleStorage.
+    ///
+    /// **Bounded scope:** Enables S3/minIO bundle storage wiring behind env gate.
+    /// Object Lock, retention enforcement, chain-hash remain Phase 4+ deferred.
+    pub fn new(
+        repo: Arc<R>,
+        storage: Arc<dyn BundleStorage>,
+        collector: Arc<dyn ForensicDataCollector>,
+    ) -> Self {
         Self {
             repo,
             storage,
@@ -174,9 +184,7 @@ impl<R: BundleRepository, S: BundleStorage> ForensicBundleService<R, S> {
 }
 
 #[async_trait]
-impl<R: BundleRepository, S: BundleStorage> ForensicBundleServiceTrait
-    for ForensicBundleService<R, S>
-{
+impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R> {
     /// Create a new forensic bundle.
     ///
     /// Full generation path:

@@ -72,6 +72,10 @@ load-test = []
 # This feature is for documentation/future use
 sqlx-load-test = []
 jwt-auth = []
+# temporal enables Temporal runtime adapter support
+# Requires TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE env vars to be set when used
+# Production Temporal readiness is NOT claimed — trace propagation (W3C) is not supported
+temporal = ["runtime-adapter/temporal"]
 
 [[bin]]
 name = "intent-api"

@@ -34,12 +34,15 @@ use forensic_service::{
     InMemoryForensicVerificationService, RealForensicDataCollector,
     RealForensicVerificationService,
 };
-use graph_service::{GraphService, InMemoryGraphRepository};
+use graph_service::{GraphService, InMemoryGraphRepository, SqlxGraphRepository};
 use intent_api::{
     build_router, build_router_with_sql_audit_and_approval, init_tracing,
     nats_jetstream::{ConsumerRegistry, ConsumerRegistryHandle, JetStreamInitializer},
     NatsEventPublisher,
 };
+
+#[cfg(feature = "jwt-auth")]
+use intent_api::build_router_with_sql_audit_and_approval_jwt;
 use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
 use intent_service::event_consumer::CheckpointCreatorConsumer;
 use intent_service::{
@@ -138,14 +141,117 @@ fn build_inmemory_router() -> Router {
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        None, // rls_pool: None for in-memory mode
     )
 }
 
-/// Build a SQL-backed router and return checkpoint service for NATS consumer.
+/// Build a SQL-backed router (non-JWT version).
 ///
 /// Returns (router, checkpoint_service) when SQL mode is used.
-/// When falling back to in-memory, returns (router, None).
 async fn build_sql_router_with_consumer(
+    database_url: &str,
+) -> Result<(Router, Option<Arc<CheckpointService>>), Box<dyn std::error::Error>> {
+    build_sql_router_with_consumer_impl(database_url).await
+}
+
+/// JWT-aware SQL-backed router builder that applies JWT middleware.
+/// Only available when jwt-auth feature is enabled.
+#[cfg(feature = "jwt-auth")]
+async fn build_sql_router_with_consumer_jwt(
+    database_url: &str,
+    auth_config: intent_api::AuthConfig,
+) -> Result<(Router, Option<Arc<CheckpointService>>), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(database_url).await?;
+
+    // SQL-backed intent repository
+    let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
+    let intent_service = Arc::new(IntentService::new(intent_repo.clone()));
+
+    // SQL-backed graph repository
+    let graph_repo = Arc::new(SqlxGraphRepository::new(pool.clone()));
+    let graph_service = Arc::new(GraphService::new(graph_repo));
+
+    // SQL-backed checkpoint repository
+    let checkpoint_repo = Arc::new(SqlxCheckpointRepository::new(pool.clone()));
+    let checkpoint_service = Arc::new(CheckpointService::new(checkpoint_repo.clone()));
+    let runtime_adapter = Arc::new(MockAdapter::ready());
+    let orchestrator = Arc::new(RebaseOrchestrator::new(
+        checkpoint_repo,
+        graph_service.clone(),
+        runtime_adapter,
+    ));
+
+    // SQL-backed side effect repository and service
+    let side_effect_repo: Arc<dyn SideEffectRepository> =
+        Arc::new(SqlxSideEffectRepository::new(pool.clone()));
+    let side_effect_service = Arc::new(compensation_service::SideEffectService::new(
+        side_effect_repo,
+    ));
+
+    let compensation_action_repo: Arc<dyn CompensationActionRepository> =
+        Arc::new(SqlxCompensationActionRepository::new(pool.clone()));
+    let compensation_action_service = Arc::new(
+        compensation_service::CompensationActionService::new(compensation_action_repo),
+    );
+
+    let orchestration_run_repo = Arc::new(SqlxOrchestrationRunRepository::new(pool.clone()));
+    let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
+        compensation_action_service.clone(),
+        orchestration_run_repo,
+    ));
+
+    // Forensic service
+    let forensic_audit_repo: Arc<dyn intent_rebase_types::AuditRepository> =
+        Arc::new(SqlxAuditRepository::new(pool.clone()));
+    let forensic_policy_repo: Arc<dyn PolicySnapshotRepository> =
+        Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
+    let forensic_collector = Arc::new(RealForensicDataCollector::new(
+        intent_repo.clone(),
+        forensic_audit_repo,
+        forensic_policy_repo,
+    ));
+    let forensic_service: Arc<dyn ForensicVerificationService> =
+        Arc::new(RealForensicVerificationService::new(forensic_collector));
+    let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
+        Arc::new(InMemoryForensicArchiveGenerator::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("prod-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ));
+
+    let event_publisher: Option<Arc<dyn EventPublisher>> = if std::env::var("NATS_URL").is_ok() {
+        Some(Arc::new(NatsEventPublisher::new()) as Arc<dyn EventPublisher>)
+    } else {
+        None
+    };
+
+    let router = build_router_with_sql_audit_and_approval_jwt(
+        pool,
+        intent_service,
+        graph_service,
+        side_effect_service,
+        compensation_action_service,
+        orchestration_runtime,
+        orchestrator,
+        event_publisher,
+        forensic_service,
+        forensic_archive_generator,
+        forensic_bundle_service,
+        auth_config,
+    );
+
+    Ok((router, Some(checkpoint_service)))
+}
+
+/// Non-JWT implementation of SQL-backed router.
+async fn build_sql_router_with_consumer_impl(
     database_url: &str,
 ) -> Result<(Router, Option<Arc<CheckpointService>>), Box<dyn std::error::Error>> {
     let pool = sqlx::PgPool::connect(database_url).await?;
@@ -154,8 +260,8 @@ async fn build_sql_router_with_consumer(
     let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
     let intent_service = Arc::new(IntentService::new(intent_repo.clone()));
 
-    // In-memory graph repository (production graph service TBD)
-    let graph_repo = Arc::new(InMemoryGraphRepository::new());
+    // SQL-backed graph repository for production graph service
+    let graph_repo = Arc::new(SqlxGraphRepository::new(pool.clone()));
     let graph_service = Arc::new(GraphService::new(graph_repo));
 
     // SQL-backed checkpoint repository
@@ -315,37 +421,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if jwt_required {
         tracing::info!("INTENT_API_REQUIRE_JWT=true — activating JWT production guard");
-        use intent_api::AuthConfig;
+        #[cfg(feature = "jwt-auth")]
+        {
+            use intent_api::AuthConfig;
 
-        match AuthConfig::from_env() {
-            Ok(config) => {
-                if config.is_production_ready() {
-                    tracing::info!(
-                        "JWT production guard passed: JWT_SECRET is properly configured"
-                    );
-                } else {
-                    return Err("INTENT_API_REQUIRE_JWT=true but JWT_SECRET is not production-ready: \
-                         secret is too short or matches weak patterns. \
-                         Set a strong JWT_SECRET (≥32 bytes, not containing 'dev', 'secret', 'password', etc.)"
+            match AuthConfig::from_env() {
+                Ok(config) => {
+                    if config.is_production_ready() {
+                        tracing::info!(
+                            "JWT production guard passed: JWT_SECRET is properly configured"
+                        );
+                    } else {
+                        return Err("INTENT_API_REQUIRE_JWT=true but JWT_SECRET is not production-ready: \
+                             secret is too short or matches weak patterns. \
+                             Set a strong JWT_SECRET (≥32 bytes, not containing 'dev', 'secret', 'password', etc.)"
+                        .into());
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "INTENT_API_REQUIRE_JWT=true but JWT configuration failed: {}",
+                        e
+                    )
                     .into());
                 }
             }
-            Err(e) => {
-                return Err(format!(
-                    "INTENT_API_REQUIRE_JWT=true but JWT configuration failed: {}",
-                    e
-                )
-                .into());
-            }
+        }
+        #[cfg(not(feature = "jwt-auth"))]
+        {
+            return Err(
+                "INTENT_API_REQUIRE_JWT=true but jwt-auth feature is not enabled. \
+                             Rebuild with --features jwt-auth to enable JWT authentication."
+                    .into(),
+            );
         }
     }
+
+    // Load auth_config for SQL router when jwt-auth feature is enabled
+    #[cfg(feature = "jwt-auth")]
+    let auth_config: Option<intent_api::AuthConfig> = if jwt_required {
+        Some(intent_api::AuthConfig::from_env().expect("auth_config already validated above"))
+    } else {
+        None
+    };
 
     // Build router and get optional checkpoint service for NATS consumer
     let (router, checkpoint_service) = if let Ok(database_url) = std::env::var("DATABASE_URL") {
         tracing::info!("DATABASE_URL set — using SQL-backed repositories");
         tracing::info!("Connecting to PostgreSQL...");
 
-        match build_sql_router_with_consumer(&database_url).await {
+        // Route to JWT or non-JWT SQL builder based on jwt_required
+        #[cfg(feature = "jwt-auth")]
+        let sql_result = if jwt_required {
+            build_sql_router_with_consumer_jwt(&database_url, auth_config.unwrap()).await
+        } else {
+            build_sql_router_with_consumer(&database_url).await
+        };
+        #[cfg(not(feature = "jwt-auth"))]
+        let sql_result = build_sql_router_with_consumer(&database_url).await;
+
+        match sql_result {
             Ok((router, checkpoint_service)) => {
                 tracing::info!("SQL-backed router initialized successfully");
                 (router, checkpoint_service)
