@@ -1,6 +1,6 @@
 # DLQ / Retry Design
 
-**Status:** Bounded First Slice Exists (Phase 3 DLQ design; app-level DLQ helpers implemented; production DLQ worker not fully production-ready until G1–G5 gates pass)
+**Status:** Bounded First Slice Exists (Phase 3 DLQ design; app-level DLQ helpers + bounded DLQ metrics worker implemented; production DLQ worker not fully production-ready until G1–G5 gates pass)
 **Phase:** Phase 3 bounded — design documented, bounded first slice implemented
 **Owner:** Backend Lead / Platform
 
@@ -12,7 +12,7 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 
 > **⚠️ Production Readiness Warning**
 >
-> A **bounded app-level DLQ first slice** is now implemented in `crates/intent-api/src/nats_jetstream.rs` (`DlqHelper` struct). This is NOT a full production DLQ worker. Do not claim production-ready retry/DLQ handling until G1–G5 gates pass as documented in this spec.
+> A **bounded app-level DLQ first slice** is now implemented in `crates/intent-api/src/nats_jetstream.rs` (`DlqHelper` struct and `DlqMetricsWorker`). This is NOT a full production DLQ worker. Do not claim production-ready retry/DLQ handling until G1–G5 gates pass as documented in this spec.
 
 ---
 
@@ -30,13 +30,17 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
   - Publish to DLQ (`publish_to_dlq()`)
   - Replay primitives (`replay_from_dlq()`, `replay_to_subject()`)
   - DLQ metadata headers
-  - Metric stubs (forward to `lib.rs` helpers)
+- **BOUNDED FIRST SLICE**: DLQ metrics worker (`DlqMetricsWorker`)
+  - Depth/age gauge metric emission
+  - Bounded peek-based polling (no message consumption)
+  - Behind `INTENT_API_NATS_DLQ_WORKER=true` env gate
+  - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
 
 ### Out of Scope (Phase 4+)
 
 - G1: Design approval (pending)
 - G2: JetStream consumer `dead_letter` config (CLI/server-side)
-- G3: Full monitoring/lifecycle wiring
+- G3: Full monitoring/lifecycle wiring (G3 partially complete — gauges now emitting)
 - G4: RB11 runbook update for app-level DLQ
 - G5: Integration test coverage
 - Automatic DLQ replay worker (gated on gate approvals)
@@ -59,6 +63,12 @@ The Intent Rebase Engine uses NATS with JetStream for event-driven workflows. Wh
   - `publish_to_dlq()` — route failed messages to DLQ subject
   - `replay_from_dlq()` / `replay_to_subject()` — replay primitives
   - Metric stubs forward to `lib.rs` record functions
+- **BOUNDED FIRST SLICE**: `DlqMetricsWorker` for depth/age metric emission
+  - Polls DLQ subjects at configured interval (default: 30s)
+  - Emits `intent_api_dlq_messages_current` gauge (depth)
+  - Emits `intent_api_dlq_message_age_seconds` gauge (oldest message age)
+  - Uses lightweight peek (no_ack=true) to count without consuming
+  - Wired behind `INTENT_API_NATS_DLQ_WORKER=true` env gate
 - Production DLQ worker NOT YET production-ready (G1–G5 gates pending)
 
 ### Dependencies

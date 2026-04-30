@@ -49,17 +49,23 @@ Phase 4 lifecycle first slice delivered as bounded non-production feature:
 - **Delivered:** Single NATS consumer lifecycle (`CheckpointCreatorConsumer`) behind `INTENT_API_NATS_CONSUMER=true` runtime gate
 - **Delivered:** Graceful shutdown via watch channel (SIGINT/SIGTERM stops poll loop without hanging)
 - **Delivered:** Fail-open on NATS connection/lifecycle failure (warning logged, HTTP server continues)
-- **NOT delivered:** DLQ worker (remains Phase 4+ future work)
+- **Delivered:** Bounded DLQ metrics worker (`DlqMetricsWorker`) behind `INTENT_API_NATS_DLQ_WORKER=true` gate
+  - Emits `intent_api_dlq_messages_current` gauge (depth)
+  - Emits `intent_api_dlq_message_age_seconds` gauge (oldest message age)
+  - Uses lightweight peek (no_ack=true) to count without consuming
+  - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
+- **NOT delivered:** Full DLQ replay worker (remains Phase 4+ future work)
 - **NOT delivered:** Multi-consumer chain (remains future scope)
 - **NOT delivered:** S3 runtime wiring (remains Phase 4 scope)
 - **NOT delivered:** Production readiness (external sign-off not claimed)
 
 **Env gate behavior:**
 - `INTENT_API_NATS_CONSUMER=true` enables consumer lifecycle (requires `NATS_URL`)
+- `INTENT_API_NATS_DLQ_WORKER=true` enables DLQ metrics worker (requires `INTENT_API_NATS_CONSUMER=true`)
 - Default (unset/false): HTTP startup behavior unchanged
 - If NATS unavailable: fail-open with warning unless strict mode
 
-**Bounded scope claim:** This is a bounded Phase 4 first slice implementing a single CheckpointCreatorConsumer behind a compile/runtime gate. DLQ worker, multi-consumer chain, and S3 runtime wiring remain future work. Production deployment readiness is not claimed.
+**Bounded scope claim:** This is a bounded Phase 4 first slice implementing a single CheckpointCreatorConsumer behind a compile/runtime gate. DLQ metrics worker is bounded (depth/age gauges only). Full DLQ replay, multi-consumer chain, and S3 runtime wiring remain future work. Production deployment readiness is not claimed.
 
 ### Side Effect Ledger
 - Model with `effect_id`, `intent_id`, `intent_version`, `effect_type`, `target`, `timestamp`, `tenant_id`
@@ -86,6 +92,27 @@ Phase 4 lifecycle first slice delivered as bounded non-production feature:
 - Dashboard API: `GET /intents/{intent_id}/orchestration-dashboard` — read-only summary
 - Coordination status API: `GET /compensation-actions/orchestration-coordination` — read-only coordination view
 - Dry-run planner: `POST /compensation-actions/orchestration-dry-run` — READ-ONLY; returns propose actions (approve/reapprove/execute/no_action) + reason
+
+### SQL Graph Persistence (Bounded — Non-Production)
+
+> **Status:** Implemented (2026-04-29) — bounded slice only, **NOT production-ready**
+
+SQL-backed `SqlxGraphRepository` wired when `DATABASE_URL` is set:
+
+- **Delivered:** `SqlxGraphRepository` implementing `GraphRepository` trait for core CRUD operations
+- **Delivered:** Node operations: `create_node`, `get_node`, `list_nodes`, `update_node_state`
+- **Delivered:** Edge operations: `create_edge`, `get_edge`, `list_edges`, `list_edges_from`, `list_edges_to`, `delete_edge`
+- **Delivered:** Type conversion helpers for `NodeType`, `NodeState`, `EdgeType`, `ExternalRefType`
+- **Bounded:** No bulk operations, no pagination on list operations
+- **Bounded:** No transaction-based consistency checks (DB trigger enforces node existence)
+- **NOT delivered:** Graph traversal operations (`find_reachable`, `find_path`, `detect_cycles`) remain on `GraphService` using repository's `list_*` methods
+- **NOT delivered:** Production-scale claim NOT made
+
+**Env gate behavior:**
+- `DATABASE_URL` set: Uses `SqlxGraphRepository` (SQL-backed graph persistence)
+- `DATABASE_URL` not set: Uses `InMemoryGraphRepository` (dev/testing only)
+
+**Bounded scope claim:** This is a bounded Phase 2b slice implementing SQL-backed graph CRUD against existing `graph_nodes`/`graph_edges` schema. Graph traversal remains on `GraphService`. Production-scale deployment readiness is not claimed.
 
 ### Single-Shot Orchestration Runtime
 - HTTP: `POST /compensation-actions/runs` (202 Accepted) + `GET /compensation-actions/runs/{run_id}`
@@ -121,9 +148,9 @@ Phase 4 lifecycle first slice delivered as bounded non-production feature:
 | Performance benchmarks | 🔄 In Progress | Bounded slices delivered: rebase-engine sync bench, graph traversal bench, DB bench, HTTP server bench with in-memory repos; full production load testing remains open |
 | Runbooks | 🔄 In Progress | RB6-RB10 delivered (rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn) |
 | Tenant isolation verification tests | 🔄 In Progress | Bounded slices delivered: P3-S1 (tenant isolation tests), P3-S2 (quota enforcement), P3-S3 (rule pack isolation), P3-S4 (audit query isolation), P3-S5 (tenant service scaffold) |
-| JWT production guard + RLS helper scaffold | ✅ Bounded Delivered | **Scaffold only — full JWT→SQL RLS e2e enforcement remains pending.** JWT guard (`INTENT_API_REQUIRE_JWT=true`) fails startup if JWT_SECRET missing/weak; `AuthConfig::from_env()` validates secret strength; RLS helper (`rls_set_tenant_context_sql`, `validate_tenant_id_for_rls`) exists in `auth.rs`; RLS policies already enabled in migration 013; **pending: actual JWT→RLS context wiring in SQL query path** |
-| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface; **bundle generation (POST /forensic/bundle) delivered with in-memory storage at runtime; S3BundleStorage seam exists but not wired; list bundles (GET /forensic/bundles) and download API surfaces delivered as bounded in-memory; S3-backed retrieval/storage lifecycle remains Phase 4 scope**; full replay remains open |
-| NATS consumer lifecycle (Phase 4 first slice) | ✅ Bounded Delivered | Bounded multi-consumer registry (`ConsumerRegistry`) implemented; single consumer (`CheckpointCreatorConsumer`) wired behind `INTENT_API_NATS_CONSUMER=true` gate; graceful shutdown via shared watch channel; fail-open on NATS unavailability; **Snapshot/DLQ consumers NOT enabled (future Phase 4+ scope)** |
+| JWT production guard + RLS helper scaffold | ✅ Bounded Delivered | **JWT tenant_id validation for RLS delivered (P3-S5 bounded slice); full repository transaction wrapping pending.** JWT guard (`INTENT_API_REQUIRE_JWT=true`) fails startup if JWT_SECRET missing/weak; `build_router_with_jwt_auth(...)` is called from `main.rs` for both SQL and in-memory paths when `INTENT_API_REQUIRE_JWT=true`; `AuthConfig::from_env()` validates secret strength; `jwt_auth_async` middleware now validates `tenant_id` claim (rejects nil UUID) before allowing authenticated requests; `RlsTenantContext` struct available with `set_rls_context`/`reset_rls_context` methods; RLS helper (`rls_set_tenant_context_sql`, `validate_tenant_id_for_rls`) exists in `auth.rs`; RLS policies already enabled in migration 013; **pending: automatic repository transaction wrapping to wire `RlsTenantContext` into SQL query execution path** |
+| Forensic bundle (model, generation, API, replay) | 🔄 In Progress | Bounded slices delivered: verification API, export API, integrity hashing, replay surface; **bundle generation (POST /forensic/bundle) with env-gated S3BundleStorage wiring (FORENSIC_BUNDLE_STORAGE=s3); default remains in-memory storage; list bundles (GET /forensic/bundles) and download API surfaces delivered as bounded in-memory; S3 retrieval/storage lifecycle, Object Lock, retention enforcement, chain-hash remain Phase 4+ deferred scope**; full replay remains open |
+| NATS consumer lifecycle (Phase 4 first slice) | ✅ Bounded Delivered | Bounded multi-consumer registry (`ConsumerRegistry`) implemented; single consumer (`CheckpointCreatorConsumer`) wired behind `INTENT_API_NATS_CONSUMER=true` gate; graceful shutdown via shared watch channel; fail-open on NATS unavailability; **Bounded DLQ metrics worker (`DlqMetricsWorker`) delivered behind `INTENT_API_NATS_DLQ_WORKER=true` gate — emits depth/age gauges; full DLQ replay NOT enabled (Phase 4+ scope)** |
 | Threat model v2, penetration testing | 🔄 In Progress | Threat model v2 documented; pen test scope defined (planning artifact only); pen test execution and external security review remain open |
 | Load testing | 🔄 In Progress | Bounded HTTP load harness delivered (intent-api HTTP server with in-memory repos); full production load testing remains gated on P5 full completion |
 

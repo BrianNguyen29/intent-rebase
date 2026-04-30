@@ -117,9 +117,6 @@ services:
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
-      - '--web.console.libraries=/usr/share/alertmanager/console_libraries'
-      - '--web.console.templates=/usr/share/alertmanager/consoles'
-      - '--web.enable-lifecycle'
     restart: unless-stopped
     profiles:
       - observability

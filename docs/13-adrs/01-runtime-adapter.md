@@ -1,9 +1,9 @@
 # ADR-01 — Runtime Adapter Selection
 
-**Status:** Accepted  
-**Date:** 2026-04-03  
-**Authors:** Intent Rebase Engine Team  
-**Phase:** Phase 0–1  
+**Status:** Accepted
+**Date:** 2026-04-03
+**Authors:** Intent Rebase Engine Team
+**Phase:** Phase 0–1
 
 ---
 
@@ -22,24 +22,37 @@ Các runtime platforms phổ biến bao gồm Temporal, Prefect, Airflow, hoặc
 
 ## Decision
 
-**Chọn Temporal làm default primary runtime adapter.**
+**Chọn MockAdapter làm default runtime adapter, với TemporalAdapter available qua explicit opt-in khi compiled với `temporal` feature.**
 
 ### Rationale
 
-1. **Workflow-as-code model** — Temporal's paradigm phù hợp với intent-based execution, nơi workflow state chứa cả execution context và intent metadata.
-2. **Activity-level checkpointing** — Temporal tracks activity completion, hỗ trợ fine-grained rebase mapping.
-3. **Signals and continue-as-new** — Temporal hỗ trợ signaling mechanism cho phép IRE gửi rebase directives mà không cần workflow disruption lớn.
-4. **Strong consistency guarantees** — Temporal provides external consistency, giảm race conditions khi mapping rebase decisions.
-5. **Ecosystem maturity** — Temporal SDK có Rust client (`temporal-rs`), hỗ trợ long-running workflows với built-in retry, timeout, và heartbeating.
+1. **Bounded selection** — Phase 2b bounded scope: MockAdapter là default để giữ dev/test workflow không phụ thuộc vào live Temporal cluster.
+2. **Explicit Temporal opt-in** — TemporalAdapter chỉ được activate khi `INTENT_API_RUNTIME_ADAPTER=temporal` và compiled với `temporal` feature.
+3. **Fail-clear on misconfiguration** — Temporal request without feature/config phải fail visibly (not silent mock fallback).
+4. **No production readiness claim** — Trace propagation (W3C traceparent/tracestate) không được support với SDK hiện tại.
 
 ### Adapter Architecture
 
 ```
 Intent Rebase Engine
   └── Runtime Adapter Interface (trait RuntimeAdapter)
-        ├── TemporalAdapter     ← default
+        ├── MockAdapter          ← default (dev/testing only)
+        ├── TemporalAdapter      ← opt-in via INTENT_API_RUNTIME_ADAPTER=temporal
         ├── PreflightAdapter    ← future
         └── CustomEventLoopAdapter ← future
+```
+
+### Configuration
+
+```bash
+# Default: MockAdapter (dev/testing only)
+INTENT_API_RUNTIME_ADAPTER=mock
+
+# Opt-in for Temporal (requires temporal feature compiled in + config)
+INTENT_API_RUNTIME_ADAPTER=temporal
+TEMPORAL_ADDRESS=http://localhost:7233
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=intent-rebase
 ```
 
 ---
@@ -47,28 +60,30 @@ Intent Rebase Engine
 ## Consequences
 
 ### Positive
-- Temporal's activity history cung cấp sẵn checkpoint trail cho rebase mapping
-- Signals API cho phép non-disruptive rebase directives
-- Strong consistency giảm complexity trong rebase planning
+- Dev/test workflow không phụ thuộc vào live Temporal cluster
+- Clear failure mode khi Temporal requested nhưng không available/configured
+- Temporal adapter sẵn sàng khi bounded scope mở rộng
 
 ### Negative
-- Temporal là dependency bắt buộc; migration sang runtime khác yêu cầu adapter rewrite
-- Temporal Cloud hoặc self-hosted cluster là operational dependency
-- Temporal's activity retry semantics cần được mapped vào IRE's compensation model
+- Temporal Cloud hoặc self-hosted cluster vẫn là operational dependency khi opt-in
+- Trace propagation không support trong Phase 2b bounded scope
 
 ### Neutral
 - Adapter trait abstract hóa runtime-specific logic; protocol-level changes affect only adapter
-- Phase 1 chỉ implement Temporal adapter; other runtimes deferred to Phase 4
+- Phase 0–2a: define trait and mock/internal wiring; Phase 2b bounded: explicit env-gated Temporal path
+- Other runtimes deferred to Phase 4+
 
 ---
 
 ## Implementation Notes
 
 - Define `RuntimeAdapter` trait in `src/runtime/adapter.rs`
-- Implement `TemporalAdapter` using Temporal Rust client
+- Implement `MockAdapter` for dev/testing (default)
+- Implement `TemporalAdapter` using Temporal Rust client (feature-gated)
 - Adapter handles: `get_checkpoints()`, `send_rebase_signal(...)`, `map_intent_to_checkpoint(...)`, `replay_from_checkpoint(...)`
 - Current bounded replay semantics use cooperative workflow signaling with checkpoint metadata; native Temporal reset remains deferred until checkpoints carry Temporal run/event correlation
 - Phase 0–2a: define trait and mock/internal wiring; Phase 2b: implement Temporal adapter external path in batches
+- `select_runtime_adapter()` helper provides env-gated adapter selection with clear error messages
 
 ---
 

@@ -542,11 +542,55 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 
 | Component | Evidence Collected | Evidence Strength |
 |-----------|-------------------|-------------------|
-| Metrics endpoint | ✅ Checklist template | LOCAL DOCKER-COMPOSE |
-| Prometheus scrape | ✅ Checklist template | LOCAL DOCKER-COMPOSE |
-| Grafana dashboards | ✅ Checklist template | LOCAL DOCKER-COMPOSE |
-| Alertmanager config | ✅ Checklist template | LOCAL DOCKER-COMPOSE |
-| Trace context | ✅ Checklist template | LOCAL DOCKER-COMPOSE |
+| Metrics endpoint | ⚠️ Placeholder nginx, not real intent-api metrics | LOCAL DOCKER-COMPOSE |
+| Prometheus scrape | ✅ Targets intent-api/prometheus up | LOCAL DOCKER-COMPOSE |
+| Prometheus rules | ✅ Rule groups present: intent_api_availability(3), compensation(2), dlq(3), error_budget(6), latency(3) | LOCAL DOCKER-COMPOSE |
+| DLQ rules | ✅ DLQDepthHigh, DLQMessageStale, DLQReplayFailures present | LOCAL DOCKER-COMPOSE |
+| Grafana dashboards | ✅ Health endpoint returns `database: ok`, version `10.2.0` after datasource default fix | LOCAL DOCKER-COMPOSE |
+| Alertmanager config | ✅ Healthy after removing invalid Prometheus-only/lifecycle flags | LOCAL DOCKER-COMPOSE |
+| Trace context | ⏳ Not exercised | LOCAL DOCKER-COMPOSE |
+
+---
+
+## Local Evidence Collected — April 29, 2026
+
+### What Was Verified
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Prometheus targets | ✅ PASS | intent-api and prometheus targets up |
+| Prometheus rule groups | ✅ PASS | 17 rules across 4 groups: intent_api_availability(3), compensation(2), dlq(3), error_budget(6), latency(3) |
+| DLQ rules | ✅ PASS | DLQDepthHigh, DLQMessageStale, DLQReplayFailures confirmed present |
+| Alertmanager startup | ✅ FIXED | Removed invalid `--web.console.libraries`, `--web.console.templates`, and `--web.enable-lifecycle` flags |
+| Metrics endpoint | ⚠️ GAP | Returns placeholder nginx static page, not intent-api Prometheus metrics |
+| Grafana health | ✅ FIXED | Health endpoint returns `database: ok`, version `10.2.0` after resolving duplicate default datasource provisioning |
+
+### Issues Found and Resolved
+
+1. **Alertmanager invalid flags (RESOLVED)**
+   - File: `infrastructure/local/docker-compose.yml`
+   - Problem: Alertmanager command included `--web.console.libraries`, `--web.console.templates`, and `--web.enable-lifecycle`, which are not supported by the pinned Alertmanager image
+   - Fix: Removed unsupported flags; Alertmanager now starts with only valid flags (`--config.file`, `--storage.path`)
+
+2. **Metrics endpoint placeholder (KNOWN GAP)**
+   - `intent-api` container in observability profile is nginx serving a static page, not the actual intent-api service
+   - Real metrics require running `cargo run -p intent-api` separately
+   - This is expected behavior for the local observability profile which is designed for infrastructure validation, not full application testing
+
+3. **Grafana datasource default conflict (RESOLVED)**
+   - File: `infrastructure/local/grafana/provisioning/datasources/prometheus.yml`
+   - Problem: Two provisioned Prometheus datasource files both marked a datasource as default, causing Grafana startup failure
+   - Fix: Renamed the legacy datasource to `Prometheus Legacy` and set `isDefault: false`; Grafana health now returns `database: ok`, version `10.2.0`
+
+### Evidence Boundaries
+
+> **⚠️ Explicitly Non-Production**
+>
+> This evidence was collected against local docker-compose infrastructure only. The observability stack validates configuration and rule syntax but does not represent:
+> - Production Prometheus/Grafana/Alertmanager deployment
+> - Real alert routing to external notification systems (PagerDuty, Slack, email)
+> - Live application metrics from a running intent-api instance
+> - End-to-end trace propagation across service boundaries
 
 ---
 
@@ -588,3 +632,5 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 | Date | Updated By | Changes |
 |------|------------|---------|
 | April 2026 | (fixer) | Initial creation — metrics/Prometheus/Grafana/Alertmanager/traces evidence collection checklist templates |
+| April 29, 2026 | (fixer) | Added local evidence from evidence execution run; fixed Alertmanager invalid flags (`--web.console.libraries`, `--web.console.templates`); documented known gaps (placeholder metrics, unconfirmed Grafana health) |
+| April 29, 2026 | (orchestrator) | Re-verified local stack; removed remaining unsupported Alertmanager lifecycle flag; resolved Grafana duplicate-default datasource; confirmed Alertmanager and Grafana health endpoints locally |
