@@ -2950,6 +2950,61 @@ pub struct ListPendingApprovalRequestsQuery {
 }
 
 /// GET /approval-requests/pending - List pending approval requests for a tenant
+///
+/// Phase 1 P1-S5f bounded slice: When `state.rls_pool` is Some AND valid JWT claims
+/// are present, this handler validates that the query tenant_id matches the JWT tenant.
+/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
+#[cfg(feature = "jwt-auth")]
+async fn list_pending_approval_requests(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<ListPendingApprovalRequestsQuery>,
+) -> Result<Json<ListPendingApprovalRequestsResponse>, ApiErrorResponse> {
+    // Phase 1 P1-S5f: Check if RLS path is available (pool exists AND JWT claims present)
+    // Also performs tenant mismatch check
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        // Tenant mismatch rejection: query tenant_id must match JWT tenant
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_pending_approval_requests: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+
+        tracing::debug!(
+            "list_pending_approval_requests: RLS path validated for tenant_id={}",
+            rls_claims.tenant_id
+        );
+
+        let _ = rls_pool; // Used implicitly via RLS when repo supports SQL
+    }
+
+    let pending = state
+        .approval_request_repo
+        .list_pending_by_tenant(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let summaries: Vec<ApprovalRequestSummary> = pending
+        .into_iter()
+        .map(ApprovalRequestSummary::from)
+        .collect();
+
+    let total = summaries.len();
+
+    Ok(Json(ListPendingApprovalRequestsResponse {
+        approval_requests: summaries,
+        total,
+    }))
+}
+
+/// GET /approval-requests/pending - List pending approval requests for a tenant (non-JWT fallback)
+///
+/// Phase 2b bounded slice: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_pending_approval_requests(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<ListPendingApprovalRequestsQuery>,
