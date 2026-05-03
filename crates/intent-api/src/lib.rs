@@ -1309,6 +1309,42 @@ async fn get_graph_node(
 }
 
 /// POST /v1/graph/edges - Create a new graph edge
+///
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates tenant ownership before creating the edge.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+#[cfg(feature = "jwt-auth")]
+async fn create_graph_edge(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<CreateGraphEdgeRequest>,
+) -> Result<(StatusCode, Json<GraphEdge>), ApiErrorResponse> {
+    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("create_graph_edge: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    state
+        .graph_service
+        .add_edge(request)
+        .await
+        .map(|edge| (StatusCode::CREATED, Json(edge)))
+        .map_err(ApiErrorResponse)
+}
+
+/// POST /v1/graph/edges - Create a new graph edge (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn create_graph_edge(
     State(state): State<AppState>,
     Json(request): Json<CreateGraphEdgeRequest>,
@@ -4982,6 +5018,80 @@ fn format_action_decision(d: &compensation_service::OrchestrationActionDecision)
 /// - `completed` → all actions succeeded
 /// - `completed_with_errors` → some actions failed
 /// - `failed` → all actions failed or system error
+///
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates tenant ownership before creating the run.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+#[cfg(feature = "jwt-auth")]
+async fn create_orchestration_run(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationRunQuery>,
+    Json(request): Json<CreateOrchestrationRunRequest>,
+) -> Result<(StatusCode, Json<OrchestrationRunResponse>), ApiErrorResponse> {
+    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("create_orchestration_run: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Step 1: Create run in Pending state and return 202 immediately
+    let run = state
+        .orchestration_runtime
+        .create_run(
+            query.tenant_id,
+            request.action_ids,
+            request.initiated_by,
+            request.intent_id,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let run_id = run.id;
+
+    // Step 2: Spawn background execution
+    // The run handle is already returned to the client; execution proceeds in the background.
+    // Propagate current span context into the spawned task for distributed tracing.
+    let runtime = state.orchestration_runtime.clone();
+    let span = tracing::info_span!(
+        "background_orchestration_run",
+        run_id = %run_id,
+        otel.kind = "internal"
+    );
+    tokio::spawn(
+        async move {
+            // Background execution; errors are logged but cannot be reported to the HTTP client
+            match runtime.execute_existing_run(run_id).await {
+                Ok(_) => {
+                    tracing::debug!("Background orchestration run {} completed", run_id);
+                }
+                Err(e) => {
+                    tracing::error!("Background orchestration run {} failed: {}", run_id, e);
+                }
+            }
+        }
+        .instrument(span),
+    );
+
+    // Return 202 Accepted with the persisted (pending) run handle immediately
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(OrchestrationRunResponse::from(run)),
+    ))
+}
+
+/// POST /compensation-actions/runs - Create and execute a single-shot orchestration run (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn create_orchestration_run(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationRunQuery>,
@@ -6557,6 +6667,103 @@ pub struct ForensicBundleIntegrityInfo {
 /// - Bundle retrieval/download API (GET /forensic/bundle/{id}/download)
 /// - Bundle replay (state reproduction from stored bundle)
 /// - Hash chain integrity verification
+///
+/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
+/// validates tenant ownership before creating the forensic bundle.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+#[cfg(feature = "jwt-auth")]
+async fn create_forensic_bundle(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<ForensicBundleRequest>,
+) -> Result<(StatusCode, Json<ForensicBundleResponse>), ApiErrorResponse> {
+    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("create_forensic_bundle: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let service_request = forensic_service::CreateForensicBundleRequest {
+        tenant_id: request.tenant_id,
+        intent_ids: request.intent_ids.clone(),
+        time_range: forensic_service::BundleTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        created_by: request.created_by.clone(),
+    };
+
+    let response = state
+        .forensic_bundle_service
+        .create_bundle(service_request)
+        .await
+        .map_err(|e| match e {
+            forensic_service::ForensicBundleServiceError::NotFound(_) => {
+                ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))
+            }
+            forensic_service::ForensicBundleServiceError::Collection(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("collection failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Generation(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("generation failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Storage(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("storage failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Repository(e) => ApiErrorResponse(e),
+            forensic_service::ForensicBundleServiceError::Serialization(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("serialization failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("invalid time range: {}", e)),
+            ),
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ForensicBundleResponse {
+            bundle_id: response.bundle.bundle_id,
+            created_at: response.bundle.created_at,
+            created_by: response.bundle.created_by,
+            tenant_id: response.bundle.tenant_id,
+            time_range: ForensicBundleTimeRange {
+                start: response.bundle.time_range.start,
+                end: response.bundle.time_range.end,
+            },
+            status: response.bundle.status,
+            purpose: response.bundle.purpose,
+            contents: ForensicBundleContentsSummary {
+                intent_versions: response.bundle.contents.intent_versions,
+                artifacts: response.bundle.contents.artifacts,
+                approvals: response.bundle.contents.approvals,
+                audit_events: response.bundle.contents.audit_events,
+                policy_snapshots: response.bundle.contents.policy_snapshots,
+            },
+            integrity: ForensicBundleIntegrityInfo {
+                manifest_hash: response.bundle.integrity.manifest_hash,
+                chain_verified: response.bundle.integrity.chain_verified,
+                verification_timestamp: response.bundle.integrity.verification_timestamp,
+            },
+            storage_location: response.storage_location,
+            bundle_size_bytes: response.bundle_size_bytes,
+            message: response.message,
+        }),
+    ))
+}
+
+/// POST /forensic/bundle - Generate and store a forensic bundle (non-JWT fallback)
+///
+/// Phase 3 P3-S5: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn create_forensic_bundle(
     State(state): State<AppState>,
     Json(request): Json<ForensicBundleRequest>,
@@ -7775,6 +7982,7 @@ pub fn build_router_with_sql_audit_and_approval(
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -7785,9 +7993,6 @@ pub fn build_router_with_sql_audit_and_approval(
     let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
         intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
     );
-
-    // Create RLS-aware pool for tenant-scoped graph node creation
-    let rls_pool = Some(graph_service::RlsAwarePool::new(pool));
 
     build_router(
         service,
@@ -7828,6 +8033,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     auth_config: auth::AuthConfig,
+    rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -7838,9 +8044,6 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
         intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
     );
-
-    // Create RLS-aware pool for tenant-scoped graph node creation
-    let rls_pool = Some(graph_service::RlsAwarePool::new(pool));
 
     let router = build_router(
         service,
@@ -13027,9 +13230,13 @@ mod tests {
             created_by: "test-user".to_string(),
         };
 
-        let _create_result = create_forensic_bundle(State(state.clone()), Json(create_request))
-            .await
-            .expect("Should create bundle");
+        let _create_result = create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request),
+        )
+        .await
+        .expect("Should create bundle");
 
         // Now list bundles
         let result = list_forensic_bundles(
@@ -13069,9 +13276,13 @@ mod tests {
                 created_by: format!("test-user-{}", i),
             };
 
-            let _ = create_forensic_bundle(State(state.clone()), Json(create_request))
-                .await
-                .expect("Should create bundle");
+            let _ = create_forensic_bundle(
+                State(state.clone()),
+                auth::OptionalRlsTenantClaims(None),
+                Json(create_request),
+            )
+            .await
+            .expect("Should create bundle");
         }
 
         // List with limit=1
@@ -13118,10 +13329,13 @@ mod tests {
             created_by: "test-user".to_string(),
         };
 
-        let (_status, create_response) =
-            create_forensic_bundle(State(state.clone()), Json(create_request))
-                .await
-                .expect("Should create bundle");
+        let (_status, create_response) = create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request),
+        )
+        .await
+        .expect("Should create bundle");
 
         let bundle_id = create_response.bundle_id;
 
@@ -13156,9 +13370,13 @@ mod tests {
             created_by: "test-user-1".to_string(),
         };
 
-        let _ = create_forensic_bundle(State(state.clone()), Json(create_request1))
-            .await
-            .expect("Should create bundle for tenant1");
+        let _ = create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request1),
+        )
+        .await
+        .expect("Should create bundle for tenant1");
 
         // Create bundle for tenant2
         let create_request2 = ForensicBundleRequest {
@@ -13172,9 +13390,13 @@ mod tests {
             created_by: "test-user-2".to_string(),
         };
 
-        let _ = create_forensic_bundle(State(state.clone()), Json(create_request2))
-            .await
-            .expect("Should create bundle for tenant2");
+        let _ = create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request2),
+        )
+        .await
+        .expect("Should create bundle for tenant2");
 
         // List bundles for tenant1 - should only see tenant1's bundle
         let result1 = list_forensic_bundles(

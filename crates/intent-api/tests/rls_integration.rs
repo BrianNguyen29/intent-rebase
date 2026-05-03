@@ -111,7 +111,7 @@ type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Parse a UUID constant string, panicking on failure (only for test constants).
 fn parse_test_uuid(s: &str) -> Uuid {
-    Uuid::parse_str(s).expect(&format!("Invalid test UUID: {}", s))
+    Uuid::parse_str(s).unwrap_or_else(|_| panic!("Invalid test UUID: {}", s))
 }
 
 /// Skip reason when DATABASE_URL is not configured
@@ -431,13 +431,11 @@ async fn drop_test_role(pool: &sqlx::PgPool) -> TestResult<()> {
 
     if exists {
         // Terminate any existing connections first
-        sqlx::query(&format!(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1"
-        ))
-        .bind(TEST_ROLE_NAME)
-        .execute(pool)
-        .await
-        .ok(); // Ignore errors - connection might already be gone
+        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1")
+            .bind(TEST_ROLE_NAME)
+            .execute(pool)
+            .await
+            .ok(); // Ignore errors - connection might already be gone
 
         // Revoke all privileges and drop owned objects first
         // DROP OWNED BY revokes privileges granted to the role and drops objects owned by the role

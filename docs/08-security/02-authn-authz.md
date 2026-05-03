@@ -78,10 +78,15 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
 
 ### Pending Items
 
-- Full repository transaction wrapping (automatic `RlsTenantContext` wiring in all SQL query paths)
-- RLS wrapping for other handlers (`create_graph_edge`, etc.)
-- NATS tenant isolation
-- Production certification
+**Full RLS transaction wrapping addressed via ordered P1 slices (P1-S1..S5 + RLC-4..RLC-9):**
+- P1-S1: Move `RlsAwarePool` to shared location — 🔴 PENDING
+- P1-S2: Wire `IntentService.rls_pool` — ✅ LOCAL DONE (pending commit; cargo fmt/check/test passed)
+- P1-S3: Add `RlsTransactionExt` trait — 🔴 PENDING
+- P1-S4: Wrap `create_graph_edge` handler — 🔴 PENDING
+- P1-S5: Wrap compensation, forensic, orchestration, approval, artifact handlers — 🔴 PENDING
+- RLC-4..RLC-9: Cross-tenant isolation test expansion — 🔴 PENDING
+- NATS tenant isolation — 🔴 PENDING
+- Production certification — 🔴 PENDING
 
 ## Authentication
 - User auth: OIDC/OAuth2

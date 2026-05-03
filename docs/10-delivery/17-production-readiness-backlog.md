@@ -24,7 +24,7 @@ P0 items block Phase 3 exit gate and any production deployment.
 |-------|-------|
 | **Description** | GitHub Actions CI runs report `startup_failure` before jobs are created |
 | **Impact** | Remote CI is not passing; code quality gates cannot run remotely |
-| **Evidence** | GitHub Actions push run shows `startup_failure` status |
+| **Evidence** | GitHub Actions push run 25273892755 shows `startup_failure` status after commit 42cdbe2 |
 | **Owner** | Backend Lead |
 | **Status** | 🔴 BLOCKED |
 | **Workaround** | Local canonical gates pass: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace` |
@@ -33,19 +33,30 @@ P0 items block Phase 3 exit gate and any production deployment.
 
 ---
 
-### P0-2: Full RLS (Row-Level Security) Coverage
+## P1 — RLS Transaction Wrapping (Ordered Slices)
+
+P1 items address the full RLS transaction wrapping plan from oracle design. These are P1 because they block production deployment (cross-tenant isolation), but the oracle plan provides a clear ordered execution path.
+
+### P1-0: Full RLS Transaction Wrapping — Oracle Design (HIGH confidence)
 
 | Field | Value |
 |-------|-------|
-| **Description** | PostgreSQL RLS policies defined but not fully wired into SQL query execution path |
+| **Description** | Oracle-ordered plan for wiring RLS context into all SQL query execution paths |
 | **Impact** | Tenant data isolation not enforced at the database layer in all code paths |
-| **Current State** | JWT tenant_id validation delivered (P3-S5 bounded slice); automatic repository transaction wrapping to wire `RlsTenantContext` into SQL query execution path is PENDING |
-| **Evidence** | `RlsTenantContext` struct exists with `set_rls_context`/`reset_rls_context` methods; RLS policies enabled in migration 013; `jwt_auth_async` middleware validates tenant_id claim |
-| **Owner** | Backend Lead |
-| **Status** | 🔴 IN PROGRESS — bounded JWT/RLS scaffold delivered; full wiring PENDING |
-| **Requirements** | Automatic `SET app.current_tenant` before SQL queries; verified no cross-tenant data leakage |
+| **Evidence** | RLC-3 validation passed locally: migration_integration 1/1, rls_integration --ignored 4/4 (commit 42cdbe2) |
 
-**No overclaim:** JWT guard and RLS policy definitions do not constitute full RLS enforcement. Full repository transaction wrapping is required.
+#### Ordered Implementation Slices
+
+| Slice | Description | Status | Notes |
+|-------|-------------|--------|-------|
+| **P1-S1** | Move `RlsAwarePool` to shared location | 🔴 PENDING | Required before other slices can use it |
+| **P1-S2** | Wire `IntentService.rls_pool` | ✅ LOCAL DONE (pending commit) | Local cargo fmt/check/test with/without jwt-auth passed (221 tests each) |
+| **P1-S3** | Add `RlsTransactionExt` trait | 🔴 PENDING | Enables `begin_with_tenant` on any pool |
+| **P1-S4** | Wrap `create_graph_edge` handler | 🔴 PENDING | Depends on S1-S3 |
+| **P1-S5** | Wrap compensation, forensic, orchestration, approval, artifact handlers | 🔴 PENDING | Depends on S1-S3 |
+| **RLC-4..RLC-9** | RLC test expansion (cross-tenant isolation) | 🔴 PENDING | Validates no cross-tenant leakage |
+
+**No overclaim:** Local P1-S2 implementation is uncommitted. S1, S3-S5, and RLC-4..RLC-9 are pending. Full RLS enforcement is not complete until all slices pass.
 
 ---
 
@@ -124,35 +135,57 @@ P1 items are required for safe production deployment but may be addressed in par
 
 ---
 
-## P2 — Phase 4 Scope (Deferred Until Phase 3 Exit)
+## P2 — Phase 4 Scope
 
-P2 items are important but not blocking Phase 3 exit. They are Phase 4 candidates.
+P2 items are important but not blocking Phase 3 exit. They split into **local-executable** (can be done without external dependencies) and **deferred** (require external factors or Phase 4 infrastructure).
 
-### P2-1: DLQ/NATS Lifecycle Implementation
+### Local-Executable (Can Begin After Phase 3 Exit)
 
-| Field | Value |
-|-------|-------|
-| **Description** | Full NATS consumer lifecycle with DLQ routing and automatic replay worker |
-| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; G1-G5 design gates passed (solo self-review) |
-| **Status** | 🔴 BLOCKED — implementation gated on G1-G5 evidence; G1 self-reviewed, G2 validated, G3 stubs, G4 RB11, G5 bounded tests |
-| **Requirements** | G1-G5 gates must pass before any DLQ worker implementation begins |
+These items can be started without waiting for external dependencies.
 
-**Note:** DLQ design is approved; DLQ worker implementation is future work gated on G1-G5.
-
----
-
-### P2-2: Panic Hardening
+#### P2-1: Panic Hardening
 
 | Field | Value |
 |-------|-------|
 | **Description** | Panic handler registration, graceful degradation on unexpected panics |
 | **Current State** | Not started |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 PENDING — Phase 4 candidate |
+| **Status** | 🔴 PENDING — Phase 4 local-executable |
+| **Dependencies** | None (local code only) |
 
 ---
 
-### P2-3: Trace Propagation (Cross-Process)
+#### P2-2: File Decomposition
+
+| Field | Value |
+|-------|-------|
+| **Description** | Large module decomposition for maintainability |
+| **Current State** | Not started |
+| **Owner** | Backend Lead |
+| **Status** | 🔴 PENDING — Phase 4 local-executable |
+| **Dependencies** | None (local code only) |
+
+---
+
+### Deferred (Require External Factors or Phase 4 Infrastructure)
+
+These items cannot proceed until specific external conditions are met.
+
+#### P2-3: DLQ/NATS Lifecycle Implementation
+
+| Field | Value |
+|-------|-------|
+| **Description** | Full NATS consumer lifecycle with DLQ routing and automatic replay worker |
+| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; G1-G5 design gates passed (solo self-review) |
+| **Status** | 🔴 DEFERRED — implementation gated on G1-G5 evidence; G1 self-reviewed, G2 validated, G3 stubs, G4 RB11, G5 bounded tests |
+| **Requirements** | G1-G5 gates must pass before any DLQ worker implementation begins |
+| **External Dependency** | Requires Phase 4 infrastructure and design review completion |
+
+**Note:** DLQ design is approved; DLQ worker implementation is future work gated on G1-G5.
+
+---
+
+#### P2-4: Trace Propagation (Cross-Process)
 
 | Field | Value |
 |-------|-------|
@@ -161,21 +194,11 @@ P2 items are important but not blocking Phase 3 exit. They are Phase 4 candidate
 | **Evidence** | Temporal SDK 0.2.0 shares `Arc<RwLock>` race on `Connection::set_headers`; sqlx lacks per-query context propagation; NATS publisher not yet implemented |
 | **Owner** | Backend Lead / SRE |
 | **Status** | 🔴 DEFERRED — revisit when SDK support improves |
+| **External Dependency** | Temporal SDK fix required for safe per-request gRPC metadata injection |
 
 ---
 
-### P2-4: File Decomposition
-
-| Field | Value |
-|-------|-------|
-| **Description** | Large module decomposition for maintainability |
-| **Current State** | Not started |
-| **Owner** | Backend Lead |
-| **Status** | 🔴 PENDING — Phase 4 candidate |
-
----
-
-### P2-5: Forensic Replay + Immutable Storage Lifecycle
+#### P2-5: Forensic Replay + Immutable Storage Lifecycle
 
 | Field | Value |
 |-------|-------|
@@ -183,6 +206,7 @@ P2 items are important but not blocking Phase 3 exit. They are Phase 4 candidate
 | **Current State** | Bounded forensic bundle generation/export/download delivered; default storage remains in-memory; env-gated S3 bundle storage exists; full replay, Object Lock, retention enforcement, and chain-hash remain deferred |
 | **Owner** | Backend Lead / Security |
 | **Status** | 🔴 DEFERRED — Phase 4+ scope |
+| **External Dependency** | Requires S3 Object Lock infrastructure, chain-hash implementation |
 
 **No overclaim:** Forensic bundle generation and integrity checks are not equivalent to full replay or production-grade immutable evidence storage.
 
@@ -193,17 +217,34 @@ P2 items are important but not blocking Phase 3 exit. They are Phase 4 candidate
 | Priority | Item | Status | Evidence Required |
 |----------|------|--------|------------------|
 | **P0** | Remote CI startup failure | 🔴 BLOCKED | Remote CI passing |
-| **P0** | Full RLS coverage | 🔴 IN PROGRESS | Cross-tenant isolation verified |
-| **P1** | External SRE sign-off | 🔴 PENDING | SRE name/date/statement |
-| **P1** | External security sign-off | 🔴 PENDING | Reviewer name/date/statement |
+| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..9) | 🔴 IN PROGRESS | Cross-tenant isolation verified; S2 local done (pending commit) |
+| **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
+| **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
 | **P1** | Production infra | 🔴 BLOCKED | Production env verified |
 | **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
-| **P2** | DLQ/NATS lifecycle | 🔴 BLOCKED | G1-G5 gates passed |
-| **P2** | Panic hardening | 🔴 PENDING | Phase 4 scope |
+| **P2** | Panic hardening (local-executable) | 🔴 PENDING | Phase 4 scope |
+| **P2** | File decomposition (local-executable) | 🔴 PENDING | Phase 4 scope |
+| **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
-| **P2** | File decomposition | 🔴 PENDING | Phase 4 scope |
 | **P2** | Forensic replay + immutable storage lifecycle | 🔴 DEFERRED | Phase 4+ scope |
+
+---
+
+## External Evidence Packets (Pending)
+
+The following external evidence/gates remain pending and are not yet available:
+
+| Packet | Status | Blocking |
+|--------|--------|----------|
+| External SRE sign-off | 🔴 PENDING | Production deployment |
+| External security review | 🔴 PENDING | Production deployment |
+| Penetration test report | 🔴 PENDING | Production deployment |
+| Load test L3-L5 results | 🔴 PENDING | Production deployment |
+| Production infrastructure | 🔴 BLOCKED | Staging/production deployment |
+| DLQ replay worker | 🔴 DEFERRED | Phase 4 (requires G1-G5 gates) |
+| Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |
+| Forensic replay + Object Lock | 🔴 DEFERRED | Phase 4+ |
 
 ---
 

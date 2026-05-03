@@ -4,7 +4,7 @@
 
 ## Current CI State (Actual)
 
-> **Remote CI Status:** 🔴 `startup_failure` — GitHub Actions reports startup_failure before jobs are created. Local canonical gates pass; remote CI is not passing.
+> **Remote CI Status:** 🔴 `startup_failure` — GitHub Actions reports startup_failure before jobs are created (run 25273892755 after commit 42cdbe2). Local canonical gates pass; remote CI is not passing.
 
 ### Actual Workflows
 

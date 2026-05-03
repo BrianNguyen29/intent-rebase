@@ -341,7 +341,14 @@ async fn build_sql_router_with_consumer_jwt(
 
     // SQL-backed intent repository
     let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
-    let intent_service = Arc::new(IntentService::new(intent_repo.clone()));
+
+    // Create RLS-aware pool for tenant-scoped transactions (Phase 3 P3-S5)
+    // This enables RLS-aware create_intent/create_version paths when JWT claims are present
+    let rls_pool = graph_service::RlsAwarePool::new(pool.clone());
+
+    // Wire RLS pool to IntentService for RLS-aware method availability
+    let intent_service =
+        Arc::new(IntentService::new(intent_repo.clone()).with_rls_pool(rls_pool.clone()));
 
     // SQL-backed graph repository
     let graph_repo = Arc::new(SqlxGraphRepository::new(pool.clone()));
@@ -453,6 +460,7 @@ async fn build_sql_router_with_consumer_jwt(
         forensic_archive_generator,
         forensic_bundle_service,
         auth_config,
+        Some(rls_pool),
     );
 
     Ok((router, Some(checkpoint_service), dlq_handle))
@@ -473,7 +481,14 @@ async fn build_sql_router_with_consumer_impl(
 
     // SQL-backed intent repository
     let intent_repo = Arc::new(SqlxIntentRepository::new(pool.clone()));
-    let intent_service = Arc::new(IntentService::new(intent_repo.clone()));
+
+    // Create RLS-aware pool for tenant-scoped transactions (Phase 3 P3-S5)
+    // This enables RLS-aware create_intent/create_version paths when JWT claims are present
+    let rls_pool = graph_service::RlsAwarePool::new(pool.clone());
+
+    // Wire RLS pool to IntentService for RLS-aware method availability
+    let intent_service =
+        Arc::new(IntentService::new(intent_repo.clone()).with_rls_pool(rls_pool.clone()));
 
     // SQL-backed graph repository for production graph service
     let graph_repo = Arc::new(SqlxGraphRepository::new(pool.clone()));
@@ -592,6 +607,7 @@ async fn build_sql_router_with_consumer_impl(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        Some(rls_pool),
     );
 
     Ok((router, Some(checkpoint_service), dlq_handle))
