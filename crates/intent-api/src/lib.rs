@@ -1310,19 +1310,21 @@ async fn get_graph_node(
 
 /// POST /v1/graph/edges - Create a new graph edge
 ///
-/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
-/// validates tenant ownership before creating the edge.
-/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+/// Phase 1 P1-S4 bounded slice: When `state.rls_pool` is Some AND valid JWT claims
+/// are present, this handler uses RLS-aware transaction wrapping for tenant isolation.
+/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
+///
+/// When jwt-auth feature is disabled, this handler uses the non-RLS path only.
 #[cfg(feature = "jwt-auth")]
 async fn create_graph_edge(
     State(state): State<AppState>,
     auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
     Json(request): Json<CreateGraphEdgeRequest>,
 ) -> Result<(StatusCode, Json<GraphEdge>), ApiErrorResponse> {
-    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
-    // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
-        if request.tenant_id != rls_claims.tenant_id {
+    // Check if RLS path is available (pool exists AND JWT claims present)
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        // Tenant mismatch rejection: JWT tenant must match request tenant
+        if rls_claims.tenant_id != request.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
                 rls_claims.tenant_id, request.tenant_id
@@ -1330,8 +1332,54 @@ async fn create_graph_edge(
             tracing::warn!("create_graph_edge: tenant mismatch rejection");
             return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
         }
+
+        // Use RLS-aware transaction
+        let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
+        let mut tx = match tx_result {
+            Ok(tx) => tx,
+            Err(e) => {
+                return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "failed to begin RLS transaction: {}",
+                    e
+                ))));
+            }
+        };
+
+        // Get the SQL repo and create edge within the transaction
+        if let Some(sql_repo) = state.graph_service.repo().as_sqlx_repo() {
+            let edge_result = sql_repo.create_edge_with_tx(&mut tx, request).await;
+            let edge = match edge_result {
+                Ok(edge) => edge,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "RLS edge creation failed: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let commit_result = tx.commit().await;
+            if let Err(e) = commit_result {
+                return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                    "failed to commit RLS transaction: {}",
+                    e
+                ))));
+            }
+
+            tracing::debug!(
+                "create_graph_edge: RLS path success for tenant_id={}",
+                rls_claims.tenant_id
+            );
+            return Ok((StatusCode::CREATED, Json(edge)));
+        } else {
+            // Fallback to non-RLS if repo doesn't support SQL
+            tracing::warn!(
+                "create_graph_edge: rls_pool set but repo doesn't support SQL, falling back"
+            );
+        }
     }
 
+    // Non-RLS path (no JWT claims or rls_pool is None)
     state
         .graph_service
         .add_edge(request)

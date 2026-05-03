@@ -29,6 +29,9 @@ use uuid::Uuid;
 // Re-export types for convenience
 pub use intent_rebase_types::{ExternalRef, ExternalRefType};
 
+// Re-export RlsAwarePool from intent-rebase_types for backward compatibility
+pub use intent_rebase_types::rls::RlsAwarePool;
+
 /// Repository trait for graph storage
 /// Allows for in-memory (tests) or SQL-backed implementations
 #[async_trait]
@@ -352,85 +355,6 @@ impl GraphRepository for InMemoryGraphRepository {
 }
 
 // =============================================================================
-// RlsAwarePool — RLS-aware PostgreSQL connection pool wrapper
-// =============================================================================
-
-/// RLS-aware pool wrapper that provides tenant-scoped transaction support.
-///
-/// This wrapper around `sqlx::PgPool` provides the `begin_with_tenant` method
-/// that starts a transaction and sets the RLS tenant context via `SET LOCAL`.
-///
-/// **Bounded scope:** This is the first slice of RLS transaction wrapping.
-/// Only `begin_with_tenant` is provided - full pool wrapper with all pool
-/// methods remains future scope.
-///
-/// # Usage
-///
-/// ```ignore
-/// let pool = RlsAwarePool::new(pg_pool);
-/// let tenant_id = uuid::Uuid::parse_str("...").unwrap();
-///
-/// let mut tx = pool.begin_with_tenant(tenant_id).await?;
-/// // Transaction is now tenant-scoped via RLS
-/// // ... use tx for queries ...
-/// tx.commit().await?;
-/// ```
-#[derive(Clone)]
-pub struct RlsAwarePool {
-    pool: PgPool,
-}
-
-impl RlsAwarePool {
-    /// Create a new RlsAwarePool wrapping the given PgPool.
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    /// Begin a new RLS-aware transaction for the given tenant.
-    ///
-    /// This starts a PostgreSQL transaction and sets the RLS tenant context
-    /// via `SET LOCAL app.current_tenant_id = '<tenant_id>'`.
-    ///
-    /// The tenant_id is validated before use - nil UUIDs are rejected.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The tenant_id is nil (reserved sentinel value)
-    /// - The transaction cannot be started
-    /// - The RLS context cannot be set
-    pub async fn begin_with_tenant(
-        &self,
-        tenant_id: Uuid,
-    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, IntentRebaseError> {
-        // Validate tenant_id for RLS use
-        intent_rebase_types::rls::validate_tenant_id_for_rls(tenant_id).map_err(|e| {
-            IntentRebaseError::Internal(format!("invalid tenant_id for RLS: {}", e))
-        })?;
-
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            IntentRebaseError::StorageError(format!("failed to begin transaction: {}", e))
-        })?;
-
-        // Set RLS tenant context
-        let sql = intent_rebase_types::rls::rls_set_tenant_context_sql(tenant_id);
-        sqlx::query(&sql).execute(&mut *tx).await.map_err(|e| {
-            IntentRebaseError::StorageError(format!("failed to set RLS context: {}", e))
-        })?;
-
-        Ok(tx)
-    }
-
-    /// Returns a reference to the underlying PgPool.
-    ///
-    /// This is provided for cases where the full pool API is needed
-    /// (e.g., for non-RLS operations or administrative tasks).
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
-    }
-}
-
-// =============================================================================
 // SqlxGraphRepository — SQL-backed graph storage
 // =============================================================================
 
@@ -584,6 +508,71 @@ impl SqlxGraphRepository {
         };
 
         Ok(node)
+    }
+
+    /// Create a new graph edge within an existing RLS-aware transaction.
+    ///
+    /// This method inserts a new edge into the graph_edges table using a transaction
+    /// that has already been configured with RLS tenant context.
+    ///
+    /// The caller is responsible for:
+    /// - Beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// - Committing or rolling back the transaction after this call
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `request` - The create edge request
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert fails or if the transaction is invalid.
+    pub async fn create_edge_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: CreateGraphEdgeRequest,
+    ) -> Result<GraphEdge, IntentRebaseError> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        // DB trigger will validate node existence and tenant/workflow consistency
+        let edge_type_str = edge_type_to_string(&request.edge_type);
+        let properties = serde_json::to_value(request.properties.unwrap_or(serde_json::json!({})))
+            .map_err(|e| {
+                IntentRebaseError::SerializationError(format!("edge properties: {}", e))
+            })?;
+
+        let edge_properties = properties.clone();
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_edges (edge_id, tenant_id, workflow_id, from_node_id, to_node_id, edge_type, properties, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(request.tenant_id)
+        .bind(request.workflow_id)
+        .bind(request.from_node_id)
+        .bind(request.to_node_id)
+        .bind(edge_type_str)
+        .bind(properties)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert graph edge: {}", e)))?;
+
+        Ok(GraphEdge {
+            id,
+            tenant_id: request.tenant_id,
+            workflow_id: request.workflow_id,
+            from_node_id: request.from_node_id,
+            to_node_id: request.to_node_id,
+            edge_type: request.edge_type,
+            properties: edge_properties,
+            created_at: now,
+        })
     }
 }
 

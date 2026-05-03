@@ -12,6 +12,12 @@
 //! - RLS policies check `NULL` tenant_id as bypass (superuser/migration access)
 //! - Always use `SET LOCAL` for transaction-scoped context
 
+use sqlx::postgres::PgPool;
+use uuid::Uuid;
+
+// Re-export IntentRebaseError for use in RlsAwarePool methods
+pub use crate::IntentRebaseError;
+
 /// PostgreSQL session setting name for tenant context
 pub const RLS_TENANT_SETTING: &str = "app.current_tenant_id";
 
@@ -140,6 +146,130 @@ impl RlsTenantContext {
         let sql = rls_reset_tenant_context_sql();
         sqlx::query(&sql).execute(&mut **tx).await?;
         Ok(())
+    }
+}
+
+// =============================================================================
+// RlsAwarePool — RLS-aware PostgreSQL connection pool wrapper
+// =============================================================================
+
+/// RLS-aware pool wrapper that provides tenant-scoped transaction support.
+///
+/// This wrapper around `sqlx::PgPool` provides the `begin_with_tenant` method
+/// that starts a transaction and sets the RLS tenant context via `SET LOCAL`.
+///
+/// **Bounded scope:** This is the first slice of RLS transaction wrapping.
+/// Only `begin_with_tenant` is provided - full pool wrapper with all pool
+/// methods remains future scope.
+///
+/// # Usage
+///
+/// ```ignore
+/// let pool = RlsAwarePool::new(pg_pool);
+/// let tenant_id = uuid::Uuid::parse_str("...").unwrap();
+///
+/// let mut tx = pool.begin_with_tenant(tenant_id).await?;
+/// // Transaction is now tenant-scoped via RLS
+/// // ... use tx for queries ...
+/// tx.commit().await?;
+/// ```
+#[derive(Clone)]
+pub struct RlsAwarePool {
+    pool: PgPool,
+}
+
+impl RlsAwarePool {
+    /// Create a new RlsAwarePool wrapping the given PgPool.
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Begin a new RLS-aware transaction for the given tenant.
+    ///
+    /// This starts a PostgreSQL transaction and sets the RLS tenant context
+    /// via `SET LOCAL app.current_tenant_id = '<tenant_id>'`.
+    ///
+    /// The tenant_id is validated before use - nil UUIDs are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tenant_id is nil (reserved sentinel value)
+    /// - The transaction cannot be started
+    /// - The RLS context cannot be set
+    pub async fn begin_with_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, IntentRebaseError> {
+        // Validate tenant_id for RLS use
+        validate_tenant_id_for_rls(tenant_id).map_err(|e| {
+            IntentRebaseError::Internal(format!("invalid tenant_id for RLS: {}", e))
+        })?;
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to begin transaction: {}", e))
+        })?;
+
+        // Set RLS tenant context
+        let sql = rls_set_tenant_context_sql(tenant_id);
+        sqlx::query(&sql).execute(&mut *tx).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("failed to set RLS context: {}", e))
+        })?;
+
+        Ok(tx)
+    }
+
+    /// Returns a reference to the underlying PgPool.
+    ///
+    /// This is provided for cases where the full pool API is needed
+    /// (e.g., for non-RLS operations or administrative tasks).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
+// =============================================================================
+// RlsTransactionExt — Extension trait for RLS-aware transaction commit/rollback
+// =============================================================================
+
+/// Extension trait providing commit helpers for RLS-aware transactions.
+///
+/// This trait offers a convenient way to commit or rollback transactions
+/// with proper error mapping to `IntentRebaseError`.
+///
+/// # Usage
+///
+/// ```ignore
+/// use intent_rebase_types::rls::RlsTransactionExt;
+///
+/// let mut tx = pool.begin_with_tenant(tenant_id).await?;
+/// // ... use tx for queries ...
+/// tx.commit_with_rls().await?;
+/// ```
+#[allow(async_fn_in_trait)]
+pub trait RlsTransactionExt {
+    /// Commit the transaction, mapping sqlx errors to IntentRebaseError.
+    async fn commit_with_rls(self) -> Result<(), IntentRebaseError>
+    where
+        Self: Sized;
+
+    /// Rollback the transaction, mapping sqlx errors to IntentRebaseError.
+    async fn rollback_with_rls(self) -> Result<(), IntentRebaseError>
+    where
+        Self: Sized;
+}
+
+impl<'t> RlsTransactionExt for sqlx::Transaction<'t, sqlx::Postgres> {
+    async fn commit_with_rls(self) -> Result<(), IntentRebaseError> {
+        self.commit().await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("RLS transaction commit failed: {}", e))
+        })
+    }
+
+    async fn rollback_with_rls(self) -> Result<(), IntentRebaseError> {
+        self.rollback().await.map_err(|e| {
+            IntentRebaseError::StorageError(format!("RLS transaction rollback failed: {}", e))
+        })
     }
 }
 
