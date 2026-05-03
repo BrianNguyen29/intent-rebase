@@ -4155,6 +4155,10 @@ pub struct TriggerReapprovalResponse {
 /// - If `original_scope_hash == current_scope_hash`: Returns 400 Bad Request (no scope drift)
 /// - If intent not found: Returns 404
 ///
+/// **Phase 3 P3-S5 bounded RLS slice**: When `state.rls_pool` is Some AND valid JWT claims
+/// are present, this handler validates tenant ownership before creating the approval request.
+/// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+///
 /// **Scope limitations**:
 /// - Does NOT send notifications (Phase 3 external notification system)
 /// - Cancels existing Approved approvals for same tenant+intent (non-Approved statuses unaffected)
@@ -4163,6 +4167,152 @@ pub struct TriggerReapprovalResponse {
 ///
 /// **Use case**: Called by external systems that detect scope drift and need to
 /// trigger a new approval cycle while preserving audit trail.
+#[cfg(feature = "jwt-auth")]
+async fn trigger_reapproval(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<TriggerReapprovalRequest>,
+) -> Result<(StatusCode, Json<TriggerReapprovalResponse>), ApiErrorResponse> {
+    // Step 1: Check if scope hashes match — if so, return 400 (no reapproval needed)
+    if request.original_scope_hash == request.current_scope_hash {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIngestRequest(
+            "Scope hashes match — no re-approval required".into(),
+        )));
+    }
+
+    // Step 2: Verify intent exists to get workflow_id and tenant_id
+    let intent_head = state
+        .service
+        .get_intent_head(request.intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 2b: Phase 3 P3-S5 tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if intent_head.intent.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
+                rls_claims.tenant_id, intent_head.intent.tenant_id
+            );
+            tracing::warn!("trigger_reapproval: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Step 3: Create new pending approval request using existing primitives
+    // Actor attribution: external-api/trigger-reapproval
+    let actor_id = "external-api/trigger-reapproval";
+
+    let approval_request = ApprovalRequest::new_pending(
+        request.intent_id,
+        request.original_version_from,
+        request.current_version_to,
+        intent_head.intent.workflow_id,
+        intent_head.intent.tenant_id,
+        actor_id,
+        "external-api",
+        "ScopeChange",
+        &request.reapproval_reason,
+    );
+
+    // Step 4: Persist the approval request
+    let created = state
+        .approval_request_repo
+        .create_approval_request(approval_request)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 4b: Cancel any existing Approved approvals for this intent+tenant
+    // Uses cancel_existing_approved_and_audit helper to handle both cancellation and audit.
+    // Only Approved approvals are cancelled; Pending/Rejected/Expired are not affected.
+    let _cancelled_count = cancel_existing_approved_and_audit(
+        &state.approval_request_repo,
+        &state.audit_service,
+        &state.event_publisher,
+        request.intent_id,
+        intent_head.intent.tenant_id,
+        actor_id,
+        request.original_version_from,
+        request.current_version_to,
+        "ScopeChange",
+        created.id,
+    )
+    .await;
+
+    // Step 5: Emit audit event (best-effort)
+    let audit_payload = intent_rebase_types::ApprovalRequestedAuditPayload {
+        approval_request_id: created.id,
+        intent_id: request.intent_id,
+        intent_version_from: request.original_version_from,
+        intent_version_to: request.current_version_to,
+        decision_class: "ScopeChange".to_string(),
+        reapproval_reason: request.reapproval_reason.clone(),
+        original_scope_hash: request.original_scope_hash.clone(),
+        current_scope_hash: request.current_scope_hash.clone(),
+    };
+
+    if let Err(e) = state
+        .audit_service
+        .record_approval_requested(
+            intent_head.intent.tenant_id,
+            actor_id,
+            request.intent_id,
+            audit_payload,
+            get_current_trace_context(),
+        )
+        .await
+    {
+        tracing::warn!("Failed to record ApprovalRequested audit event: {:?}", e);
+    } else {
+        // Phase 2b bounded event publishing: publish after successful audit persistence
+        publish_audit_event(
+            &state.event_publisher,
+            intent_head.intent.tenant_id,
+            "ApprovalRequested",
+            &serde_json::to_value(serde_json::json!({
+                "approval_request_id": created.id,
+                "intent_id": request.intent_id,
+                "intent_version_from": request.original_version_from,
+                "intent_version_to": request.current_version_to,
+                "reason": request.reapproval_reason
+            }))
+            .unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await;
+    }
+
+    // Step 6: Return response
+    Ok((
+        StatusCode::CREATED,
+        Json(TriggerReapprovalResponse {
+            approval_request_id: created.id,
+            intent_id: request.intent_id,
+            intent_version_from: request.original_version_from,
+            intent_version_to: request.current_version_to,
+            status: format!("{:?}", created.status),
+            notification_intent: true, // Advisory only — Phase 3 handles actual delivery
+            reason: request.reapproval_reason,
+        }),
+    ))
+}
+
+/// POST /approval-requests/trigger-reapproval - Trigger re-approval for scope change (non-JWT fallback)
+///
+/// **ADR-07 bounded slice**: Creates a pending approval request when scope hashes differ.
+/// Non-JWT path for backward compatibility when jwt-auth feature is disabled.
+///
+/// **Behavior**:
+/// - If `original_scope_hash != current_scope_hash`: Creates new pending approval request
+/// - If `original_scope_hash == current_scope_hash`: Returns 400 Bad Request (no scope drift)
+/// - If intent not found: Returns 404
+///
+/// **Scope limitations**:
+/// - Does NOT send notifications (Phase 3 external notification system)
+/// - Cancels existing Approved approvals for same tenant+intent (non-Approved statuses unaffected)
+/// - Does NOT trigger rebase or orchestration
+/// - Does NOT claim production readiness
+#[cfg(not(feature = "jwt-auth"))]
 async fn trigger_reapproval(
     State(state): State<AppState>,
     Json(request): Json<TriggerReapprovalRequest>,
@@ -10960,9 +11110,13 @@ mod tests {
             reapproval_reason: "Scope has changed since approval was granted".to_string(),
         };
 
-        let result = trigger_reapproval(State(state.clone()), Json(request))
-            .await
-            .expect("trigger_reapproval should succeed when scope hashes differ");
+        let result = trigger_reapproval(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("trigger_reapproval should succeed when scope hashes differ");
 
         // Verify response
         assert_eq!(result.1.intent_id, intent_id);
@@ -11067,7 +11221,12 @@ mod tests {
             reapproval_reason: "Should not trigger".to_string(),
         };
 
-        let result = trigger_reapproval(State(state), Json(request)).await;
+        let result = trigger_reapproval(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -11088,7 +11247,12 @@ mod tests {
             reapproval_reason: "Test".to_string(),
         };
 
-        let result = trigger_reapproval(State(state), Json(request)).await;
+        let result = trigger_reapproval(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -11219,9 +11383,13 @@ mod tests {
             reapproval_reason: "Scope has changed since approval was granted".to_string(),
         };
 
-        let result = trigger_reapproval(State(state.clone()), Json(request))
-            .await
-            .expect("trigger_reapproval should succeed when scope hashes differ");
+        let result = trigger_reapproval(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("trigger_reapproval should succeed when scope hashes differ");
 
         // Verify a new pending approval was created
         assert_eq!(result.1.status, "Pending");
@@ -11352,9 +11520,13 @@ mod tests {
             reapproval_reason: "Scope has changed since approval was granted".to_string(),
         };
 
-        let result = trigger_reapproval(State(state.clone()), Json(request))
-            .await
-            .expect("trigger_reapproval should succeed when scope hashes differ");
+        let result = trigger_reapproval(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("trigger_reapproval should succeed when scope hashes differ");
 
         // Verify a new pending approval was created
         assert_eq!(result.1.status, "Pending");
@@ -11495,7 +11667,12 @@ mod tests {
             reapproval_reason: "Should not trigger".to_string(),
         };
 
-        let result = trigger_reapproval(State(state.clone()), Json(request)).await;
+        let result = trigger_reapproval(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         assert!(result.is_err());
 
         // Verify error is BAD_REQUEST
@@ -11513,6 +11690,131 @@ mod tests {
             still_approved.status,
             ApprovalRequestStatus::Approved,
             "Existing approved approval should NOT be cancelled when scope hashes match"
+        );
+    }
+
+    // =========================================================================
+    // ADR-07: trigger_reapproval JWT Tenant Mismatch Tests (Phase 3 P3-S5)
+    // =========================================================================
+
+    #[tokio::test]
+    #[cfg(feature = "jwt-auth")]
+    async fn test_trigger_reapproval_rejects_tenant_mismatch() {
+        use intent_rebase_types::{
+            AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
+            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
+            IntentScope, RiskTier, Urgency,
+        };
+
+        let state = create_test_service();
+
+        // Create an intent first (we need it to exist for get_intent_head to work)
+        let workflow_id = Uuid::new_v4();
+
+        let create_request = CreateIntentRequest {
+            tenant_id: None,
+            workflow_id,
+            source_refs: vec![],
+            payload: IntentPayload {
+                objective: IntentObjective {
+                    summary: "Test".to_string(),
+                    success_statement: "Success".to_string(),
+                    domain: "test".to_string(),
+                },
+                scope: IntentScope {
+                    in_scope: vec![],
+                    out_of_scope: vec![],
+                },
+                constraints: IntentConstraints {
+                    functional: vec![],
+                    non_functional: vec![],
+                    policy: vec![],
+                    budget: vec![],
+                    time: vec![],
+                },
+                acceptance_criteria: AcceptanceCriteria {
+                    required: vec![],
+                    optional: vec![],
+                },
+                authority: IntentAuthority {
+                    allowed_actions: vec![],
+                    forbidden_actions: vec![],
+                    approval_requirements: vec![],
+                },
+                preferences: IntentPreferences { tradeoffs: vec![] },
+                references: IntentReferences {
+                    specs: vec![],
+                    tickets: vec![],
+                    repos: vec![],
+                    policies: vec![],
+                },
+                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+                metadata: IntentMetadataV1 {
+                    risk_tier: RiskTier::Low,
+                    urgency: Urgency::Low,
+                    confidence: 1.0,
+                },
+            },
+            created_by: ActorRef {
+                actor_type: "user".to_string(),
+                actor_id: "test".to_string(),
+            },
+            tags: vec![],
+        };
+
+        let intent_id = state
+            .service
+            .create_intent(create_request)
+            .await
+            .unwrap()
+            .intent_id;
+
+        // Get intent head to find the tenant_id (TenantA)
+        let intent_head = state.service.get_intent_head(intent_id).await.unwrap();
+        let tenant_a = intent_head.intent.tenant_id;
+
+        // Create JWT claims for a different tenant (TenantB)
+        let tenant_b = Uuid::new_v4();
+
+        // Call trigger_reapproval with tenant mismatch (JWT has TenantB, intent has TenantA)
+        let request = TriggerReapprovalRequest {
+            intent_id,
+            original_version_from: 1,
+            current_version_to: 2,
+            original_scope_hash: "hash_v1".to_string(),
+            current_scope_hash: "hash_v2".to_string(), // Different hash - would normally succeed
+            reapproval_reason: "Scope has changed since approval was granted".to_string(),
+        };
+
+        let result = trigger_reapproval(
+            State(state.clone()),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Json(request),
+        )
+        .await;
+
+        // Verify the request was rejected with Unauthorized
+        assert!(
+            result.is_err(),
+            "trigger_reapproval should fail on tenant mismatch"
+        );
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "Tenant mismatch should return 401 Unauthorized"
+        );
+
+        // Verify no approval request was created (fail-closed before mutation)
+        let approvals = state
+            .approval_request_repo
+            .list_by_intent(intent_id, tenant_a)
+            .await
+            .unwrap();
+        assert!(
+            approvals.is_empty(),
+            "No approval should be created when tenant mismatch is detected"
         );
     }
 
