@@ -3832,6 +3832,120 @@ async fn expire_approval_request(
 /// Returns 200 with valid=false if latest snapshot is missing (policy not yet computed
 /// for current intent version) - this is NOT a 404, as the approval still exists
 /// but we cannot determine current validity without a latest snapshot.
+/// GET /approval-requests/{id}/revalidate - Check if an approval request is still valid
+///
+/// Phase 1 P1-S5g bounded slice: When `state.rls_pool` is Some AND valid JWT claims
+/// are present, this handler validates that the approval request tenant matches the JWT tenant.
+/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
+#[cfg(feature = "jwt-auth")]
+async fn revalidate_approval_request(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(approval_request_id): Path<Uuid>,
+) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
+    // Step 1: Fetch the approval request
+    let approval_request = state
+        .approval_request_repo
+        .get_approval_request(approval_request_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 1 P1-S5g: Check if RLS path is available (pool exists AND JWT claims present)
+    // Also performs tenant mismatch check
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        // Tenant mismatch rejection: approval request tenant must match JWT tenant
+        if approval_request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match approval request tenant_id ({})",
+                rls_claims.tenant_id, approval_request.tenant_id
+            );
+            tracing::warn!("revalidate_approval_request: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+
+        tracing::debug!(
+            "revalidate_approval_request: RLS path validated for tenant_id={}",
+            rls_claims.tenant_id
+        );
+
+        let _ = rls_pool; // Used implicitly via RLS when repo supports SQL
+    }
+
+    // Step 2: Fetch the approval-basis policy snapshot (snapshot for intent_version_from)
+    let approval_basis_snapshot = state
+        .policy_snapshot_repo
+        .get_by_intent_version(
+            approval_request.intent_id,
+            approval_request.intent_version_from,
+            approval_request.tenant_id,
+        )
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let approval_basis_scope_hash = match approval_basis_snapshot {
+        Some(snapshot) => snapshot.scope_hash,
+        None => {
+            // Approval basis snapshot missing - this is unexpected but return 404
+            return Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
+                approval_request.intent_id,
+            )));
+        }
+    };
+
+    // Step 3: Fetch the latest policy snapshot for this intent
+    let latest_snapshot = state
+        .policy_snapshot_repo
+        .get_latest_by_intent(approval_request.intent_id, approval_request.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 4: Compare scope_hash values
+    let (valid, reason) = match &latest_snapshot {
+        Some(latest) if latest.scope_hash == approval_basis_scope_hash => {
+            // Scope unchanged - approval remains valid
+            (
+                true,
+                "Scope unchanged since approval was granted".to_string(),
+            )
+        }
+        Some(latest) if latest.scope_hash != approval_basis_scope_hash => {
+            // Scope changed - approval no longer valid
+            (
+                false,
+                "Scope has changed since approval was granted".to_string(),
+            )
+        }
+        None => {
+            // No latest snapshot available - cannot determine validity
+            // Return valid=false but with a clear reason (not a 404)
+            (
+                false,
+                "No latest policy snapshot available for comparison".to_string(),
+            )
+        }
+        // Should not reach here, but handle defensively
+        _ => (false, "Unable to determine approval validity".to_string()),
+    };
+
+    let current_scope_hash = latest_snapshot.map(|s| s.scope_hash);
+
+    Ok(Json(ApprovalRevalidationResponse {
+        approval_id: approval_request_id,
+        valid,
+        reason,
+        approval_basis_scope_hash,
+        current_scope_hash,
+        revalidation_required: !valid,
+        intent_id: approval_request.intent_id,
+        approval_basis_version: approval_request.intent_version_from,
+    }))
+}
+
+/// GET /approval-requests/{id}/revalidate - Check if an approval request is still valid (non-JWT fallback)
+///
+/// Phase 2b bounded slice: Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+#[cfg(not(feature = "jwt-auth"))]
 async fn revalidate_approval_request(
     State(state): State<AppState>,
     Path(approval_request_id): Path<Uuid>,
@@ -10452,6 +10566,28 @@ mod tests {
 
     // === Approval Revalidation Handler Tests ===
 
+    /// Helper to call revalidate_approval_request that works in both jwt-auth and non-jwt-auth builds
+    #[cfg(feature = "jwt-auth")]
+    async fn call_revalidate_approval_request(
+        state: AppState,
+        approval_request_id: Uuid,
+    ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
+        revalidate_approval_request(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(approval_request_id),
+        )
+        .await
+    }
+
+    #[cfg(not(feature = "jwt-auth"))]
+    async fn call_revalidate_approval_request(
+        state: AppState,
+        approval_request_id: Uuid,
+    ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
+        revalidate_approval_request(State(state), Path(approval_request_id)).await
+    }
+
     #[tokio::test]
     async fn test_revalidate_approval_request_valid_when_scope_unchanged() {
         use intent_rebase_types::{PolicySnapshot, ScopeDefinition, ScopeType};
@@ -10516,7 +10652,7 @@ mod tests {
             .unwrap();
 
         // Test revalidate - should be valid since scope_hash matches
-        let result = revalidate_approval_request(State(state), Path(approval_id))
+        let result = call_revalidate_approval_request(state, approval_id)
             .await
             .expect("Revalidate should succeed");
 
@@ -10597,7 +10733,7 @@ mod tests {
             .unwrap();
 
         // Test revalidate - should be invalid since scope_hash differs
-        let result = revalidate_approval_request(State(state), Path(approval_id))
+        let result = call_revalidate_approval_request(state, approval_id)
             .await
             .expect("Revalidate should succeed");
 
@@ -10666,7 +10802,7 @@ mod tests {
 
         // Test revalidate - should return valid=true because latest (only) snapshot
         // matches approval basis, meaning no newer policy exists to invalidate the approval
-        let result = revalidate_approval_request(State(state), Path(approval_id))
+        let result = call_revalidate_approval_request(state, approval_id)
             .await
             .expect("Revalidate should succeed when only basis snapshot exists");
 
@@ -10683,7 +10819,7 @@ mod tests {
         let non_existent_id = Uuid::new_v4();
 
         // Test revalidate - should return 404
-        let result = revalidate_approval_request(State(state), Path(non_existent_id)).await;
+        let result = call_revalidate_approval_request(state, non_existent_id).await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -10730,7 +10866,7 @@ mod tests {
             .unwrap();
 
         // Test revalidate - should return 404 because approval basis snapshot doesn't exist
-        let result = revalidate_approval_request(State(state), Path(approval_id)).await;
+        let result = call_revalidate_approval_request(state, approval_id).await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
