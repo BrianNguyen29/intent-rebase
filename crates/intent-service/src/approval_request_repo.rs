@@ -697,6 +697,72 @@ impl SqlxApprovalRequestRepository {
         // Fetch and return the updated request using the transaction
         self.get_approval_request_with_tx(tx, id).await
     }
+
+    /// Mark an approval request as expired within an external RLS-aware transaction.
+    ///
+    /// This method performs an atomic conditional UPDATE using the provided transaction.
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// and committing/rolling back after this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `id` - The approval request ID
+    /// * `expired_by` - Actor ID who expired the request
+    /// * `reason` - Reason for expiry
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the UPDATE affects 0 rows (not pending or not found).
+    pub async fn mark_expired_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+        expired_by: &str,
+        reason: &str,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let now = Utc::now();
+
+        // Atomic conditional UPDATE: only expires if current status is 'pending'
+        let result = sqlx::query(
+            r#"
+            UPDATE approval_requests
+            SET status = 'expired',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE id = $4 AND status = 'pending'
+            "#,
+        )
+        .bind(now)
+        .bind(expired_by)
+        .bind(reason)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("expire approval request: {}", e)))?;
+
+        // If no rows were affected, the request was not in pending status
+        if result.rows_affected() == 0 {
+            // Determine the actual status for the error message
+            let current = self.get_approval_request_with_tx(tx, id).await;
+            match current {
+                Ok(req) => {
+                    return Err(IntentRebaseError::ApprovalRequestNotPending(
+                        id,
+                        format!("{:?}", req.status),
+                    ));
+                }
+                Err(_) => {
+                    return Err(IntentRebaseError::ApprovalRequestNotFound(id));
+                }
+            }
+        }
+
+        self.get_approval_request_with_tx(tx, id).await
+    }
 }
 
 #[async_trait]
