@@ -35,21 +35,31 @@ $$ LANGUAGE plpgsql STABLE;
 
 -- Core intent tables
 ALTER TABLE intents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE intents FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_events FORCE ROW LEVEL SECURITY;
 ALTER TABLE checkpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checkpoints FORCE ROW LEVEL SECURITY;
 ALTER TABLE approval_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approval_requests FORCE ROW LEVEL SECURITY;
 
 -- Graph storage tables
 ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE graph_nodes FORCE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE graph_edges FORCE ROW LEVEL SECURITY;
 
 -- Side effect and compensation tables
 ALTER TABLE side_effects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE side_effects FORCE ROW LEVEL SECURITY;
 ALTER TABLE compensation_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compensation_actions FORCE ROW LEVEL SECURITY;
 ALTER TABLE side_effect_rollback_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE side_effect_rollback_records FORCE ROW LEVEL SECURITY;
 
 -- Policy governance tables
 ALTER TABLE policy_snapshot ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_snapshot FORCE ROW LEVEL SECURITY;
 
 -- =============================================================================
 -- RLS POLICIES FOR TENANT ISOLATION

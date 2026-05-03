@@ -64,6 +64,10 @@ harness = false
 name = "load_test"
 path = "tests/load_test.rs"
 
+[[test]]
+name = "rls_integration"
+path = "tests/rls_integration.rs"
+
 [features]
 default = ["jwt-auth"]
 load-test = []
