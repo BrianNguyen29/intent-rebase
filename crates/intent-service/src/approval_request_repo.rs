@@ -182,6 +182,13 @@ pub trait ApprovalRequestRepository: Send + Sync {
         cancelled_by: &str,
         reason: &str,
     ) -> Result<usize, IntentRebaseError>;
+
+    /// Returns a reference to self if this is a SQL-backed repository.
+    ///
+    /// Used by RLS-aware handlers to downcast from `dyn ApprovalRequestRepository`
+    /// to `SqlxApprovalRequestRepository` for transaction-based operations.
+    /// Returns `None` for in-memory repositories.
+    fn as_sqlx_approval_repo(&self) -> Option<&SqlxApprovalRequestRepository>;
 }
 
 /// In-memory approval request repository for Phase 2b bounded slice testing
@@ -456,6 +463,10 @@ impl ApprovalRequestRepository for InMemoryApprovalRequestRepository {
 
         Ok(count)
     }
+
+    fn as_sqlx_approval_repo(&self) -> Option<&SqlxApprovalRequestRepository> {
+        None
+    }
 }
 
 // =============================================================================
@@ -594,6 +605,97 @@ impl SqlxApprovalRequestRepository {
         }
 
         self.get_approval_request(id).await
+    }
+
+    /// Get an approval request by ID using an external transaction.
+    ///
+    /// This method is used by RLS-wrapped operations where the caller manages
+    /// the transaction lifecycle.
+    pub async fn get_approval_request_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, intent_id, intent_version_from, intent_version_to,
+                workflow_id, tenant_id, requestor_id, requestor_type,
+                decision_class, reason, metadata, status,
+                created_at, updated_at, expires_at,
+                resolved_at, resolved_by, resolution_notes
+            FROM approval_requests
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch approval request: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_request(r),
+            None => Err(IntentRebaseError::ApprovalRequestNotFound(id)),
+        }
+    }
+
+    /// Update the status of an approval request within an external RLS-aware transaction.
+    ///
+    /// This method performs an atomic conditional UPDATE using the provided transaction.
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// and committing/rolling back after this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `id` - The approval request ID
+    /// * `status` - The new status (Approved or Rejected)
+    /// * `resolved_by` - Actor ID who resolved the request
+    /// * `resolution_notes` - Optional notes about the resolution
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the UPDATE affects 0 rows (not pending or not found).
+    pub async fn update_status_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+        status: ApprovalRequestStatus,
+        resolved_by: &str,
+        resolution_notes: Option<&str>,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let status_str = approval_request_status_to_string(&status);
+        let now = Utc::now();
+
+        // Atomic conditional UPDATE: only succeeds if current status is 'pending'
+        let result = sqlx::query(
+            r#"
+            UPDATE approval_requests
+            SET status = $1, updated_at = $2, resolved_at = $2, resolved_by = $3, resolution_notes = $4
+            WHERE id = $5 AND status = 'pending'
+            "#,
+        )
+        .bind(status_str)
+        .bind(now)
+        .bind(resolved_by)
+        .bind(resolution_notes)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update approval request status: {}", e))
+        })?;
+
+        // If no rows were affected, the request was not in pending status
+        if result.rows_affected() == 0 {
+            return Err(IntentRebaseError::ApprovalRequestNotPending(
+                id,
+                "atomic update failed - request not in pending status".to_string(),
+            ));
+        }
+
+        // Fetch and return the updated request using the transaction
+        self.get_approval_request_with_tx(tx, id).await
     }
 }
 
@@ -909,6 +1011,14 @@ impl ApprovalRequestRepository for SqlxApprovalRequestRepository {
         })?;
 
         Ok(result.rows_affected() as usize)
+    }
+
+    /// Returns a reference to self if this is a SQL-backed repository.
+    ///
+    /// Used by RLS-aware handlers to downcast from `dyn ApprovalRequestRepository`
+    /// to `SqlxApprovalRequestRepository` for transaction-based operations.
+    fn as_sqlx_approval_repo(&self) -> Option<&SqlxApprovalRequestRepository> {
+        Some(self)
     }
 }
 
