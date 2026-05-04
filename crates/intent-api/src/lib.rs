@@ -1441,6 +1441,112 @@ async fn list_edges_from_node(
         .map_err(ApiErrorResponse)
 }
 
+#[cfg(feature = "jwt-auth")]
+async fn rebase_preview(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    Json(request): Json<DiffRequest>,
+) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+    let start = std::time::Instant::now();
+
+    // Phase 5.1: Fetch intent head to get tenant_id for JWT validation
+    let intent_head = match state.service.get_intent_head(intent_id).await {
+        Ok(h) => h,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if intent_head.intent.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
+                rls_claims.tenant_id, intent_head.intent.tenant_id
+            );
+            tracing::warn!("rebase_preview: tenant mismatch rejection");
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Always use graph-integrated preview - the service handles unavailability gracefully
+    let plan_result = state
+        .service
+        .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
+        .await;
+
+    let plan = match plan_result {
+        Ok(p) => p,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Get version info for response context
+    let from_version = match state
+        .service
+        .get_version(intent_id, request.from_version)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+    let to_version = match state
+        .service
+        .get_version(intent_id, request.to_version)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            record_rebase_preview_request("error");
+            return Err(ApiErrorResponse(e));
+        }
+    };
+
+    // Record latency with graph_size label (use "unknown" if affected_items unavailable)
+    let graph_size = match &plan.affected_items.status {
+        intent_rebase_types::AffectedItemsStatus::Available => {
+            let total = plan.affected_items.affected_artifacts.len()
+                + plan.affected_items.affected_approvals.len()
+                + plan.affected_items.side_effects.len();
+            if total < 10 {
+                "small"
+            } else if total < 100 {
+                "medium"
+            } else {
+                "large"
+            }
+        }
+        _ => "unknown",
+    };
+
+    let duration = start.elapsed().as_secs_f64();
+    record_rebase_preview_duration(duration, graph_size);
+    record_rebase_preview_request("success");
+
+    Ok(Json(RebasePreviewResponse {
+        intent_id,
+        from_version,
+        to_version,
+        decision_class: plan.decision_class,
+        rationale: plan.rationale,
+        section_decisions: plan.section_decisions,
+        affected_items: plan.affected_items,
+        manual_review_recommended: plan.manual_review_recommended,
+        risk_tier: plan.risk_tier,
+        risk_level: plan.risk_level,
+        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
+    }))
+}
+
+#[cfg(not(feature = "jwt-auth"))]
 async fn rebase_preview(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -2482,6 +2588,121 @@ async fn rebase_simulation(
 ///
 /// **This endpoint is READ-ONLY** - it only simulates compensation outcomes
 /// using mock executors. It does not execute real compensation actions.
+#[cfg(feature = "jwt-auth")]
+async fn compensation_simulation_run(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<CompensationSimulationRequest>,
+) -> Result<Json<compensation_service::SimulationReport>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("compensation_simulation_run: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Step 1: Get intent head to verify intent exists and obtain workflow_id
+    let intent_head = state
+        .service
+        .get_intent_head(request.intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 1b: Validate version bounds — both versions must be >= 1
+    if request.from_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("from_version ({}) must be >= 1", request.from_version),
+        )));
+    }
+    if request.to_version < 1 {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!("to_version ({}) must be >= 1", request.to_version),
+        )));
+    }
+
+    // Step 1c: Validate version ordering — from_version must be less than to_version
+    if request.from_version >= request.to_version {
+        return Err(ApiErrorResponse(IntentRebaseError::InvalidIntentVersion(
+            format!(
+                "from_version ({}) must be less than to_version ({})",
+                request.from_version, request.to_version
+            ),
+        )));
+    }
+
+    // Step 2: Fetch side effects for this intent and tenant
+    let all_side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(request.intent_id, request.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Step 2b: Filter by side_effect_ids if provided
+    let side_effects = if let Some(ref ids) = request.side_effect_ids {
+        all_side_effects
+            .into_iter()
+            .filter(|se| ids.contains(&se.id))
+            .collect()
+    } else {
+        all_side_effects
+    };
+
+    // Step 3: Construct RebaseContext using intent head's workflow_id
+    let rebase_context = compensation_service::RebaseContext::new(
+        request.intent_id,
+        request.from_version,
+        request.to_version,
+        intent_head.intent.workflow_id,
+    );
+
+    // Step 4: Create simulator config based on mode query param
+    let sim_config = match request.mode.as_deref() {
+        Some("stochastic") => {
+            if let Some(seed) = request.seed {
+                compensation_service::SimulationConfig::stochastic_seed(seed)
+            } else {
+                // Stochastic mode without seed uses system entropy
+                compensation_service::SimulationConfig::stochastic_seed(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0),
+                )
+            }
+        }
+        Some("deterministic") | None => {
+            // Default to deterministic mode
+            compensation_service::SimulationConfig::deterministic()
+        }
+        Some(invalid_mode) => {
+            // Invalid mode defaults to deterministic (safe fallback)
+            tracing::warn!(
+                "Invalid simulation mode '{}', defaulting to deterministic",
+                invalid_mode
+            );
+            compensation_service::SimulationConfig::deterministic()
+        }
+    };
+
+    // Step 5: Create simulator and run simulation
+    let simulator = compensation_service::CompensationSimulator::with_config(sim_config);
+    let report = simulator
+        .simulate_side_effects(&side_effects, &rebase_context, request.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    Ok(Json(report))
+}
+
+/// **Mode behavior:**
+/// - `deterministic` (default): Valid strategy+feasibility combos always succeed
+/// - `stochastic`: Outcomes are probabilistic based on effect class success rates
+#[cfg(not(feature = "jwt-auth"))]
 async fn compensation_simulation_run(
     State(state): State<AppState>,
     Json(request): Json<CompensationSimulationRequest>,
@@ -4189,7 +4410,7 @@ async fn trigger_reapproval(
 
     // Step 2b: Phase 3 P3-S5 tenant mismatch rejection when JWT present
     // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
+    if let Some(ref rls_claims) = optional_rls_claims {
         if intent_head.intent.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
@@ -4200,10 +4421,10 @@ async fn trigger_reapproval(
         }
     }
 
-    // Step 3: Create new pending approval request using existing primitives
     // Actor attribution: external-api/trigger-reapproval
     let actor_id = "external-api/trigger-reapproval";
 
+    // Step 3: Create new pending approval request using existing primitives
     let approval_request = ApprovalRequest::new_pending(
         request.intent_id,
         request.original_version_from,
@@ -4216,33 +4437,133 @@ async fn trigger_reapproval(
         &request.reapproval_reason,
     );
 
-    // Step 4: Persist the approval request
-    let created = state
-        .approval_request_repo
-        .create_approval_request(approval_request)
-        .await
-        .map_err(ApiErrorResponse)?;
+    // Step 3b: P1-S5f/P1-S5i RLS transaction wrapping for create+cancel
+    // Check if RLS path is available (pool exists AND JWT claims present AND SQL repo)
+    let created_approval;
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        if let Some(sql_repo) = state.approval_request_repo.as_sqlx_approval_repo() {
+            // Use RLS-aware transaction for create+cancel
+            let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
+            let mut tx = match tx_result {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "trigger_reapproval: failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
 
-    // Step 4b: Cancel any existing Approved approvals for this intent+tenant
-    // Uses cancel_existing_approved_and_audit helper to handle both cancellation and audit.
-    // Only Approved approvals are cancelled; Pending/Rejected/Expired are not affected.
-    let _cancelled_count = cancel_existing_approved_and_audit(
-        &state.approval_request_repo,
-        &state.audit_service,
-        &state.event_publisher,
-        request.intent_id,
-        intent_head.intent.tenant_id,
-        actor_id,
-        request.original_version_from,
-        request.current_version_to,
-        "ScopeChange",
-        created.id,
-    )
-    .await;
+            // Create approval request within transaction
+            match sql_repo
+                .create_approval_request_with_tx(&mut tx, &approval_request)
+                .await
+            {
+                Ok(created) => created_approval = created,
+                Err(e) => {
+                    tracing::warn!("trigger_reapproval: RLS create failed, rolling back: {}", e);
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "trigger_reapproval: RLS approval creation failed: {}",
+                        e
+                    ))));
+                }
+            };
 
-    // Step 5: Emit audit event (best-effort)
+            // Cancel existing Approved approvals within the same transaction
+            let cancellation_reason = format!(
+                "Superseded by new approval request {} due to scope change",
+                created_approval.id
+            );
+            match sql_repo
+                .cancel_approved_by_intent_with_tx(
+                    &mut tx,
+                    request.intent_id,
+                    intent_head.intent.tenant_id,
+                    actor_id,
+                    &cancellation_reason,
+                )
+                .await
+            {
+                Ok(_cancelled_count) => {
+                    tracing::debug!(
+                        "trigger_reapproval: cancelled {} existing approved approvals within RLS tx",
+                        _cancelled_count
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("trigger_reapproval: RLS cancel failed, rolling back: {}", e);
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "trigger_reapproval: RLS cancellation failed: {}",
+                        e
+                    ))));
+                }
+            }
+
+            // Commit the RLS transaction
+            if let Err(e) = tx.commit().await {
+                return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                    "trigger_reapproval: failed to commit RLS transaction: {}",
+                    e
+                ))));
+            }
+
+            tracing::debug!(
+                "trigger_reapproval: RLS path success for tenant_id={}",
+                rls_claims.tenant_id
+            );
+        } else {
+            // Fallback: non-SQL repo, use bare pool create+cancel
+            tracing::debug!(
+                "trigger_reapproval: rls_pool set but repo doesn't support SQL, falling back to bare pool"
+            );
+            created_approval = state
+                .approval_request_repo
+                .create_approval_request(approval_request)
+                .await
+                .map_err(ApiErrorResponse)?;
+
+            // Cancel any existing Approved approvals for this intent+tenant
+            let _cancelled_count = cancel_existing_approved_and_audit(
+                &state.approval_request_repo,
+                &state.audit_service,
+                &state.event_publisher,
+                request.intent_id,
+                intent_head.intent.tenant_id,
+                actor_id,
+                request.original_version_from,
+                request.current_version_to,
+                "ScopeChange",
+                created_approval.id,
+            )
+            .await;
+        }
+    } else {
+        // Non-RLS path: use bare pool operations
+        created_approval = state
+            .approval_request_repo
+            .create_approval_request(approval_request)
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        // Cancel any existing Approved approvals for this intent+tenant
+        let _cancelled_count = cancel_existing_approved_and_audit(
+            &state.approval_request_repo,
+            &state.audit_service,
+            &state.event_publisher,
+            request.intent_id,
+            intent_head.intent.tenant_id,
+            actor_id,
+            request.original_version_from,
+            request.current_version_to,
+            "ScopeChange",
+            created_approval.id,
+        )
+        .await;
+    }
+
+    // Step 4: Emit audit event (best-effort, post-commit)
     let audit_payload = intent_rebase_types::ApprovalRequestedAuditPayload {
-        approval_request_id: created.id,
+        approval_request_id: created_approval.id,
         intent_id: request.intent_id,
         intent_version_from: request.original_version_from,
         intent_version_to: request.current_version_to,
@@ -4271,7 +4592,7 @@ async fn trigger_reapproval(
             intent_head.intent.tenant_id,
             "ApprovalRequested",
             &serde_json::to_value(serde_json::json!({
-                "approval_request_id": created.id,
+                "approval_request_id": created_approval.id,
                 "intent_id": request.intent_id,
                 "intent_version_from": request.original_version_from,
                 "intent_version_to": request.current_version_to,
@@ -4282,15 +4603,15 @@ async fn trigger_reapproval(
         .await;
     }
 
-    // Step 6: Return response
+    // Step 5: Return response
     Ok((
         StatusCode::CREATED,
         Json(TriggerReapprovalResponse {
-            approval_request_id: created.id,
+            approval_request_id: created_approval.id,
             intent_id: request.intent_id,
             intent_version_from: request.original_version_from,
             intent_version_to: request.current_version_to,
-            status: format!("{:?}", created.status),
+            status: format!("{:?}", created_approval.status),
             notification_intent: true, // Advisory only — Phase 3 handles actual delivery
             reason: request.reapproval_reason,
         }),
@@ -4926,6 +5247,41 @@ pub struct ListSideEffectsResponse {
 ///
 /// This endpoint provides the query API for compensation planning input.
 /// The actual compensation planning/execution is not included in this slice.
+#[cfg(feature = "jwt-auth")]
+async fn list_side_effects(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListSideEffectsQuery>,
+) -> Result<Json<ListSideEffectsResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_side_effects: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = side_effects.len();
+
+    Ok(Json(ListSideEffectsResponse {
+        side_effects,
+        total,
+    }))
+}
+
+/// GET /intents/{intent_id}/side-effects - List side effects for an intent (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_side_effects(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -5028,6 +5384,138 @@ pub struct OrchestrationDashboardResponse {
 /// **No batch execution or orchestration engine claims:**
 /// This endpoint only aggregates existing persisted data. It does not execute
 /// any compensation actions, trigger workflows, or involve background processing.
+#[cfg(feature = "jwt-auth")]
+async fn get_orchestration_dashboard(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationDashboardQuery>,
+) -> Result<Json<OrchestrationDashboardResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_orchestration_dashboard: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Fetch side effects for this intent
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Fetch compensation actions for this intent
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Compute side effect summary
+    let side_effect_summary = {
+        let total = side_effects.len();
+        let irreversible_count = side_effects
+            .iter()
+            .filter(|se| se.effect_class == compensation_service::SideEffectClass::S4Irreversible)
+            .count();
+        let auto_compensatable_count = side_effects
+            .iter()
+            .filter(|se| se.is_auto_compensatable())
+            .count();
+        SideEffectSummary {
+            total,
+            irreversible_count,
+            auto_compensatable_count,
+        }
+    };
+
+    // Compute compensation action summary
+    let compensation_action_summary = {
+        let total = compensation_actions.len();
+
+        // Count by status
+        let mut status_counts = CompensationActionStatusCounts::default();
+        for action in &compensation_actions {
+            match action.status {
+                compensation_service::CompensationStatus::Pending => status_counts.pending += 1,
+                compensation_service::CompensationStatus::Approved => status_counts.approved += 1,
+                compensation_service::CompensationStatus::Executed => status_counts.executed += 1,
+                compensation_service::CompensationStatus::Failed => status_counts.failed += 1,
+                compensation_service::CompensationStatus::Waived => status_counts.waived += 1,
+            }
+        }
+
+        // Count retryable failed (Failed + retryable error code)
+        let retryable_failed_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                if action.status != compensation_service::CompensationStatus::Failed {
+                    return false;
+                }
+                // Check if error is retryable
+                if let Some(ref result) = action.execution_result_payload {
+                    if let Some(ref error_code) = result.error_code {
+                        let classification =
+                            compensation_service::CompensationAction::classify_error_code(
+                                error_code,
+                            );
+                        return classification.retryable
+                            == compensation_service::RetryableErrorClass::Retryable;
+                    }
+                }
+                false
+            })
+            .count();
+
+        // Count DLQ candidates (Failed + exhausted OR non-retryable)
+        let dlq_candidate_count = compensation_actions
+            .iter()
+            .filter(|action| action.is_dlq_candidate())
+            .count();
+
+        // Count reapprovable (Failed + retryable error + remaining budget)
+        let reapprovable_count = compensation_actions
+            .iter()
+            .filter(|action| action.can_be_reapproved())
+            .count();
+
+        // Count service-executable (Approved + service-executable: Rollback+Automatic or CounterAction+SemiAutomatic)
+        let auto_executable_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                action.status == compensation_service::CompensationStatus::Approved
+                    && action.is_service_executable()
+            })
+            .count();
+
+        CompensationActionSummary {
+            total,
+            status_counts,
+            retryable_failed_count,
+            dlq_candidate_count,
+            reapprovable_count,
+            auto_executable_count,
+        }
+    };
+
+    Ok(Json(OrchestrationDashboardResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        side_effects,
+        side_effect_summary,
+        compensation_actions,
+        compensation_action_summary,
+    }))
+}
+
+/// GET /intents/{intent_id}/orchestration-dashboard - Get orchestration dashboard for an intent
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_orchestration_dashboard(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -5177,6 +5665,43 @@ pub struct ListCompensationActionsResponse {
 /// - The `compensation_planning` field in rebase-preview/apply responses shows
 ///   planner-generated skeleton/preview data (not stored records)
 /// - Full compensation execution (executor trigger) is Batch 1+ scope
+#[cfg(feature = "jwt-auth")]
+async fn list_compensation_actions(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListCompensationActionsQuery>,
+) -> Result<Json<ListCompensationActionsResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_compensation_actions: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = actions.len();
+
+    Ok(Json(ListCompensationActionsResponse {
+        compensation_actions: actions,
+        total,
+    }))
+}
+
+/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+/// approval workflows, or any mutation. It only queries existing compensation
+/// action records.
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_compensation_actions(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -5322,8 +5847,73 @@ async fn approve_compensation_action(
             tracing::warn!("approve_compensation_action: tenant mismatch rejection");
             return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
         }
+
+        // Phase 3.1: Try RLS path if pool + SQL repo available
+        if let (Some(rls_pool), Some(sql_repo)) = (
+            &state.rls_pool,
+            state.compensation_action_service.repo().as_sqlx_repo(),
+        ) {
+            // Validate transition: must be Pending to approve
+            let validation = action
+                .status
+                .can_transition_to(compensation_service::CompensationStatus::Approved);
+            if !validation.allowed {
+                return Err(ApiErrorResponse(
+                    IntentRebaseError::InvalidCompensationActionTransition {
+                        from_status: format!("{:?}", action.status),
+                        to_status: "Approved".into(),
+                        reason: validation.reason.unwrap_or_default(),
+                    },
+                ));
+            }
+
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let result = sql_repo
+                .update_status_with_tx(
+                    &mut tx,
+                    action_id,
+                    compensation_service::CompensationStatus::Approved,
+                    body.lock_version,
+                    body.approved_by.as_deref(),
+                    None,
+                )
+                .await;
+
+            match result {
+                Ok(updated) => {
+                    if let Err(e) = tx.commit().await {
+                        return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                            "failed to commit RLS transaction: {}",
+                            e
+                        ))));
+                    }
+                    tracing::debug!(
+                        "approve_compensation_action: RLS path success for tenant_id={}",
+                        rls_claims.tenant_id
+                    );
+                    return Ok(Json(CompensationActionResponse::from(updated)));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "approve_compensation_action: RLS update failed, rolling back"
+                    );
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
     }
 
+    // Non-RLS path (fallback)
     let updated = state
         .compensation_action_service
         .approve_action(action_id, body.lock_version, body.approved_by.as_deref())
@@ -5392,8 +5982,103 @@ async fn waive_compensation_action(
             tracing::warn!("waive_compensation_action: tenant mismatch rejection");
             return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
         }
+
+        // Phase 3.1: Try RLS path if pool + SQL repo available
+        if let (Some(rls_pool), Some(sql_repo)) = (
+            &state.rls_pool,
+            state.compensation_action_service.repo().as_sqlx_repo(),
+        ) {
+            // Validate transition: must be Pending to waive
+            let validation = action
+                .status
+                .can_transition_to(compensation_service::CompensationStatus::Waived);
+            if !validation.allowed {
+                return Err(ApiErrorResponse(
+                    IntentRebaseError::InvalidCompensationActionTransition {
+                        from_status: format!("{:?}", action.status),
+                        to_status: "Waived".into(),
+                        reason: validation.reason.unwrap_or_default(),
+                    },
+                ));
+            }
+
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let result = sql_repo
+                .update_status_with_tx(
+                    &mut tx,
+                    action_id,
+                    compensation_service::CompensationStatus::Waived,
+                    body.lock_version,
+                    None,
+                    body.waived_by.as_deref(),
+                )
+                .await;
+
+            match result {
+                Ok(updated) => {
+                    // Phase 3.2: Create rollback record in same transaction if SQL rollback repo available
+                    // Best-effort (fail-open) - rollback record creation failure does not fail the waive
+                    if let Some(rollback_record_repo) =
+                        state.compensation_action_service.rollback_record_repo()
+                    {
+                        if let Some(sql_rollback_repo) = rollback_record_repo.as_sqlx_repo() {
+                            let rollback_record =
+                                compensation_service::SideEffectRollbackRecord::waived(
+                                    action.tenant_id,
+                                    action.id,
+                                    action.side_effect_id,
+                                    action.intent_id,
+                                    "Compensation action waived",
+                                    body.waived_by.as_deref(),
+                                );
+                            if let Err(e) = sql_rollback_repo
+                                .create_with_tx(&mut tx, rollback_record)
+                                .await
+                            {
+                                tracing::warn!(
+                                    "Failed to create rollback record for waived action {}: {:?}",
+                                    action_id,
+                                    e
+                                );
+                                // Best-effort: continue even if rollback record creation fails
+                            }
+                        }
+                    }
+
+                    if let Err(e) = tx.commit().await {
+                        return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                            "failed to commit RLS transaction: {}",
+                            e
+                        ))));
+                    }
+
+                    tracing::debug!(
+                        "waive_compensation_action: RLS path success for tenant_id={}",
+                        rls_claims.tenant_id
+                    );
+                    return Ok(Json(CompensationActionResponse::from(updated)));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "waive_compensation_action: RLS update failed, rolling back"
+                    );
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
     }
 
+    // Non-RLS path (fallback)
     let updated = state
         .compensation_action_service
         .waive_action(action_id, body.lock_version, body.waived_by.as_deref())
@@ -5439,6 +6124,10 @@ async fn waive_compensation_action(
 /// - Returns 409 Conflict if action is not Approved
 ///
 /// **This slice:** No retry logic; Failed actions remain Failed.
+///
+/// **Phase 3.1 note:** The execute handler uses the service method for execution
+/// because the executor requires access to `side_effect_repo` which is not exposed
+/// from the service. The RLS transaction path is used for approve/waive/reapprove.
 #[cfg(feature = "jwt-auth")]
 async fn execute_compensation_action(
     State(state): State<AppState>,
@@ -5466,6 +6155,7 @@ async fn execute_compensation_action(
         }
     }
 
+    // Non-RLS path: use service method for full execution with executor
     let updated = state
         .compensation_action_service
         .execute_action(action_id, body.executed_by.as_deref())
@@ -5555,6 +6245,42 @@ pub struct ListDlqCandidatesQuery {
 ///
 /// **This endpoint is READ-ONLY** - it only queries existing data.
 /// **Manual intervention is the only path forward for DLQ candidates.**
+#[cfg(feature = "jwt-auth")]
+async fn list_dlq_candidates(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<ListDlqCandidatesQuery>,
+) -> Result<Json<ListDlqCandidatesResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_dlq_candidates: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let dlq_candidates = state
+        .compensation_action_service
+        .list_dlq_candidates(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = dlq_candidates.len();
+
+    Ok(Json(ListDlqCandidatesResponse {
+        dlq_candidates,
+        total,
+    }))
+}
+
+/// **No DLQ table:** This is a read-only derived query from existing data.
+/// DLQ candidates cannot be reapproved - they represent failures that have
+/// exhausted automated retry possibilities.
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_dlq_candidates(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<ListDlqCandidatesQuery>,
@@ -5598,6 +6324,48 @@ pub struct ListBatchCandidatesQuery {
 /// execute any actions, or involve background workers.
 ///
 /// **Tenant-scoped:** Results are filtered by the provided tenant_id.
+#[cfg(feature = "jwt-auth")]
+async fn list_batch_candidates(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<ListBatchCandidatesQuery>,
+) -> Result<Json<ListBatchCandidatesResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_batch_candidates: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let batch = state
+        .compensation_action_service
+        .list_batch_candidates(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let summary = BatchCandidatesSummary {
+        pending_approval_count: batch.pending_approval_candidates.len(),
+        approved_service_executable_count: batch.approved_service_executable_candidates.len(),
+        retryable_failed_count: batch.retryable_failed_candidates.len(),
+        dlq_count: batch.dlq_candidates.len(),
+    };
+
+    Ok(Json(ListBatchCandidatesResponse {
+        pending_approval_candidates: batch.pending_approval_candidates,
+        approved_service_executable_candidates: batch.approved_service_executable_candidates,
+        retryable_failed_candidates: batch.retryable_failed_candidates,
+        dlq_candidates: batch.dlq_candidates,
+        summary,
+    }))
+}
+
+/// GET /compensation-actions/batch-candidates - List batch candidates across all categories
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_batch_candidates(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<ListBatchCandidatesQuery>,
@@ -5669,8 +6437,83 @@ async fn reapprove_compensation_action(
             tracing::warn!("reapprove_compensation_action: tenant mismatch rejection");
             return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
         }
+
+        // Phase 3.1: Try RLS path if pool + SQL repo available
+        if let (Some(rls_pool), Some(sql_repo)) = (
+            &state.rls_pool,
+            state.compensation_action_service.repo().as_sqlx_repo(),
+        ) {
+            // Policy gate 1: Must be in Failed status
+            if action.status != compensation_service::CompensationStatus::Failed {
+                return Err(ApiErrorResponse(
+                    IntentRebaseError::InvalidCompensationActionTransition {
+                        from_status: format!("{:?}", action.status),
+                        to_status: "Pending".into(),
+                        reason: "Only Failed actions can be reapproved".to_string(),
+                    },
+                ));
+            }
+
+            // Policy gate 2: Check retry budget
+            if action.attempt_count >= action.max_retries {
+                return Err(ApiErrorResponse(
+                    IntentRebaseError::CompensationActionNotReapprovable(
+                        action_id,
+                        format!(
+                            "Retry budget exhausted: {} attempts made (max={})",
+                            action.attempt_count, action.max_retries
+                        ),
+                    ),
+                ));
+            }
+
+            // Policy gate 3: Error must be retryable
+            if let Some(denial_reason) = action.reapproval_denial_reason() {
+                return Err(ApiErrorResponse(
+                    IntentRebaseError::CompensationActionNotReapprovable(action_id, denial_reason),
+                ));
+            }
+
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let result = sql_repo
+                .reapprove_with_tx(&mut tx, action_id, body.lock_version)
+                .await;
+
+            match result {
+                Ok(updated) => {
+                    if let Err(e) = tx.commit().await {
+                        return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                            "failed to commit RLS transaction: {}",
+                            e
+                        ))));
+                    }
+                    tracing::debug!(
+                        "reapprove_compensation_action: RLS path success for tenant_id={}",
+                        rls_claims.tenant_id
+                    );
+                    return Ok(Json(CompensationActionResponse::from(updated)));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "reapprove_compensation_action: RLS update failed, rolling back"
+                    );
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        }
     }
 
+    // Non-RLS path (fallback)
     let updated = state
         .compensation_action_service
         .reapprove_action(action_id, body.lock_version)
@@ -5754,6 +6597,77 @@ pub struct FeasibilityCounts {
 /// | S4Irreversible | Escalation | NotPossible | Escalation required |
 ///
 /// **Returns:** All generated compensation actions (S0 produces no action).
+#[cfg(feature = "jwt-auth")]
+async fn plan_compensation_actions(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<PlanCompensationActionsRequest>,
+) -> Result<Json<PlanCompensationActionsResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("plan_compensation_actions: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let rebase_context = compensation_service::RebaseContext::new(
+        request.intent_id,
+        request.from_version,
+        request.to_version,
+        request.workflow_id,
+    );
+
+    let actions = state
+        .compensation_action_service
+        .plan_compensation_actions(request.intent_id, request.tenant_id, rebase_context)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Count by feasibility
+    let mut feasibility_counts = FeasibilityCounts {
+        automatic: 0,
+        semi_automatic: 0,
+        manual_only: 0,
+        not_possible: 0,
+    };
+
+    for action in &actions {
+        match action.feasibility {
+            compensation_service::CompensationFeasibility::Automatic => {
+                feasibility_counts.automatic += 1
+            }
+            compensation_service::CompensationFeasibility::SemiAutomatic => {
+                feasibility_counts.semi_automatic += 1
+            }
+            compensation_service::CompensationFeasibility::ManualOnly => {
+                feasibility_counts.manual_only += 1
+            }
+            compensation_service::CompensationFeasibility::NotPossible => {
+                feasibility_counts.not_possible += 1
+            }
+        }
+    }
+
+    let total = actions.len();
+    let action_responses: Vec<CompensationActionResponse> = actions
+        .into_iter()
+        .map(CompensationActionResponse::from)
+        .collect();
+
+    Ok(Json(PlanCompensationActionsResponse {
+        actions: action_responses,
+        total,
+        feasibility_counts,
+    }))
+}
+
+/// POST /compensation-actions/plan - Plan compensation actions from side effects (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn plan_compensation_actions(
     State(state): State<AppState>,
     Json(request): Json<PlanCompensationActionsRequest>,
@@ -6070,6 +6984,43 @@ async fn create_orchestration_run(
 ///
 /// Phase 3 Batch 1 (bounded single-shot HTTP orchestration slice):
 /// Returns the run including its current status, counts, and per-item results.
+#[cfg(feature = "jwt-auth")]
+async fn get_orchestration_run(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(run_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationRunQuery>,
+) -> Result<Json<OrchestrationRunResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_orchestration_run: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let run = state
+        .orchestration_runtime
+        .get_run(run_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Verify tenant ownership (pre-existing check, kept for non-JWT path)
+    if run.tenant_id != query.tenant_id {
+        return Err(ApiErrorResponse(
+            IntentRebaseError::OrchestrationRunNotFound(run_id),
+        ));
+    }
+
+    Ok(Json(OrchestrationRunResponse::from(run)))
+}
+
+/// GET /compensation-actions/runs/{run_id} - Get an orchestration run by ID
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_orchestration_run(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
@@ -6366,6 +7317,38 @@ fn format_error_severity(e: &compensation_service::ErrorSeverity) -> String {
 /// - Individual action evaluations with gate outcome and reason
 /// - Summary counts by gate status
 /// - Policy/risk metadata useful for UI display
+#[cfg(feature = "jwt-auth")]
+async fn get_compensation_policy_gate(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<CompensationPolicyGateQuery>,
+) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_compensation_policy_gate: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_policy_gates(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = CompensationPolicyGateResponse::from(result);
+    response.tenant_id = query.tenant_id;
+
+    Ok(Json(response))
+}
+
+/// GET /compensation-actions/policy-gate - Tenant-scoped policy gate evaluation
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_compensation_policy_gate(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<CompensationPolicyGateQuery>,
@@ -6402,6 +7385,40 @@ async fn get_compensation_policy_gate(
 /// - Individual action evaluations with gate outcome and reason
 /// - Summary counts by gate status
 /// - Policy/risk metadata useful for UI display
+#[cfg(feature = "jwt-auth")]
+async fn get_intent_compensation_policy_gate(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<IntentCompensationPolicyGateQuery>,
+) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_intent_compensation_policy_gate: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_policy_gates_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = CompensationPolicyGateResponse::from(result);
+    response.tenant_id = query.tenant_id;
+    response.intent_id = Some(intent_id);
+
+    Ok(Json(response))
+}
+
+/// GET /intents/{intent_id}/compensation-policy-gate - Intent-scoped policy gate evaluation
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_intent_compensation_policy_gate(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -6562,6 +7579,38 @@ fn format_coordination_status(status: &ServiceCoordinationStatus) -> String {
 ///
 /// **Derivation:** Coordination status is derived from existing CompensationAction fields
 /// at query time. No new orchestration engine is queried.
+#[cfg(feature = "jwt-auth")]
+async fn get_orchestration_coordination(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_orchestration_coordination: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
+    response.tenant_id = query.tenant_id;
+
+    Ok(Json(response))
+}
+
+/// GET /compensation-actions/orchestration-coordination - Tenant-scoped orchestration coordination status
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_orchestration_coordination(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationCoordinationQuery>,
@@ -6598,6 +7647,40 @@ async fn get_orchestration_coordination(
 ///
 /// **Derivation:** Coordination status is derived from existing CompensationAction fields
 /// at query time. No new orchestration engine is queried.
+#[cfg(feature = "jwt-auth")]
+async fn get_intent_orchestration_coordination(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<IntentOrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_intent_orchestration_coordination: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
+    response.tenant_id = query.tenant_id;
+    response.intent_id = Some(intent_id);
+
+    Ok(Json(response))
+}
+
+/// GET /intents/{intent_id}/orchestration-coordination - Intent-scoped orchestration coordination status
+#[cfg(not(feature = "jwt-auth"))]
 async fn get_intent_orchestration_coordination(
     State(state): State<AppState>,
     Path(intent_id): Path<Uuid>,
@@ -6787,6 +7870,11 @@ async fn orchestration_dry_run(
 /// - Only Pending actions can be approved
 /// - Uses optimistic locking via lock_version
 ///
+/// **RLS wiring (Phase 4.1):** Per-item RLS transactions when rls_pool is available,
+/// preserving per-item partial-success semantics. Each action is processed in its own
+/// RLS transaction. If one action fails (concurrency conflict, etc.), other actions
+/// still proceed in their own transactions.
+///
 /// **No background worker or queue claiming:**
 /// This is a direct service method that processes actions sequentially.
 #[cfg(feature = "jwt-auth")]
@@ -6799,7 +7887,8 @@ async fn batch_approve_compensation_actions(
     // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
     // Fail-closed if ANY action has a different tenant
     if let Some(rls_claims) = optional_rls_claims {
-        // Fetch all actions to validate tenant ownership
+        // Pre-validate: track not_found items but don't fail on them
+        let mut not_found = Vec::new();
         for action_id in &request.action_ids {
             match state
                 .compensation_action_service
@@ -6820,54 +7909,183 @@ async fn batch_approve_compensation_actions(
                     }
                 }
                 Err(IntentRebaseError::CompensationActionNotFound(_)) => {
-                    // Action not found - batch_approve will handle this as not_found
-                    continue;
+                    not_found.push(*action_id);
                 }
                 Err(e) => {
                     return Err(ApiErrorResponse(e));
                 }
             }
         }
-        // All actions validated - use JWT's tenant_id for the batch operation
-        let result = state
-            .compensation_action_service
-            .batch_approve(
-                rls_claims.tenant_id,
-                request.action_ids,
-                request.initiated_by.as_deref(),
-            )
-            .await
-            .map_err(ApiErrorResponse)?;
 
-        let outcomes = result
-            .outcomes
-            .into_iter()
-            .map(|o| {
-                let (result, error) = match &o.result {
-                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                    Err(e) => (None, Some(e.clone())),
-                };
-                BatchItemOutcomeResponse {
-                    action_id: o.action_id,
-                    success: o.success,
-                    result,
-                    error,
+        // RLS path: per-item transactions preserving partial-success semantics
+        let mut outcomes = Vec::new();
+        let total = request.action_ids.len();
+        let mut succeeded = 0;
+        let mut failed = 0;
+
+        for action_id in request.action_ids {
+            // Fetch action - if not found, add to not_found and continue
+            let action = match state
+                .compensation_action_service
+                .get_action(action_id)
+                .await
+            {
+                Ok(a) => a,
+                Err(IntentRebaseError::CompensationActionNotFound(_)) => {
+                    not_found.push(action_id);
+                    failed += 1;
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Action not found".to_string()),
+                    });
+                    continue;
                 }
-            })
-            .collect();
+                Err(e) => {
+                    failed += 1;
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id,
+                        success: false,
+                        result: None,
+                        error: Some(e.to_string()),
+                    });
+                    continue;
+                }
+            };
 
-        let response = BatchOrchestrationResponse {
+            // Validate transition: must be Pending to approve
+            let validation = action
+                .status
+                .can_transition_to(compensation_service::CompensationStatus::Approved);
+            if !validation.allowed {
+                failed += 1;
+                outcomes.push(BatchItemOutcomeResponse {
+                    action_id,
+                    success: false,
+                    result: None,
+                    error: Some(format!(
+                        "Invalid transition: {:?} -> Approved ({})",
+                        action.status,
+                        validation.reason.unwrap_or_default()
+                    )),
+                });
+                continue;
+            }
+
+            // Try RLS path if pool + SQL repo available
+            if let (Some(rls_pool), Some(sql_repo)) = (
+                &state.rls_pool,
+                state.compensation_action_service.repo().as_sqlx_repo(),
+            ) {
+                let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(format!("failed to begin RLS transaction: {}", e)),
+                        });
+                        continue;
+                    }
+                };
+
+                let result = sql_repo
+                    .update_status_with_tx(
+                        &mut tx,
+                        action_id,
+                        compensation_service::CompensationStatus::Approved,
+                        action.lock_version,
+                        request.initiated_by.as_deref(),
+                        None,
+                    )
+                    .await;
+
+                match result {
+                    Ok(updated) => {
+                        if let Err(e) = tx.commit().await {
+                            failed += 1;
+                            outcomes.push(BatchItemOutcomeResponse {
+                                action_id,
+                                success: false,
+                                result: None,
+                                error: Some(format!("failed to commit: {}", e)),
+                            });
+                            continue;
+                        }
+                        tracing::debug!(
+                            "batch_approve_compensation_actions: RLS success for action {}",
+                            action_id
+                        );
+                        succeeded += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: true,
+                            result: Some(CompensationActionResponse::from(updated)),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        // Transaction auto-rollbacks on drop, just record failure
+                        tracing::error!(
+                            error = %e,
+                            "batch_approve_compensation_actions: RLS update failed for action {}",
+                            action_id
+                        );
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            } else {
+                // Fallback to non-RLS service method
+                match state
+                    .compensation_action_service
+                    .approve_action(
+                        action_id,
+                        action.lock_version,
+                        request.initiated_by.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(updated) => {
+                        succeeded += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: true,
+                            result: Some(CompensationActionResponse::from(updated)),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+
+        return Ok(Json(BatchOrchestrationResponse {
             outcomes,
-            not_found: result.not_found,
+            not_found: not_found.clone(),
             summary: BatchOrchestrationSummaryResponse {
-                total: result.summary.total,
-                succeeded: result.summary.succeeded,
-                failed: result.summary.failed,
-                not_found: result.summary.not_found,
+                total,
+                succeeded,
+                failed,
+                not_found: not_found.len(),
             },
-        };
-
-        return Ok(Json(response));
+        }));
     }
 
     // Non-JWT path (backward compatible): use query param tenant_id
@@ -6975,6 +8193,11 @@ async fn batch_approve_compensation_actions(
 /// - Action must be in Failed status
 /// - Action must have remaining retry budget
 /// - Error code must be retryable
+///
+/// **RLS wiring (Phase 4.1):** Per-item RLS transactions when rls_pool is available,
+/// preserving per-item partial-success semantics. Each action is processed in its own
+/// RLS transaction. If one action fails (concurrency conflict, invalid transition, etc.),
+/// other actions still proceed in their own transactions.
 #[cfg(feature = "jwt-auth")]
 async fn batch_reapprove_compensation_actions(
     State(state): State<AppState>,
@@ -6985,7 +8208,8 @@ async fn batch_reapprove_compensation_actions(
     // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
     // Fail-closed if ANY action has a different tenant
     if let Some(rls_claims) = optional_rls_claims {
-        // Fetch all actions to validate tenant ownership
+        // Pre-validate: track not_found items but don't fail on them
+        let mut not_found = Vec::new();
         for action_id in &request.action_ids {
             match state
                 .compensation_action_service
@@ -7006,50 +8230,170 @@ async fn batch_reapprove_compensation_actions(
                     }
                 }
                 Err(IntentRebaseError::CompensationActionNotFound(_)) => {
-                    // Action not found - batch_reapprove will handle this as not_found
-                    continue;
+                    not_found.push(*action_id);
                 }
                 Err(e) => {
                     return Err(ApiErrorResponse(e));
                 }
             }
         }
-        // All actions validated - use JWT's tenant_id for the batch operation
-        let result = state
-            .compensation_action_service
-            .batch_reapprove(rls_claims.tenant_id, request.action_ids)
-            .await
-            .map_err(ApiErrorResponse)?;
 
-        let outcomes = result
-            .outcomes
-            .into_iter()
-            .map(|o| {
-                let (result, error) = match &o.result {
-                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                    Err(e) => (None, Some(e.clone())),
-                };
-                BatchItemOutcomeResponse {
-                    action_id: o.action_id,
-                    success: o.success,
-                    result,
-                    error,
+        // RLS path: per-item transactions preserving partial-success semantics
+        let mut outcomes = Vec::new();
+        let total = request.action_ids.len();
+        let mut succeeded = 0;
+        let mut failed = 0;
+
+        for action_id in request.action_ids {
+            // Fetch action - if not found, add to not_found and continue
+            let action = match state
+                .compensation_action_service
+                .get_action(action_id)
+                .await
+            {
+                Ok(a) => a,
+                Err(IntentRebaseError::CompensationActionNotFound(_)) => {
+                    not_found.push(action_id);
+                    failed += 1;
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Action not found".to_string()),
+                    });
+                    continue;
                 }
-            })
-            .collect();
+                Err(e) => {
+                    failed += 1;
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id,
+                        success: false,
+                        result: None,
+                        error: Some(e.to_string()),
+                    });
+                    continue;
+                }
+            };
 
-        let response = BatchOrchestrationResponse {
+            // Policy gate: Action must be in Failed status to be reapprovable
+            // This is validated by reapprove_with_tx SQL query (status = 'failed' check)
+            // But we can fail fast if not in Failed status
+            if action.status != compensation_service::CompensationStatus::Failed {
+                failed += 1;
+                outcomes.push(BatchItemOutcomeResponse {
+                    action_id,
+                    success: false,
+                    result: None,
+                    error: Some(format!(
+                        "Invalid transition: {:?} -> Pending (Only Failed actions can be reapproved)",
+                        action.status
+                    )),
+                });
+                continue;
+            }
+
+            // Try RLS path if pool + SQL repo available
+            if let (Some(rls_pool), Some(sql_repo)) = (
+                &state.rls_pool,
+                state.compensation_action_service.repo().as_sqlx_repo(),
+            ) {
+                let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(format!("failed to begin RLS transaction: {}", e)),
+                        });
+                        continue;
+                    }
+                };
+
+                let result = sql_repo
+                    .reapprove_with_tx(&mut tx, action_id, action.lock_version)
+                    .await;
+
+                match result {
+                    Ok(updated) => {
+                        if let Err(e) = tx.commit().await {
+                            failed += 1;
+                            outcomes.push(BatchItemOutcomeResponse {
+                                action_id,
+                                success: false,
+                                result: None,
+                                error: Some(format!("failed to commit: {}", e)),
+                            });
+                            continue;
+                        }
+                        tracing::debug!(
+                            "batch_reapprove_compensation_actions: RLS success for action {}",
+                            action_id
+                        );
+                        succeeded += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: true,
+                            result: Some(CompensationActionResponse::from(updated)),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        // Transaction auto-rollbacks on drop, just record failure
+                        tracing::error!(
+                            error = %e,
+                            "batch_reapprove_compensation_actions: RLS update failed for action {}",
+                            action_id
+                        );
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            } else {
+                // Fallback to non-RLS service method
+                match state
+                    .compensation_action_service
+                    .reapprove_action(action_id, action.lock_version)
+                    .await
+                {
+                    Ok(updated) => {
+                        succeeded += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: true,
+                            result: Some(CompensationActionResponse::from(updated)),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+
+        return Ok(Json(BatchOrchestrationResponse {
             outcomes,
-            not_found: result.not_found,
+            not_found: not_found.clone(),
             summary: BatchOrchestrationSummaryResponse {
-                total: result.summary.total,
-                succeeded: result.summary.succeeded,
-                failed: result.summary.failed,
-                not_found: result.summary.not_found,
+                total,
+                succeeded,
+                failed,
+                not_found: not_found.len(),
             },
-        };
-
-        return Ok(Json(response));
+        }));
     }
 
     // Non-JWT path (backward compatible): use query param tenant_id
@@ -7146,6 +8490,12 @@ async fn batch_reapprove_compensation_actions(
 /// **Bounded partial-success semantics:** Same as batch_approve.
 ///
 /// **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+///
+/// **Phase 4.1 gap (documented):** Unlike batch_approve and batch_reapprove, this handler
+/// CANNOT be RLS-wired per-item because the executor requires access to `side_effect_repo`
+/// which is private to the service. The execute path must use the service's execute_action
+/// method which internally accesses side_effect_repo. This is the same limitation as the
+/// single-item execute handler (see execute_compensation_action docstring).
 #[cfg(feature = "jwt-auth")]
 async fn batch_execute_compensation_actions(
     State(state): State<AppState>,
@@ -7361,6 +8711,137 @@ pub struct ArtifactIngestResponse {
 /// ledger (capture-on-write groundwork).
 ///
 /// This is the primary path for artifact-producing operations to record side effects.
+#[cfg(feature = "jwt-auth")]
+async fn ingest_artifact(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<ArtifactIngestRequest>,
+) -> Result<(StatusCode, Json<ArtifactIngestResponse>), ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("ingest_artifact: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Phase 1: Input validation - validate request before processing
+    validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
+
+    // Extract side effect context before consuming request for side effect recording
+    // after successful graph ingest. This preserves the context for the compensation
+    // ledger write even though graph_service.ingest_artifact consumes the request.
+    let side_effect_context = request.side_effect_context.clone();
+
+    // Delegate artifact ingest to graph_service - this handles prevalidation of
+    // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
+    // This avoids duplicating the core artifact ingest logic in intent-api.
+    let graph_request = intent_rebase_types::ArtifactIngestRequest {
+        tenant_id: request.tenant_id,
+        workflow_id: request.workflow_id,
+        external_ref: request.external_ref,
+        label: request.label,
+        depends_on_intent_versions: request.depends_on_intent_versions,
+        properties: request.properties,
+        side_effect_context: None, // Consumed above for post-ingest recording
+    };
+
+    let ingest_result = state
+        .graph_service
+        .ingest_artifact(graph_request)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Phase 3 Batch 1 (groundwork): Optionally record side effect if context provided
+    let mut side_effect_recorded = false;
+    let mut side_effect_id = None;
+
+    if let Some(ref context) = side_effect_context {
+        let effect_class = match context.effect_class {
+            Some(intent_rebase_types::SideEffectClass::S0PureRead) => {
+                compensation_service::SideEffectClass::S0PureRead
+            }
+            Some(intent_rebase_types::SideEffectClass::S1InternalReversible) => {
+                compensation_service::SideEffectClass::S1InternalReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S2ExternalReversible) | None => {
+                compensation_service::SideEffectClass::S2ExternalReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S3ExternalPartiallyReversible) => {
+                compensation_service::SideEffectClass::S3ExternalPartiallyReversible
+            }
+            Some(intent_rebase_types::SideEffectClass::S4Irreversible) => {
+                compensation_service::SideEffectClass::S4Irreversible
+            }
+        };
+
+        let recorded = if let Some(ref idempotency_key) = context.idempotency_key {
+            state
+                .side_effect_service
+                .record_side_effect_with_idempotency(
+                    request.tenant_id,
+                    context.source_intent_id,
+                    context.source_intent_version,
+                    effect_class,
+                    &context.effect_type,
+                    &context.target,
+                    idempotency_key,
+                )
+                .await
+        } else {
+            state
+                .side_effect_service
+                .record_side_effect(
+                    request.tenant_id,
+                    context.source_intent_id,
+                    context.source_intent_version,
+                    effect_class,
+                    &context.effect_type,
+                    &context.target,
+                )
+                .await
+        };
+
+        match recorded {
+            Ok(effect) => {
+                side_effect_recorded = true;
+                side_effect_id = Some(effect.id);
+                tracing::debug!(
+                    "Recorded side effect {} for artifact {} (intent_id={}, version={})",
+                    effect.id,
+                    ingest_result.node.id,
+                    context.source_intent_id,
+                    context.source_intent_version
+                );
+            }
+            Err(e) => {
+                // Log but don't fail the artifact ingest if side effect recording fails
+                tracing::warn!(
+                    "Failed to record side effect for artifact {}: {:?}",
+                    ingest_result.node.id,
+                    e
+                );
+            }
+        }
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ArtifactIngestResponse {
+            node: ingest_result.node,
+            edges: ingest_result.edges,
+            side_effect_recorded,
+            side_effect_id,
+        }),
+    ))
+}
+
+/// POST /v1/graph/artifacts - Ingest an artifact with optional side effect capture (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn ingest_artifact(
     State(state): State<AppState>,
     Json(request): Json<ArtifactIngestRequest>,
@@ -7829,6 +9310,64 @@ impl From<forensic_service::ForensicBundle> for ForensicBundleSummary {
 /// - Returns bundle summaries with metadata
 ///
 /// **Tenant scoping:** Results are filtered by the provided `tenant_id`.
+#[cfg(feature = "jwt-auth")]
+async fn list_forensic_bundles(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<ListForensicBundlesQuery>,
+) -> Result<Json<ListForensicBundlesResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_forensic_bundles: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let bundles = state
+        .forensic_bundle_service
+        .list_bundles(query.tenant_id, query.limit)
+        .await
+        .map_err(|e| match e {
+            forensic_service::ForensicBundleServiceError::NotFound(_) => {
+                ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))
+            }
+            forensic_service::ForensicBundleServiceError::Collection(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("collection failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Generation(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("generation failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Storage(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("storage failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Repository(e) => ApiErrorResponse(e),
+            forensic_service::ForensicBundleServiceError::Serialization(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("serialization failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => ApiErrorResponse(
+                IntentRebaseError::Internal(format!("invalid time range: {}", e)),
+            ),
+        })?;
+
+    let total = bundles.len();
+    let summaries: Vec<ForensicBundleSummary> = bundles
+        .into_iter()
+        .map(ForensicBundleSummary::from)
+        .collect();
+
+    Ok(Json(ListForensicBundlesResponse {
+        bundles: summaries,
+        total,
+    }))
+}
+
+/// GET /forensic/bundles - List forensic bundles for a tenant (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn list_forensic_bundles(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<ListForensicBundlesQuery>,
@@ -8248,6 +9787,44 @@ pub struct ForensicExportContentsSummary {
 /// - Bundle retrieval (downloading stored bundles)
 /// - Bundle replay (reproducing state from a bundle)
 /// - Hash chain integrity verification (requires generated bundle)
+#[cfg(feature = "jwt-auth")]
+async fn verify_forensic_bundle(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<ForensicVerificationRequest>,
+) -> Result<Json<ForensicVerificationResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("verify_forensic_bundle: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let service_request = forensic_service::ForensicVerificationRequest {
+        tenant_id: request.tenant_id,
+        intent_id: request.intent_id,
+        time_range: forensic_service::VerificationTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
+    };
+
+    let response = state.forensic_service.verify(service_request).await;
+
+    Ok(Json(ForensicVerificationResponse::from(response)))
+}
+
+/// POST /forensic/verify - Verify forensic bundle feasibility (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn verify_forensic_bundle(
     State(state): State<AppState>,
     Json(request): Json<ForensicVerificationRequest>,
@@ -8294,6 +9871,68 @@ async fn verify_forensic_bundle(
 /// - Async job orchestration for bundle generation
 /// - Real replay engine (state reproduction from bundle)
 /// - Hash chain integrity verification
+#[cfg(feature = "jwt-auth")]
+async fn export_forensic_archive(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Json(request): Json<ForensicExportRequest>,
+) -> Result<Json<ForensicExportResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if request.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                rls_claims.tenant_id, request.tenant_id
+            );
+            tracing::warn!("export_forensic_archive: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let service_request = forensic_service::ForensicExportRequest {
+        tenant_id: request.tenant_id,
+        intent_id: request.intent_id,
+        time_range: forensic_service::ExportTimeRange {
+            start: request.time_range.start,
+            end: request.time_range.end,
+        },
+        purpose: request.purpose,
+        include_artifacts: request.include_artifacts,
+        include_audit_events: request.include_audit_events,
+        include_policy_snapshots: request.include_policy_snapshots,
+    };
+
+    let response = state
+        .forensic_archive_generator
+        .generate(service_request)
+        .await;
+
+    Ok(Json(ForensicExportResponse {
+        archive_id: response.archive_id,
+        generated_at: response.generated_at,
+        status: response.status,
+        status_reason: response.status_reason,
+        tenant_id: response.tenant_id,
+        intent_id: response.intent_id,
+        time_range: ForensicExportTimeRange {
+            start: response.time_range.start,
+            end: response.time_range.end,
+        },
+        purpose: response.purpose,
+        contents: ForensicExportContentsSummary {
+            intent_versions: response.contents.intent_versions,
+            artifacts: response.contents.artifacts,
+            audit_events: response.contents.audit_events,
+            policy_snapshots: response.contents.policy_snapshots,
+        },
+        item_count: response.item_count,
+        content_type: response.content_type,
+        archive_size_bytes: response.archive_size_bytes,
+    }))
+}
+
+/// POST /forensic/export - Generate forensic archive metadata (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 async fn export_forensic_archive(
     State(state): State<AppState>,
     Json(request): Json<ForensicExportRequest>,
@@ -9377,6 +11016,31 @@ mod tests {
 
     // === Rebase Preview Handler Tests ===
 
+    /// Helper to call rebase_preview that works in both jwt-auth and non-jwt-auth builds
+    #[cfg(feature = "jwt-auth")]
+    async fn call_rebase_preview(
+        state: AppState,
+        intent_id: Uuid,
+        request: DiffRequest,
+    ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+        rebase_preview(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            Json(request),
+        )
+        .await
+    }
+
+    #[cfg(not(feature = "jwt-auth"))]
+    async fn call_rebase_preview(
+        state: AppState,
+        intent_id: Uuid,
+        request: DiffRequest,
+    ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
+        rebase_preview(State(state), Path(intent_id), Json(request)).await
+    }
+
     #[tokio::test]
     async fn test_rebase_preview_success() {
         use intent_rebase_types::{
@@ -9475,7 +11139,7 @@ mod tests {
             from_version: 1,
             to_version: 2,
         };
-        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+        let result = call_rebase_preview(state, intent_id, preview_request)
             .await
             .expect("Rebase preview should succeed");
 
@@ -9561,7 +11225,7 @@ mod tests {
             from_version: 2,
             to_version: 1,
         };
-        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request)).await;
+        let result = call_rebase_preview(state, intent_id, preview_request).await;
         // result is Err(ApiErrorResponse) - verify it maps to BAD_REQUEST
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
@@ -9774,7 +11438,7 @@ mod tests {
             from_version: 1,
             to_version: 2,
         };
-        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+        let result = call_rebase_preview(state, intent_id, preview_request)
             .await
             .expect("Rebase preview should succeed even with graph");
 
@@ -9940,7 +11604,7 @@ mod tests {
             from_version: 1,
             to_version: 2,
         };
-        let result = rebase_preview(State(state), Path(intent_id), Json(preview_request))
+        let result = call_rebase_preview(state, intent_id, preview_request)
             .await
             .expect("Rebase preview should succeed even when graph node not found");
 
@@ -12139,9 +13803,13 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request))
-            .await
-            .expect("Artifact ingest should succeed");
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Artifact ingest should succeed");
 
         assert_eq!(result.0, StatusCode::CREATED);
         assert_eq!(result.1.node.label, "Test Artifact");
@@ -12167,7 +13835,12 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12192,7 +13865,12 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12217,7 +13895,12 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12242,7 +13925,12 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12267,7 +13955,12 @@ mod tests {
             side_effect_context: None,
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12695,7 +14388,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12727,7 +14425,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12759,7 +14462,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12791,7 +14499,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12889,7 +14602,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -12921,7 +14639,12 @@ mod tests {
             }),
         };
 
-        let result = ingest_artifact(State(state), Json(request)).await;
+        let result = ingest_artifact(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -13058,9 +14781,13 @@ mod tests {
             }),
         };
 
-        let result_a = ingest_artifact(State(state.clone()), Json(artifact_request_a))
-            .await
-            .expect("Tenant A artifact ingest should succeed");
+        let result_a = ingest_artifact(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(artifact_request_a),
+        )
+        .await
+        .expect("Tenant A artifact ingest should succeed");
         // ingest_artifact returns (StatusCode, Json<ArtifactIngestResponse>)
         assert!(result_a.1.side_effect_recorded);
         let side_effect_id_a = result_a
@@ -13184,12 +14911,20 @@ mod tests {
         };
 
         // Both ingests should succeed
-        let result_a = ingest_artifact(State(state.clone()), Json(artifact_request_a))
-            .await
-            .expect("Tenant A artifact ingest should succeed");
-        let result_b = ingest_artifact(State(state.clone()), Json(artifact_request_b))
-            .await
-            .expect("Tenant B artifact ingest should succeed");
+        let result_a = ingest_artifact(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(artifact_request_a),
+        )
+        .await
+        .expect("Tenant A artifact ingest should succeed");
+        let result_b = ingest_artifact(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(artifact_request_b),
+        )
+        .await
+        .expect("Tenant B artifact ingest should succeed");
 
         // ingest_artifact returns (StatusCode, Json<ArtifactIngestResponse>)
         assert!(result_a.1.side_effect_recorded);
@@ -13508,10 +15243,14 @@ mod tests {
         let tenant_id = Uuid::new_v4();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return even with no data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return even with no data");
 
         assert_eq!(result.intent_id, intent_id);
         assert_eq!(result.tenant_id, tenant_id);
@@ -13556,10 +15295,14 @@ mod tests {
             .unwrap();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return data");
 
         assert_eq!(result.side_effects.len(), 2);
         assert_eq!(result.side_effect_summary.total, 2);
@@ -13652,10 +15395,14 @@ mod tests {
             .unwrap();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return data");
 
         assert_eq!(result.compensation_actions.len(), 3);
         assert_eq!(result.compensation_action_summary.total, 3);
@@ -13716,10 +15463,14 @@ mod tests {
             .unwrap();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return data");
 
         assert_eq!(result.compensation_action_summary.dlq_candidate_count, 1);
         // Non-retryable error + exhausted budget = DLQ candidate, not reapprovable
@@ -13776,10 +15527,14 @@ mod tests {
             .unwrap();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return data");
 
         // Exhausted budget makes it a DLQ candidate even with retryable error
         assert_eq!(result.compensation_action_summary.dlq_candidate_count, 1);
@@ -13827,10 +15582,14 @@ mod tests {
             .unwrap();
 
         let query = OrchestrationDashboardQuery { tenant_id };
-        let result =
-            get_orchestration_dashboard(State(state), Path(intent_id), axum::extract::Query(query))
-                .await
-                .expect("Dashboard should return data");
+        let result = get_orchestration_dashboard(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(intent_id),
+            axum::extract::Query(query),
+        )
+        .await
+        .expect("Dashboard should return data");
 
         // Verify response structure
         assert_eq!(result.intent_id, intent_id);
@@ -13891,6 +15650,7 @@ mod tests {
         };
         let result1 = get_orchestration_dashboard(
             State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
             Path(intent_id),
             axum::extract::Query(query1),
         )
@@ -13906,6 +15666,7 @@ mod tests {
         };
         let result2 = get_orchestration_dashboard(
             State(state),
+            auth::OptionalRlsTenantClaims(None),
             Path(intent_id),
             axum::extract::Query(query2),
         )
@@ -13937,9 +15698,13 @@ mod tests {
             include_policy_snapshots: true,
         };
 
-        let result = verify_forensic_bundle(State(state), Json(request))
-            .await
-            .expect("Should return verification result");
+        let result = verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
 
         assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
         assert_eq!(result.tenant_id, tenant_id);
@@ -13992,9 +15757,13 @@ mod tests {
             include_policy_snapshots: false,
         };
 
-        let result = verify_forensic_bundle(State(state), Json(request))
-            .await
-            .expect("Should return verification result");
+        let result = verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
 
         // Verify serialization works
         let json = serde_json::to_string(&result.0).expect("Should serialize");
@@ -14026,9 +15795,13 @@ mod tests {
             include_policy_snapshots: false,
         };
 
-        let result = verify_forensic_bundle(State(state), Json(request))
-            .await
-            .expect("Should return verification result");
+        let result = verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
 
         // In-memory service returns ready by default
         assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
@@ -14107,9 +15880,13 @@ mod tests {
             include_policy_snapshots: true,
         };
 
-        let result = export_forensic_archive(State(state), Json(request))
-            .await
-            .expect("Should return export result");
+        let result = export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
 
         assert_eq!(result.status, forensic_service::ExportStatus::Generated);
         assert_eq!(result.tenant_id, tenant_id);
@@ -14165,9 +15942,13 @@ mod tests {
             include_policy_snapshots: false,
         };
 
-        let result = export_forensic_archive(State(state), Json(request))
-            .await
-            .expect("Should return export result");
+        let result = export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
 
         // Verify serialization works
         let json = serde_json::to_string(&result.0).expect("Should serialize");
@@ -14198,9 +15979,13 @@ mod tests {
             include_policy_snapshots: true,
         };
 
-        let result = export_forensic_archive(State(state), Json(request))
-            .await
-            .expect("Should return export result");
+        let result = export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
 
         // Status reason should be truthful about in-memory generation
         assert!(
@@ -14276,9 +16061,13 @@ mod tests {
             include_policy_snapshots: true,
         };
 
-        let result = export_forensic_archive(State(state), Json(request))
-            .await
-            .expect("Should return export result");
+        let result = export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
 
         // Zero counts should produce zero items
         assert_eq!(result.item_count, 0);
@@ -14299,6 +16088,7 @@ mod tests {
 
         let result = list_forensic_bundles(
             State(state),
+            auth::OptionalRlsTenantClaims(None),
             axum::extract::Query(ListForensicBundlesQuery {
                 tenant_id,
                 limit: None,
@@ -14339,6 +16129,7 @@ mod tests {
         // Now list bundles
         let result = list_forensic_bundles(
             State(state),
+            auth::OptionalRlsTenantClaims(None),
             axum::extract::Query(ListForensicBundlesQuery {
                 tenant_id,
                 limit: None,
@@ -14386,6 +16177,7 @@ mod tests {
         // List with limit=1
         let result = list_forensic_bundles(
             State(state),
+            auth::OptionalRlsTenantClaims(None),
             axum::extract::Query(ListForensicBundlesQuery {
                 tenant_id,
                 limit: Some(1),
@@ -14499,6 +16291,7 @@ mod tests {
         // List bundles for tenant1 - should only see tenant1's bundle
         let result1 = list_forensic_bundles(
             State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
             axum::extract::Query(ListForensicBundlesQuery {
                 tenant_id: tenant1,
                 limit: None,
@@ -14513,6 +16306,7 @@ mod tests {
         // List bundles for tenant2 - should only see tenant2's bundle
         let result2 = list_forensic_bundles(
             State(state),
+            auth::OptionalRlsTenantClaims(None),
             axum::extract::Query(ListForensicBundlesQuery {
                 tenant_id: tenant2,
                 limit: None,
@@ -15409,9 +17203,13 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state), Json(request))
-            .await
-            .expect("Should run simulation");
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should run simulation");
 
         // With no side effects, report should have 0 total actions
         assert_eq!(result.total_actions, 0);
@@ -15538,9 +17336,13 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state), Json(request))
-            .await
-            .expect("Should run simulation");
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should run simulation");
 
         // Report should have 1 action and it should succeed (S1 + Automatic)
         assert_eq!(result.total_actions, 1);
@@ -15654,7 +17456,12 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state), Json(request)).await;
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
 
         // Should return error for invalid version ordering
         let err_response = result.unwrap_err();
@@ -15767,7 +17574,12 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state.clone()), Json(request)).await;
+        let result = compensation_simulation_run(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
 
         // Should return error for invalid version bounds
         let err_response = result.unwrap_err();
@@ -15785,7 +17597,12 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state.clone()), Json(request)).await;
+        let result = compensation_simulation_run(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
 
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
@@ -15802,7 +17619,12 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state), Json(request)).await;
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
 
         let err_response = result.unwrap_err();
         let response = err_response.into_response();
@@ -15825,7 +17647,12 @@ mod tests {
             side_effect_ids: None,
         };
 
-        let result = compensation_simulation_run(State(state), Json(request)).await;
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await;
 
         // Should return error for non-existent intent
         let err_response = result.unwrap_err();
@@ -15965,9 +17792,13 @@ mod tests {
             side_effect_ids: Some(vec![se1.id]), // Only simulate se1
         };
 
-        let result = compensation_simulation_run(State(state), Json(request))
-            .await
-            .expect("Should run simulation");
+        let result = compensation_simulation_run(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should run simulation");
 
         // Report should only have 1 action (se1 only)
         assert_eq!(result.total_actions, 1);

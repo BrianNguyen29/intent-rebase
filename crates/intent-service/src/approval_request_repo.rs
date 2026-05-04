@@ -698,6 +698,126 @@ impl SqlxApprovalRequestRepository {
         self.get_approval_request_with_tx(tx, id).await
     }
 
+    /// Create a new approval request within an external RLS-aware transaction.
+    ///
+    /// This method inserts a new approval request using the provided transaction.
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// and committing/rolling back after this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `request` - The approval request to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the INSERT fails.
+    pub async fn create_approval_request_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: &ApprovalRequest,
+    ) -> Result<ApprovalRequest, IntentRebaseError> {
+        let metadata_json = serde_json::to_value(&request.metadata).map_err(|e| {
+            IntentRebaseError::SerializationError(format!("approval request metadata: {}", e))
+        })?;
+        let status_str = approval_request_status_to_string(&request.status);
+
+        sqlx::query(
+            r#"
+            INSERT INTO approval_requests (
+                id, intent_id, intent_version_from, intent_version_to,
+                workflow_id, tenant_id, requestor_id, requestor_type,
+                decision_class, reason, metadata, status,
+                created_at, updated_at, expires_at,
+                resolved_at, resolved_by, resolution_notes
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            "#,
+        )
+        .bind(request.id)
+        .bind(request.intent_id)
+        .bind(request.intent_version_from)
+        .bind(request.intent_version_to)
+        .bind(request.workflow_id)
+        .bind(request.tenant_id)
+        .bind(&request.requestor_id)
+        .bind(&request.requestor_type)
+        .bind(&request.decision_class)
+        .bind(&request.reason)
+        .bind(metadata_json)
+        .bind(status_str)
+        .bind(request.created_at)
+        .bind(request.updated_at)
+        .bind(request.expires_at)
+        .bind(request.resolved_at)
+        .bind(&request.resolved_by)
+        .bind(&request.resolution_notes)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert approval request: {}", e)))?;
+
+        Ok(request.clone())
+    }
+
+    /// Cancel all Approved approval requests for an intent within an external RLS-aware transaction.
+    ///
+    /// This method performs a bulk UPDATE using the provided transaction.
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// and committing/rolling back after this call.
+    ///
+    /// Only cancels approvals that are in Approved status — pending, rejected, expired,
+    /// or already cancelled requests are not affected.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `intent_id` - The intent ID
+    /// * `tenant_id` - The tenant ID
+    /// * `cancelled_by` - Actor ID who cancelled the approvals
+    /// * `reason` - Reason for cancellation
+    ///
+    /// Returns the number of cancelled approval requests.
+    pub async fn cancel_approved_by_intent_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        let now = Utc::now();
+
+        // Bulk update: cancel all approved approval requests for this intent+tenant
+        let result = sqlx::query(
+            r#"
+            UPDATE approval_requests
+            SET status = 'cancelled',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE intent_id = $4 AND tenant_id = $5 AND status = 'approved'
+            "#,
+        )
+        .bind(now)
+        .bind(cancelled_by)
+        .bind(reason)
+        .bind(intent_id)
+        .bind(tenant_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "cancel approved approval requests by intent: {}",
+                e
+            ))
+        })?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
     /// Mark an approval request as expired within an external RLS-aware transaction.
     ///
     /// This method performs an atomic conditional UPDATE using the provided transaction.

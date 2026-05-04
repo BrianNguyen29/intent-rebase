@@ -105,6 +105,22 @@ impl CompensationActionService {
         self
     }
 
+    /// Returns a reference to the underlying repository.
+    ///
+    /// This is used by RLS-aware handlers to access the SQL repository directly
+    /// for transaction-wrapped operations.
+    pub fn repo(&self) -> &Arc<dyn CompensationActionRepository> {
+        &self.repo
+    }
+
+    /// Returns a reference to the underlying rollback record repository if configured.
+    ///
+    /// This is used by RLS-aware handlers to access the SQL rollback repository directly
+    /// for transaction-wrapped rollback record creation.
+    pub fn rollback_record_repo(&self) -> Option<&Arc<dyn RollbackRecordRepository>> {
+        self.rollback_record_repo.as_ref()
+    }
+
     /// Plan and generate compensation actions for an intent's side effects.
     ///
     /// Phase 3 (bounded planner slice): Uses actual SideEffect data to generate

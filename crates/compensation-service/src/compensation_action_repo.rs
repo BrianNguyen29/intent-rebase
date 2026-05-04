@@ -873,6 +873,182 @@ impl CompensationActionRepository for SqlxCompensationActionRepository {
 }
 
 // =============================================================================
+// Transaction helper methods for RLS-aware operations
+// =============================================================================
+
+impl SqlxCompensationActionRepository {
+    /// Update compensation action status with an external transaction.
+    /// Used by approve/waive handlers that manage their own transaction context.
+    pub async fn update_status_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        action_id: Uuid,
+        new_status: CompensationStatus,
+        lock_version: i32,
+        approved_by: Option<&str>,
+        waived_by: Option<&str>,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        let status_str = compensation_status_to_string(new_status);
+        let now = chrono::Utc::now();
+
+        let (approved_at, waived_at, executed_at, failed_at) = match new_status {
+            CompensationStatus::Approved => (Some(now), None, None, None),
+            CompensationStatus::Waived => (None, Some(now), None, None),
+            CompensationStatus::Executed => (None, None, Some(now), None),
+            CompensationStatus::Failed => (None, None, None, Some(now)),
+            _ => (None, None, None, None),
+        };
+
+        let row = sqlx::query(
+            r#"
+            UPDATE compensation_actions
+            SET status = $2,
+                lock_version = lock_version + 1,
+                approved_at = COALESCE($3, approved_at),
+                waived_at = COALESCE($4, waived_at),
+                executed_at = COALESCE($5, executed_at),
+                failed_at = COALESCE($6, failed_at),
+                approved_by = COALESCE($7, approved_by),
+                waived_by = COALESCE($8, waived_by)
+            WHERE id = $1 AND lock_version = $9
+            RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
+                execution_result_payload, feasibility, strategy_type,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
+            "#,
+        )
+        .bind(action_id)
+        .bind(status_str)
+        .bind(approved_at)
+        .bind(waived_at)
+        .bind(executed_at)
+        .bind(failed_at)
+        .bind(approved_by)
+        .bind(waived_by)
+        .bind(lock_version)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update compensation action status: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_action(r),
+            None => Err(IntentRebaseError::ConcurrencyConflict(action_id)),
+        }
+    }
+
+    /// Record execution result with an external transaction.
+    /// Used by execute handlers that manage their own transaction context.
+    pub async fn record_result_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        action_id: Uuid,
+        result: &ExecutionResult,
+        lock_version: i32,
+        executed_by: Option<&str>,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        let status_str = if result.success {
+            compensation_status_to_string(CompensationStatus::Executed)
+        } else {
+            compensation_status_to_string(CompensationStatus::Failed)
+        };
+
+        let execution_result_payload = serde_json::json!({
+            "success": result.success,
+            "summary": result.summary,
+            "error_code": result.error_code,
+            "error_detail": result.error_detail,
+            "completed_at": result.completed_at,
+        });
+
+        let row = sqlx::query(
+            r#"
+            UPDATE compensation_actions
+            SET status = $2,
+                attempt_count = attempt_count + 1,
+                lock_version = lock_version + 1,
+                executed_at = CASE WHEN $3 THEN NOW() ELSE executed_at END,
+                failed_at = CASE WHEN NOT $3 THEN NOW() ELSE failed_at END,
+                execution_result_payload = $4,
+                executed_by = COALESCE($6, executed_by)
+            WHERE id = $1 AND lock_version = $5
+            RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
+                execution_result_payload, feasibility, strategy_type,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
+            "#,
+        )
+        .bind(action_id)
+        .bind(status_str)
+        .bind(result.success)
+        .bind(&execution_result_payload)
+        .bind(lock_version)
+        .bind(executed_by)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("record compensation result: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_action(r),
+            None => Err(IntentRebaseError::ConcurrencyConflict(action_id)),
+        }
+    }
+
+    /// Reapprove a failed compensation action with an external transaction.
+    /// Used by reapprove handlers that manage their own transaction context.
+    pub async fn reapprove_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        action_id: Uuid,
+        lock_version: i32,
+    ) -> Result<CompensationAction, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE compensation_actions
+            SET status = 'pending',
+                lock_version = lock_version + 1,
+                failed_at = NULL
+            WHERE id = $1 AND lock_version = $2 AND status = 'failed'
+            RETURNING id, tenant_id, side_effect_id, intent_id, trigger_context,
+                execution_result_payload, feasibility, strategy_type,
+                rationale, status, attempt_count, max_retries, lock_version, generated_at,
+                approved_at, approved_by, waived_at, waived_by, executed_at, executed_by, failed_at
+            "#,
+        )
+        .bind(action_id)
+        .bind(lock_version)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("reapprove compensation action: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_action(r),
+            None => {
+                // Could be either not found, wrong lock_version, or not in Failed status
+                // Fetch to determine which error to return
+                let action = self.get(action_id).await;
+                match action {
+                    Ok(a) if a.status != CompensationStatus::Failed => {
+                        Err(IntentRebaseError::InvalidCompensationActionTransition {
+                            from_status: format!("{:?}", a.status),
+                            to_status: "Pending".to_string(),
+                            reason: "Only Failed actions can be reapproved".to_string(),
+                        })
+                    }
+                    Ok(_) => Err(IntentRebaseError::ConcurrencyConflict(action_id)),
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
 // Helper functions for compensation action enum conversion
 // =============================================================================
 

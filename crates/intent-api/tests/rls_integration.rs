@@ -103,8 +103,19 @@ const TENANT_B_UUID: &str = "550e8400-e29b-41d4-a716-446655440002";
 const TEST_WORKFLOW_UUID: &str = "550e8400-e29b-41d4-a716-446655440099";
 
 /// Key tables to verify RLS isolation on.
-/// These are selected from migration 013 as the primary tenant-scoped targets.
-const RLS_SCOPED_TABLES: &[&str] = &["intents", "audit_events", "checkpoints"];
+/// All 10 tenant-scoped tables from migration 013.
+const RLS_SCOPED_TABLES: &[&str] = &[
+    "intents",
+    "audit_events",
+    "checkpoints",
+    "approval_requests",
+    "graph_nodes",
+    "graph_edges",
+    "side_effects",
+    "compensation_actions",
+    "side_effect_rollback_records",
+    "policy_snapshot",
+];
 
 /// Test result type for clearer error handling
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -267,6 +278,448 @@ async fn count_test_intents_for_current_tenant(
         .fetch_one(&mut **tx)
         .await
         .map_err(|e| format!("Failed to count test intents: {}", e))?;
+    Ok(count)
+}
+
+// =============================================================================
+// Helper functions for additional RLS-scoped tables (RLC-4 through RLC-9)
+// =============================================================================
+
+/// Create a test approval_request for the given tenant within an RLS-scoped transaction.
+async fn create_test_approval_request_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    request_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO approval_requests (id, intent_id, intent_version_from, intent_version_to,
+                                     workflow_id, tenant_id, requestor_id, requestor_type,
+                                     decision_class, reason, metadata, status)
+        VALUES ($1, $2, 1, 2, $3, $4, 'rls-test', 'test', 'D',
+                'RLS integration test approval request', '{}', 'pending')
+        "#,
+    )
+    .bind(request_id)
+    .bind(intent_id)
+    .bind(Uuid::parse_str(TEST_WORKFLOW_UUID).unwrap())
+    .bind(tenant_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test approval_request: {}", e))?;
+
+    Ok(())
+}
+
+/// Count approval_requests visible to the current tenant context.
+async fn count_test_approval_requests_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request_ids: &[Uuid],
+) -> TestResult<i64> {
+    if request_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = request_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM approval_requests WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in request_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test approval_requests: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test checkpoint for the given tenant within an RLS-scoped transaction.
+async fn create_test_checkpoint_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    checkpoint_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO checkpoints (checkpoint_id, intent_id, intent_version, workflow_id,
+                                tenant_id, workflow_state, checkpoint_type, status, metadata)
+        VALUES ($1, $2, 1, $3, $4, '{}', 'initial', 'pending', '{}')
+        "#,
+    )
+    .bind(checkpoint_id)
+    .bind(intent_id)
+    .bind(Uuid::parse_str(TEST_WORKFLOW_UUID).unwrap())
+    .bind(tenant_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test checkpoint: {}", e))?;
+
+    Ok(())
+}
+
+/// Count checkpoints visible to the current tenant context.
+async fn count_test_checkpoints_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    checkpoint_ids: &[Uuid],
+) -> TestResult<i64> {
+    if checkpoint_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = checkpoint_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM checkpoints WHERE checkpoint_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in checkpoint_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test checkpoints: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test graph_node for the given tenant within an RLS-scoped transaction.
+async fn create_test_graph_node_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    node_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO graph_nodes (node_id, tenant_id, workflow_id, node_type,
+                                external_ref_type, external_ref_id, label, state, properties)
+        VALUES ($1, $2, $3, 'intent', 'intent', $4, 'RLS test node', 'active', '{}')
+        "#,
+    )
+    .bind(node_id)
+    .bind(tenant_id)
+    .bind(Uuid::parse_str(TEST_WORKFLOW_UUID).unwrap())
+    .bind(node_id) // use same ID as external_ref_id
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test graph_node: {}", e))?;
+
+    Ok(())
+}
+
+/// Count graph_nodes visible to the current tenant context.
+async fn count_test_graph_nodes_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_ids: &[Uuid],
+) -> TestResult<i64> {
+    if node_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM graph_nodes WHERE node_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in node_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test graph_nodes: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test graph_edge for the given tenant within an RLS-scoped transaction.
+/// Requires that the from_node_id and to_node_id already exist in graph_nodes.
+async fn create_test_graph_edge_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    edge_id: Uuid,
+    from_node_id: Uuid,
+    to_node_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO graph_edges (edge_id, tenant_id, workflow_id, from_node_id, to_node_id,
+                                edge_type, properties)
+        VALUES ($1, $2, $3, $4, $5, 'depends_on', '{}')
+        "#,
+    )
+    .bind(edge_id)
+    .bind(tenant_id)
+    .bind(Uuid::parse_str(TEST_WORKFLOW_UUID).unwrap())
+    .bind(from_node_id)
+    .bind(to_node_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test graph_edge: {}", e))?;
+
+    Ok(())
+}
+
+/// Count graph_edges visible to the current tenant context.
+async fn count_test_graph_edges_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    edge_ids: &[Uuid],
+) -> TestResult<i64> {
+    if edge_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = edge_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM graph_edges WHERE edge_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in edge_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test graph_edges: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test side_effect for the given tenant within an RLS-scoped transaction.
+async fn create_test_side_effect_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    side_effect_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO side_effects (id, tenant_id, intent_id, intent_version, effect_class,
+                                  effect_type, target, idempotency_key)
+        VALUES ($1, $2, $3, 1, 's2_external_reversible', 'rls_test_effect',
+                'test-target-uuid', $4)
+        "#,
+    )
+    .bind(side_effect_id)
+    .bind(tenant_id)
+    .bind(intent_id)
+    .bind(side_effect_id) // use as idempotency_key
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test side_effect: {}", e))?;
+
+    Ok(())
+}
+
+/// Count side_effects visible to the current tenant context.
+async fn count_test_side_effects_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    side_effect_ids: &[Uuid],
+) -> TestResult<i64> {
+    if side_effect_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = side_effect_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM side_effects WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in side_effect_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test side_effects: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test compensation_action for the given tenant within an RLS-scoped transaction.
+async fn create_test_compensation_action_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    compensation_id: Uuid,
+    side_effect_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO compensation_actions (id, tenant_id, side_effect_id, intent_id,
+                                        trigger_context, execution_result_payload,
+                                        feasibility, strategy_type, rationale, status)
+        VALUES ($1, $2, $3, $4, '{"intent_id": $4}', NULL,
+                'semi_automatic', 'rollback', 'RLS integration test', 'pending')
+        "#,
+    )
+    .bind(compensation_id)
+    .bind(tenant_id)
+    .bind(side_effect_id)
+    .bind(intent_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test compensation_action: {}", e))?;
+
+    Ok(())
+}
+
+/// Count compensation_actions visible to the current tenant context.
+async fn count_test_compensation_actions_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    compensation_ids: &[Uuid],
+) -> TestResult<i64> {
+    if compensation_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = compensation_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM compensation_actions WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in compensation_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test compensation_actions: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test side_effect_rollback_record for the given tenant within an RLS-scoped transaction.
+async fn create_test_side_effect_rollback_record_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    rollback_id: Uuid,
+    compensation_action_id: Uuid,
+    side_effect_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO side_effect_rollback_records (id, tenant_id, compensation_action_id,
+                                                side_effect_id, intent_id, result, summary,
+                                                recorded_by, lock_version)
+        VALUES ($1, $2, $3, $4, $5, 'success', 'RLS integration test rollback',
+                'rls-test-user', 0)
+        "#,
+    )
+    .bind(rollback_id)
+    .bind(tenant_id)
+    .bind(compensation_action_id)
+    .bind(side_effect_id)
+    .bind(intent_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test side_effect_rollback_record: {}", e))?;
+
+    Ok(())
+}
+
+/// Count side_effect_rollback_records visible to the current tenant context.
+async fn count_test_side_effect_rollback_records_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rollback_ids: &[Uuid],
+) -> TestResult<i64> {
+    if rollback_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = rollback_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM side_effect_rollback_records WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in rollback_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test side_effect_rollback_records: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test policy_snapshot for the given tenant within an RLS-scoped transaction.
+async fn create_test_policy_snapshot_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    snapshot_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO policy_snapshot (id, tenant_id, intent_id, intent_version,
+                                    rule_pack_version, scope_type, affected_resources,
+                                    required_approvers, min_approvals, scope_hash, snapshot_uri)
+        VALUES ($1, $2, $3, 1, 'test-version', 'full', '[]', '[]', 1,
+                'test-scope-hash-sha256', 'memory://test-snapshot')
+        "#,
+    )
+    .bind(snapshot_id)
+    .bind(tenant_id)
+    .bind(intent_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test policy_snapshot: {}", e))?;
+
+    Ok(())
+}
+
+/// Count policy_snapshots visible to the current tenant context.
+async fn count_test_policy_snapshots_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    snapshot_ids: &[Uuid],
+) -> TestResult<i64> {
+    if snapshot_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = snapshot_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM policy_snapshot WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in snapshot_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test policy_snapshots: {}", e))?;
     Ok(count)
 }
 
@@ -922,4 +1375,1493 @@ async fn test_rls_tenant_setting_name() {
         "test_rls_tenant_setting_name PASSED - setting name: {}",
         RLS_TENANT_SETTING
     );
+}
+
+// =============================================================================
+// RLC-4 through RLC-9: Tenant isolation tests for additional RLS tables
+// =============================================================================
+
+/// Test: RLC-4 - Tenant isolation on approval_requests table.
+///
+/// Verifies that approval_requests rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc4_tenant_isolation_approval_requests() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create test data for Tenant A
+    let tenant_a_request_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        // Create intent (prerequisite for approval_request via FK)
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant A");
+
+        // Create approval_request for Tenant A
+        create_test_approval_request_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_request_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create test approval_request for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_request_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        // Create intent for Tenant B
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant B");
+
+        // Create approval_request for Tenant B
+        create_test_approval_request_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_request_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create test approval_request for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own =
+            count_test_approval_requests_for_current_tenant(&mut tx, &[tenant_a_request_id])
+                .await
+                .expect("Failed to count Tenant A approval_requests");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see their own approval_request"
+        );
+
+        let count_other =
+            count_test_approval_requests_for_current_tenant(&mut tx, &[tenant_b_request_id])
+                .await
+                .expect("Failed to count Tenant B approval_requests from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's approval_request"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own =
+            count_test_approval_requests_for_current_tenant(&mut tx, &[tenant_b_request_id])
+                .await
+                .expect("Failed to count Tenant B approval_requests");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see their own approval_request"
+        );
+
+        let count_other =
+            count_test_approval_requests_for_current_tenant(&mut tx, &[tenant_a_request_id])
+                .await
+                .expect("Failed to count Tenant A approval_requests from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's approval_request"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc4_tenant_isolation_approval_requests PASSED");
+}
+
+/// Test: RLC-5 - Tenant isolation on graph_nodes table.
+///
+/// Verifies that graph_nodes rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc5_tenant_isolation_graph_nodes() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create test data for Tenant A
+    let tenant_a_node_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_a_id, tenant_a_node_id)
+            .await
+            .expect("Failed to create test graph_node for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_node_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_b_id, tenant_b_node_id)
+            .await
+            .expect("Failed to create test graph_node for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own = count_test_graph_nodes_for_current_tenant(&mut tx, &[tenant_a_node_id])
+            .await
+            .expect("Failed to count Tenant A graph_nodes");
+        assert_eq!(count_own, 1, "Tenant A should see their own graph_node");
+
+        let count_other = count_test_graph_nodes_for_current_tenant(&mut tx, &[tenant_b_node_id])
+            .await
+            .expect("Failed to count Tenant B graph_nodes from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's graph_node"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own = count_test_graph_nodes_for_current_tenant(&mut tx, &[tenant_b_node_id])
+            .await
+            .expect("Failed to count Tenant B graph_nodes");
+        assert_eq!(count_own, 1, "Tenant B should see their own graph_node");
+
+        let count_other = count_test_graph_nodes_for_current_tenant(&mut tx, &[tenant_a_node_id])
+            .await
+            .expect("Failed to count Tenant A graph_nodes from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's graph_node"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc5_tenant_isolation_graph_nodes PASSED");
+}
+
+/// Test: RLC-6 - Tenant isolation on graph_edges table.
+///
+/// Verifies that graph_edges rows are correctly isolated between tenants.
+/// Note: graph_edges has FK dependency on graph_nodes, so we create nodes first.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc6_tenant_isolation_graph_edges() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create graph_nodes first (prerequisite for graph_edges)
+    let tenant_a_from_node = Uuid::new_v4();
+    let tenant_a_to_node = Uuid::new_v4();
+    let tenant_b_from_node = Uuid::new_v4();
+    let tenant_b_to_node = Uuid::new_v4();
+
+    // Tenant A nodes
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_a_id, tenant_a_from_node)
+            .await
+            .expect("Failed to create Tenant A from_node");
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_a_id, tenant_a_to_node)
+            .await
+            .expect("Failed to create Tenant A to_node");
+
+        tx.commit().await.expect("Failed to commit Tenant A nodes");
+    }
+
+    // Tenant B nodes
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_b_id, tenant_b_from_node)
+            .await
+            .expect("Failed to create Tenant B from_node");
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_b_id, tenant_b_to_node)
+            .await
+            .expect("Failed to create Tenant B to_node");
+
+        tx.commit().await.expect("Failed to commit Tenant B nodes");
+    }
+
+    // Create test edges for Tenant A
+    let tenant_a_edge_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A edge");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_graph_edge_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_edge_id,
+            tenant_a_from_node,
+            tenant_a_to_node,
+        )
+        .await
+        .expect("Failed to create test graph_edge for Tenant A");
+
+        tx.commit().await.expect("Failed to commit Tenant A edge");
+    }
+
+    // Create test edges for Tenant B
+    let tenant_b_edge_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B edge");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_graph_edge_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_edge_id,
+            tenant_b_from_node,
+            tenant_b_to_node,
+        )
+        .await
+        .expect("Failed to create test graph_edge for Tenant B");
+
+        tx.commit().await.expect("Failed to commit Tenant B edge");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own = count_test_graph_edges_for_current_tenant(&mut tx, &[tenant_a_edge_id])
+            .await
+            .expect("Failed to count Tenant A graph_edges");
+        assert_eq!(count_own, 1, "Tenant A should see their own graph_edge");
+
+        let count_other = count_test_graph_edges_for_current_tenant(&mut tx, &[tenant_b_edge_id])
+            .await
+            .expect("Failed to count Tenant B graph_edges from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's graph_edge"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own = count_test_graph_edges_for_current_tenant(&mut tx, &[tenant_b_edge_id])
+            .await
+            .expect("Failed to count Tenant B graph_edges");
+        assert_eq!(count_own, 1, "Tenant B should see their own graph_edge");
+
+        let count_other = count_test_graph_edges_for_current_tenant(&mut tx, &[tenant_a_edge_id])
+            .await
+            .expect("Failed to count Tenant A graph_edges from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's graph_edge"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc6_tenant_isolation_graph_edges PASSED");
+}
+
+/// Test: RLC-7 - Tenant isolation on side_effects table.
+///
+/// Verifies that side_effects rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc7_tenant_isolation_side_effects() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create test data for Tenant A
+    let tenant_a_side_effect_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant A");
+
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create test side_effect for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_side_effect_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant B");
+
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create test side_effect for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own =
+            count_test_side_effects_for_current_tenant(&mut tx, &[tenant_a_side_effect_id])
+                .await
+                .expect("Failed to count Tenant A side_effects");
+        assert_eq!(count_own, 1, "Tenant A should see their own side_effect");
+
+        let count_other =
+            count_test_side_effects_for_current_tenant(&mut tx, &[tenant_b_side_effect_id])
+                .await
+                .expect("Failed to count Tenant B side_effects from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's side_effect"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own =
+            count_test_side_effects_for_current_tenant(&mut tx, &[tenant_b_side_effect_id])
+                .await
+                .expect("Failed to count Tenant B side_effects");
+        assert_eq!(count_own, 1, "Tenant B should see their own side_effect");
+
+        let count_other =
+            count_test_side_effects_for_current_tenant(&mut tx, &[tenant_a_side_effect_id])
+                .await
+                .expect("Failed to count Tenant A side_effects from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's side_effect"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc7_tenant_isolation_side_effects PASSED");
+}
+
+/// Test: RLC-8 - Tenant isolation on compensation_actions table.
+///
+/// Verifies that compensation_actions rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc8_tenant_isolation_compensation_actions() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+    let tenant_a_side_effect_id = Uuid::new_v4();
+    let tenant_b_side_effect_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create prerequisites: intents and side_effects for both tenants
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A prerequisites");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create Tenant A intent");
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant A side_effect");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A prerequisites");
+    }
+
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B prerequisites");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create Tenant B intent");
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant B side_effect");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B prerequisites");
+    }
+
+    // Create test data for Tenant A
+    let tenant_a_compensation_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A compensation");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_compensation_action_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_compensation_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create test compensation_action for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A compensation");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_compensation_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B compensation");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_compensation_action_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_compensation_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create test compensation_action for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B compensation");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own = count_test_compensation_actions_for_current_tenant(
+            &mut tx,
+            &[tenant_a_compensation_id],
+        )
+        .await
+        .expect("Failed to count Tenant A compensation_actions");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see their own compensation_action"
+        );
+
+        let count_other = count_test_compensation_actions_for_current_tenant(
+            &mut tx,
+            &[tenant_b_compensation_id],
+        )
+        .await
+        .expect("Failed to count Tenant B compensation_actions from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's compensation_action"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own = count_test_compensation_actions_for_current_tenant(
+            &mut tx,
+            &[tenant_b_compensation_id],
+        )
+        .await
+        .expect("Failed to count Tenant B compensation_actions");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see their own compensation_action"
+        );
+
+        let count_other = count_test_compensation_actions_for_current_tenant(
+            &mut tx,
+            &[tenant_a_compensation_id],
+        )
+        .await
+        .expect("Failed to count Tenant A compensation_actions from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's compensation_action"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc8_tenant_isolation_compensation_actions PASSED");
+}
+
+/// Test: RLC-9 - Tenant isolation on side_effect_rollback_records table.
+///
+/// Verifies that side_effect_rollback_records rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+    let tenant_a_side_effect_id = Uuid::new_v4();
+    let tenant_b_side_effect_id = Uuid::new_v4();
+    let tenant_a_compensation_id = Uuid::new_v4();
+    let tenant_b_compensation_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create all prerequisites for both tenants
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A prerequisites");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create Tenant A intent");
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant A side_effect");
+        create_test_compensation_action_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_compensation_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant A compensation_action");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A prerequisites");
+    }
+
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B prerequisites");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create Tenant B intent");
+        create_test_side_effect_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant B side_effect");
+        create_test_compensation_action_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_compensation_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create Tenant B compensation_action");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B prerequisites");
+    }
+
+    // Create test data for Tenant A
+    let tenant_a_rollback_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A rollback");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_side_effect_rollback_record_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_rollback_id,
+            tenant_a_compensation_id,
+            tenant_a_side_effect_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create test rollback_record for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A rollback");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_rollback_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B rollback");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_side_effect_rollback_record_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_rollback_id,
+            tenant_b_compensation_id,
+            tenant_b_side_effect_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create test rollback_record for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B rollback");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own = count_test_side_effect_rollback_records_for_current_tenant(
+            &mut tx,
+            &[tenant_a_rollback_id],
+        )
+        .await
+        .expect("Failed to count Tenant A rollback_records");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see their own rollback_record"
+        );
+
+        let count_other = count_test_side_effect_rollback_records_for_current_tenant(
+            &mut tx,
+            &[tenant_b_rollback_id],
+        )
+        .await
+        .expect("Failed to count Tenant B rollback_records from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's rollback_record"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own = count_test_side_effect_rollback_records_for_current_tenant(
+            &mut tx,
+            &[tenant_b_rollback_id],
+        )
+        .await
+        .expect("Failed to count Tenant B rollback_records");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see their own rollback_record"
+        );
+
+        let count_other = count_test_side_effect_rollback_records_for_current_tenant(
+            &mut tx,
+            &[tenant_a_rollback_id],
+        )
+        .await
+        .expect("Failed to count Tenant A rollback_records from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's rollback_record"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc9_tenant_isolation_side_effect_rollback_records PASSED");
+}
+
+/// Test: RLC-10 - Tenant isolation on policy_snapshot table.
+///
+/// Verifies that policy_snapshot rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc10_tenant_isolation_policy_snapshot() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create test data for Tenant A
+    let tenant_a_snapshot_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        // Create intent (prerequisite for policy_snapshot via FK)
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant A");
+
+        // Create policy_snapshot for Tenant A
+        create_test_policy_snapshot_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            tenant_a_snapshot_id,
+            tenant_a_intent_id,
+        )
+        .await
+        .expect("Failed to create test policy_snapshot for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_snapshot_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        // Create intent for Tenant B
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create test intent for Tenant B");
+
+        // Create policy_snapshot for Tenant B
+        create_test_policy_snapshot_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            tenant_b_snapshot_id,
+            tenant_b_intent_id,
+        )
+        .await
+        .expect("Failed to create test policy_snapshot for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own =
+            count_test_policy_snapshots_for_current_tenant(&mut tx, &[tenant_a_snapshot_id])
+                .await
+                .expect("Failed to count Tenant A policy_snapshots");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see their own policy_snapshot"
+        );
+
+        let count_other =
+            count_test_policy_snapshots_for_current_tenant(&mut tx, &[tenant_b_snapshot_id])
+                .await
+                .expect("Failed to count Tenant B policy_snapshots from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's policy_snapshot"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own =
+            count_test_policy_snapshots_for_current_tenant(&mut tx, &[tenant_b_snapshot_id])
+                .await
+                .expect("Failed to count Tenant B policy_snapshots");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see their own policy_snapshot"
+        );
+
+        let count_other =
+            count_test_policy_snapshots_for_current_tenant(&mut tx, &[tenant_a_snapshot_id])
+                .await
+                .expect("Failed to count Tenant A policy_snapshots from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's policy_snapshot"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc10_tenant_isolation_policy_snapshot PASSED");
+}
+
+/// Test: RLC-11 - Deeper checkpoints isolation verification.
+///
+/// Extends the basic checkpoint isolation with additional verification.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc11_deeper_checkpoints_isolation() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let tenant_a_intent_id = Uuid::new_v4();
+    let tenant_b_intent_id = Uuid::new_v4();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create multiple checkpoints for each tenant
+    let tenant_a_checkpoint_ids = [Uuid::new_v4(), Uuid::new_v4()];
+    let tenant_b_checkpoint_ids = [Uuid::new_v4(), Uuid::new_v4()];
+
+    // Tenant A checkpoints
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, tenant_a_intent_id)
+            .await
+            .expect("Failed to create Tenant A intent");
+
+        for cp_id in &tenant_a_checkpoint_ids {
+            create_test_checkpoint_for_current_tenant(
+                &mut tx,
+                tenant_a_id,
+                *cp_id,
+                tenant_a_intent_id,
+            )
+            .await
+            .expect("Failed to create Tenant A checkpoint");
+        }
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A checkpoints");
+    }
+
+    // Tenant B checkpoints
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_intent_for_current_tenant(&mut tx, tenant_b_id, tenant_b_intent_id)
+            .await
+            .expect("Failed to create Tenant B intent");
+
+        for cp_id in &tenant_b_checkpoint_ids {
+            create_test_checkpoint_for_current_tenant(
+                &mut tx,
+                tenant_b_id,
+                *cp_id,
+                tenant_b_intent_id,
+            )
+            .await
+            .expect("Failed to create Tenant B checkpoint");
+        }
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B checkpoints");
+    }
+
+    // Verify Tenant A sees only their checkpoints
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        // Count all Tenant A checkpoints
+        let count_own =
+            count_test_checkpoints_for_current_tenant(&mut tx, &tenant_a_checkpoint_ids)
+                .await
+                .expect("Failed to count Tenant A checkpoints");
+        assert_eq!(
+            count_own,
+            tenant_a_checkpoint_ids.len() as i64,
+            "Tenant A should see all their own checkpoints"
+        );
+
+        // Count Tenant B checkpoints - should be 0
+        let count_other =
+            count_test_checkpoints_for_current_tenant(&mut tx, &tenant_b_checkpoint_ids)
+                .await
+                .expect("Failed to count Tenant B checkpoints from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see any Tenant B checkpoints"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B sees only their checkpoints
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        // Count all Tenant B checkpoints
+        let count_own =
+            count_test_checkpoints_for_current_tenant(&mut tx, &tenant_b_checkpoint_ids)
+                .await
+                .expect("Failed to count Tenant B checkpoints");
+        assert_eq!(
+            count_own,
+            tenant_b_checkpoint_ids.len() as i64,
+            "Tenant B should see all their own checkpoints"
+        );
+
+        // Count Tenant A checkpoints - should be 0
+        let count_other =
+            count_test_checkpoints_for_current_tenant(&mut tx, &tenant_a_checkpoint_ids)
+                .await
+                .expect("Failed to count Tenant A checkpoints from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see any Tenant A checkpoints"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc11_deeper_checkpoints_isolation PASSED");
 }

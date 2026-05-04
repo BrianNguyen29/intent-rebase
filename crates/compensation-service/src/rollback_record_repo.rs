@@ -58,6 +58,16 @@ pub trait RollbackRecordRepository: Send + Sync {
         tenant_id: Uuid,
         result: RollbackRecordResult,
     ) -> Result<Vec<SideEffectRollbackRecord>, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxRollbackRecordRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxRollbackRecordRepository> {
+        None
+    }
 }
 
 // =============================================================================
@@ -302,6 +312,41 @@ impl SqlxRollbackRecordRepository {
             lock_version: row.get("lock_version"),
         })
     }
+
+    /// Create a rollback record within an external transaction.
+    /// Used by RLS-aware handlers that manage their own transaction context.
+    pub async fn create_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        record: SideEffectRollbackRecord,
+    ) -> Result<SideEffectRollbackRecord, IntentRebaseError> {
+        sqlx::query(
+            r#"
+            INSERT INTO side_effect_rollback_records (
+                id, tenant_id, compensation_action_id, side_effect_id, intent_id,
+                result, summary, error_code, error_detail, recorded_by, recorded_at, lock_version
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+        )
+        .bind(record.id)
+        .bind(record.tenant_id)
+        .bind(record.compensation_action_id)
+        .bind(record.side_effect_id)
+        .bind(record.intent_id)
+        .bind(record.result.as_str())
+        .bind(&record.summary)
+        .bind(&record.error_code)
+        .bind(&record.error_detail)
+        .bind(&record.recorded_by)
+        .bind(record.recorded_at)
+        .bind(record.lock_version)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert rollback record: {}", e)))?;
+
+        Ok(record)
+    }
 }
 
 #[async_trait]
@@ -486,6 +531,10 @@ impl RollbackRecordRepository for SqlxRollbackRecordRepository {
         })?;
 
         rows.into_iter().map(|r| self.row_to_record(r)).collect()
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxRollbackRecordRepository> {
+        Some(self)
     }
 }
 
