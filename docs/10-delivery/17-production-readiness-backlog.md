@@ -49,14 +49,28 @@ P1 items address the full RLS transaction wrapping plan from oracle design. Thes
 
 | Slice | Description | Status | Notes |
 |-------|-------------|--------|-------|
-| **P1-S1** | Move `RlsAwarePool` to shared location | 🔴 PENDING | Required before other slices can use it |
-| **P1-S2** | Wire `IntentService.rls_pool` | ✅ LOCAL DONE (pending commit) | Local cargo fmt/check/test with/without jwt-auth passed (221 tests each) |
-| **P1-S3** | Add `RlsTransactionExt` trait | 🔴 PENDING | Enables `begin_with_tenant` on any pool |
-| **P1-S4** | Wrap `create_graph_edge` handler | 🔴 PENDING | Depends on S1-S3 |
-| **P1-S5** | Wrap compensation, forensic, orchestration, approval, artifact handlers | 🔴 PENDING | Depends on S1-S3 |
-| **RLC-4..RLC-9** | RLC test expansion (cross-tenant isolation) | 🔴 PENDING | Validates no cross-tenant leakage |
+| **P1-S1** | Move `RlsAwarePool` to shared location | ✅ BOUNDED DONE (pushed f055dc5) | RlsAwarePool shared via intent-rebase-types; enables RLS-aware pool wrapping |
+| **P1-S2** | Wire `IntentService.rls_pool` | ✅ BOUNDED DONE (pushed) | IntentService.rls_pool wired; cargo fmt/check/test with/without jwt-auth passed (221 tests) |
+| **P1-S3** | Add `RlsTransactionExt` trait | ✅ BOUNDED DONE (pushed f055dc5) | RlsTransactionExt trait enables `begin_with_tenant` on any sqlx::Transaction |
+| **P1-S4** | Wrap `create_graph_edge` handler | ✅ BOUNDED DONE (pushed 02de885) | `begin_with_tenant → create_edge_with_tx → commit` wired; tenant mismatch rejection |
+| **P1-S5** | Wrap compensation, forensic, orchestration, approval, artifact handlers | 🔴 PARTIAL — approval sub-slices delivered | See sub-slice breakdown below |
+| **RLC-4..RLC-9** | RLC test expansion (cross-tenant isolation) | ✅ BOUNDED DONE (local) | 12 rls_integration --ignored tests passed locally; full RLS enforcement pending all slices |
 
-**No overclaim:** Local P1-S2 implementation is uncommitted. S1, S3-S5, and RLC-4..RLC-9 are pending. Full RLS enforcement is not complete until all slices pass.
+##### P1-S5 Sub-Slice Breakdown (Approval Handlers)
+
+| Sub-Slice | Description | Status | Notes |
+|-----------|-------------|--------|-------|
+| **P1-S5a** | Approve/reject full RLS tx | ✅ BOUNDED DONE (pushed) | `begin_with_tenant → update_status_with_tx` for approve/reject |
+| **P1-S5b** | Expire full RLS tx | ✅ BOUNDED DONE (pushed) | `begin_with_tenant → mark_expired_with_tx` for expire |
+| **P1-S5c** | List pending handler-level check | ✅ BOUNDED DONE (pushed) | Handler validates tenant scope on list_pending |
+| **P1-S5d** | Revalidate handler-level check | ✅ BOUNDED DONE (pushed) | Handler validates tenant scope on revalidate |
+| **P1-S5e** | Trigger handler-level check | ✅ BOUNDED DONE (pushed) | Handler validates tenant scope on trigger |
+| **P1-S5f** | Trigger full-tx create+cancel | ✅ BOUNDED DONE (local) | `begin_with_tenant → insert_request_with_tx → cancel_approved_by_intent_with_tx → commit`; handler-level guards delivered; full RLS tx deferred |
+| **P1-S5g** | Compensation approve/waive/reapprove + batch approve/reapprove | ✅ BOUNDED DONE (local) | Handler-level guards for approve/waive/reapprove/execute; full RLS tx wrapping deferred due to transaction-unaware executor/side_effect_repo trait boundary |
+| **P1-S5h** | Compensation execute single/batch | 🔴 DOCUMENTED BLOCKER | Execute full RLS tx NO-GO bounded — executor and side_effect_repo trait boundary is transaction-unaware; documented as Phase 3 blocker |
+| **P1-S5i** | Forensic/orchestration/artifact full RLS tx | 🔴 PENDING | Full tx wrapping for forensic/orchestration/artifact handlers still pending |
+
+**No overclaim:** S1-S4 are BOUNDED DONE (pushed commits). S5a..S5e are BOUNDED DONE (pushed). S5f (trigger full-tx) BOUNDED DONE (local). S5g (approve/waive/reapprove + batch) BOUNDED DONE (local). S5h (execute single/batch) is a documented blocker due to transaction-unaware executor/side_effect_repo trait boundary. S5i (forensic/orchestration/artifact) PENDING. RLC-4..RLC-9 are BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`). Full RLS enforcement is not complete until all slices pass. Remote CI not confirmed green.
 
 ---
 
@@ -217,7 +231,7 @@ These items cannot proceed until specific external conditions are met.
 | Priority | Item | Status | Evidence Required |
 |----------|------|--------|------------------|
 | **P0** | Remote CI startup failure | 🔴 BLOCKED | Remote CI passing |
-| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..9) | 🔴 IN PROGRESS | Cross-tenant isolation verified; S2 local done (pending commit) |
+| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..9) | 🔴 IN PROGRESS | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f (trigger full-tx) BOUNDED DONE (local); S5g (approve/waive/reapprove + batch) BOUNDED DONE (local); S5h (execute single/batch) DOCUMENTED BLOCKER (transaction-unaware executor boundary); S5i (forensic/orchestration/artifact) PENDING; RLC-4..RLC-9 BOUNDED DONE (local, 12 tests passed) |
 | **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
 | **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
 | **P1** | Production infra | 🔴 BLOCKED | Production env verified |

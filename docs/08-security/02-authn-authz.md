@@ -79,12 +79,21 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
 ### Pending Items
 
 **Full RLS transaction wrapping addressed via ordered P1 slices (P1-S1..S5 + RLC-4..RLC-9):**
-- P1-S1: Move `RlsAwarePool` to shared location — 🔴 PENDING
-- P1-S2: Wire `IntentService.rls_pool` — ✅ LOCAL DONE (pending commit; cargo fmt/check/test passed)
-- P1-S3: Add `RlsTransactionExt` trait — 🔴 PENDING
-- P1-S4: Wrap `create_graph_edge` handler — 🔴 PENDING
-- P1-S5: Wrap compensation, forensic, orchestration, approval, artifact handlers — 🔴 PENDING
-- RLC-4..RLC-9: Cross-tenant isolation test expansion — 🔴 PENDING
+- P1-S1: Move `RlsAwarePool` to shared location — ✅ BOUNDED DONE (pushed f055dc5)
+- P1-S2: Wire `IntentService.rls_pool` — ✅ BOUNDED DONE (pushed; cargo fmt/check/test passed)
+- P1-S3: Add `RlsTransactionExt` trait — ✅ BOUNDED DONE (pushed f055dc5)
+- P1-S4: Wrap `create_graph_edge` handler — ✅ BOUNDED DONE (pushed 02de885)
+- P1-S5: Wrap compensation, forensic, orchestration, approval, artifact handlers — 🔴 PARTIAL — approval sub-slices delivered
+  - **P1-S5a:** Approve/reject full RLS tx — ✅ BOUNDED DONE (pushed) — uses `update_status_with_tx`
+  - **P1-S5b:** Expire full RLS tx — ✅ BOUNDED DONE (pushed) — uses `mark_expired_with_tx`
+  - **P1-S5c:** List pending handler-level check — ✅ BOUNDED DONE (pushed)
+  - **P1-S5d:** Revalidate handler-level check — ✅ BOUNDED DONE (pushed)
+  - **P1-S5e:** Trigger handler-level check — ✅ BOUNDED DONE (pushed)
+  - **P1-S5f:** Trigger full-tx create+cancel — ✅ BOUNDED DONE (local) — handler-level guards delivered; full RLS tx deferred
+  - **P1-S5g:** Compensation approve/waive/reapprove + batch approve/reapprove — ✅ BOUNDED DONE (local) — handler-level guards delivered; execute full RLS tx wrapping deferred due to transaction-unaware executor/side_effect_repo trait boundary
+  - **P1-S5h:** Compensation execute single/batch — 🔴 DOCUMENTED BLOCKER — executor/side_effect_repo trait boundary is transaction-unaware; execute full RLS tx NO-GO bounded
+  - **P1-S5i:** Forensic/orchestration/artifact full RLS tx — 🔴 PENDING
+- RLC-4..RLC-9: Cross-tenant isolation test expansion — ✅ BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`)
 - NATS tenant isolation — 🔴 PENDING
 - Production certification — 🔴 PENDING
 
