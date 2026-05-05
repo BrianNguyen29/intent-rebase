@@ -36,7 +36,7 @@ use forensic_service::{
 };
 use graph_service::{GraphService, InMemoryGraphRepository, SqlxGraphRepository};
 use intent_api::{
-    build_router, build_router_with_sql_audit_and_approval, init_tracing,
+    build_router, build_router_with_sql_audit_and_approval, init_panic_hook, init_tracing,
     nats_jetstream::{
         ConsumerRegistry, ConsumerRegistryHandle, DlqMetricsWorkerBuilder, DlqMetricsWorkerConfig,
         DlqMetricsWorkerHandle, JetStreamInitializer,
@@ -615,6 +615,10 @@ async fn build_sql_router_with_consumer_impl(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize panic hook for observability (Phase 2b bounded slice)
+    // Registered before any async tasks spawn to ensure panics are caught
+    init_panic_hook();
+
     // Initialize tracing (supports OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set)
     init_tracing();
 

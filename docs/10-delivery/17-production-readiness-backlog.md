@@ -18,18 +18,17 @@ This document captures the prioritized production readiness backlog. It distingu
 
 P0 items block Phase 3 exit gate and any production deployment.
 
-### P0-1: Remote CI Startup Failure
+### P0-1: CI/Actions Disabled by Design
 
 | Field | Value |
 |-------|-------|
-| **Description** | GitHub Actions CI runs report `startup_failure` before jobs are created |
-| **Impact** | Remote CI is not passing; code quality gates cannot run remotely |
-| **Evidence** | GitHub Actions push run 25273892755 shows `startup_failure` status after commit 42cdbe2 |
+| **Description** | GitHub Actions CI is intentionally disabled — no automatic runs on push or pull_request |
+| **Impact** | Remote CI is not used; local verification is the source of truth |
+| **Rationale** | Personal project with no collaborators; CI costs avoided by design |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 BLOCKED |
-| **Workaround** | Local canonical gates pass: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace` |
+| **Status** | ✅ INTENTIONAL — not a blocker; local gates are the verification source |
 
-**No overclaim:** Remote CI `startup_failure` is not a green CI. Do not represent local gate passes as remote CI passing.
+**No overclaim:** CI/Actions being disabled is a deliberate choice, not a defect. Local canonical gates are the verification source.
 
 ---
 
@@ -68,7 +67,7 @@ P1 items address the full RLS transaction wrapping plan from oracle design. Thes
 | **P1-S5f** | Trigger full-tx create+cancel | ✅ BOUNDED DONE (local) | `begin_with_tenant → insert_request_with_tx → cancel_approved_by_intent_with_tx → commit`; handler-level guards delivered; full RLS tx deferred |
 | **P1-S5g** | Compensation approve/waive/reapprove + batch approve/reapprove | ✅ BOUNDED DONE (local) | Handler-level guards for approve/waive/reapprove/execute; full RLS tx wrapping deferred due to transaction-unaware executor/side_effect_repo trait boundary |
 | **P1-S5h** | Compensation execute single/batch | 🔴 DOCUMENTED BLOCKER | Execute full RLS tx NO-GO bounded — executor and side_effect_repo trait boundary is transaction-unaware; documented as Phase 3 blocker |
-| **P1-S5i** | Forensic/orchestration/artifact full RLS tx | 🔴 PENDING | Full tx wrapping for forensic/orchestration/artifact handlers still pending |
+| **P1-S5i** | Forensic/orchestration/artifact full RLS tx | 🔴 PARTIAL — orchestration_dry_run guard delivered | `orchestration_dry_run` JWT tenant guard with fail-closed mismatch check delivered; full tx wrapping for forensic/orchestration/artifact pending; `orchestration_runs` table not yet covered by RLS migration |
 
 **No overclaim:** S1-S4 are BOUNDED DONE (pushed commits). S5a..S5e are BOUNDED DONE (pushed). S5f (trigger full-tx) BOUNDED DONE (local). S5g (approve/waive/reapprove + batch) BOUNDED DONE (local). S5h (execute single/batch) is a documented blocker due to transaction-unaware executor/side_effect_repo trait boundary. S5i (forensic/orchestration/artifact) PENDING. RLC-4..RLC-9 are BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`). Full RLS enforcement is not complete until all slices pass. Remote CI not confirmed green.
 
@@ -162,10 +161,12 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Panic handler registration, graceful degradation on unexpected panics |
-| **Current State** | Not started |
+| **Current State** | Bounded local-executable slice delivered — panic hook registered at startup, sanitized logging, no production alerting claims |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 PENDING — Phase 4 local-executable |
+| **Status** | 🟡 IN PROGRESS (bounded local slice) — Phase 4 full hardening deferred |
 | **Dependencies** | None (local code only) |
+| **Implementation** | `init_panic_hook()` in `intent_api::panic_hardening` module (extracted from lib.rs as first file decomposition slice); re-exported from crate root for backward compatibility; called before `init_tracing()` in `main.rs`; sanitizes JWT/DB/creds/bearer tokens in panic payloads |
+| **No overclaim** | Bounded local panic hook is not production alerting. Full panic hardening (worker lifecycle, alerting, graceful shutdown) remains Phase 4 scope. |
 
 ---
 
@@ -174,10 +175,11 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Large module decomposition for maintainability |
-| **Current State** | Not started |
+| **Current State** | First slice delivered — `panic_hardening.rs` extracted from `lib.rs` (Phase 2b bounded slice); panic hook helpers moved to separate module with tests |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 PENDING — Phase 4 local-executable |
+| **Status** | 🟡 IN PROGRESS (first slice) — Phase 4 continues with additional bounded slices |
 | **Dependencies** | None (local code only) |
+| **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; `lib.rs` shrank by ~150 lines |
 
 ---
 
@@ -230,15 +232,15 @@ These items cannot proceed until specific external conditions are met.
 
 | Priority | Item | Status | Evidence Required |
 |----------|------|--------|------------------|
-| **P0** | Remote CI startup failure | 🔴 BLOCKED | Remote CI passing |
+| **P0** | CI/Actions disabled by design | ✅ INTENTIONAL | Local gates are source of truth |
 | **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..9) | 🔴 IN PROGRESS | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f (trigger full-tx) BOUNDED DONE (local); S5g (approve/waive/reapprove + batch) BOUNDED DONE (local); S5h (execute single/batch) DOCUMENTED BLOCKER (transaction-unaware executor boundary); S5i (forensic/orchestration/artifact) PENDING; RLC-4..RLC-9 BOUNDED DONE (local, 12 tests passed) |
 | **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
 | **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
 | **P1** | Production infra | 🔴 BLOCKED | Production env verified |
 | **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
-| **P2** | Panic hardening (local-executable) | 🔴 PENDING | Phase 4 scope |
-| **P2** | File decomposition (local-executable) | 🔴 PENDING | Phase 4 scope |
+| **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
+| **P2** | File decomposition (local-executable) | 🟡 FIRST SLICE DELIVERED | panic_hardening.rs extracted; Phase 4 continues |
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🔴 DEFERRED | Phase 4+ scope |

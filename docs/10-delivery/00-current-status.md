@@ -183,13 +183,41 @@ cargo clippy --all-features -- -D warnings
 
 ---
 
+## Local Verification Matrix
+
+**Remote GitHub Actions CI is intentionally disabled** — no automatic runs on push or pull_request. This is a deliberate choice to avoid CI costs on a personal project with no collaborators.
+
+Local verification is the source of truth:
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Format | `cargo fmt --all -- --check` | No diff |
+| Clippy | `cargo clippy --all-features -- -D warnings` | No warnings |
+| Type check | `cargo check --all` | Success |
+| Unit tests | `cargo test --all-features` | All pass |
+| OpenAPI spec | `npx spectral lint docs/04-api/openapi.yaml` | No errors |
+| Git check | `git diff --check` | No conflicts |
+
+**Full test suite** (requires Postgres via docker-compose):
+```bash
+docker compose -f infrastructure/local/docker-compose.yml up -d
+cargo test -p intent-service --test migration_integration -- --ignored
+```
+
+**To manually trigger CI in GitHub Actions** (if ever needed):
+1. Go to the **Actions** tab
+2. Select **CI** or **Smoke Test** workflow
+3. Click **Run workflow**
+
+---
+
 ## Prioritized Next Steps
 
 For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Backlog](./17-production-readiness-backlog.md).
 
 | Priority | Area | Action | Owner |
 |----------|------|--------|-------|
-| **P0** | Remote CI transient infra issue | GitHub Actions reported `startup_failure` on run 25273892755 (transient infra; workflow config verified correct) | Backend Lead |
+| **P0** | CI/Actions intentionally disabled | Remote CI disabled by design; local gates are source of truth | Backend Lead |
 | **P1** | RLS transaction wrapping | Execute P1-S1 (RlsAwarePool shared), P1-S3 (RlsTransactionExt), P1-S4 (graph_edge), P1-S5 (compensation/forensic/orchestration/approval/artifact); expand RLC-4..RLC-9 | Backend Lead |
 | **P1** | External SRE sign-off | Obtain external SRE review and approval | SRE |
 | **P1** | External security sign-off | Obtain external security review and approval | Security |
@@ -202,7 +230,7 @@ For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Ba
 | **P2** | Cross-process trace propagation | Revisit when Temporal SDK supports safe per-request gRPC metadata injection | Backend Lead / SRE |
 | **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |
 
-> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. RLC-3 bounded RLS validation passed locally: migration_integration 1/1 passed, rls_integration --ignored 4/4 passed. Latest observed GitHub Actions push run 25273892755 (commit 42cdbe2) reported a transient `startup_failure` (GitHub Actions infra issue, not a workflow defect — CI config verified free-safe compliant May 2026). Smoke workflow is a lightweight stub. Production readiness is not claimed.
+> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates are the source of truth: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check` all pass. RLC-3 bounded RLS validation passed locally: migration_integration 1/1 passed, rls_integration --ignored 4/4 passed. **GitHub Actions CI is intentionally disabled by design** — no automatic runs on push or pull_request to avoid CI costs. This is a deliberate choice for a personal project with no collaborators. Production readiness is not claimed.
 
 ---
 

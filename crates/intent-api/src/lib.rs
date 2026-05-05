@@ -50,6 +50,12 @@ pub mod nats_event_publisher;
 /// NATS JetStream module (Phase 3 bounded slice)
 pub mod nats_jetstream;
 
+/// Panic hardening module (Phase 2b bounded slice — first file decomposition slice)
+pub mod panic_hardening;
+
+// Re-export panic_hardening::init_panic_hook for convenience
+pub use panic_hardening::init_panic_hook;
+
 // Re-export auth types for convenience when jwt-auth feature is enabled
 #[cfg(feature = "jwt-auth")]
 pub use auth::{
@@ -6860,6 +6866,10 @@ fn format_action_decision(d: &compensation_service::OrchestrationActionDecision)
 /// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
 /// validates tenant ownership before creating the run.
 /// Fails closed on tenant mismatch; fails open when JWT is absent (backward compatible).
+///
+/// **RLS note:** Full RLS transaction wrapping for `orchestration_runs` table is pending
+/// P1-S5i completion. The `orchestration_runs` table is not yet covered by migration 013's
+/// RLS policies. Handler-level tenant guard is in place as the primary enforcement.
 #[cfg(feature = "jwt-auth")]
 async fn create_orchestration_run(
     State(state): State<AppState>,
@@ -7804,6 +7814,10 @@ pub struct OrchestrationQuery {
 ///
 /// **This is READ-ONLY** - it does not execute any actions.
 ///
+/// Phase 3 P3-S5 bounded slice (P1-S5i): When valid JWT claims are present, this handler
+/// validates tenant ownership before planning. Fails closed on tenant mismatch;
+/// fails open when JWT is absent (backward compatible).
+///
 /// **Action determination logic:**
 /// - `approve`: Action is Pending (can transition to Approved)
 /// - `reapprove`: Action is Failed AND can_be_reapproved() (retryable error + budget remains)
@@ -7816,6 +7830,66 @@ pub struct OrchestrationQuery {
 ///
 /// **No background worker or queue claiming:**
 /// This is a direct query-based planner that reads current state and proposes actions.
+#[cfg(feature = "jwt-auth")]
+async fn orchestration_dry_run(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
+    Json(request): Json<OrchestrationDryRunRequest>,
+) -> Result<Json<OrchestrationDryRunResponse>, ApiErrorResponse> {
+    // Phase 3 P3-S5 (P1-S5i): Tenant mismatch rejection when JWT present
+    // Fail-open when JWT absent (backward compatible)
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("orchestration_dry_run: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .plan_orchestration_actions(query.tenant_id, request.action_ids)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let proposals = result
+        .proposals
+        .into_iter()
+        .map(|p| OrchestrationDryRunProposalResponse {
+            action_id: p.action_id,
+            proposed_action: p.proposed_action.as_str().to_string(),
+            reason: p.reason,
+            current_status: format_compensation_status(&p.current_status),
+        })
+        .collect();
+
+    let response = OrchestrationDryRunResponse {
+        proposals,
+        not_found: result.not_found,
+        summary: OrchestrationDryRunSummaryResponse {
+            total: result.summary.total,
+            can_approve: result.summary.can_approve,
+            can_reapprove: result.summary.can_reapprove,
+            can_execute: result.summary.can_execute,
+            no_action: result.summary.no_action,
+            not_found: result.summary.not_found,
+        },
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /compensation-actions/orchestration-dry-run - Plan orchestration actions (dry-run) (non-JWT fallback)
+///
+/// Phase 3 Batch 1 (bounded dry-run slice): Non-JWT path for backward compatibility.
+/// When jwt-auth feature is disabled, this handler operates without tenant validation.
+///
+/// **This is READ-ONLY** - it does not execute any actions.
+#[cfg(not(feature = "jwt-auth"))]
 async fn orchestration_dry_run(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
@@ -18873,6 +18947,116 @@ mod tests {
         );
         let response = result.unwrap();
         assert_eq!(response.status, "approved");
+    }
+
+    // -------------------------------------------------------------------------
+    // orchestration_dry_run Tenant Mismatch Tests (P1-S5i)
+    // -------------------------------------------------------------------------
+
+    /// Tests that orchestration_dry_run rejects JWT tenant mismatch.
+    /// P1-S5i: Validates fail-closed behavior when JWT tenant_id doesn't match query tenant_id.
+    #[tokio::test]
+    async fn test_orchestration_dry_run_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to run dry-run with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let query = OrchestrationQuery {
+            tenant_id: tenant_a, // Query has TenantA
+        };
+        let request = OrchestrationDryRunRequest {
+            action_ids: vec![created.id],
+        };
+
+        let result = orchestration_dry_run(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // JWT has TenantB - mismatch
+            axum::extract::Query(query),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    /// Tests that orchestration_dry_run succeeds when JWT tenant matches query tenant.
+    /// P1-S5i: Validates the happy path for tenant-matched requests.
+    #[tokio::test]
+    async fn test_orchestration_dry_run_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Run dry-run with TenantA (matching)
+        let query = OrchestrationQuery {
+            tenant_id: tenant_a,
+        };
+        let request = OrchestrationDryRunRequest {
+            action_ids: vec![created.id],
+        };
+
+        let result = orchestration_dry_run(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            axum::extract::Query(query),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
     }
 
     // -------------------------------------------------------------------------
