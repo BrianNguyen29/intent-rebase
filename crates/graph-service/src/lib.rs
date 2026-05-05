@@ -574,6 +574,123 @@ impl SqlxGraphRepository {
             created_at: now,
         })
     }
+
+    /// Ingest an artifact into the graph within an existing RLS-aware transaction.
+    ///
+    /// This method creates an artifact node and wires DependsOn edges to the
+    /// referenced IntentVersion nodes, all within a single transaction that has
+    /// already been configured with RLS tenant context.
+    ///
+    /// The caller is responsible for:
+    /// - Beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// - Committing or rolling back the transaction after this call
+    ///
+    /// # Prevalidation
+    /// - `depends_on_intent_versions` MUST contain at least one IntentVersion node ID
+    /// - All referenced IntentVersion nodes MUST exist, be of type `NodeType::IntentVersion`,
+    ///   AND belong to the same tenant_id and workflow_id as the artifact
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `request` - The artifact ingest request
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails, insert fails, or if the transaction is invalid.
+    pub async fn ingest_artifact_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: ArtifactIngestRequest,
+    ) -> Result<IngestorResult, IntentRebaseError> {
+        // PREVALIDATION: Enforce artifact traceability contract
+        if request.depends_on_intent_versions.is_empty() {
+            return Err(IntentRebaseError::ArtifactTraceabilityEmpty);
+        }
+
+        // Validate all referenced IntentVersion nodes exist, have correct type, and match scope
+        // We query within the transaction to maintain consistency
+        for intent_version_id in &request.depends_on_intent_versions {
+            let row = sqlx::query(
+                r#"
+                SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+                FROM graph_nodes
+                WHERE node_id = $1
+                "#,
+            )
+            .bind(intent_version_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| IntentRebaseError::StorageError(format!("fetch intent version node: {}", e)))?;
+
+            let node = match row {
+                Some(r) => self.row_to_node(r)?,
+                None => {
+                    return Err(IntentRebaseError::InvalidIngestRequest(format!(
+                        "IntentVersion node {} does not exist",
+                        intent_version_id
+                    )));
+                }
+            };
+
+            if node.node_type != NodeType::IntentVersion {
+                return Err(IntentRebaseError::InvalidIngestRequest(format!(
+                    "Node {} is not an IntentVersion (found {:?})",
+                    intent_version_id, node.node_type
+                )));
+            }
+
+            // Validate scope: tenant_id must match
+            if node.tenant_id != request.tenant_id {
+                return Err(IntentRebaseError::InvalidIngestRequest(format!(
+                    "IntentVersion node {} belongs to tenant {} but artifact has tenant {}",
+                    intent_version_id, node.tenant_id, request.tenant_id
+                )));
+            }
+
+            // Validate scope: workflow_id must match
+            if node.workflow_id != request.workflow_id {
+                return Err(IntentRebaseError::InvalidIngestRequest(format!(
+                    "IntentVersion node {} belongs to workflow {} but artifact has workflow {}",
+                    intent_version_id, node.workflow_id, request.workflow_id
+                )));
+            }
+        }
+
+        // Create the artifact node within the transaction
+        let node_request = CreateGraphNodeRequest {
+            tenant_id: request.tenant_id,
+            workflow_id: request.workflow_id,
+            node_type: NodeType::Artifact,
+            external_ref: Some(request.external_ref.clone()),
+            label: request.label,
+            properties: request.properties,
+        };
+
+        let node = self.create_node_with_tx(tx, node_request).await?;
+        let mut edges = Vec::new();
+
+        // Wire DependsOn edges to each IntentVersion within the transaction
+        for intent_version_id in &request.depends_on_intent_versions {
+            let edge_request = CreateGraphEdgeRequest {
+                tenant_id: request.tenant_id,
+                workflow_id: request.workflow_id,
+                from_node_id: node.id,
+                to_node_id: *intent_version_id,
+                edge_type: EdgeType::DependsOn,
+                properties: Some(serde_json::json!({
+                    "direction": "upstream",
+                    "target_type": "IntentVersion"
+                })),
+            };
+
+            let edge = self.create_edge_with_tx(tx, edge_request).await?;
+            edges.push(edge);
+        }
+
+        Ok(IngestorResult { node, edges })
+    }
 }
 
 #[async_trait]

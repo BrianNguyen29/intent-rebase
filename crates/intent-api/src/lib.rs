@@ -8957,18 +8957,6 @@ async fn ingest_artifact(
     auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
     Json(request): Json<ArtifactIngestRequest>,
 ) -> Result<(StatusCode, Json<ArtifactIngestResponse>), ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if request.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
-                rls_claims.tenant_id, request.tenant_id
-            );
-            tracing::warn!("ingest_artifact: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
     // Phase 1: Input validation - validate request before processing
     validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
 
@@ -8977,24 +8965,118 @@ async fn ingest_artifact(
     // ledger write even though graph_service.ingest_artifact consumes the request.
     let side_effect_context = request.side_effect_context.clone();
 
-    // Delegate artifact ingest to graph_service - this handles prevalidation of
-    // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
-    // This avoids duplicating the core artifact ingest logic in intent-api.
-    let graph_request = intent_rebase_types::ArtifactIngestRequest {
-        tenant_id: request.tenant_id,
-        workflow_id: request.workflow_id,
-        external_ref: request.external_ref,
-        label: request.label,
-        depends_on_intent_versions: request.depends_on_intent_versions,
-        properties: request.properties,
-        side_effect_context: None, // Consumed above for post-ingest recording
-    };
+    // Phase 3 P1-S5i: Use RLS-aware transaction wrapping when pool and JWT claims available
+    let ingest_result =
+        if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+            // Phase 5.1: JWT tenant guard - fail closed on mismatch
+            if request.tenant_id != rls_claims.tenant_id {
+                let msg = format!(
+                    "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
+                    rls_claims.tenant_id, request.tenant_id
+                );
+                tracing::warn!("ingest_artifact: tenant mismatch rejection");
+                return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+            }
 
-    let ingest_result = state
-        .graph_service
-        .ingest_artifact(graph_request)
-        .await
-        .map_err(ApiErrorResponse)?;
+            // Begin RLS-aware transaction
+            let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
+            let mut tx = match tx_result {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
+
+            // Get the SQL repo and ingest artifact within the transaction
+            if let Some(sql_repo) = state.graph_service.repo().as_sqlx_repo() {
+                // Build the artifact request (consuming the request)
+                let graph_request = intent_rebase_types::ArtifactIngestRequest {
+                    tenant_id: request.tenant_id,
+                    workflow_id: request.workflow_id,
+                    external_ref: request.external_ref,
+                    label: request.label,
+                    depends_on_intent_versions: request.depends_on_intent_versions,
+                    properties: request.properties,
+                    side_effect_context: None, // Side effects recorded post-commit
+                };
+
+                let result = sql_repo
+                    .ingest_artifact_with_tx(&mut tx, graph_request)
+                    .await;
+                let ingest_result = match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                            "RLS artifact ingest failed: {}",
+                            e
+                        ))));
+                    }
+                };
+
+                // Commit the transaction
+                if let Err(e) = tx.commit().await {
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "failed to commit RLS transaction: {}",
+                        e
+                    ))));
+                }
+
+                tracing::debug!(
+                    "ingest_artifact: RLS path success for tenant_id={}",
+                    rls_claims.tenant_id
+                );
+
+                ingest_result
+            } else {
+                // Fallback to non-RLS path if repo doesn't support SQL
+                tracing::warn!(
+                    "ingest_artifact: rls_pool set but repo doesn't support SQL, falling back"
+                );
+
+                // Delegate artifact ingest to graph_service - this handles prevalidation of
+                // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
+                // This avoids duplicating the core artifact ingest logic in intent-api.
+                let graph_request = intent_rebase_types::ArtifactIngestRequest {
+                    tenant_id: request.tenant_id,
+                    workflow_id: request.workflow_id,
+                    external_ref: request.external_ref,
+                    label: request.label,
+                    depends_on_intent_versions: request.depends_on_intent_versions,
+                    properties: request.properties,
+                    side_effect_context: None, // Consumed above for post-ingest recording
+                };
+
+                state
+                    .graph_service
+                    .ingest_artifact(graph_request)
+                    .await
+                    .map_err(ApiErrorResponse)?
+            }
+        } else {
+            // Non-RLS path (no JWT claims or rls_pool is None)
+
+            // Delegate artifact ingest to graph_service - this handles prevalidation of
+            // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
+            // This avoids duplicating the core artifact ingest logic in intent-api.
+            let graph_request = intent_rebase_types::ArtifactIngestRequest {
+                tenant_id: request.tenant_id,
+                workflow_id: request.workflow_id,
+                external_ref: request.external_ref,
+                label: request.label,
+                depends_on_intent_versions: request.depends_on_intent_versions,
+                properties: request.properties,
+                side_effect_context: None, // Consumed above for post-ingest recording
+            };
+
+            state
+                .graph_service
+                .ingest_artifact(graph_request)
+                .await
+                .map_err(ApiErrorResponse)?
+        };
 
     // Phase 3 Batch 1 (groundwork): Optionally record side effect if context provided
     let mut side_effect_recorded = false;
