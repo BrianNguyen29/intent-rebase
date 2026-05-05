@@ -103,7 +103,7 @@ const TENANT_B_UUID: &str = "550e8400-e29b-41d4-a716-446655440002";
 const TEST_WORKFLOW_UUID: &str = "550e8400-e29b-41d4-a716-446655440099";
 
 /// Key tables to verify RLS isolation on.
-/// All 10 tenant-scoped tables from migration 013.
+/// All 11 tenant-scoped tables (migration 013 + 015).
 const RLS_SCOPED_TABLES: &[&str] = &[
     "intents",
     "audit_events",
@@ -115,6 +115,7 @@ const RLS_SCOPED_TABLES: &[&str] = &[
     "compensation_actions",
     "side_effect_rollback_records",
     "policy_snapshot",
+    "orchestration_runs",
 ];
 
 /// Test result type for clearer error handling
@@ -720,6 +721,58 @@ async fn count_test_policy_snapshots_for_current_tenant(
         .fetch_one(&mut **tx)
         .await
         .map_err(|e| format!("Failed to count test policy_snapshots: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test orchestration_run for the given tenant within an RLS-scoped transaction.
+async fn create_test_orchestration_run_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    run_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO orchestration_runs (id, tenant_id, intent_id, action_ids, status,
+                                      initiated_by, created_at, succeeded_count, failed_count,
+                                      skipped_count, not_found_count, total_count, item_results)
+        VALUES ($1, $2, NULL, '[]'::jsonb, 'pending', 'rls-integration-test', NOW(),
+                0, 0, 0, 0, 0, '[]'::jsonb)
+        "#,
+    )
+    .bind(run_id)
+    .bind(tenant_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test orchestration_run: {}", e))?;
+
+    Ok(())
+}
+
+/// Count orchestration_runs visible to the current tenant context.
+async fn count_test_orchestration_runs_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_ids: &[Uuid],
+) -> TestResult<i64> {
+    if run_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = run_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM orchestration_runs WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in run_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test orchestration_runs: {}", e))?;
     Ok(count)
 }
 
@@ -2864,4 +2917,150 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
 
     pool.close().await;
     println!("test_rlc11_deeper_checkpoints_isolation PASSED");
+}
+
+/// Test: RLC-12 - Tenant isolation on orchestration_runs table.
+///
+/// Verifies that orchestration_runs rows are correctly isolated between tenants.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc12_tenant_isolation_orchestration_runs() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // Create test data for Tenant A
+    let tenant_a_run_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_orchestration_run_for_current_tenant(&mut tx, tenant_a_id, tenant_a_run_id)
+            .await
+            .expect("Failed to create test orchestration_run for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+    }
+
+    // Create test data for Tenant B
+    let tenant_b_run_id = Uuid::new_v4();
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_orchestration_run_for_current_tenant(&mut tx, tenant_b_id, tenant_b_run_id)
+            .await
+            .expect("Failed to create test orchestration_run for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+    }
+
+    // Verify Tenant A isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own =
+            count_test_orchestration_runs_for_current_tenant(&mut tx, &[tenant_a_run_id])
+                .await
+                .expect("Failed to count Tenant A orchestration_runs");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see their own orchestration_run"
+        );
+
+        let count_other =
+            count_test_orchestration_runs_for_current_tenant(&mut tx, &[tenant_b_run_id])
+                .await
+                .expect("Failed to count Tenant B orchestration_runs from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's orchestration_run"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // Verify Tenant B isolation
+    {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own =
+            count_test_orchestration_runs_for_current_tenant(&mut tx, &[tenant_b_run_id])
+                .await
+                .expect("Failed to count Tenant B orchestration_runs");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see their own orchestration_run"
+        );
+
+        let count_other =
+            count_test_orchestration_runs_for_current_tenant(&mut tx, &[tenant_a_run_id])
+                .await
+                .expect("Failed to count Tenant A orchestration_runs from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's orchestration_run"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    pool.close().await;
+    println!("test_rlc12_tenant_isolation_orchestration_runs PASSED");
 }

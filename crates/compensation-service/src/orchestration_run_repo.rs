@@ -29,6 +29,16 @@ pub trait OrchestrationRunRepository: Send + Sync {
         tenant_id: Uuid,
         limit: Option<usize>,
     ) -> Result<Vec<OrchestrationRun>, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxOrchestrationRunRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxOrchestrationRunRepository> {
+        None
+    }
 }
 
 /// In-memory implementation for testing and Phase 3 Batch 1.
@@ -313,6 +323,71 @@ impl OrchestrationRunRepository for SqlxOrchestrationRunRepository {
         })?;
 
         rows.into_iter().map(|r| self.row_to_run(r)).collect()
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxOrchestrationRunRepository> {
+        Some(self)
+    }
+}
+
+/// Separate impl block for SQL-specific methods that are not part of the trait.
+impl SqlxOrchestrationRunRepository {
+    /// Create an orchestration run within an external RLS-aware transaction.
+    ///
+    /// This method is used for RLS-wrapped operations where the transaction
+    /// is created by `RlsAwarePool::begin_with_tenant` which sets the RLS
+    /// tenant context before any operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `run` - The orchestration run to create
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert fails or if the transaction is invalid.
+    pub async fn create_run_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        run: OrchestrationRun,
+    ) -> Result<OrchestrationRun, IntentRebaseError> {
+        let action_ids_json = serde_json::to_value(&run.action_ids)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize action_ids: {}", e)))?;
+        let item_results_json = serde_json::to_value(&run.item_results)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize item_results: {}", e)))?;
+        let status_str = run_status_to_string(run.status);
+
+        sqlx::query(
+            r#"
+            INSERT INTO orchestration_runs (
+                id, tenant_id, intent_id, action_ids, status, initiated_by,
+                created_at, started_at, completed_at, succeeded_count, failed_count,
+                skipped_count, not_found_count, total_count, item_results
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            "#,
+        )
+        .bind(run.id)
+        .bind(run.tenant_id)
+        .bind(run.intent_id)
+        .bind(action_ids_json)
+        .bind(status_str)
+        .bind(&run.initiated_by)
+        .bind(run.created_at)
+        .bind(run.started_at)
+        .bind(run.completed_at)
+        .bind(run.succeeded_count as i32)
+        .bind(run.failed_count as i32)
+        .bind(run.skipped_count as i32)
+        .bind(run.not_found_count as i32)
+        .bind(run.total_count as i32)
+        .bind(item_results_json)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert orchestration run: {}", e)))?;
+
+        Ok(run)
     }
 }
 

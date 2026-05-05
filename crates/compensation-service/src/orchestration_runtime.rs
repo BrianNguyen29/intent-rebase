@@ -49,6 +49,14 @@ impl OrchestrationRuntime {
         }
     }
 
+    /// Returns a reference to the underlying orchestration run repository.
+    ///
+    /// This is used by RLS-aware handlers to access the SQL repository directly
+    /// for transaction-wrapped operations.
+    pub fn run_repo(&self) -> &Arc<dyn OrchestrationRunRepository> {
+        &self.run_repo
+    }
+
     /// Create and persist a new orchestration run in Pending state.
     ///
     /// This is used by the HTTP accepted flow so the API can return a durable
