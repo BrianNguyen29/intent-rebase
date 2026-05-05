@@ -165,7 +165,7 @@ impl TenantRepository for InMemoryTenantRepository {
         let mut result: Vec<Tenant> = tenants.values().cloned().collect();
 
         // Sort by created_at descending
-        result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
         if let Some(l) = limit {
             result.truncate(l);

@@ -17,6 +17,11 @@ on:
       - '**.md'
   workflow_dispatch:
     inputs:
+      run_tests:
+        description: 'Run cargo test (requires NATS/DB for integration tests)'
+        required: false
+        default: false
+        type: boolean
       run_build:
         description: 'Run cargo build (heavy)'
         required: false
@@ -90,6 +95,8 @@ jobs:
   test:
     name: Cargo Test
     runs-on: ubuntu-latest
+    # Only runs when explicitly triggered with run_tests input
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

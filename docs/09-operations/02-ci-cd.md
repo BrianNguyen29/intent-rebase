@@ -41,17 +41,17 @@ Lightweight sanity check only. Runs instantly, uses minimal resources.
 | Rust Format | `cargo fmt --all -- --check` | Style check |
 | Clippy Lints | `cargo clippy --workspace --all-targets -- -D warnings` | Lint + type check |
 | Cargo Check | `cargo check --workspace` | Fast type verification |
-| Cargo Test | `cargo test --workspace` | Unit tests (no DB) |
 | OpenAPI Validate | `npx spectral lint docs/04-api/openapi.yaml` | API contract check |
 
 **Total automatic runtime:** ~3-5 minutes (parallel jobs)
 
 #### Manual-Only Tier (requires `workflow_dispatch` with inputs)
 
-All four inputs default to `false` — no heavy job runs unless you explicitly enable it.
+All five inputs default to `false` — no heavy job runs unless you explicitly enable it.
 
 | Job | Input | Notes |
 |-----|-------|-------|
+| Cargo Test | `run_tests` | Unit tests (some require NATS/DB; use local for fast iteration) |
 | Cargo Build | `run_build` | Full release build |
 | Benchmark | `run_bench` | Criterion benchmarks |
 | Migration Integration Test | `run_test_db` | Postgres-backed integration tests |
