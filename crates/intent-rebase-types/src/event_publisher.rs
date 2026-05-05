@@ -300,7 +300,7 @@ impl InMemoryEventPublisher {
             result.extend(evts.clone());
         }
         // Sort by sequence for deterministic ordering
-        result.sort_by(|a, b| a.sequence.cmp(&b.sequence));
+        result.sort_by_key(|a| a.sequence);
         result
     }
 
