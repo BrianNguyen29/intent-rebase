@@ -1,17 +1,57 @@
 name: CI
 
+# Free-safe policy: automatic CI is lightweight only.
+# Heavy jobs (build, bench, test-db, docker-build) require explicit opt-in via workflow_dispatch.
+# This prevents accidental paid-resource use while keeping fast gates on every PR.
+
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
+    inputs:
+      run_build:
+        description: 'Run cargo build (heavy)'
+        required: false
+        default: false
+        type: boolean
+      run_bench:
+        description: 'Run benchmarks (heavy)'
+        required: false
+        default: false
+        type: boolean
+      run_test_db:
+        description: 'Run migration integration test (heavy)'
+        required: false
+        default: false
+        type: boolean
+      run_docker_build:
+        description: 'Run Docker build (heavy)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
+  # ─── Automatic lightweight jobs (run on every push/PR) ───────────────────────
+
   fmt:
     name: Rust Format
     runs-on: ubuntu-latest
@@ -72,9 +112,16 @@ jobs:
       - name: Validate OpenAPI spec
         run: npx --yes @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error
 
+  # ─── Manual-only heavy jobs (require workflow_dispatch input) ───────────────
+
   build:
     name: Cargo Build
     runs-on: ubuntu-latest
+    # Only runs when explicitly triggered with run_build input
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_build == 'true'
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,6 +136,11 @@ jobs:
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
+    # Only runs when explicitly triggered with run_bench input
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_bench == 'true'
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,11 +155,16 @@ jobs:
         with:
           name: criterion-reports
           path: crates/rebase-engine/target/criterion/**/report/
-          retention-days: 30
+          retention-days: 7
 
   test-db:
     name: Migration Integration Test
     runs-on: ubuntu-latest
+    # Only runs when explicitly triggered with run_test_db input
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_test_db == 'true'
+    defaults:
+      run:
+        shell: bash
     services:
       postgres:
         image: postgres:16-alpine
@@ -144,6 +201,11 @@ jobs:
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
+    # Only runs when explicitly triggered with run_docker_build input
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_docker_build == 'true'
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -155,5 +217,3 @@ jobs:
           push: false
           tags: intent-api:latest
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

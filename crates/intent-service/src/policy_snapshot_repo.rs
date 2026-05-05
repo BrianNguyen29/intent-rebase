@@ -125,7 +125,7 @@ impl PolicySnapshotRepository for InMemoryPolicySnapshotRepository {
             .collect();
 
         // Sort by intent_version descending (newest first)
-        result.sort_by(|a, b| b.intent_version.cmp(&a.intent_version));
+        result.sort_by_key(|b| std::cmp::Reverse(b.intent_version));
 
         Ok(result.into_iter().next())
     }
@@ -166,7 +166,7 @@ impl PolicySnapshotRepository for InMemoryPolicySnapshotRepository {
             .collect();
 
         // Sort by intent_version descending (newest first)
-        result.sort_by(|a, b| b.intent_version.cmp(&a.intent_version));
+        result.sort_by_key(|b| std::cmp::Reverse(b.intent_version));
 
         Ok(result)
     }

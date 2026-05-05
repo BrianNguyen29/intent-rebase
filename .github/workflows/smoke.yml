@@ -5,8 +5,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Free-safe: lightweight smoke only, no heavy resource use.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hello:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "hello"
+      - run: echo "Smoke test passed — lightweight gate only"

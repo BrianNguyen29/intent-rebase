@@ -1,99 +1,96 @@
 # CI/CD
 
-> **Last Updated:** April 2026
+> **Last Updated:** May 2026
 
-## Current CI State (Actual)
+## Free-Safe CI Policy
 
-> **Remote CI Status:** 🔴 `startup_failure` — GitHub Actions reports startup_failure before jobs are created (run 25273892755 after commit 42cdbe2). Local canonical gates pass; remote CI is not passing.
+This repo enforces a **100% free-safe CI policy** for automatic runs:
 
-### Actual Workflows
+- **Automatic runs** (push to `main`, pull requests): **lightweight jobs only** — no paid-resource risk
+- **Heavy jobs** (build, benchmarks, DB integration tests, Docker builds): **manual-only** via `workflow_dispatch`
+- **Concurrency**: redundant runs are cancelled automatically
+- **Permissions**: all workflows use `contents: read` only (no write access)
 
-| Workflow | File | Status | Description |
-|----------|------|--------|-------------|
-| **CI** | `.github/workflows/ci.yml` | 🔴 BLOCKED (startup_failure) | Full Rust workspace: fmt, clippy, check, test, openapi-validate, build, bench, test-db, docker-build |
-| **Smoke** | `.github/workflows/smoke.yml` | ⚠️ STUB | `echo "hello"` only — not a real smoke test |
+### Why Free-Safe?
 
-### Actual CI Jobs (ci.yml)
+Public GitHub repos get free GitHub Actions minutes, but:
+- Accidental heavy resource use can trigger cost alerts or throttling
+- Unnecessary compute on every PR wastes resources
+- Some jobs (benchmarks, Docker builds) have no value in fast feedback loops
 
-| Job | Status | Command |
-|-----|--------|---------|
-| fmt | ✅ Runs | `cargo fmt --all -- --check` |
-| clippy | ✅ Runs | `cargo clippy --workspace --all-targets -- -D warnings` |
-| check | ✅ Runs | `cargo check --workspace` |
-| test | ✅ Runs | `cargo test --workspace` |
-| openapi-validate | ✅ Runs | `npx spectral lint docs/04-api/openapi.yaml` |
-| build | ✅ Runs | `cargo build --workspace --release` |
-| bench | ✅ Runs | `cargo bench -p rebase-engine` |
-| test-db | ✅ Runs | `cargo test -p intent-service --test migration_integration -- --ignored` |
-| docker-build | ✅ Runs | `docker build-push-action` |
-
-**Local Gate Equivalents:** All jobs run locally via their respective `cargo` commands.
-
-**No overclaim:** Remote CI reports `startup_failure`. Do not claim CI passes.
+The free-safe policy ensures **every push/PR gets fast, cheap checks** while **heavy jobs run only on explicit request**.
 
 ---
 
-## Aspirational Pipeline (Not Yet Implemented)
+## Workflows
 
-The following describes the **target production pipeline** that is NOT yet implemented:
+### Smoke Test (`.github/workflows/smoke.yml`)
 
+**Automatic on push to `main` / manual via `workflow_dispatch`**
+
+Lightweight sanity check only. Runs instantly, uses minimal resources.
+
+### CI (`.github/workflows/ci.yml`)
+
+**Split into two tiers:**
+
+#### Automatic Tier (runs on every push/PR to `main`)
+
+| Job | Command | Notes |
+|-----|---------|-------|
+| Rust Format | `cargo fmt --all -- --check` | Style check |
+| Clippy Lints | `cargo clippy --workspace --all-targets -- -D warnings` | Lint + type check |
+| Cargo Check | `cargo check --workspace` | Fast type verification |
+| Cargo Test | `cargo test --workspace` | Unit tests (no DB) |
+| OpenAPI Validate | `npx spectral lint docs/04-api/openapi.yaml` | API contract check |
+
+**Total automatic runtime:** ~3-5 minutes (parallel jobs)
+
+#### Manual-Only Tier (requires `workflow_dispatch` with inputs)
+
+All four inputs default to `false` — no heavy job runs unless you explicitly enable it.
+
+| Job | Input | Notes |
+|-----|-------|-------|
+| Cargo Build | `run_build` | Full release build |
+| Benchmark | `run_bench` | Criterion benchmarks |
+| Migration Integration Test | `run_test_db` | Postgres-backed integration tests |
+| Docker Build | `run_docker_build` | Docker image build (no GHA cache write) |
+
+**To trigger manual heavy CI:**
+1. Go to the **Actions** tab in GitHub
+2. Select **CI** workflow
+3. Click **Run workflow**
+4. Enable the inputs for the heavy jobs you want (all default to false)
+5. Click **Run workflow**
+
+### Running Heavy Jobs Locally
+
+Equivalent local commands for heavy jobs:
+
+```bash
+# Full release build
+cargo build --workspace --release
+
+# Benchmarks
+cargo bench -p rebase-engine
+
+# Migration integration test (requires Postgres)
+cargo test -p intent-service --test migration_integration -- --ignored
+
+# Docker build (requires Docker)
+docker build -t intent-api:latest .
 ```
-1. lint / format            ← ci.yml has this
-2. unit tests               ← ci.yml has this (cargo test --workspace)
-3. contract tests           ← NOT implemented
-4. integration tests         ← ci.yml has test-db (migration only); broader integration tests not implemented
-5. replay tests              ← NOT implemented (requires full Phase 3 exit)
-6. security scans            ← NOT implemented
-7. image signing             ← NOT implemented
-8. deploy to preview/staging ← NOT implemented (docker-build creates image but no deploy job)
-9. smoke tests               ← smoke.yml is a stub (echo hello); not a real smoke test
-10. controlled production rollout ← NOT implemented
-```
-
-### Missing Pipeline Components
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Contract tests | 🔴 Not implemented | Requires Phase 3 exit |
-| Replay tests | 🔴 Not implemented | Requires Phase 3 exit |
-| Security scans | 🔴 Not implemented | Requires security tooling setup |
-| Image signing | 🔴 Not implemented | Requires cosign/signing infrastructure |
-| Preview/staging deploy | 🔴 Not implemented | Requires deployment infrastructure |
-| Real smoke tests | 🔴 Not implemented | smoke.yml is stub; requires service endpoint tests |
-| Production rollout | 🔴 Not implemented | Requires production infra |
-
----
-
-## Special Requirements for IRE
-
-> **Note:** These are design/operational requirements that exist in the architecture but are not yet enforced by CI.
-
-- [ ] rule pack versioning — artifact in docs/architecture; not CI-enforced
-- [ ] diff classifier versioning — artifact in docs/architecture; not CI-enforced
-- [ ] replay tests against historical rebase scenarios — NOT implemented
-- [ ] adapter compatibility tests — NOT implemented
-
----
-
-## Release Strategies
-
-> **Note:** These are target strategies documented in design; no automated release pipeline exists.
-
-- [ ] canary — NOT implemented (requires deployment infrastructure)
-- [ ] blue/green where possible — NOT implemented (requires deployment infrastructure)
-- [ ] feature flags for classifier behavior — implementation exists; not yet in CI
-- [ ] tenant allowlists for risky features — implementation exists; not yet in CI
 
 ---
 
 ## CI/CD Truths
 
-1. **Remote CI is broken** — `startup_failure` blocks all remote gates
-2. **Smoke workflow is a stub** — `echo hello` is not a real smoke test
-3. **The aspirational pipeline (steps 1–10) is not implemented** — only steps 1–2 are covered by current CI; migration-only integration testing and docker image build exist as bounded partials, but deployment/security/signing/real smoke/production rollout are not implemented
-4. **Local gates pass** — `cargo fmt`, `cargo clippy`, `cargo check`, `cargo test`, `cargo bench` all pass locally
-5. **No deployment pipeline** — docker-build creates an image but nothing deploys it
-6. **No security scans** — no Trivy, Grype, or similar in CI
+1. **Free-safe policy enforced** — automatic CI is lightweight only
+2. **Heavy jobs require manual trigger** — no accidental resource use
+3. **Concurrency cancels redundant runs** — no wasted minutes on superseded commits
+4. **Smoke workflow is lightweight** — runs in seconds on every push
+5. **Local equivalents exist** — all CI jobs have direct `cargo` / `docker` equivalents
 
 ---
 

@@ -281,7 +281,7 @@ impl IntentRepository for InMemoryIntentRepository {
             .filter_map(|id| versions.get(id).cloned())
             .collect();
 
-        result.sort_by(|a, b| a.version_number.cmp(&b.version_number));
+        result.sort_by_key(|a| a.version_number);
         Ok(result)
     }
 
@@ -703,7 +703,7 @@ impl IntentService {
         let mut versions = self.repo.get_versions_by_intent(intent_id).await?;
 
         // Sort descending by version number (newest first)
-        versions.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+        versions.sort_by_key(|b| std::cmp::Reverse(b.version_number));
 
         Ok(ListVersionsResponse {
             intent_id,

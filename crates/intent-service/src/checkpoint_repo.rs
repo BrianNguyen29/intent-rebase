@@ -125,7 +125,7 @@ impl CheckpointRepository for InMemoryCheckpointRepository {
             .collect();
 
         // Sort by created_at descending (newest first)
-        result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
         Ok(result)
     }
@@ -147,7 +147,7 @@ impl CheckpointRepository for InMemoryCheckpointRepository {
             .collect();
 
         // Sort by created_at descending (newest first)
-        result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
         Ok(result)
     }

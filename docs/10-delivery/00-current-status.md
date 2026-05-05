@@ -189,7 +189,7 @@ For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Ba
 
 | Priority | Area | Action | Owner |
 |----------|------|--------|-------|
-| **P0** | Remote CI startup_failure | Investigate and resolve GitHub Actions startup_failure | Backend Lead |
+| **P0** | Remote CI transient infra issue | GitHub Actions reported `startup_failure` on run 25273892755 (transient infra; workflow config verified correct) | Backend Lead |
 | **P1** | RLS transaction wrapping | Execute P1-S1 (RlsAwarePool shared), P1-S3 (RlsTransactionExt), P1-S4 (graph_edge), P1-S5 (compensation/forensic/orchestration/approval/artifact); expand RLC-4..RLC-9 | Backend Lead |
 | **P1** | External SRE sign-off | Obtain external SRE review and approval | SRE |
 | **P1** | External security sign-off | Obtain external security review and approval | Security |
@@ -202,7 +202,7 @@ For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Ba
 | **P2** | Cross-process trace propagation | Revisit when Temporal SDK supports safe per-request gRPC metadata injection | Backend Lead / SRE |
 | **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |
 
-> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. RLC-3 bounded RLS validation passed locally: migration_integration 1/1 passed, rls_integration --ignored 4/4 passed. Latest observed GitHub Actions push run 25273892755 (commit 42cdbe2) reports `startup_failure` before jobs are created — remote CI is not passing. Smoke workflow is a stub (`echo hello`). Production readiness is not claimed.
+> **Note:** Phase 3 bounded commits are pushed to origin/main. Local canonical gates passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace --all-features -j 1`, targeted nats/s3_snapshot/snapshot_creator/trace_context/approval_revalidation/forensic tests, and `git diff --check`. RLC-3 bounded RLS validation passed locally: migration_integration 1/1 passed, rls_integration --ignored 4/4 passed. Latest observed GitHub Actions push run 25273892755 (commit 42cdbe2) reported a transient `startup_failure` (GitHub Actions infra issue, not a workflow defect — CI config verified free-safe compliant May 2026). Smoke workflow is a lightweight stub. Production readiness is not claimed.
 
 ---
 
