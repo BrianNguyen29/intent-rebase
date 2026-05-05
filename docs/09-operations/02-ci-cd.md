@@ -6,19 +6,19 @@
 
 This repo enforces a **100% free-safe CI policy** for automatic runs:
 
-- **Automatic runs** (push to `main`, pull requests): **lightweight jobs only** — no paid-resource risk
-- **Heavy jobs** (build, benchmarks, DB integration tests, Docker builds): **manual-only** via `workflow_dispatch`
+- **Automatic runs disabled** — no CI runs on push or pull_request to avoid GitHub Actions costs
+- **All jobs are manual-only** via `workflow_dispatch` — user explicitly triggers when needed
 - **Concurrency**: redundant runs are cancelled automatically
 - **Permissions**: all workflows use `contents: read` only (no write access)
 
-### Why Free-Safe?
+### Why Manual-Only?
 
 Public GitHub repos get free GitHub Actions minutes, but:
 - Accidental heavy resource use can trigger cost alerts or throttling
-- Unnecessary compute on every PR wastes resources
-- Some jobs (benchmarks, Docker builds) have no value in fast feedback loops
+- CI is not needed for a personal project with no collaborators
+- All CI jobs have direct `cargo` / `docker` equivalents for local use
 
-The free-safe policy ensures **every push/PR gets fast, cheap checks** while **heavy jobs run only on explicit request**.
+The manual-only policy means **CI runs only when explicitly triggered** via the Actions tab.
 
 ---
 
@@ -26,42 +26,33 @@ The free-safe policy ensures **every push/PR gets fast, cheap checks** while **h
 
 ### Smoke Test (`.github/workflows/smoke.yml`)
 
-**Automatic on push to `main` / manual via `workflow_dispatch`**
+**Manual-only via `workflow_dispatch`**
 
-Lightweight sanity check only. Runs instantly, uses minimal resources.
+Lightweight sanity check. Runs instantly, uses minimal resources. Trigger manually from the Actions tab when needed.
 
 ### CI (`.github/workflows/ci.yml`)
 
-**Split into two tiers:**
+**Manual-only via `workflow_dispatch` with inputs**
 
-#### Automatic Tier (runs on every push/PR to `main`)
-
-| Job | Command | Notes |
-|-----|---------|-------|
-| Rust Format | `cargo fmt --all -- --check` | Style check |
-| Clippy Lints | `cargo clippy --workspace --all-targets -- -D warnings` | Lint + type check |
-| Cargo Check | `cargo check --workspace` | Fast type verification |
-| OpenAPI Validate | `npx spectral lint docs/04-api/openapi.yaml` | API contract check |
-
-**Total automatic runtime:** ~3-5 minutes (parallel jobs)
-
-#### Manual-Only Tier (requires `workflow_dispatch` with inputs)
-
-All five inputs default to `false` — no heavy job runs unless you explicitly enable it.
+All inputs default to `false` — no job runs unless you explicitly enable it.
 
 | Job | Input | Notes |
 |-----|-------|-------|
+| Rust Format | (none — runs on trigger) | Style check |
+| Clippy Lints | (none — runs on trigger) | Lint + type check |
+| Cargo Check | (none — runs on trigger) | Fast type verification |
+| OpenAPI Validate | (none — runs on trigger) | API contract check |
 | Cargo Test | `run_tests` | Unit tests (some require NATS/DB; use local for fast iteration) |
 | Cargo Build | `run_build` | Full release build |
 | Benchmark | `run_bench` | Criterion benchmarks |
 | Migration Integration Test | `run_test_db` | Postgres-backed integration tests |
 | Docker Build | `run_docker_build` | Docker image build (no GHA cache write) |
 
-**To trigger manual heavy CI:**
+**To trigger manual CI:**
 1. Go to the **Actions** tab in GitHub
-2. Select **CI** workflow
+2. Select **CI** or **Smoke Test** workflow
 3. Click **Run workflow**
-4. Enable the inputs for the heavy jobs you want (all default to false)
+4. For CI, enable the inputs for the jobs you want (all default to false)
 5. Click **Run workflow**
 
 ### Running Heavy Jobs Locally
@@ -86,10 +77,10 @@ docker build -t intent-api:latest .
 
 ## CI/CD Truths
 
-1. **Free-safe policy enforced** — automatic CI is lightweight only
-2. **Heavy jobs require manual trigger** — no accidental resource use
+1. **Automatic CI is disabled** — no runs on push or pull_request
+2. **All jobs require manual trigger** — user explicitly triggers via workflow_dispatch
 3. **Concurrency cancels redundant runs** — no wasted minutes on superseded commits
-4. **Smoke workflow is lightweight** — runs in seconds on every push
+4. **Smoke workflow is manual-only** — trigger from Actions tab when needed
 5. **Local equivalents exist** — all CI jobs have direct `cargo` / `docker` equivalents
 
 ---

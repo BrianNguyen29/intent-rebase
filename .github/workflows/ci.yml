@@ -1,20 +1,10 @@
 name: CI
 
-# Free-safe policy: automatic CI is lightweight only.
-# Heavy jobs (build, bench, test-db, docker-build) require explicit opt-in via workflow_dispatch.
-# This prevents accidental paid-resource use while keeping fast gates on every PR.
+# Manual-only CI: no automatic runs on push or pull_request.
+# All jobs require explicit workflow_dispatch trigger from the Actions tab.
+# This disables GitHub Actions usage to avoid costs on this public repo.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
   workflow_dispatch:
     inputs:
       run_tests:
