@@ -97,7 +97,7 @@ impl OrchestrationRunRepository for InMemoryOrchestrationRunRepository {
             ids.iter().filter_map(|id| runs.get(id).cloned()).collect();
 
         // Sort by created_at descending (most recent first)
-        result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
         if let Some(l) = limit {
             result.truncate(l);

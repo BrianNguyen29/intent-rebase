@@ -192,7 +192,7 @@ impl CompensationActionRepository for InMemoryCompensationActionRepository {
             .collect();
 
         // Sort by generated_at descending
-        result.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.generated_at));
 
         if let Some(l) = limit {
             result.truncate(l);

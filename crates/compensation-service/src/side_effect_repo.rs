@@ -165,7 +165,7 @@ impl SideEffectRepository for InMemorySideEffectRepository {
             .collect();
 
         // Sort by occurred_at descending (newest first)
-        result.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.occurred_at));
 
         Ok(result)
     }

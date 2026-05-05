@@ -179,7 +179,7 @@ impl RollbackRecordRepository for InMemoryRollbackRecordRepository {
             .collect();
 
         // Sort by recorded_at descending (newest first)
-        result.sort_by(|a, b| b.recorded_at.cmp(&a.recorded_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.recorded_at));
 
         if let Some(l) = limit {
             result.truncate(l);
