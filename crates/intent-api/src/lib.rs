@@ -67,12 +67,14 @@ pub use nats_event_publisher::NatsEventPublisher;
 // Re-export types for convenience (Phase 2 bounded file decomposition slice)
 pub use types::{
     ApiError, ApprovalRequestResponse, ApprovalRequestSummary, ApprovalRevalidationResponse,
-    ApproveApprovalRequestBody, DiffResponse, ErrorDetails, ExpireApprovalRequestBody,
+    ApproveApprovalRequestBody, ApproveCompensationActionBody, CompensationActionResponse,
+    DiffResponse, ErrorDetails, ExecuteCompensationActionBody, ExpireApprovalRequestBody,
     GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ListCompensationActionsQuery, ListCompensationActionsResponse,
     ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, PolicySnapshotResponse,
     RebaseApplyResponse, RebasePreviewResponse, RejectApprovalRequestBody, ReplayRequest,
-    ReplayResponse,
+    ReplayResponse, WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -5444,19 +5446,6 @@ async fn get_orchestration_dashboard(
 // Compensation Action Handlers (Phase 3 Batch 1 bounded execution slice)
 // ============================================================================
 
-/// Query parameters for listing compensation actions
-#[derive(Debug, Deserialize)]
-pub struct ListCompensationActionsQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Response for listing compensation actions
-#[derive(Debug, Serialize)]
-pub struct ListCompensationActionsResponse {
-    pub compensation_actions: Vec<compensation_service::CompensationAction>,
-    pub total: usize,
-}
-
 /// GET /intents/{intent_id}/compensation-actions - List compensation actions for an intent
 ///
 /// Phase 3 Batch 1 (bounded read-only slice): Returns all compensation actions
@@ -5527,92 +5516,6 @@ async fn list_compensation_actions(
         compensation_actions: actions,
         total,
     }))
-}
-
-/// Request body for approve compensation action
-#[derive(Debug, Clone, Deserialize)]
-pub struct ApproveCompensationActionBody {
-    /// Lock version for optimistic concurrency control
-    pub lock_version: i32,
-    /// Optional actor who approved (for audit purposes)
-    #[serde(default)]
-    pub approved_by: Option<String>,
-}
-
-/// Request body for waive compensation action
-#[derive(Debug, Clone, Deserialize)]
-pub struct WaiveCompensationActionBody {
-    /// Lock version for optimistic concurrency control
-    pub lock_version: i32,
-    /// Optional actor who waived (for audit purposes)
-    #[serde(default)]
-    pub waived_by: Option<String>,
-}
-
-/// Request body for execute compensation action
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExecuteCompensationActionBody {
-    /// Optional actor who executed (for audit purposes)
-    #[serde(default)]
-    pub executed_by: Option<String>,
-}
-
-/// Response for compensation action mutation (approve/waive/execute)
-#[derive(Debug, Clone, Serialize)]
-pub struct CompensationActionResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub intent_id: Uuid,
-    pub status: String,
-    pub strategy_type: String,
-    pub feasibility: String,
-    pub rationale: String,
-    pub attempt_count: i32,
-    pub lock_version: i32,
-    pub approved_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub approved_by: Option<String>,
-    pub waived_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub waived_by: Option<String>,
-    pub executed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub executed_by: Option<String>,
-    pub failed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub execution_result_payload: Option<serde_json::Value>,
-}
-
-impl From<compensation_service::CompensationAction> for CompensationActionResponse {
-    fn from(action: compensation_service::CompensationAction) -> Self {
-        // Use serde_json to serialize enum fields to snake_case strings
-        // instead of Debug formatting (which produces PascalCase).
-        // serde_json::to_string returns the JSON representation including quotes,
-        // so we trim the surrounding quotes.
-        fn to_snake_case_string<T: serde::Serialize>(val: &T) -> String {
-            serde_json::to_string(val)
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default()
-        }
-
-        Self {
-            id: action.id,
-            tenant_id: action.tenant_id,
-            intent_id: action.intent_id,
-            status: to_snake_case_string(&action.status),
-            strategy_type: to_snake_case_string(&action.strategy_type),
-            feasibility: to_snake_case_string(&action.feasibility),
-            rationale: action.rationale,
-            attempt_count: action.attempt_count,
-            lock_version: action.lock_version,
-            approved_at: action.approved_at,
-            approved_by: action.approved_by,
-            waived_at: action.waived_at,
-            waived_by: action.waived_by,
-            executed_at: action.executed_at,
-            executed_by: action.executed_by,
-            failed_at: action.failed_at,
-            execution_result_payload: action
-                .execution_result_payload
-                .map(|r| serde_json::to_value(&r).unwrap_or_else(|_| serde_json::json!({}))),
-        }
-    }
 }
 
 /// POST /compensation-actions/{action_id}/approve - Approve a pending compensation action
