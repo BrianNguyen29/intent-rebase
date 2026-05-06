@@ -75,9 +75,10 @@ pub use types::{
     ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
     ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-    PolicySnapshotResponse, RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery,
-    RejectApprovalRequestBody, ReplayRequest, ReplayResponse, SideEffectSummary,
-    TriggerReapprovalRequest, TriggerReapprovalResponse, WaiveCompensationActionBody,
+    PolicySnapshotResponse, ReapproveCompensationActionBody, RebaseApplyResponse,
+    RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
+    ReplayResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -5926,13 +5927,6 @@ async fn execute_compensation_action(
         .map_err(ApiErrorResponse)?;
 
     Ok(Json(CompensationActionResponse::from(updated)))
-}
-
-/// Request body for reapprove compensation action (manual retry)
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReapproveCompensationActionBody {
-    /// Lock version for optimistic concurrency control
-    pub lock_version: i32,
 }
 
 /// Response for listing DLQ candidates

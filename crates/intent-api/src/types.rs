@@ -455,6 +455,13 @@ pub struct ExecuteCompensationActionBody {
     pub executed_by: Option<String>,
 }
 
+/// Request body for reapprove compensation action (manual retry)
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReapproveCompensationActionBody {
+    /// Lock version for optimistic concurrency control
+    pub lock_version: i32,
+}
+
 /// Response for compensation action mutation (approve/waive/execute)
 #[derive(Debug, Clone, Serialize)]
 pub struct CompensationActionResponse {
