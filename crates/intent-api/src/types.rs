@@ -845,3 +845,58 @@ pub struct OrchestrationDryRunSummaryResponse {
     pub no_action: usize,
     pub not_found: usize,
 }
+
+// =============================================================================
+// Batch Orchestration Types
+// =============================================================================
+
+/// Query parameters for manual orchestration endpoints
+#[derive(Debug, Deserialize)]
+pub struct OrchestrationQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Request body for batch orchestration commands.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchOrchestrationRequest {
+    /// List of compensation action IDs to process
+    pub action_ids: Vec<Uuid>,
+    /// Optional actor who initiated the batch (for audit purposes)
+    #[serde(default)]
+    pub initiated_by: Option<String>,
+}
+
+/// A single item outcome from a batched command.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchItemOutcomeResponse {
+    /// The compensation action ID
+    pub action_id: Uuid,
+    /// Whether this item succeeded
+    pub success: bool,
+    /// The resulting action (if successful)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<CompensationActionResponse>,
+    /// The error that occurred (if failed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Summary for batched orchestration results.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchOrchestrationSummaryResponse {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub not_found: usize,
+}
+
+/// Response for batch orchestration commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchOrchestrationResponse {
+    /// Per-item outcomes
+    pub outcomes: Vec<BatchItemOutcomeResponse>,
+    /// Actions that were not found
+    pub not_found: Vec<Uuid>,
+    /// Summary counts
+    pub summary: BatchOrchestrationSummaryResponse,
+}
