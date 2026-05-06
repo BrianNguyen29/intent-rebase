@@ -68,15 +68,16 @@ pub use nats_event_publisher::NatsEventPublisher;
 pub use types::{
     ApiError, ApprovalRequestResponse, ApprovalRequestSummary, ApprovalRevalidationResponse,
     ApproveApprovalRequestBody, ApproveCompensationActionBody, CompensationActionResponse,
-    CompensationSimulationRequest, DiffResponse, ErrorDetails, ExecuteCompensationActionBody,
-    ExpireApprovalRequestBody, GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery,
-    GetPolicySnapshotQuery, ListCompensationActionsQuery, ListCompensationActionsResponse,
-    ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
-    ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
-    ListSideEffectsQuery, ListSideEffectsResponse, PolicySnapshotResponse, RebaseApplyResponse,
-    RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
-    ReplayResponse, TriggerReapprovalRequest, TriggerReapprovalResponse,
-    WaiveCompensationActionBody,
+    CompensationActionStatusCounts, CompensationActionSummary, CompensationSimulationRequest,
+    DiffResponse, ErrorDetails, ExecuteCompensationActionBody, ExpireApprovalRequestBody,
+    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ListCompensationActionsQuery, ListCompensationActionsResponse, ListGraphEdgesQuery,
+    ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
+    ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
+    PolicySnapshotResponse, RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery,
+    RejectApprovalRequestBody, ReplayRequest, ReplayResponse, SideEffectSummary,
+    TriggerReapprovalRequest, TriggerReapprovalResponse, WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -4991,63 +4992,6 @@ async fn list_side_effects(
 // ============================================================================
 // Intent Orchestration Dashboard (Phase 3 Batch 1 bounded read-only slice)
 // ============================================================================
-
-/// Query parameters for orchestration dashboard
-#[derive(Debug, Deserialize)]
-pub struct OrchestrationDashboardQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Summary counts for compensation actions by status
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CompensationActionStatusCounts {
-    pub pending: usize,
-    pub approved: usize,
-    pub executed: usize,
-    pub failed: usize,
-    pub waived: usize,
-}
-
-/// Summary of side effects for an intent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SideEffectSummary {
-    pub total: usize,
-    pub irreversible_count: usize,
-    pub auto_compensatable_count: usize,
-}
-
-/// Summary of compensation actions for an intent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompensationActionSummary {
-    pub total: usize,
-    pub status_counts: CompensationActionStatusCounts,
-    pub retryable_failed_count: usize,
-    pub dlq_candidate_count: usize,
-    pub reapprovable_count: usize,
-    pub auto_executable_count: usize,
-}
-
-/// Response for the intent orchestration dashboard endpoint
-///
-/// Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
-/// of side effects and compensation actions for a single intent within a tenant.
-///
-/// **This endpoint is READ-ONLY** - it does not trigger any mutations.
-/// It only queries existing data and computes summary statistics.
-///
-/// **Summary fields are truthful:**
-/// - `side_effect_summary` counts are derived from persisted side effects
-/// - `compensation_action_summary` counts are derived from persisted compensation actions
-/// - No batch execution, orchestration engine, or background processing is claimed
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrchestrationDashboardResponse {
-    pub intent_id: Uuid,
-    pub tenant_id: Uuid,
-    pub side_effects: Vec<compensation_service::SideEffect>,
-    pub side_effect_summary: SideEffectSummary,
-    pub compensation_actions: Vec<compensation_service::CompensationAction>,
-    pub compensation_action_summary: CompensationActionSummary,
-}
 
 /// GET /intents/{intent_id}/orchestration-dashboard - Get orchestration dashboard for an intent
 ///
