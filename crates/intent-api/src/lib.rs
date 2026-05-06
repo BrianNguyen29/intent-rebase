@@ -69,19 +69,19 @@ pub use types::{
     ApiError, ApprovalRequestResponse, ApprovalRequestSummary, ApprovalRevalidationResponse,
     ApproveApprovalRequestBody, ApproveCompensationActionBody, BatchCandidatesSummary,
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
-    CompensationSimulationRequest, DiffResponse, ErrorDetails, ExecuteCompensationActionBody,
-    ExpireApprovalRequestBody, FeasibilityCounts, GetLatestPolicySnapshotQuery,
-    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, ListBatchCandidatesQuery,
-    ListBatchCandidatesResponse, ListCompensationActionsQuery, ListCompensationActionsResponse,
-    ListDlqCandidatesQuery, ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
-    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
-    ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
-    ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicySnapshotResponse,
-    ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
-    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
-    SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
-    WaiveCompensationActionBody,
+    CompensationSimulationRequest, CreateOrchestrationRunRequest, DiffResponse, ErrorDetails,
+    ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
+    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
+    ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
+    ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
+    ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
+    ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
+    OrchestrationDashboardResponse, OrchestrationRunQuery, PlanCompensationActionsRequest,
+    PlanCompensationActionsResponse, PolicySnapshotResponse, ReapproveCompensationActionBody,
+    RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody,
+    ReplayRequest, ReplayResponse, SideEffectSummary, TriggerReapprovalRequest,
+    TriggerReapprovalResponse, WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -6389,25 +6389,6 @@ async fn plan_compensation_actions(
 // ============================================================================
 // Orchestration Run Handlers (Phase 3 Batch 1 bounded single-shot HTTP slice)
 // ============================================================================
-
-/// Request body for creating an orchestration run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateOrchestrationRunRequest {
-    /// List of compensation action IDs to process in this run.
-    pub action_ids: Vec<Uuid>,
-    /// Optional intent scope for this run.
-    #[serde(default)]
-    pub intent_id: Option<Uuid>,
-    /// Optional actor who initiated this run (for audit purposes).
-    #[serde(default)]
-    pub initiated_by: Option<String>,
-}
-
-/// Query parameters for getting/listing orchestration runs.
-#[derive(Debug, Deserialize)]
-pub struct OrchestrationRunQuery {
-    pub tenant_id: Uuid,
-}
 
 /// Response for an orchestration run.
 #[derive(Debug, Clone, Serialize, Deserialize)]

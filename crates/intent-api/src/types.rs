@@ -738,3 +738,26 @@ pub struct PlanCompensationActionsRequest {
     /// Workflow ID that initiated the rebase
     pub workflow_id: Uuid,
 }
+
+// =============================================================================
+// Orchestration Run Types
+// =============================================================================
+
+/// Request body for creating an orchestration run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateOrchestrationRunRequest {
+    /// List of compensation action IDs to process in this run.
+    pub action_ids: Vec<Uuid>,
+    /// Optional intent scope for this run.
+    #[serde(default)]
+    pub intent_id: Option<Uuid>,
+    /// Optional actor who initiated this run (for audit purposes).
+    #[serde(default)]
+    pub initiated_by: Option<String>,
+}
+
+/// Query parameters for getting/listing orchestration runs.
+#[derive(Debug, Deserialize)]
+pub struct OrchestrationRunQuery {
+    pub tenant_id: Uuid,
+}
