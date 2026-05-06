@@ -364,7 +364,7 @@ pub struct ListGraphEdgesQuery {
 // Compensation Action Types
 // =============================================================================
 
-use compensation_service::CompensationAction;
+use compensation_service::{CompensationAction, SideEffect};
 
 /// Query parameters for listing compensation actions
 #[derive(Debug, Deserialize)]
@@ -463,6 +463,23 @@ impl From<CompensationAction> for CompensationActionResponse {
                 .map(|r| serde_json::to_value(&r).unwrap_or_else(|_| serde_json::json!({}))),
         }
     }
+}
+
+// =============================================================================
+// Side Effect Types
+// =============================================================================
+
+/// Query parameters for listing side effects
+#[derive(Debug, Deserialize)]
+pub struct ListSideEffectsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for listing side effects
+#[derive(Debug, Serialize)]
+pub struct ListSideEffectsResponse {
+    pub side_effects: Vec<SideEffect>,
+    pub total: usize,
 }
 
 // =============================================================================

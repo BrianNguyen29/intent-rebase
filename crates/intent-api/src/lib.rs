@@ -73,8 +73,9 @@ pub use types::{
     GetPolicySnapshotQuery, ListCompensationActionsQuery, ListCompensationActionsResponse,
     ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
     ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
-    PolicySnapshotResponse, RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery,
-    RejectApprovalRequestBody, ReplayRequest, ReplayResponse, WaiveCompensationActionBody,
+    ListSideEffectsQuery, ListSideEffectsResponse, PolicySnapshotResponse, RebaseApplyResponse,
+    RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
+    ReplayResponse, WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -4971,19 +4972,6 @@ async fn metrics_handler() -> impl IntoResponse {
 // ============================================================================
 // Side Effect Handlers (Phase 3 Batch 1 groundwork)
 // ============================================================================
-
-/// Query parameters for listing side effects
-#[derive(Debug, Deserialize)]
-pub struct ListSideEffectsQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Response for listing side effects
-#[derive(Debug, Serialize)]
-pub struct ListSideEffectsResponse {
-    pub side_effects: Vec<compensation_service::SideEffect>,
-    pub total: usize,
-}
 
 /// GET /intents/{intent_id}/side-effects - List side effects for an intent
 ///
