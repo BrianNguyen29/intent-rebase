@@ -75,7 +75,8 @@ pub use types::{
     ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
     ListSideEffectsQuery, ListSideEffectsResponse, PolicySnapshotResponse, RebaseApplyResponse,
     RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
-    ReplayResponse, WaiveCompensationActionBody,
+    ReplayResponse, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -3994,54 +3995,6 @@ async fn revalidate_approval_request(
 // ============================================================================
 // ADR-07: Approval Revalidation/Re-approval API (Phase 2b bounded slice)
 // ============================================================================
-
-/// Request body for POST /approval-requests/trigger-reapproval
-///
-/// **ADR-07 bounded slice**: Creates a pending approval request when scope hashes differ.
-/// If scope hashes match, returns 400 Bad Request (no duplicate reapproval created).
-///
-/// **Scope**: Non-production bounded trigger — creates approval record and returns
-/// queue intent. Does NOT send notifications, trigger orchestration, or modify
-/// existing approval state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriggerReapprovalRequest {
-    /// Intent ID to request re-approval for
-    pub intent_id: Uuid,
-    /// Original intent version that was previously approved
-    pub original_version_from: i32,
-    /// Current intent version that requires re-approval
-    pub current_version_to: i32,
-    /// Scope hash at the time of original approval
-    pub original_scope_hash: String,
-    /// Current scope hash (computed from latest intent state)
-    pub current_scope_hash: String,
-    /// Human-readable reason for re-approval requirement
-    pub reapproval_reason: String,
-}
-
-/// Response for POST /approval-requests/trigger-reapproval
-///
-/// **ADR-07 bounded slice**: Returns created approval request metadata.
-/// notification_intent=true is advisory only — actual notification delivery
-/// is Phase 3 scope.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriggerReapprovalResponse {
-    /// ID of the newly created approval request
-    pub approval_request_id: Uuid,
-    /// Intent ID this approval request is for
-    pub intent_id: Uuid,
-    /// Original version that was previously approved
-    pub intent_version_from: i32,
-    /// Current version requiring re-approval
-    pub intent_version_to: i32,
-    /// Approval status (always "Pending" for newly created requests)
-    pub status: String,
-    /// Advisory flag indicating notification SHOULD be sent
-    /// Note: Actual notification delivery is Phase 3 scope
-    pub notification_intent: bool,
-    /// Human-readable reason for re-approval
-    pub reason: String,
-}
 
 /// POST /approval-requests/trigger-reapproval - Trigger re-approval for scope change
 ///
