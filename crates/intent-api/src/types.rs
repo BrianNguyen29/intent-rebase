@@ -665,3 +665,37 @@ pub struct ListDlqCandidatesResponse {
     pub dlq_candidates: Vec<CompensationAction>,
     pub total: usize,
 }
+
+// =============================================================================
+// Batch Candidates Types
+// =============================================================================
+
+/// Query parameters for listing batch candidates
+#[derive(Debug, Deserialize)]
+pub struct ListBatchCandidatesQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Summary counts for batch candidate categories
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchCandidatesSummary {
+    pub pending_approval_count: usize,
+    pub approved_service_executable_count: usize,
+    pub retryable_failed_count: usize,
+    pub dlq_count: usize,
+}
+
+/// Response for listing batch candidates across all categories
+#[derive(Debug, Clone, Serialize)]
+pub struct ListBatchCandidatesResponse {
+    /// Actions in Pending status awaiting approval
+    pub pending_approval_candidates: Vec<CompensationAction>,
+    /// Approved actions with Service-executable feasibility that can be service-executed
+    pub approved_service_executable_candidates: Vec<CompensationAction>,
+    /// Failed actions that can be reapproved (retryable error + budget remains)
+    pub retryable_failed_candidates: Vec<CompensationAction>,
+    /// Failed actions that exhausted retry budget or have non-retryable errors
+    pub dlq_candidates: Vec<CompensationAction>,
+    /// Summary counts for each category
+    pub summary: BatchCandidatesSummary,
+}

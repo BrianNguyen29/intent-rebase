@@ -67,10 +67,11 @@ pub use nats_event_publisher::NatsEventPublisher;
 // Re-export types for convenience (Phase 2 bounded file decomposition slice)
 pub use types::{
     ApiError, ApprovalRequestResponse, ApprovalRequestSummary, ApprovalRevalidationResponse,
-    ApproveApprovalRequestBody, ApproveCompensationActionBody, CompensationActionResponse,
-    CompensationActionStatusCounts, CompensationActionSummary, CompensationSimulationRequest,
-    DiffResponse, ErrorDetails, ExecuteCompensationActionBody, ExpireApprovalRequestBody,
-    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ApproveApprovalRequestBody, ApproveCompensationActionBody, BatchCandidatesSummary,
+    CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
+    CompensationSimulationRequest, DiffResponse, ErrorDetails, ExecuteCompensationActionBody,
+    ExpireApprovalRequestBody, GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery,
+    GetPolicySnapshotQuery, ListBatchCandidatesQuery, ListBatchCandidatesResponse,
     ListCompensationActionsQuery, ListCompensationActionsResponse, ListDlqCandidatesQuery,
     ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
     ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
@@ -5930,30 +5931,6 @@ async fn execute_compensation_action(
     Ok(Json(CompensationActionResponse::from(updated)))
 }
 
-/// Response for listing batch candidates across all categories
-#[derive(Debug, Clone, Serialize)]
-pub struct ListBatchCandidatesResponse {
-    /// Actions in Pending status awaiting approval
-    pub pending_approval_candidates: Vec<compensation_service::CompensationAction>,
-    /// Approved actions with Service-executable feasibility that can be service-executed
-    pub approved_service_executable_candidates: Vec<compensation_service::CompensationAction>,
-    /// Failed actions that can be reapproved (retryable error + budget remains)
-    pub retryable_failed_candidates: Vec<compensation_service::CompensationAction>,
-    /// Failed actions that exhausted retry budget or have non-retryable errors
-    pub dlq_candidates: Vec<compensation_service::CompensationAction>,
-    /// Summary counts for each category
-    pub summary: BatchCandidatesSummary,
-}
-
-/// Summary counts for batch candidate categories
-#[derive(Debug, Clone, Serialize)]
-pub struct BatchCandidatesSummary {
-    pub pending_approval_count: usize,
-    pub approved_service_executable_count: usize,
-    pub retryable_failed_count: usize,
-    pub dlq_count: usize,
-}
-
 /// GET /compensation-actions/dlq - List DLQ (Dead Letter Queue) candidates
 ///
 /// Phase 3 Batch 1 (bounded manual retry slice): Returns all compensation
@@ -6023,12 +6000,6 @@ async fn list_dlq_candidates(
         dlq_candidates,
         total,
     }))
-}
-
-/// Query parameters for listing batch candidates
-#[derive(Debug, Deserialize)]
-pub struct ListBatchCandidatesQuery {
-    pub tenant_id: Uuid,
 }
 
 /// GET /compensation-actions/batch-candidates - List batch candidates across all categories
