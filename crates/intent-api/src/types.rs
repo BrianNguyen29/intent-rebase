@@ -9,6 +9,7 @@
 //! and complex composed types.
 
 use chrono::{DateTime, Utc};
+use forensic_service::{BundlePurpose, BundleStatus};
 use intent_rebase_types::{
     AffectedItemsPreview, EdgeType, ExternalRef, GraphEdge, GraphNode, IntentVersion, NodeType,
     PolicySnapshot, ScopeDefinition, SideEffectCaptureContext,
@@ -899,4 +900,92 @@ pub struct BatchOrchestrationResponse {
     pub not_found: Vec<Uuid>,
     /// Summary counts
     pub summary: BatchOrchestrationSummaryResponse,
+}
+
+// =============================================================================
+// Forensic Bundle Types
+// =============================================================================
+
+/// Time range for forensic bundle request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleTimeRange {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// Summary of contents in a forensic bundle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleContentsSummary {
+    pub intent_versions: usize,
+    pub artifacts: usize,
+    pub approvals: usize,
+    pub audit_events: usize,
+    pub policy_snapshots: usize,
+}
+
+/// Integrity information for a forensic bundle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleIntegrityInfo {
+    /// SHA-256 hash of the bundle manifest
+    pub manifest_hash: String,
+    /// Whether the hash chain was verified (always false for new bundles)
+    pub chain_verified: bool,
+    /// When integrity was computed
+    pub verification_timestamp: DateTime<Utc>,
+}
+
+/// Request body for forensic bundle generation
+///
+/// **P4 bounded slice:** Collects real data, generates a bundle manifest,
+/// persists it to S3/MinIO, and records the bundle in the repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent IDs to include in the bundle
+    pub intent_ids: Vec<Uuid>,
+    /// Time range to collect data for
+    pub time_range: ForensicBundleTimeRange,
+    /// Purpose of the bundle
+    pub purpose: BundlePurpose,
+    /// Actor who triggered bundle generation
+    #[serde(default = "default_actor")]
+    pub created_by: String,
+}
+
+fn default_actor() -> String {
+    "system".to_string()
+}
+
+/// Response for forensic bundle creation
+///
+/// **P4 bounded slice:** Returns the generated bundle manifest with
+/// storage location and size. The bundle bytes are already persisted
+/// to S3/MinIO when this response is returned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleResponse {
+    /// Unique identifier for the generated bundle
+    pub bundle_id: Uuid,
+    /// When the bundle was created
+    pub created_at: DateTime<Utc>,
+    /// Actor who triggered bundle generation
+    pub created_by: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Time range covered by the bundle
+    pub time_range: ForensicBundleTimeRange,
+    /// Bundle generation status (always "ready" on success)
+    pub status: BundleStatus,
+    /// Purpose of the bundle
+    pub purpose: BundlePurpose,
+    /// Summary of bundle contents
+    pub contents: ForensicBundleContentsSummary,
+    /// Integrity information
+    pub integrity: ForensicBundleIntegrityInfo,
+    /// Storage location (S3/MinIO path)
+    pub storage_location: String,
+    /// Size of stored bundle in bytes
+    pub bundle_size_bytes: usize,
+    /// Human-readable message
+    pub message: String,
 }

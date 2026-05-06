@@ -73,19 +73,21 @@ pub use types::{
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
     CompensationSimulationRequest, CreateOrchestrationRunRequest, DiffResponse, ErrorDetails,
     ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
-    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
-    ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
-    ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
-    ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
-    ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
-    ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
-    OrchestrationDashboardResponse, OrchestrationDryRunProposalResponse,
-    OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationDryRunSummaryResponse,
-    OrchestrationQuery, OrchestrationRunQuery, PlanCompensationActionsRequest,
-    PlanCompensationActionsResponse, PolicySnapshotResponse, ReapproveCompensationActionBody,
-    RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody,
-    ReplayRequest, ReplayResponse, SideEffectSummary, TriggerReapprovalRequest,
-    TriggerReapprovalResponse, WaiveCompensationActionBody,
+    ForensicBundleContentsSummary, ForensicBundleIntegrityInfo, ForensicBundleRequest,
+    ForensicBundleResponse, ForensicBundleTimeRange, GetLatestPolicySnapshotQuery,
+    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, ListBatchCandidatesQuery,
+    ListBatchCandidatesResponse, ListCompensationActionsQuery, ListCompensationActionsResponse,
+    ListDlqCandidatesQuery, ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
+    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
+    ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
+    OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
+    OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
+    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicySnapshotResponse,
+    ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
+    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
+    SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -9022,90 +9024,6 @@ async fn ingest_artifact(
 // ============================================================================
 // Forensic Bundle Handler (P4 bounded slice)
 // ============================================================================
-
-/// Request body for forensic bundle generation
-///
-/// **P4 bounded slice:** Collects real data, generates a bundle manifest,
-/// persists it to S3/MinIO, and records the bundle in the repository.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicBundleRequest {
-    /// Tenant ID for multi-tenancy isolation
-    pub tenant_id: Uuid,
-    /// Intent IDs to include in the bundle
-    pub intent_ids: Vec<Uuid>,
-    /// Time range to collect data for
-    pub time_range: ForensicBundleTimeRange,
-    /// Purpose of the bundle
-    pub purpose: forensic_service::BundlePurpose,
-    /// Actor who triggered bundle generation
-    #[serde(default = "default_actor")]
-    pub created_by: String,
-}
-
-fn default_actor() -> String {
-    "system".to_string()
-}
-
-/// Time range for forensic bundle request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicBundleTimeRange {
-    pub start: chrono::DateTime<chrono::Utc>,
-    pub end: chrono::DateTime<chrono::Utc>,
-}
-
-/// Response for forensic bundle creation
-///
-/// **P4 bounded slice:** Returns the generated bundle manifest with
-/// storage location and size. The bundle bytes are already persisted
-/// to S3/MinIO when this response is returned.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicBundleResponse {
-    /// Unique identifier for the generated bundle
-    pub bundle_id: Uuid,
-    /// When the bundle was created
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Actor who triggered bundle generation
-    pub created_by: String,
-    /// Tenant ID
-    pub tenant_id: Uuid,
-    /// Time range covered by the bundle
-    pub time_range: ForensicBundleTimeRange,
-    /// Bundle generation status (always "ready" on success)
-    pub status: forensic_service::BundleStatus,
-    /// Purpose of the bundle
-    pub purpose: forensic_service::BundlePurpose,
-    /// Summary of bundle contents
-    pub contents: ForensicBundleContentsSummary,
-    /// Integrity information
-    pub integrity: ForensicBundleIntegrityInfo,
-    /// Storage location (S3/MinIO path)
-    pub storage_location: String,
-    /// Size of stored bundle in bytes
-    pub bundle_size_bytes: usize,
-    /// Human-readable message
-    pub message: String,
-}
-
-/// Summary of contents in a forensic bundle
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicBundleContentsSummary {
-    pub intent_versions: usize,
-    pub artifacts: usize,
-    pub approvals: usize,
-    pub audit_events: usize,
-    pub policy_snapshots: usize,
-}
-
-/// Integrity information for a forensic bundle
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicBundleIntegrityInfo {
-    /// SHA-256 hash of the bundle manifest
-    pub manifest_hash: String,
-    /// Whether the hash chain was verified (always false for new bundles)
-    pub chain_verified: bool,
-    /// When integrity was computed
-    pub verification_timestamp: chrono::DateTime<chrono::Utc>,
-}
 
 /// POST /forensic/bundle - Generate and store a forensic bundle
 ///
