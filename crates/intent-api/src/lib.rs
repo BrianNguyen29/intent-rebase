@@ -70,16 +70,17 @@ pub use types::{
     ApproveApprovalRequestBody, ApproveCompensationActionBody, BatchCandidatesSummary,
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
     CompensationSimulationRequest, DiffResponse, ErrorDetails, ExecuteCompensationActionBody,
-    ExpireApprovalRequestBody, GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery,
-    GetPolicySnapshotQuery, ListBatchCandidatesQuery, ListBatchCandidatesResponse,
-    ListCompensationActionsQuery, ListCompensationActionsResponse, ListDlqCandidatesQuery,
-    ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
+    ExpireApprovalRequestBody, FeasibilityCounts, GetLatestPolicySnapshotQuery,
+    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, ListBatchCandidatesQuery,
+    ListBatchCandidatesResponse, ListCompensationActionsQuery, ListCompensationActionsResponse,
+    ListDlqCandidatesQuery, ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
     ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
     ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-    PolicySnapshotResponse, ReapproveCompensationActionBody, RebaseApplyResponse,
-    RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
-    ReplayResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicySnapshotResponse,
+    ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
+    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
+    SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
     WaiveCompensationActionBody,
 };
 
@@ -6242,41 +6243,6 @@ async fn reapprove_compensation_action(
 // ============================================================================
 // Bounded Compensation Planner (Phase 3 bounded planner slice)
 // ============================================================================
-
-/// Request body for planning compensation actions from side effects.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PlanCompensationActionsRequest {
-    /// Intent ID to plan compensation for
-    pub intent_id: Uuid,
-    /// Tenant ID for scoping
-    pub tenant_id: Uuid,
-    /// Source version before rebase
-    pub from_version: i32,
-    /// Target version after rebase
-    pub to_version: i32,
-    /// Workflow ID that initiated the rebase
-    pub workflow_id: Uuid,
-}
-
-/// Response for compensation action planning.
-#[derive(Debug, Clone, Serialize)]
-pub struct PlanCompensationActionsResponse {
-    /// Generated compensation actions
-    pub actions: Vec<CompensationActionResponse>,
-    /// Total count of generated actions
-    pub total: usize,
-    /// Count by feasibility level
-    pub feasibility_counts: FeasibilityCounts,
-}
-
-/// Counts of actions by feasibility level.
-#[derive(Debug, Clone, Serialize)]
-pub struct FeasibilityCounts {
-    pub automatic: usize,
-    pub semi_automatic: usize,
-    pub manual_only: usize,
-    pub not_possible: usize,
-}
 
 /// POST /compensation-actions/plan - Plan compensation actions from side effects
 ///
