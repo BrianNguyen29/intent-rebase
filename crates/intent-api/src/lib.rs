@@ -15,7 +15,7 @@ use intent_rebase_types::{
     get_current_trace_context, AffectedItemsStatus, CreateGraphEdgeRequest, CreateGraphNodeRequest,
     CreateIntentRequest, CreateIntentResponse, CreateVersionRequest, CreateVersionResponse,
     DiffRequest, EdgeType, GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError,
-    IntentVersion, ListVersionsResponse, NodeType, PolicySnapshot, ValidateIntentResponse,
+    IntentVersion, ListVersionsResponse, NodeType, ValidateIntentResponse,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -68,8 +68,11 @@ pub use nats_event_publisher::NatsEventPublisher;
 pub use types::{
     ApiError, ApprovalRequestResponse, ApprovalRequestSummary, ApprovalRevalidationResponse,
     ApproveApprovalRequestBody, DiffResponse, ErrorDetails, ExpireApprovalRequestBody,
-    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse, RebaseApplyResponse,
-    RebasePreviewResponse, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
+    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, PolicySnapshotResponse,
+    RebaseApplyResponse, RebasePreviewResponse, RejectApprovalRequestBody, ReplayRequest,
+    ReplayResponse,
 };
 
 // ============================================================================
@@ -4048,69 +4051,6 @@ async fn revalidate_approval_request(
 // ============================================================================
 // Policy Snapshot Handlers (Phase 2 bounded read-only slice)
 // ============================================================================
-
-/// Query parameters for getting policy snapshot by ID
-#[derive(Debug, Deserialize)]
-pub struct GetPolicySnapshotQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Query parameters for getting latest policy snapshot by intent
-#[derive(Debug, Deserialize)]
-pub struct GetLatestPolicySnapshotQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Query parameters for getting policy snapshot by intent version
-#[derive(Debug, Deserialize)]
-pub struct GetPolicySnapshotByVersionQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Query parameters for listing policy snapshots by intent
-#[derive(Debug, Deserialize)]
-pub struct ListPolicySnapshotsQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Response type for a single policy snapshot
-#[derive(Debug, Serialize)]
-pub struct PolicySnapshotResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub intent_id: Uuid,
-    pub intent_version: i32,
-    pub rule_pack_version: String,
-    pub scope_definition: intent_rebase_types::ScopeDefinition,
-    pub scope_hash: String,
-    pub snapshot_uri: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub canonicalized_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl From<PolicySnapshot> for PolicySnapshotResponse {
-    fn from(s: PolicySnapshot) -> Self {
-        Self {
-            id: s.id,
-            tenant_id: s.tenant_id,
-            intent_id: s.intent_id,
-            intent_version: s.intent_version,
-            rule_pack_version: s.rule_pack_version,
-            scope_definition: s.scope_definition,
-            scope_hash: s.scope_hash,
-            snapshot_uri: s.snapshot_uri,
-            created_at: s.created_at,
-            canonicalized_at: s.canonicalized_at,
-        }
-    }
-}
-
-/// Response for listing policy snapshots
-#[derive(Debug, Serialize)]
-pub struct ListPolicySnapshotsResponse {
-    pub policy_snapshots: Vec<PolicySnapshotResponse>,
-    pub total: usize,
-}
 
 // ============================================================================
 // ADR-07: Approval Revalidation/Re-approval API (Phase 2b bounded slice)
