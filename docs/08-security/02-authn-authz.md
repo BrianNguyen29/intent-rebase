@@ -90,8 +90,8 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
   - **P1-S5d:** Revalidate handler-level check — ✅ BOUNDED DONE (pushed)
   - **P1-S5e:** Trigger handler-level check — ✅ BOUNDED DONE (pushed)
   - **P1-S5f:** Trigger full-tx create+cancel — ✅ BOUNDED DONE (local) — handler-level guards delivered; full RLS tx deferred
-  - **P1-S5g:** Compensation approve/waive/reapprove + batch approve/reapprove — ✅ BOUNDED DONE (local) — handler-level guards delivered; execute full RLS tx wrapping deferred due to transaction-unaware executor/side_effect_repo trait boundary
-  - **P1-S5h:** Compensation execute single/batch — 🔴 DOCUMENTED BLOCKER — executor/side_effect_repo trait boundary is transaction-unaware; execute full RLS tx NO-GO bounded
+  - **P1-S5g:** Compensation approve/waive/reapprove + batch approve/reapprove — ✅ BOUNDED DONE (local) — handler-level guards delivered; execute RLS tx covered separately by P1-S5h
+  - **P1-S5h:** Compensation execute single/batch — ✅ BOUNDED DONE (pushed 7167223) — single execute and batch execute use bounded RLS transaction wrapping for `record_result_with_tx + create_with_tx` with executor read-only phase outside the write transaction
   - **P1-S5i:** Forensic/orchestration/artifact full RLS tx — 🔴 PENDING
 - RLC-4..RLC-9: Cross-tenant isolation test expansion — ✅ BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`)
 - NATS tenant isolation — 🔴 PENDING
