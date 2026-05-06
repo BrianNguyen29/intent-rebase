@@ -71,8 +71,9 @@ pub use types::{
     CompensationActionStatusCounts, CompensationActionSummary, CompensationSimulationRequest,
     DiffResponse, ErrorDetails, ExecuteCompensationActionBody, ExpireApprovalRequestBody,
     GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
-    ListCompensationActionsQuery, ListCompensationActionsResponse, ListGraphEdgesQuery,
-    ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    ListCompensationActionsQuery, ListCompensationActionsResponse, ListDlqCandidatesQuery,
+    ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
+    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
     ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
     PolicySnapshotResponse, ReapproveCompensationActionBody, RebaseApplyResponse,
@@ -5929,13 +5930,6 @@ async fn execute_compensation_action(
     Ok(Json(CompensationActionResponse::from(updated)))
 }
 
-/// Response for listing DLQ candidates
-#[derive(Debug, Clone, Serialize)]
-pub struct ListDlqCandidatesResponse {
-    pub dlq_candidates: Vec<compensation_service::CompensationAction>,
-    pub total: usize,
-}
-
 /// Response for listing batch candidates across all categories
 #[derive(Debug, Clone, Serialize)]
 pub struct ListBatchCandidatesResponse {
@@ -5958,12 +5952,6 @@ pub struct BatchCandidatesSummary {
     pub approved_service_executable_count: usize,
     pub retryable_failed_count: usize,
     pub dlq_count: usize,
-}
-
-/// Query parameters for listing DLQ candidates
-#[derive(Debug, Deserialize)]
-pub struct ListDlqCandidatesQuery {
-    pub tenant_id: Uuid,
 }
 
 /// GET /compensation-actions/dlq - List DLQ (Dead Letter Queue) candidates

@@ -648,3 +648,20 @@ pub struct OrchestrationDashboardResponse {
     pub compensation_actions: Vec<CompensationAction>,
     pub compensation_action_summary: CompensationActionSummary,
 }
+
+// =============================================================================
+// DLQ Types
+// =============================================================================
+
+/// Query parameters for listing DLQ candidates
+#[derive(Debug, Deserialize)]
+pub struct ListDlqCandidatesQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for listing DLQ candidates
+#[derive(Debug, Clone, Serialize)]
+pub struct ListDlqCandidatesResponse {
+    pub dlq_candidates: Vec<CompensationAction>,
+    pub total: usize,
+}
