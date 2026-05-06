@@ -14,8 +14,8 @@ use graph_service::GraphService;
 use intent_rebase_types::{
     get_current_trace_context, AffectedItemsStatus, CreateGraphEdgeRequest, CreateGraphNodeRequest,
     CreateIntentRequest, CreateIntentResponse, CreateVersionRequest, CreateVersionResponse,
-    DiffRequest, EdgeType, GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError,
-    IntentVersion, ListVersionsResponse, NodeType, ValidateIntentResponse,
+    DiffRequest, GraphEdge, GraphNode, IntentHeadResponse, IntentRebaseError, IntentVersion,
+    ListVersionsResponse, ValidateIntentResponse,
 };
 use intent_service::{ApprovalRequest, ApprovalRequestStatus, IntentService};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -70,8 +70,8 @@ pub use types::{
     ApproveApprovalRequestBody, ApproveCompensationActionBody, CompensationActionResponse,
     DiffResponse, ErrorDetails, ExecuteCompensationActionBody, ExpireApprovalRequestBody,
     GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
-    ListCompensationActionsQuery, ListCompensationActionsResponse,
-    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    ListCompensationActionsQuery, ListCompensationActionsResponse, ListGraphEdgesQuery,
+    ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, PolicySnapshotResponse,
     RebaseApplyResponse, RebasePreviewResponse, RejectApprovalRequestBody, ReplayRequest,
     ReplayResponse, WaiveCompensationActionBody,
@@ -1042,23 +1042,6 @@ async fn compute_diff(
 // ============================================================================
 // Graph Handlers (Phase 1 - Internal CRUD only)
 // ============================================================================
-
-/// Query parameters for listing graph nodes
-#[derive(Debug, Deserialize)]
-pub struct ListGraphNodesQuery {
-    pub tenant_id: Option<Uuid>,
-    pub workflow_id: Option<Uuid>,
-    pub node_type: Option<NodeType>,
-}
-
-/// Query parameters for listing graph edges
-#[derive(Debug, Deserialize)]
-pub struct ListGraphEdgesQuery {
-    pub tenant_id: Option<Uuid>,
-    pub workflow_id: Option<Uuid>,
-    pub from_node_id: Option<Uuid>,
-    pub edge_type: Option<EdgeType>,
-}
 
 /// POST /v1/graph/nodes - Create a new graph node
 ///

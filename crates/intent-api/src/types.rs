@@ -9,7 +9,9 @@
 //! and complex composed types.
 
 use chrono::{DateTime, Utc};
-use intent_rebase_types::{AffectedItemsPreview, IntentVersion, PolicySnapshot, ScopeDefinition};
+use intent_rebase_types::{
+    AffectedItemsPreview, EdgeType, IntentVersion, NodeType, PolicySnapshot, ScopeDefinition,
+};
 use intent_service::ApprovalRequest;
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{
@@ -335,6 +337,27 @@ impl From<PolicySnapshot> for PolicySnapshotResponse {
 pub struct ListPolicySnapshotsResponse {
     pub policy_snapshots: Vec<PolicySnapshotResponse>,
     pub total: usize,
+}
+
+// =============================================================================
+// Graph Query Types
+// =============================================================================
+
+/// Query parameters for listing graph nodes
+#[derive(Debug, Deserialize)]
+pub struct ListGraphNodesQuery {
+    pub tenant_id: Option<Uuid>,
+    pub workflow_id: Option<Uuid>,
+    pub node_type: Option<NodeType>,
+}
+
+/// Query parameters for listing graph edges
+#[derive(Debug, Deserialize)]
+pub struct ListGraphEdgesQuery {
+    pub tenant_id: Option<Uuid>,
+    pub workflow_id: Option<Uuid>,
+    pub from_node_id: Option<Uuid>,
+    pub edge_type: Option<EdgeType>,
 }
 
 // =============================================================================
