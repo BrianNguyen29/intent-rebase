@@ -799,3 +799,49 @@ pub struct ArtifactIngestResponse {
     pub side_effect_recorded: bool,
     pub side_effect_id: Option<Uuid>,
 }
+
+// =============================================================================
+// Dry Run Types
+// =============================================================================
+
+/// Request body for dry-run orchestration action planning.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrchestrationDryRunRequest {
+    /// List of compensation action IDs to plan for
+    pub action_ids: Vec<Uuid>,
+}
+
+/// Response for dry-run orchestration action planning.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunResponse {
+    /// Per-item proposals
+    pub proposals: Vec<OrchestrationDryRunProposalResponse>,
+    /// Actions that were not found
+    pub not_found: Vec<Uuid>,
+    /// Summary counts
+    pub summary: OrchestrationDryRunSummaryResponse,
+}
+
+/// A single proposal from the dry-run planner.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunProposalResponse {
+    /// The compensation action ID
+    pub action_id: Uuid,
+    /// The proposed action (approve | reapprove | execute | no_action)
+    pub proposed_action: String,
+    /// Human-readable reason for the proposal
+    pub reason: String,
+    /// Current status of the action
+    pub current_status: String,
+}
+
+/// Summary for dry-run results.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrchestrationDryRunSummaryResponse {
+    pub total: usize,
+    pub can_approve: usize,
+    pub can_reapprove: usize,
+    pub can_execute: usize,
+    pub no_action: usize,
+    pub not_found: usize,
+}
