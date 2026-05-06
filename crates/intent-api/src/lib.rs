@@ -6240,16 +6240,17 @@ async fn execute_compensation_action(
     Path(action_id): Path<Uuid>,
     Json(body): Json<ExecuteCompensationActionBody>,
 ) -> Result<Json<CompensationActionResponse>, ApiErrorResponse> {
-    // Phase 3 P3-S5: Fetch action to get its tenant_id for validation
+    // Phase 1 P1-S5h: Fetch action to get its tenant_id for validation
     let action = state
         .compensation_action_service
         .get_action(action_id)
         .await
         .map_err(ApiErrorResponse)?;
 
-    // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
+    // Phase 1 P1-S5h: Tenant mismatch rejection when JWT present
     // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
+    // Check tenant mismatch FIRST before any status/feasibility gate validation
+    if let Some(ref rls_claims) = optional_rls_claims {
         if action.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match action tenant_id ({})",
@@ -6260,7 +6261,218 @@ async fn execute_compensation_action(
         }
     }
 
-    // Non-RLS path: use service method for full execution with executor
+    // Phase 1 P1-S5h: RLS path if pool + SQL repos available
+    // Guard condition: rls_pool present AND JWT claims present AND SQL repos available
+    if let (Some(rls_pool), Some(rls_claims)) =
+        (state.rls_pool.as_ref(), optional_rls_claims.as_ref())
+    {
+        let sql_action_repo = match state.compensation_action_service.repo().as_sqlx_repo() {
+            Some(repo) => repo,
+            None => {
+                // Fall back to non-RLS path
+                let updated = state
+                    .compensation_action_service
+                    .execute_action(action_id, body.executed_by.as_deref())
+                    .await
+                    .map_err(ApiErrorResponse)?;
+                return Ok(Json(CompensationActionResponse::from(updated)));
+            }
+        };
+
+        // Executor gate: only Approved actions can execute
+        if action.status != compensation_service::CompensationStatus::Approved {
+            return Err(ApiErrorResponse(
+                IntentRebaseError::CompensationActionNotExecutable(action_id),
+            ));
+        }
+
+        // Execution policy gate: validate strategy/feasibility combo
+        let is_allowed_combo = matches!(
+            (action.strategy_type, action.feasibility),
+            (
+                compensation_service::StrategyType::Rollback,
+                compensation_service::CompensationFeasibility::Automatic
+            ) | (
+                compensation_service::StrategyType::CounterAction,
+                compensation_service::CompensationFeasibility::SemiAutomatic
+            ) | (
+                compensation_service::StrategyType::FollowupNotice,
+                compensation_service::CompensationFeasibility::ManualOnly
+            ) | (
+                compensation_service::StrategyType::Escalation,
+                compensation_service::CompensationFeasibility::NotPossible
+            )
+        );
+        if !is_allowed_combo {
+            return Err(ApiErrorResponse(
+                IntentRebaseError::CompensationActionNotExecutable(action_id),
+            ));
+        }
+
+        // Capture fields needed for RLS tx
+        let lock_version = action.lock_version;
+        let tenant_id = action.tenant_id;
+        let intent_id = action.intent_id;
+        let compensation_plan_id = action.id;
+        let actor_id = body
+            .executed_by
+            .as_deref()
+            .unwrap_or("compensation-service/system");
+
+        // Phase 1 P1-S5h: Run the appropriate bounded executor (read-only - returns ExecutionResult)
+        use compensation_service::CompensationExecutor;
+        let executor_result = if let Some(side_effect_repo) =
+            state.compensation_action_service.side_effect_repo()
+        {
+            match (action.strategy_type, action.feasibility) {
+                (
+                    compensation_service::StrategyType::Rollback,
+                    compensation_service::CompensationFeasibility::Automatic,
+                ) => {
+                    let executor =
+                        compensation_service::RollbackExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await.map_err(ApiErrorResponse)?
+                }
+                (
+                    compensation_service::StrategyType::CounterAction,
+                    compensation_service::CompensationFeasibility::SemiAutomatic,
+                ) => {
+                    let executor =
+                        compensation_service::CounterActionExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await.map_err(ApiErrorResponse)?
+                }
+                (
+                    compensation_service::StrategyType::FollowupNotice,
+                    compensation_service::CompensationFeasibility::ManualOnly,
+                ) => {
+                    let executor =
+                        compensation_service::FollowupNoticeExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await.map_err(ApiErrorResponse)?
+                }
+                (
+                    compensation_service::StrategyType::Escalation,
+                    compensation_service::CompensationFeasibility::NotPossible,
+                ) => {
+                    let executor =
+                        compensation_service::EscalationExecutor::new(side_effect_repo.clone());
+                    executor.execute(&action).await.map_err(ApiErrorResponse)?
+                }
+                _ => {
+                    return Err(ApiErrorResponse(
+                        IntentRebaseError::CompensationActionNotExecutable(action_id),
+                    ));
+                }
+            }
+        } else {
+            return Err(ApiErrorResponse(
+                IntentRebaseError::CompensationActionNotExecutable(action_id),
+            ));
+        };
+
+        // Phase 1 P1-S5h: RLS tx wrapping for record_result + rollback_record create
+        let mut tx = rls_pool
+            .begin_with_tenant(rls_claims.tenant_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("execute_compensation_action: failed to begin RLS tx: {}", e);
+                ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "Failed to begin RLS transaction: {}",
+                    e
+                )))
+            })?;
+
+        // Record execution result within RLS tx
+        // Signature: record_result_with_tx(tx, action_id, result, lock_version, executed_by)
+        let record_result = sql_action_repo
+            .record_result_with_tx(
+                &mut tx,
+                action_id,
+                &executor_result,
+                lock_version,
+                Some(actor_id),
+            )
+            .await;
+
+        let updated = match record_result {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "execute_compensation_action: record_result_with_tx failed, rolling back"
+                );
+                tx.rollback().await.map_err(|e| {
+                    ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "Failed to rollback transaction: {}",
+                        e
+                    )))
+                })?;
+                return Err(ApiErrorResponse(e));
+            }
+        };
+
+        // Create rollback record within RLS tx (best-effort, fail-open)
+        if let Some(sql_rollback_repo) = state
+            .compensation_action_service
+            .rollback_record_repo()
+            .and_then(|r| r.as_sqlx_repo())
+        {
+            use compensation_service::SideEffectRollbackRecord;
+            let rollback_record = if executor_result.success {
+                SideEffectRollbackRecord::success(
+                    tenant_id,
+                    compensation_plan_id,
+                    action.side_effect_id,
+                    intent_id,
+                    &executor_result.summary,
+                    Some(actor_id),
+                )
+            } else {
+                SideEffectRollbackRecord::failure_with_actor(
+                    tenant_id,
+                    compensation_plan_id,
+                    action.side_effect_id,
+                    intent_id,
+                    &executor_result.summary,
+                    executor_result
+                        .error_code
+                        .as_deref()
+                        .unwrap_or("UNKNOWN_ERROR"),
+                    executor_result.error_detail.clone(),
+                    Some(actor_id),
+                )
+            };
+
+            if let Err(e) = sql_rollback_repo
+                .create_with_tx(&mut tx, rollback_record)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to create rollback record for executed action {}: {:?}",
+                    action_id,
+                    e
+                );
+                // Best-effort: continue even if rollback record creation fails
+            }
+        }
+
+        // Commit RLS tx
+        if let Err(e) = tx.commit().await {
+            tracing::error!("execute_compensation_action: commit failed: {}", e);
+            return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                "failed to commit RLS transaction: {}",
+                e
+            ))));
+        }
+
+        tracing::info!(
+            "execute_compensation_action: RLS path success for tenant_id={}",
+            tenant_id
+        );
+
+        return Ok(Json(CompensationActionResponse::from(updated)));
+    }
+
+    // Non-RLS fallback path: use service method for full execution with executor
     let updated = state
         .compensation_action_service
         .execute_action(action_id, body.executed_by.as_deref())
@@ -8723,19 +8935,20 @@ async fn batch_reapprove_compensation_actions(
 
 /// POST /compensation-actions/batch-execute - Batch execute compensation actions
 ///
-/// Phase 3 P3-S5 bounded slice: When valid JWT claims are present, this handler
-/// validates that ALL actions belong to the JWT's tenant before processing.
-/// Fails closed if ANY action has a different tenant; fails open when JWT is absent.
+/// Phase 3 P1-S5h bounded slice: When valid JWT claims are present, this handler
+/// uses per-item RLS transaction wrapping for each action's write phase.
+/// Fails closed on tenant mismatch per item; fails open when JWT is absent.
 ///
-/// **Bounded partial-success semantics:** Same as batch_approve.
+/// **Bounded sequential per-item RLS transaction pattern:**
+/// - For each action: begin_with_tenant → executor (read-only) → record_result_with_tx + rollback_record create_with_tx → commit
+/// - Non-RLS fallback uses service.batch_execute for backward compatibility
 ///
-/// **Executor gate:** Only Approved + Automatic feasibility actions can execute.
+/// **Bounded partial-success semantics:**
+/// - Tenant mismatch per item: fail closed (item rejected, batch continues)
+/// - Action not found: recorded as not_found, batch continues
+/// - Executor failure: recorded as failed, batch continues
 ///
-/// **Phase 4.1 gap (documented):** Unlike batch_approve and batch_reapprove, this handler
-/// CANNOT be RLS-wired per-item because the executor requires access to `side_effect_repo`
-/// which is private to the service. The execute path must use the service's execute_action
-/// method which internally accesses side_effect_repo. This is the same limitation as the
-/// single-item execute handler (see execute_compensation_action docstring).
+/// **Executor gate:** Only Approved + service-executable actions can execute.
 #[cfg(feature = "jwt-auth")]
 async fn batch_execute_compensation_actions(
     State(state): State<AppState>,
@@ -8743,78 +8956,400 @@ async fn batch_execute_compensation_actions(
     axum::extract::Query(query): axum::extract::Query<OrchestrationQuery>,
     Json(request): Json<BatchOrchestrationRequest>,
 ) -> Result<Json<BatchOrchestrationResponse>, ApiErrorResponse> {
-    // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
-    // Fail-closed if ANY action has a different tenant
+    // Phase 1 P1-S5h: When JWT is present, use per-item RLS transaction wrapping
     if let Some(rls_claims) = optional_rls_claims {
-        // Fetch all actions to validate tenant ownership
+        let mut outcomes = Vec::new();
+        let mut not_found = Vec::new();
+        let mut summary = BatchOrchestrationSummaryResponse {
+            total: request.action_ids.len(),
+            succeeded: 0,
+            failed: 0,
+            not_found: 0,
+        };
+
         for action_id in &request.action_ids {
-            match state
+            // Fetch action to validate existence and tenant ownership
+            let action = match state
                 .compensation_action_service
                 .get_action(*action_id)
                 .await
             {
-                Ok(action) => {
-                    if action.tenant_id != rls_claims.tenant_id {
-                        let msg = format!(
-                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
-                            rls_claims.tenant_id, action_id, action.tenant_id
-                        );
-                        tracing::warn!(
-                            "batch_execute_compensation_actions: tenant mismatch rejection for action {}",
-                            action_id
-                        );
-                        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-                    }
-                }
+                Ok(a) => a,
                 Err(IntentRebaseError::CompensationActionNotFound(_)) => {
-                    // Action not found - batch_execute will handle this as not_found
+                    not_found.push(*action_id);
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Compensation action not found".to_string()),
+                    });
+                    summary.not_found += 1;
+                    summary.failed += 1;
                     continue;
                 }
                 Err(e) => {
-                    return Err(ApiErrorResponse(e));
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some(e.to_string()),
+                    });
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+
+            // Tenant mismatch check - fail closed per item
+            if action.tenant_id != rls_claims.tenant_id {
+                tracing::warn!(
+                    "batch_execute_compensation_actions: tenant mismatch for action {}",
+                    action_id
+                );
+                outcomes.push(BatchItemOutcomeResponse {
+                    action_id: *action_id,
+                    success: false,
+                    result: None,
+                    error: Some("Tenant mismatch: action not found or access denied".to_string()),
+                });
+                summary.failed += 1;
+                continue;
+            }
+
+            // Phase 1 P1-S5h: RLS path if pool + SQL repos available
+            // Guard condition: rls_pool present AND JWT claims present AND SQL repos available
+            if let (Some(rls_pool), Some(sql_action_repo)) = (
+                state.rls_pool.as_ref(),
+                state.compensation_action_service.repo().as_sqlx_repo(),
+            ) {
+                // Executor gate: only Approved actions can execute
+                if action.status != compensation_service::CompensationStatus::Approved {
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Action is not in Approved status".to_string()),
+                    });
+                    summary.failed += 1;
+                    continue;
+                }
+
+                // Execution policy gate: validate strategy/feasibility combo
+                let is_allowed_combo = matches!(
+                    (action.strategy_type, action.feasibility),
+                    (
+                        compensation_service::StrategyType::Rollback,
+                        compensation_service::CompensationFeasibility::Automatic
+                    ) | (
+                        compensation_service::StrategyType::CounterAction,
+                        compensation_service::CompensationFeasibility::SemiAutomatic
+                    ) | (
+                        compensation_service::StrategyType::FollowupNotice,
+                        compensation_service::CompensationFeasibility::ManualOnly
+                    ) | (
+                        compensation_service::StrategyType::Escalation,
+                        compensation_service::CompensationFeasibility::NotPossible
+                    )
+                );
+                if !is_allowed_combo {
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Action is not service-executable".to_string()),
+                    });
+                    summary.failed += 1;
+                    continue;
+                }
+
+                // Capture fields needed for RLS tx
+                let lock_version = action.lock_version;
+                let tenant_id = action.tenant_id;
+                let intent_id = action.intent_id;
+                let compensation_plan_id = action.id;
+                let actor_id = request
+                    .initiated_by
+                    .as_deref()
+                    .unwrap_or("compensation-service/system");
+
+                // Phase 1 P1-S5h: Run the appropriate bounded executor (read-only - returns ExecutionResult)
+                use compensation_service::CompensationExecutor;
+                let executor_result = if let Some(side_effect_repo) =
+                    state.compensation_action_service.side_effect_repo()
+                {
+                    match (action.strategy_type, action.feasibility) {
+                        (
+                            compensation_service::StrategyType::Rollback,
+                            compensation_service::CompensationFeasibility::Automatic,
+                        ) => {
+                            let executor = compensation_service::RollbackExecutor::new(
+                                side_effect_repo.clone(),
+                            );
+                            match executor.execute(&action).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    outcomes.push(BatchItemOutcomeResponse {
+                                        action_id: *action_id,
+                                        success: false,
+                                        result: None,
+                                        error: Some(e.to_string()),
+                                    });
+                                    summary.failed += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        (
+                            compensation_service::StrategyType::CounterAction,
+                            compensation_service::CompensationFeasibility::SemiAutomatic,
+                        ) => {
+                            let executor = compensation_service::CounterActionExecutor::new(
+                                side_effect_repo.clone(),
+                            );
+                            match executor.execute(&action).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    outcomes.push(BatchItemOutcomeResponse {
+                                        action_id: *action_id,
+                                        success: false,
+                                        result: None,
+                                        error: Some(e.to_string()),
+                                    });
+                                    summary.failed += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        (
+                            compensation_service::StrategyType::FollowupNotice,
+                            compensation_service::CompensationFeasibility::ManualOnly,
+                        ) => {
+                            let executor = compensation_service::FollowupNoticeExecutor::new(
+                                side_effect_repo.clone(),
+                            );
+                            match executor.execute(&action).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    outcomes.push(BatchItemOutcomeResponse {
+                                        action_id: *action_id,
+                                        success: false,
+                                        result: None,
+                                        error: Some(e.to_string()),
+                                    });
+                                    summary.failed += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        (
+                            compensation_service::StrategyType::Escalation,
+                            compensation_service::CompensationFeasibility::NotPossible,
+                        ) => {
+                            let executor = compensation_service::EscalationExecutor::new(
+                                side_effect_repo.clone(),
+                            );
+                            match executor.execute(&action).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    outcomes.push(BatchItemOutcomeResponse {
+                                        action_id: *action_id,
+                                        success: false,
+                                        result: None,
+                                        error: Some(e.to_string()),
+                                    });
+                                    summary.failed += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => {
+                            outcomes.push(BatchItemOutcomeResponse {
+                                action_id: *action_id,
+                                success: false,
+                                result: None,
+                                error: Some("Unsupported strategy/feasibility combo".to_string()),
+                            });
+                            summary.failed += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some("Side effect repository not available".to_string()),
+                    });
+                    summary.failed += 1;
+                    continue;
+                };
+
+                // Phase 1 P1-S5h: RLS tx wrapping for record_result + rollback_record create
+                let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        tracing::error!(
+                            "batch_execute: failed to begin RLS tx for action {}: {}",
+                            action_id,
+                            e
+                        );
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id: *action_id,
+                            success: false,
+                            result: None,
+                            error: Some(format!("Failed to begin RLS transaction: {}", e)),
+                        });
+                        summary.failed += 1;
+                        continue;
+                    }
+                };
+
+                // Record execution result within RLS tx
+                let record_result = sql_action_repo
+                    .record_result_with_tx(
+                        &mut tx,
+                        *action_id,
+                        &executor_result,
+                        lock_version,
+                        Some(actor_id),
+                    )
+                    .await;
+
+                let updated = match record_result {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "batch_execute: record_result_with_tx failed for action {}, rolling back",
+                            action_id
+                        );
+                        if let Err(rb_err) = tx.rollback().await {
+                            tracing::error!(
+                                "batch_execute: rollback failed for action {}: {}",
+                                action_id,
+                                rb_err
+                            );
+                        }
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id: *action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                        summary.failed += 1;
+                        continue;
+                    }
+                };
+
+                // Create rollback record within RLS tx (best-effort, fail-open)
+                if let Some(sql_rollback_repo) = state
+                    .compensation_action_service
+                    .rollback_record_repo()
+                    .and_then(|r| r.as_sqlx_repo())
+                {
+                    use compensation_service::SideEffectRollbackRecord;
+                    let rollback_record = if executor_result.success {
+                        SideEffectRollbackRecord::success(
+                            tenant_id,
+                            compensation_plan_id,
+                            action.side_effect_id,
+                            intent_id,
+                            &executor_result.summary,
+                            Some(actor_id),
+                        )
+                    } else {
+                        SideEffectRollbackRecord::failure_with_actor(
+                            tenant_id,
+                            compensation_plan_id,
+                            action.side_effect_id,
+                            intent_id,
+                            &executor_result.summary,
+                            executor_result
+                                .error_code
+                                .as_deref()
+                                .unwrap_or("UNKNOWN_ERROR"),
+                            executor_result.error_detail.clone(),
+                            Some(actor_id),
+                        )
+                    };
+
+                    if let Err(e) = sql_rollback_repo
+                        .create_with_tx(&mut tx, rollback_record)
+                        .await
+                    {
+                        tracing::warn!(
+                            "batch_execute: failed to create rollback record for action {}: {:?}",
+                            action_id,
+                            e
+                        );
+                        // Best-effort: continue even if rollback record creation fails
+                    }
+                }
+
+                // Commit RLS tx
+                if let Err(e) = tx.commit().await {
+                    tracing::error!(
+                        "batch_execute: commit failed for action {}: {}",
+                        action_id,
+                        e
+                    );
+                    outcomes.push(BatchItemOutcomeResponse {
+                        action_id: *action_id,
+                        success: false,
+                        result: None,
+                        error: Some(format!("Failed to commit RLS transaction: {}", e)),
+                    });
+                    summary.failed += 1;
+                    continue;
+                }
+
+                tracing::debug!(
+                    "batch_execute: RLS path success for action {} tenant_id={}",
+                    action_id,
+                    tenant_id
+                );
+
+                outcomes.push(BatchItemOutcomeResponse {
+                    action_id: *action_id,
+                    success: true,
+                    result: Some(CompensationActionResponse::from(updated)),
+                    error: None,
+                });
+                summary.succeeded += 1;
+            } else {
+                // Non-RLS fallback path: use service method for full execution with executor
+                // This handles the case where rls_pool is None or SQL repos are unavailable
+                match state
+                    .compensation_action_service
+                    .execute_action(*action_id, request.initiated_by.as_deref())
+                    .await
+                {
+                    Ok(updated) => {
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id: *action_id,
+                            success: true,
+                            result: Some(CompensationActionResponse::from(updated)),
+                            error: None,
+                        });
+                        summary.succeeded += 1;
+                    }
+                    Err(e) => {
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id: *action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                        summary.failed += 1;
+                    }
                 }
             }
         }
-        // All actions validated - use JWT's tenant_id for the batch operation
-        let result = state
-            .compensation_action_service
-            .batch_execute(
-                rls_claims.tenant_id,
-                request.action_ids,
-                request.initiated_by.as_deref(),
-            )
-            .await
-            .map_err(ApiErrorResponse)?;
 
-        let outcomes = result
-            .outcomes
-            .into_iter()
-            .map(|o| {
-                let (result, error) = match &o.result {
-                    Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                    Err(e) => (None, Some(e.clone())),
-                };
-                BatchItemOutcomeResponse {
-                    action_id: o.action_id,
-                    success: o.success,
-                    result,
-                    error,
-                }
-            })
-            .collect();
-
-        let response = BatchOrchestrationResponse {
+        return Ok(Json(BatchOrchestrationResponse {
             outcomes,
-            not_found: result.not_found,
-            summary: BatchOrchestrationSummaryResponse {
-                total: result.summary.total,
-                succeeded: result.summary.succeeded,
-                failed: result.summary.failed,
-                not_found: result.summary.not_found,
-            },
-        };
-
-        return Ok(Json(response));
+            not_found,
+            summary,
+        }));
     }
 
     // Non-JWT path (backward compatible): use query param tenant_id
@@ -20408,14 +20943,26 @@ mod tests {
         )
         .await;
 
-        // Should fail with Unauthorized (fail-closed on tenant mismatch)
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        let err_msg = err.0.to_string();
+        // Phase 1 P1-S5h: Per-item fail-closed on tenant mismatch - batch continues
+        // but the mismatched item is recorded as failed with error message
         assert!(
-            err_msg.contains("Tenant mismatch"),
-            "Expected tenant mismatch error, got: {}",
-            err_msg
+            result.is_ok(),
+            "Expected Ok response with per-item failure, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.total, 1);
+        assert_eq!(response.summary.failed, 1);
+        assert_eq!(response.summary.succeeded, 0);
+        // The error message should indicate tenant mismatch / access denied
+        let outcome = &response.outcomes[0];
+        assert!(!outcome.success);
+        assert!(outcome.error.is_some());
+        let error_msg = outcome.error.as_ref().unwrap();
+        assert!(
+            error_msg.contains("Tenant mismatch") || error_msg.contains("access denied"),
+            "Expected tenant mismatch or access denied error, got: {}",
+            error_msg
         );
     }
 

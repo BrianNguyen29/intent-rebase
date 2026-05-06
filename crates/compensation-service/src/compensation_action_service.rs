@@ -121,6 +121,17 @@ impl CompensationActionService {
         self.rollback_record_repo.as_ref()
     }
 
+    /// Returns a clone of the underlying side effect repository if configured.
+    ///
+    /// This is used by RLS-aware handlers to access the side effect repository directly
+    /// for running the bounded executors.
+    ///
+    /// Phase 3 P1-S5h: Enables the execute handler to run the executor inline
+    /// when RLS transaction wrapping is used for record_result and rollback_record creation.
+    pub fn side_effect_repo(&self) -> Option<Arc<dyn SideEffectRepository>> {
+        self.side_effect_repo.clone()
+    }
+
     /// Plan and generate compensation actions for an intent's side effects.
     ///
     /// Phase 3 (bounded planner slice): Uses actual SideEffect data to generate

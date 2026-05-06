@@ -42,7 +42,8 @@ pub use compensation_action_service::{
     PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
 };
 pub use compensation_executor::{
-    CompensationExecutor, CounterActionExecutor, RollbackExecutor, StubCompensationExecutor,
+    CompensationExecutor, CounterActionExecutor, EscalationExecutor, FollowupNoticeExecutor,
+    RollbackExecutor, StubCompensationExecutor,
 };
 pub use compensation_planner::{
     BoundedCompensationPlanner, CompensationPlanner, InMemoryCompensationPlanner,
