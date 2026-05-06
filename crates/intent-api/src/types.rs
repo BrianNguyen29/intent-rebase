@@ -8,7 +8,9 @@
 //! moved here yet. Types remaining in lib.rs include AppState, handlers, middleware,
 //! and complex composed types.
 
+use chrono::{DateTime, Utc};
 use intent_rebase_types::{AffectedItemsPreview, IntentVersion};
+use intent_service::ApprovalRequest;
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{
     DecisionClass, DiffRiskAnalysis, IntentVersionDiff, RiskTier, SectionDecision,
@@ -162,4 +164,108 @@ pub struct RebaseApplyResponse {
     /// The `ready` field indicates whether full compensation planning is available;
     /// when `false`, the action list is empty and execution is not supported.
     pub compensation_planning: CompensationPlanningSummary,
+}
+
+// =============================================================================
+// Approval Request Types
+// =============================================================================
+
+/// Response for listing pending approval requests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPendingApprovalRequestsResponse {
+    pub approval_requests: Vec<ApprovalRequestSummary>,
+    pub total: usize,
+}
+
+/// Summary of an approval request for list responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestSummary {
+    pub id: Uuid,
+    pub intent_id: Uuid,
+    pub intent_version_from: i32,
+    pub intent_version_to: i32,
+    pub decision_class: String,
+    pub reason: String,
+    pub requestor_id: String,
+    pub requestor_type: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl From<ApprovalRequest> for ApprovalRequestSummary {
+    fn from(req: ApprovalRequest) -> Self {
+        Self {
+            id: req.id,
+            intent_id: req.intent_id,
+            intent_version_from: req.intent_version_from,
+            intent_version_to: req.intent_version_to,
+            decision_class: req.decision_class,
+            reason: req.reason,
+            requestor_id: req.requestor_id,
+            requestor_type: req.requestor_type,
+            status: format!("{:?}", req.status),
+            created_at: req.created_at,
+            expires_at: req.expires_at,
+        }
+    }
+}
+
+/// Request body for approving an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveApprovalRequestBody {
+    #[serde(default)]
+    pub resolution_notes: Option<String>,
+}
+
+/// Request body for rejecting an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectApprovalRequestBody {
+    #[serde(default)]
+    pub resolution_notes: Option<String>,
+}
+
+/// Request body for expiring an approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpireApprovalRequestBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Response for approve/reject approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestResponse {
+    pub id: Uuid,
+    pub intent_id: Uuid,
+    pub status: String,
+    pub resolved_by: String,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolution_notes: Option<String>,
+}
+
+/// Query parameters for listing pending approval requests
+#[derive(Debug, Deserialize)]
+pub struct ListPendingApprovalRequestsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for approval revalidation (Phase 2b bounded slice)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRevalidationResponse {
+    /// ID of the approval request being revalidated
+    pub approval_id: Uuid,
+    /// Whether the approval scope remains valid (scope_hash unchanged)
+    pub valid: bool,
+    /// Human-readable reason for invalidation status
+    pub reason: String,
+    /// The scope_hash at the time of original approval
+    pub approval_basis_scope_hash: String,
+    /// The current latest scope_hash for this intent (None if no latest snapshot exists)
+    pub current_scope_hash: Option<String>,
+    /// Whether re-approval would be required (always true when valid=false)
+    pub revalidation_required: bool,
+    /// Intent ID this approval is for
+    pub intent_id: Uuid,
+    /// Intent version when approval was originally granted
+    pub approval_basis_version: i32,
 }
