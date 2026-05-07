@@ -14,7 +14,6 @@ use graph_service::GraphService;
 use intent_rebase_types::{
     get_current_trace_context, AffectedItemsStatus, CreateIntentRequest, CreateIntentResponse,
     CreateVersionRequest, CreateVersionResponse, DiffRequest, IntentRebaseError,
-    ValidateIntentResponse,
 };
 use intent_service::IntentService;
 use rebase_engine::planner::CompensationPlanningSummary;
@@ -29,7 +28,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use uuid::Uuid;
-use validator::Validate;
 
 #[cfg(feature = "jwt-auth")]
 pub mod auth;
@@ -96,6 +94,9 @@ pub mod batch_handlers;
 
 /// Intent read-only query handlers (Phase 2 bounded slice)
 pub mod intent_read_handlers;
+
+/// Intent validation handlers (Phase 2 bounded slice - extracted handler decomposition)
+pub mod intent_validation_handlers;
 
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
@@ -871,74 +872,6 @@ fn parse_optional_header(
                     "{} header must be an integer, got: {}",
                     name, s
                 ))
-            })
-        }
-    }
-}
-
-/// Recursively collect nested validation errors from ValidationErrors
-fn collect_nested_errors(
-    errors: &validator::ValidationErrors,
-    prefix: &str,
-    out: &mut Vec<(String, validator::ValidationError)>,
-) {
-    for (field, kind) in errors.0.iter() {
-        match kind {
-            validator::ValidationErrorsKind::Field(field_errors) => {
-                for e in field_errors {
-                    let full_field = if prefix.is_empty() {
-                        field.to_string()
-                    } else {
-                        format!("{prefix}.{field}")
-                    };
-                    out.push((
-                        full_field,
-                        validator::ValidationError {
-                            code: e.code.clone(),
-                            message: e.message.clone(),
-                            params: e.params.clone(),
-                        },
-                    ));
-                }
-            }
-            validator::ValidationErrorsKind::Struct(nested) => {
-                let new_prefix = if prefix.is_empty() {
-                    field.to_string()
-                } else {
-                    format!("{prefix}.{field}")
-                };
-                collect_nested_errors(nested, &new_prefix, out);
-            }
-            validator::ValidationErrorsKind::List(_) => {
-                // Skip list errors for now (collections not used in Phase 1)
-            }
-        }
-    }
-}
-
-/// POST /v1/intents/validate - Validate an intent request without persisting
-async fn validate_intent(Json(request): Json<CreateIntentRequest>) -> Json<ValidateIntentResponse> {
-    use intent_rebase_types::ValidationError;
-
-    match request.validate() {
-        Ok(()) => Json(ValidateIntentResponse {
-            valid: true,
-            errors: vec![],
-        }),
-        Err(errs) => {
-            let mut raw_errors: Vec<(String, validator::ValidationError)> = Vec::new();
-            collect_nested_errors(&errs, "", &mut raw_errors);
-            let validation_errors: Vec<ValidationError> = raw_errors
-                .into_iter()
-                .map(|(field, e)| ValidationError {
-                    field,
-                    message: e.message.as_ref().unwrap_or(&e.code).to_string(),
-                })
-                .collect();
-
-            Json(ValidateIntentResponse {
-                valid: validation_errors.is_empty(),
-                errors: validation_errors,
             })
         }
     }
@@ -2359,7 +2292,10 @@ pub fn build_router(
         .route("/health", get(health_routes::health_handler))
         .route("/ready", get(health_routes::ready_handler))
         .route("/metrics", get(health_routes::metrics_handler))
-        .route("/v1/intents/validate", post(validate_intent))
+        .route(
+            "/v1/intents/validate",
+            post(intent_validation_handlers::validate_intent),
+        )
         .route("/intents", post(create_intent))
         .route(
             "/intents/{intent_id}",
@@ -2684,7 +2620,10 @@ pub fn build_router_with_jwt_auth(
         .route("/health", get(health_routes::health_handler))
         .route("/ready", get(health_routes::ready_handler))
         .route("/metrics", get(health_routes::metrics_handler))
-        .route("/v1/intents/validate", post(validate_intent))
+        .route(
+            "/v1/intents/validate",
+            post(intent_validation_handlers::validate_intent),
+        )
         .route("/intents", post(create_intent))
         .route(
             "/intents/{intent_id}",
@@ -3100,6 +3039,9 @@ mod tests {
 
     // Import intent read handlers for tests
     use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};
+
+    // Import intent validation handlers for tests
+    use crate::intent_validation_handlers::validate_intent;
 
     fn create_test_service() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
