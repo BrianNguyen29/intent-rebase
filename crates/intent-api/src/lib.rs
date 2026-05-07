@@ -4472,92 +4472,7 @@ async fn execute_compensation_action(
 
 // DLQ candidate handlers have been moved to compensation_query_handlers.rs
 
-/// GET /compensation-actions/batch-candidates - List batch candidates across all categories
-///
-/// Phase 3 Batch 1 (bounded read-only batch candidate queue slice): Returns a
-/// consolidated view of all actionable compensation categories for batch processing.
-///
-/// **This endpoint is READ-ONLY** - it only queries existing data.
-///
-/// **Four candidate categories:**
-/// 1. `pending_approval_candidates` - Actions in Pending status awaiting approval
-/// 2. `approved_service_executable_candidates` - Approved actions executable by the service
-///    Phase 3 Batch 1 P7: Includes both Rollback+Automatic and CounterAction+SemiAutomatic
-/// 3. `retryable_failed_candidates` - Failed actions that can be reapproved (retryable error + budget remains)
-/// 4. `dlq_candidates` - Failed actions that exhausted retry budget or have non-retryable errors
-///
-/// **No execution, orchestration, or policy gate:**
-/// This is a read-only query endpoint. It does not trigger any mutations,
-/// execute any actions, or involve background workers.
-///
-/// **Tenant-scoped:** Results are filtered by the provided tenant_id.
-#[cfg(feature = "jwt-auth")]
-async fn list_batch_candidates(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    axum::extract::Query(query): axum::extract::Query<ListBatchCandidatesQuery>,
-) -> Result<Json<ListBatchCandidatesResponse>, ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("list_batch_candidates: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    let batch = state
-        .compensation_action_service
-        .list_batch_candidates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let summary = BatchCandidatesSummary {
-        pending_approval_count: batch.pending_approval_candidates.len(),
-        approved_service_executable_count: batch.approved_service_executable_candidates.len(),
-        retryable_failed_count: batch.retryable_failed_candidates.len(),
-        dlq_count: batch.dlq_candidates.len(),
-    };
-
-    Ok(Json(ListBatchCandidatesResponse {
-        pending_approval_candidates: batch.pending_approval_candidates,
-        approved_service_executable_candidates: batch.approved_service_executable_candidates,
-        retryable_failed_candidates: batch.retryable_failed_candidates,
-        dlq_candidates: batch.dlq_candidates,
-        summary,
-    }))
-}
-
-/// GET /compensation-actions/batch-candidates - List batch candidates across all categories
-#[cfg(not(feature = "jwt-auth"))]
-async fn list_batch_candidates(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<ListBatchCandidatesQuery>,
-) -> Result<Json<ListBatchCandidatesResponse>, ApiErrorResponse> {
-    let batch = state
-        .compensation_action_service
-        .list_batch_candidates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let summary = BatchCandidatesSummary {
-        pending_approval_count: batch.pending_approval_candidates.len(),
-        approved_service_executable_count: batch.approved_service_executable_candidates.len(),
-        retryable_failed_count: batch.retryable_failed_candidates.len(),
-        dlq_count: batch.dlq_candidates.len(),
-    };
-
-    Ok(Json(ListBatchCandidatesResponse {
-        pending_approval_candidates: batch.pending_approval_candidates,
-        approved_service_executable_candidates: batch.approved_service_executable_candidates,
-        retryable_failed_candidates: batch.retryable_failed_candidates,
-        dlq_candidates: batch.dlq_candidates,
-        summary,
-    }))
-}
+// Batch candidate handlers have been moved to compensation_query_handlers.rs
 
 /// POST /compensation-actions/{action_id}/reapprove - Manually reapprove a failed action
 ///
@@ -7142,7 +7057,7 @@ pub fn build_router(
         // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
         .route(
             "/compensation-actions/batch-candidates",
-            get(list_batch_candidates),
+            get(compensation_query_handlers::list_batch_candidates),
         )
         // Policy gate evaluation endpoints (Phase 3 Batch 1 bounded read-only slice)
         // NOTE: These routes are placed before graph routes to avoid path conflict
@@ -7455,7 +7370,7 @@ pub fn build_router_with_jwt_auth(
         // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
         .route(
             "/compensation-actions/batch-candidates",
-            get(list_batch_candidates),
+            get(compensation_query_handlers::list_batch_candidates),
         )
         // Policy gate evaluation endpoints (Phase 3 Batch 1 bounded read-only slice)
         // NOTE: These routes are placed before graph routes to avoid path conflict
