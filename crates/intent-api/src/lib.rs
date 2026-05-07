@@ -98,7 +98,8 @@ pub use types::{
     TriggerReapprovalRequest, TriggerReapprovalResponse, WaiveCompensationActionBody,
 };
 
-// Re-export formatting helpers needed by lib.rs coordination code
+// Re-export formatting helpers needed by lib.rs coordination code.
+// Defined in types.rs alongside response mapping logic for co-location.
 pub(crate) use types::format_compensation_status;
 
 // ============================================================================

@@ -9,6 +9,7 @@
 //! and complex composed types.
 
 use chrono::{DateTime, Utc};
+use compensation_service::{OrchestrationActionDecision, OrchestrationRun, RunStatus};
 use forensic_service::{
     BundlePurpose, BundleStatus, ExportPurpose, ExportStatus, ForensicBundle, VerificationPurpose,
     VerificationStatus,
@@ -1757,8 +1758,6 @@ pub struct RequestId(pub String);
 // =============================================================================
 // Orchestration Run Response Types (Phase 3 Batch 1 bounded extraction)
 // =============================================================================
-
-use compensation_service::{OrchestrationActionDecision, OrchestrationRun, RunStatus};
 
 /// Response for an orchestration run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
