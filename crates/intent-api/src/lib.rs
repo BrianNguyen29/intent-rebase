@@ -5059,146 +5059,6 @@ async fn get_orchestration_run(
     Ok(Json(OrchestrationRunResponse::from(run)))
 }
 
-/// GET /compensation-actions/policy-gate - Tenant-scoped policy gate evaluation
-///
-/// Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
-/// for all compensation actions belonging to the specified tenant.
-///
-/// **This endpoint is READ-ONLY** - it only queries existing data.
-///
-/// **Canonical gate statuses:**
-/// - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
-/// - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
-/// - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
-///
-/// **Gate evaluation is derived from existing surfaces:**
-/// - Status, feasibility, attempt_count, max_retries, error_code fields
-/// - No new policy engine or external risk surface is queried
-///
-/// **Response includes:**
-/// - Individual action evaluations with gate outcome and reason
-/// - Summary counts by gate status
-/// - Policy/risk metadata useful for UI display
-#[cfg(feature = "jwt-auth")]
-async fn get_compensation_policy_gate(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    axum::extract::Query(query): axum::extract::Query<CompensationPolicyGateQuery>,
-) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("get_compensation_policy_gate: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    let result = state
-        .compensation_action_service
-        .evaluate_policy_gates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let mut response = CompensationPolicyGateResponse::from(result);
-    response.tenant_id = query.tenant_id;
-
-    Ok(Json(response))
-}
-
-/// GET /compensation-actions/policy-gate - Tenant-scoped policy gate evaluation
-#[cfg(not(feature = "jwt-auth"))]
-async fn get_compensation_policy_gate(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<CompensationPolicyGateQuery>,
-) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
-    let result = state
-        .compensation_action_service
-        .evaluate_policy_gates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let mut response = CompensationPolicyGateResponse::from(result);
-    response.tenant_id = query.tenant_id;
-
-    Ok(Json(response))
-}
-
-/// GET /intents/{intent_id}/compensation-policy-gate - Intent-scoped policy gate evaluation
-///
-/// Phase 3 Batch 1 (bounded read-only slice): Returns policy gate evaluations
-/// for all compensation actions belonging to the specified intent.
-///
-/// **This endpoint is READ-ONLY** - it only queries existing data.
-///
-/// **Canonical gate statuses:**
-/// - `eligible`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
-/// - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget, terminal status)
-/// - `manual_review_required`: Needs human intervention (Pending, SemiAutomatic/ManualOnly feasibility)
-///
-/// **Gate evaluation is derived from existing surfaces:**
-/// - Status, feasibility, attempt_count, max_retries, error_code fields
-/// - No new policy engine or external risk surface is queried
-///
-/// **Response includes:**
-/// - Individual action evaluations with gate outcome and reason
-/// - Summary counts by gate status
-/// - Policy/risk metadata useful for UI display
-#[cfg(feature = "jwt-auth")]
-async fn get_intent_compensation_policy_gate(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<IntentCompensationPolicyGateQuery>,
-) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("get_intent_compensation_policy_gate: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    let result = state
-        .compensation_action_service
-        .evaluate_policy_gates_for_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let mut response = CompensationPolicyGateResponse::from(result);
-    response.tenant_id = query.tenant_id;
-    response.intent_id = Some(intent_id);
-
-    Ok(Json(response))
-}
-
-/// GET /intents/{intent_id}/compensation-policy-gate - Intent-scoped policy gate evaluation
-#[cfg(not(feature = "jwt-auth"))]
-async fn get_intent_compensation_policy_gate(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<IntentCompensationPolicyGateQuery>,
-) -> Result<Json<CompensationPolicyGateResponse>, ApiErrorResponse> {
-    let result = state
-        .compensation_action_service
-        .evaluate_policy_gates_for_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let mut response = CompensationPolicyGateResponse::from(result);
-    response.tenant_id = query.tenant_id;
-    response.intent_id = Some(intent_id);
-
-    Ok(Json(response))
-}
-
 /// GET /compensation-actions/orchestration-coordination - Tenant-scoped orchestration coordination status
 ///
 /// Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
@@ -7063,11 +6923,11 @@ pub fn build_router(
         // NOTE: These routes are placed before graph routes to avoid path conflict
         .route(
             "/compensation-actions/policy-gate",
-            get(get_compensation_policy_gate),
+            get(compensation_query_handlers::get_compensation_policy_gate),
         )
         .route(
             "/intents/{intent_id}/compensation-policy-gate",
-            get(get_intent_compensation_policy_gate),
+            get(compensation_query_handlers::get_intent_compensation_policy_gate),
         )
         // Orchestration coordination status endpoints (Phase 3 Batch 1 bounded read-only orchestration view)
         .route(
@@ -7376,11 +7236,11 @@ pub fn build_router_with_jwt_auth(
         // NOTE: These routes are placed before graph routes to avoid path conflict
         .route(
             "/compensation-actions/policy-gate",
-            get(get_compensation_policy_gate),
+            get(compensation_query_handlers::get_compensation_policy_gate),
         )
         .route(
             "/intents/{intent_id}/compensation-policy-gate",
-            get(get_intent_compensation_policy_gate),
+            get(compensation_query_handlers::get_intent_compensation_policy_gate),
         )
         // Orchestration coordination status endpoints (Phase 3 Batch 1 bounded read-only orchestration view)
         .route(
