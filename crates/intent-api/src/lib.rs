@@ -71,7 +71,8 @@ pub use types::{
     ArtifactIngestResponse, BatchCandidatesSummary, BatchItemOutcomeResponse,
     BatchOrchestrationRequest, BatchOrchestrationResponse, BatchOrchestrationSummaryResponse,
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
-    CompensationSimulationRequest, CreateOrchestrationRunRequest, DiffResponse, ErrorDetails,
+    CompensationPolicyGateQuery, CompensationPolicyGateResponse, CompensationSimulationRequest,
+    CreateOrchestrationRunRequest, DiffResponse, ErrorClassificationResponse, ErrorDetails,
     ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
     ForensicArtifactCoverage, ForensicAuditEventCoverage, ForensicBundleContentsSummary,
     ForensicBundleIntegrityInfo, ForensicBundleRequest, ForensicBundleResponse,
@@ -79,21 +80,25 @@ pub use types::{
     ForensicExportRequest, ForensicExportResponse, ForensicExportTimeRange,
     ForensicIntentVersionCoverage, ForensicPolicySnapshotCoverage, ForensicVerificationRequest,
     ForensicVerificationResponse, ForensicVerificationTimeRange, GetLatestPolicySnapshotQuery,
-    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, ListBatchCandidatesQuery,
-    ListBatchCandidatesResponse, ListCompensationActionsQuery, ListCompensationActionsResponse,
-    ListDlqCandidatesQuery, ListDlqCandidatesResponse, ListForensicBundlesQuery,
-    ListForensicBundlesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
-    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
+    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, IntentCompensationPolicyGateQuery,
+    ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
+    ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
+    ListForensicBundlesQuery, ListForensicBundlesResponse, ListGraphEdgesQuery,
+    ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
     ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
     OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
     OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
-    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicySnapshotResponse,
+    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicyGateEvaluationResponse,
+    PolicyGateMetadataResponse, PolicyGateSummaryResponse, PolicySnapshotResponse,
     ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
     RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
-    SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    RiskMetadataResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
     WaiveCompensationActionBody,
 };
+
+// Re-export formatting helpers needed by lib.rs coordination code
+pub(crate) use types::{format_compensation_status, format_feasibility, format_strategy_type};
 
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
@@ -6766,261 +6771,6 @@ async fn get_orchestration_run(
     }
 
     Ok(Json(OrchestrationRunResponse::from(run)))
-}
-
-// ============================================================================
-// Policy Gate Evaluation (Phase 3 Batch 1 bounded read-only slice)
-// ============================================================================
-
-/// Query parameters for tenant-scoped policy gate evaluation
-#[derive(Debug, Deserialize)]
-pub struct CompensationPolicyGateQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Query parameters for intent-scoped policy gate evaluation
-#[derive(Debug, Deserialize)]
-pub struct IntentCompensationPolicyGateQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Response DTOs for policy gate evaluation
-use compensation_service::{
-    PolicyGateEvaluation as ServicePolicyGateEvaluation,
-    PolicyGateEvaluationResult as ServicePolicyGateEvaluationResult,
-    PolicyGateMetadata as ServicePolicyGateMetadata, PolicyGateStatus as ServicePolicyGateStatus,
-    PolicyGateSummary as ServicePolicyGateSummary, RiskMetadata as ServiceRiskMetadata,
-};
-
-/// API response for policy gate evaluation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompensationPolicyGateResponse {
-    pub tenant_id: Uuid,
-    pub intent_id: Option<Uuid>,
-    pub evaluations: Vec<PolicyGateEvaluationResponse>,
-    pub summary: PolicyGateSummaryResponse,
-}
-
-/// Policy gate evaluation for a single action (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyGateEvaluationResponse {
-    pub action: compensation_service::CompensationAction,
-    pub gate_status: String,
-    pub gate_reason: String,
-    pub policy_metadata: PolicyGateMetadataResponse,
-    pub risk_metadata: RiskMetadataResponse,
-}
-
-/// Policy gate metadata for a single action (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyGateMetadataResponse {
-    pub auto_executable: bool,
-    pub is_dlq_candidate: bool,
-    pub can_reapprove: bool,
-    pub retry_budget_exhausted: bool,
-    pub has_non_retryable_error: bool,
-    pub feasibility: String,
-    pub strategy_type: String,
-    pub status: String,
-    pub attempt_count: i32,
-    pub max_retries: i32,
-}
-
-/// Risk metadata for a single action (API version)
-///
-/// Phase 3 Batch 1 (bounded read-only slice): Derived from existing action state fields.
-/// Provides risk-relevant signals: strategy severity, retry exhaustion risk, feasibility risk,
-/// error severity, remaining retry budget, error classification, terminal state flag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RiskMetadataResponse {
-    pub strategy_severity: String,
-    pub retry_exhaustion_risk: String,
-    pub feasibility_risk: String,
-    pub error_severity: String,
-    pub retry_budget_remaining: i32,
-    pub error_classification: Option<ErrorClassificationResponse>,
-    pub is_terminal: bool,
-    pub requires_manual_intervention: bool,
-}
-
-/// Error classification response (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorClassificationResponse {
-    pub error_code: String,
-    pub retryable: bool,
-    pub reason: String,
-}
-
-/// Summary of policy gate evaluations (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyGateSummaryResponse {
-    pub total_actions: usize,
-    pub eligible_count: usize,
-    pub blocked_count: usize,
-    pub manual_review_required_count: usize,
-    pub dlq_candidate_count: usize,
-    pub pending_approval_count: usize,
-    pub auto_executable_count: usize,
-}
-
-impl From<ServicePolicyGateEvaluationResult> for CompensationPolicyGateResponse {
-    fn from(result: ServicePolicyGateEvaluationResult) -> Self {
-        Self {
-            tenant_id: Uuid::nil(), // Will be set by caller
-            intent_id: None,        // Will be set by caller
-            evaluations: result
-                .evaluations
-                .into_iter()
-                .map(PolicyGateEvaluationResponse::from)
-                .collect(),
-            summary: PolicyGateSummaryResponse::from(result.summary),
-        }
-    }
-}
-
-impl From<ServicePolicyGateEvaluation> for PolicyGateEvaluationResponse {
-    fn from(eval: ServicePolicyGateEvaluation) -> Self {
-        Self {
-            action: eval.action,
-            gate_status: format_gate_status(&eval.gate_status),
-            gate_reason: eval.gate_reason,
-            policy_metadata: PolicyGateMetadataResponse::from(eval.policy_metadata),
-            risk_metadata: RiskMetadataResponse::from(eval.risk_metadata),
-        }
-    }
-}
-
-impl From<ServicePolicyGateMetadata> for PolicyGateMetadataResponse {
-    fn from(meta: ServicePolicyGateMetadata) -> Self {
-        Self {
-            auto_executable: meta.auto_executable,
-            is_dlq_candidate: meta.is_dlq_candidate,
-            can_reapprove: meta.can_reapprove,
-            retry_budget_exhausted: meta.retry_budget_exhausted,
-            has_non_retryable_error: meta.has_non_retryable_error,
-            feasibility: format_feasibility(&meta.feasibility),
-            strategy_type: format_strategy_type(&meta.strategy_type),
-            status: format_compensation_status(&meta.status),
-            attempt_count: meta.attempt_count,
-            max_retries: meta.max_retries,
-        }
-    }
-}
-
-impl From<ServicePolicyGateSummary> for PolicyGateSummaryResponse {
-    fn from(summary: ServicePolicyGateSummary) -> Self {
-        Self {
-            total_actions: summary.total_actions,
-            eligible_count: summary.eligible_count,
-            blocked_count: summary.blocked_count,
-            manual_review_required_count: summary.manual_review_required_count,
-            dlq_candidate_count: summary.dlq_candidate_count,
-            pending_approval_count: summary.pending_approval_count,
-            auto_executable_count: summary.auto_executable_count,
-        }
-    }
-}
-
-impl From<ServiceRiskMetadata> for RiskMetadataResponse {
-    fn from(risk: ServiceRiskMetadata) -> Self {
-        Self {
-            strategy_severity: format_strategy_severity(&risk.strategy_severity),
-            retry_exhaustion_risk: format_retry_exhaustion_risk(&risk.retry_exhaustion_risk),
-            feasibility_risk: format_feasibility_risk(&risk.feasibility_risk),
-            error_severity: format_error_severity(&risk.error_severity),
-            retry_budget_remaining: risk.retry_budget_remaining,
-            error_classification: risk
-                .error_classification
-                .map(ErrorClassificationResponse::from),
-            is_terminal: risk.is_terminal,
-            requires_manual_intervention: risk.requires_manual_intervention,
-        }
-    }
-}
-
-impl From<compensation_service::ErrorClassification> for ErrorClassificationResponse {
-    fn from(ec: compensation_service::ErrorClassification) -> Self {
-        Self {
-            error_code: ec.error_code,
-            retryable: ec.retryable,
-            reason: ec.reason,
-        }
-    }
-}
-
-fn format_gate_status(status: &ServicePolicyGateStatus) -> String {
-    match status {
-        ServicePolicyGateStatus::Eligible => "eligible".to_string(),
-        ServicePolicyGateStatus::Blocked => "blocked".to_string(),
-        ServicePolicyGateStatus::ManualReviewRequired => "manual_review_required".to_string(),
-    }
-}
-
-fn format_feasibility(f: &compensation_service::CompensationFeasibility) -> String {
-    match f {
-        compensation_service::CompensationFeasibility::Automatic => "automatic".to_string(),
-        compensation_service::CompensationFeasibility::SemiAutomatic => {
-            "semi_automatic".to_string()
-        }
-        compensation_service::CompensationFeasibility::ManualOnly => "manual_only".to_string(),
-        compensation_service::CompensationFeasibility::NotPossible => "not_possible".to_string(),
-    }
-}
-
-fn format_strategy_type(s: &compensation_service::StrategyType) -> String {
-    match s {
-        compensation_service::StrategyType::Rollback => "rollback".to_string(),
-        compensation_service::StrategyType::CounterAction => "counter_action".to_string(),
-        compensation_service::StrategyType::FollowupNotice => "followup_notice".to_string(),
-        compensation_service::StrategyType::Quarantine => "quarantine".to_string(),
-        compensation_service::StrategyType::Escalation => "escalation".to_string(),
-    }
-}
-
-fn format_compensation_status(s: &compensation_service::CompensationStatus) -> String {
-    match s {
-        compensation_service::CompensationStatus::Pending => "pending".to_string(),
-        compensation_service::CompensationStatus::Approved => "approved".to_string(),
-        compensation_service::CompensationStatus::Executed => "executed".to_string(),
-        compensation_service::CompensationStatus::Failed => "failed".to_string(),
-        compensation_service::CompensationStatus::Waived => "waived".to_string(),
-    }
-}
-
-fn format_strategy_severity(s: &compensation_service::StrategySeverity) -> String {
-    match s {
-        compensation_service::StrategySeverity::Low => "low".to_string(),
-        compensation_service::StrategySeverity::Medium => "medium".to_string(),
-        compensation_service::StrategySeverity::High => "high".to_string(),
-        compensation_service::StrategySeverity::Critical => "critical".to_string(),
-    }
-}
-
-fn format_retry_exhaustion_risk(r: &compensation_service::RetryExhaustionRisk) -> String {
-    match r {
-        compensation_service::RetryExhaustionRisk::Low => "low".to_string(),
-        compensation_service::RetryExhaustionRisk::Medium => "medium".to_string(),
-        compensation_service::RetryExhaustionRisk::High => "high".to_string(),
-        compensation_service::RetryExhaustionRisk::Critical => "critical".to_string(),
-    }
-}
-
-fn format_feasibility_risk(f: &compensation_service::FeasibilityRisk) -> String {
-    match f {
-        compensation_service::FeasibilityRisk::Low => "low".to_string(),
-        compensation_service::FeasibilityRisk::Medium => "medium".to_string(),
-        compensation_service::FeasibilityRisk::High => "high".to_string(),
-        compensation_service::FeasibilityRisk::Critical => "critical".to_string(),
-    }
-}
-
-fn format_error_severity(e: &compensation_service::ErrorSeverity) -> String {
-    match e {
-        compensation_service::ErrorSeverity::None => "none".to_string(),
-        compensation_service::ErrorSeverity::Low => "low".to_string(),
-        compensation_service::ErrorSeverity::Medium => "medium".to_string(),
-        compensation_service::ErrorSeverity::High => "high".to_string(),
-    }
 }
 
 /// GET /compensation-actions/policy-gate - Tenant-scoped policy gate evaluation

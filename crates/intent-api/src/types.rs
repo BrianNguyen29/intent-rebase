@@ -1170,6 +1170,261 @@ impl From<ForensicBundle> for ForensicBundleSummary {
 }
 
 // =============================================================================
+// Policy Gate Evaluation Types (Phase 3 Batch 1 bounded read-only slice)
+// =============================================================================
+
+use compensation_service::{
+    CompensationFeasibility, CompensationStatus, ErrorClassification, ErrorSeverity,
+    FeasibilityRisk, PolicyGateEvaluation as ServicePolicyGateEvaluation,
+    PolicyGateEvaluationResult as ServicePolicyGateEvaluationResult,
+    PolicyGateMetadata as ServicePolicyGateMetadata, PolicyGateStatus as ServicePolicyGateStatus,
+    PolicyGateSummary as ServicePolicyGateSummary, RetryExhaustionRisk,
+    RiskMetadata as ServiceRiskMetadata, StrategySeverity, StrategyType,
+};
+
+/// Query parameters for tenant-scoped policy gate evaluation
+#[derive(Debug, Deserialize)]
+pub struct CompensationPolicyGateQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Query parameters for intent-scoped policy gate evaluation
+#[derive(Debug, Deserialize)]
+pub struct IntentCompensationPolicyGateQuery {
+    pub tenant_id: Uuid,
+}
+
+/// API response for policy gate evaluation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompensationPolicyGateResponse {
+    pub tenant_id: Uuid,
+    pub intent_id: Option<Uuid>,
+    pub evaluations: Vec<PolicyGateEvaluationResponse>,
+    pub summary: PolicyGateSummaryResponse,
+}
+
+/// Policy gate evaluation for a single action (API version)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyGateEvaluationResponse {
+    pub action: compensation_service::CompensationAction,
+    pub gate_status: String,
+    pub gate_reason: String,
+    pub policy_metadata: PolicyGateMetadataResponse,
+    pub risk_metadata: RiskMetadataResponse,
+}
+
+/// Policy gate metadata for a single action (API version)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyGateMetadataResponse {
+    pub auto_executable: bool,
+    pub is_dlq_candidate: bool,
+    pub can_reapprove: bool,
+    pub retry_budget_exhausted: bool,
+    pub has_non_retryable_error: bool,
+    pub feasibility: String,
+    pub strategy_type: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub max_retries: i32,
+}
+
+/// Risk metadata for a single action (API version)
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Derived from existing action state fields.
+/// Provides risk-relevant signals: strategy severity, retry exhaustion risk, feasibility risk,
+/// error severity, remaining retry budget, error classification, terminal state flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskMetadataResponse {
+    pub strategy_severity: String,
+    pub retry_exhaustion_risk: String,
+    pub feasibility_risk: String,
+    pub error_severity: String,
+    pub retry_budget_remaining: i32,
+    pub error_classification: Option<ErrorClassificationResponse>,
+    pub is_terminal: bool,
+    pub requires_manual_intervention: bool,
+}
+
+/// Error classification response (API version)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorClassificationResponse {
+    pub error_code: String,
+    pub retryable: bool,
+    pub reason: String,
+}
+
+/// Summary of policy gate evaluations (API version)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyGateSummaryResponse {
+    pub total_actions: usize,
+    pub eligible_count: usize,
+    pub blocked_count: usize,
+    pub manual_review_required_count: usize,
+    pub dlq_candidate_count: usize,
+    pub pending_approval_count: usize,
+    pub auto_executable_count: usize,
+}
+
+impl From<ServicePolicyGateEvaluationResult> for CompensationPolicyGateResponse {
+    fn from(result: ServicePolicyGateEvaluationResult) -> Self {
+        Self {
+            tenant_id: Uuid::nil(), // Will be set by caller
+            intent_id: None,        // Will be set by caller
+            evaluations: result
+                .evaluations
+                .into_iter()
+                .map(PolicyGateEvaluationResponse::from)
+                .collect(),
+            summary: PolicyGateSummaryResponse::from(result.summary),
+        }
+    }
+}
+
+impl From<ServicePolicyGateEvaluation> for PolicyGateEvaluationResponse {
+    fn from(eval: ServicePolicyGateEvaluation) -> Self {
+        Self {
+            action: eval.action,
+            gate_status: format_gate_status(&eval.gate_status),
+            gate_reason: eval.gate_reason,
+            policy_metadata: PolicyGateMetadataResponse::from(eval.policy_metadata),
+            risk_metadata: RiskMetadataResponse::from(eval.risk_metadata),
+        }
+    }
+}
+
+impl From<ServicePolicyGateMetadata> for PolicyGateMetadataResponse {
+    fn from(meta: ServicePolicyGateMetadata) -> Self {
+        Self {
+            auto_executable: meta.auto_executable,
+            is_dlq_candidate: meta.is_dlq_candidate,
+            can_reapprove: meta.can_reapprove,
+            retry_budget_exhausted: meta.retry_budget_exhausted,
+            has_non_retryable_error: meta.has_non_retryable_error,
+            feasibility: format_feasibility(&meta.feasibility),
+            strategy_type: format_strategy_type(&meta.strategy_type),
+            status: format_compensation_status(&meta.status),
+            attempt_count: meta.attempt_count,
+            max_retries: meta.max_retries,
+        }
+    }
+}
+
+impl From<ServicePolicyGateSummary> for PolicyGateSummaryResponse {
+    fn from(summary: ServicePolicyGateSummary) -> Self {
+        Self {
+            total_actions: summary.total_actions,
+            eligible_count: summary.eligible_count,
+            blocked_count: summary.blocked_count,
+            manual_review_required_count: summary.manual_review_required_count,
+            dlq_candidate_count: summary.dlq_candidate_count,
+            pending_approval_count: summary.pending_approval_count,
+            auto_executable_count: summary.auto_executable_count,
+        }
+    }
+}
+
+impl From<ServiceRiskMetadata> for RiskMetadataResponse {
+    fn from(risk: ServiceRiskMetadata) -> Self {
+        Self {
+            strategy_severity: format_strategy_severity(&risk.strategy_severity),
+            retry_exhaustion_risk: format_retry_exhaustion_risk(&risk.retry_exhaustion_risk),
+            feasibility_risk: format_feasibility_risk(&risk.feasibility_risk),
+            error_severity: format_error_severity(&risk.error_severity),
+            retry_budget_remaining: risk.retry_budget_remaining,
+            error_classification: risk
+                .error_classification
+                .map(ErrorClassificationResponse::from),
+            is_terminal: risk.is_terminal,
+            requires_manual_intervention: risk.requires_manual_intervention,
+        }
+    }
+}
+
+impl From<ErrorClassification> for ErrorClassificationResponse {
+    fn from(ec: ErrorClassification) -> Self {
+        Self {
+            error_code: ec.error_code,
+            retryable: ec.retryable,
+            reason: ec.reason,
+        }
+    }
+}
+
+// Pure formatting helpers for Policy Gate types
+pub(crate) fn format_gate_status(status: &ServicePolicyGateStatus) -> String {
+    match status {
+        ServicePolicyGateStatus::Eligible => "eligible".to_string(),
+        ServicePolicyGateStatus::Blocked => "blocked".to_string(),
+        ServicePolicyGateStatus::ManualReviewRequired => "manual_review_required".to_string(),
+    }
+}
+
+pub(crate) fn format_feasibility(f: &CompensationFeasibility) -> String {
+    match f {
+        CompensationFeasibility::Automatic => "automatic".to_string(),
+        CompensationFeasibility::SemiAutomatic => "semi_automatic".to_string(),
+        CompensationFeasibility::ManualOnly => "manual_only".to_string(),
+        CompensationFeasibility::NotPossible => "not_possible".to_string(),
+    }
+}
+
+pub(crate) fn format_strategy_type(s: &StrategyType) -> String {
+    match s {
+        StrategyType::Rollback => "rollback".to_string(),
+        StrategyType::CounterAction => "counter_action".to_string(),
+        StrategyType::FollowupNotice => "followup_notice".to_string(),
+        StrategyType::Quarantine => "quarantine".to_string(),
+        StrategyType::Escalation => "escalation".to_string(),
+    }
+}
+
+pub(crate) fn format_compensation_status(s: &CompensationStatus) -> String {
+    match s {
+        CompensationStatus::Pending => "pending".to_string(),
+        CompensationStatus::Approved => "approved".to_string(),
+        CompensationStatus::Executed => "executed".to_string(),
+        CompensationStatus::Failed => "failed".to_string(),
+        CompensationStatus::Waived => "waived".to_string(),
+    }
+}
+
+pub(crate) fn format_strategy_severity(s: &StrategySeverity) -> String {
+    match s {
+        StrategySeverity::Low => "low".to_string(),
+        StrategySeverity::Medium => "medium".to_string(),
+        StrategySeverity::High => "high".to_string(),
+        StrategySeverity::Critical => "critical".to_string(),
+    }
+}
+
+pub(crate) fn format_retry_exhaustion_risk(r: &RetryExhaustionRisk) -> String {
+    match r {
+        RetryExhaustionRisk::Low => "low".to_string(),
+        RetryExhaustionRisk::Medium => "medium".to_string(),
+        RetryExhaustionRisk::High => "high".to_string(),
+        RetryExhaustionRisk::Critical => "critical".to_string(),
+    }
+}
+
+pub(crate) fn format_feasibility_risk(f: &FeasibilityRisk) -> String {
+    match f {
+        FeasibilityRisk::Low => "low".to_string(),
+        FeasibilityRisk::Medium => "medium".to_string(),
+        FeasibilityRisk::High => "high".to_string(),
+        FeasibilityRisk::Critical => "critical".to_string(),
+    }
+}
+
+pub(crate) fn format_error_severity(e: &ErrorSeverity) -> String {
+    match e {
+        ErrorSeverity::None => "none".to_string(),
+        ErrorSeverity::Low => "low".to_string(),
+        ErrorSeverity::Medium => "medium".to_string(),
+        ErrorSeverity::High => "high".to_string(),
+    }
+}
+
+// =============================================================================
 // Forensic Verification Types
 // =============================================================================
 
