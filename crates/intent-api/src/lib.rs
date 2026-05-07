@@ -68,6 +68,9 @@ pub mod policy_snapshot_handlers;
 /// Query handlers (Phase 3 Batch 1 bounded read-only slice - side effect and orchestration dashboard queries)
 pub mod query_handlers;
 
+/// Compensation query handlers (Phase 3 Batch 1 bounded read-only slice - compensation action queries)
+pub mod compensation_query_handlers;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -3876,81 +3879,7 @@ pub fn init_tracing() {
 
 // Side effect and orchestration dashboard handlers have been moved to query_handlers.rs
 
-// ============================================================================
-// Compensation Action Handlers (Phase 3 Batch 1 bounded execution slice)
-// ============================================================================
-
-/// GET /intents/{intent_id}/compensation-actions - List compensation actions for an intent
-///
-/// Phase 3 Batch 1 (bounded read-only slice): Returns all compensation actions
-/// recorded for the given intent, scoped to the specified tenant. Actions are
-/// ordered by generated_at descending (newest first).
-///
-/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
-/// approval workflows, or any mutation. It only queries existing compensation
-/// action records.
-///
-/// **Planner vs Executor distinction:**
-/// - This endpoint returns actual compensation action records stored via the
-///   compensation action service/repository
-/// - The `compensation_planning` field in rebase-preview/apply responses shows
-///   planner-generated skeleton/preview data (not stored records)
-/// - Full compensation execution (executor trigger) is Batch 1+ scope
-#[cfg(feature = "jwt-auth")]
-async fn list_compensation_actions(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<ListCompensationActionsQuery>,
-) -> Result<Json<ListCompensationActionsResponse>, ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("list_compensation_actions: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    let actions = state
-        .compensation_action_service
-        .list_by_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let total = actions.len();
-
-    Ok(Json(ListCompensationActionsResponse {
-        compensation_actions: actions,
-        total,
-    }))
-}
-
-/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
-/// approval workflows, or any mutation. It only queries existing compensation
-/// action records.
-#[cfg(not(feature = "jwt-auth"))]
-async fn list_compensation_actions(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<ListCompensationActionsQuery>,
-) -> Result<Json<ListCompensationActionsResponse>, ApiErrorResponse> {
-    let actions = state
-        .compensation_action_service
-        .list_by_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let total = actions.len();
-
-    Ok(Json(ListCompensationActionsResponse {
-        compensation_actions: actions,
-        total,
-    }))
-}
+// Compensation action handlers have been moved to compensation_query_handlers.rs
 
 /// POST /compensation-actions/{action_id}/approve - Approve a pending compensation action
 ///
@@ -7249,7 +7178,7 @@ pub fn build_router(
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/{intent_id}/compensation-actions",
-            get(list_compensation_actions),
+            get(compensation_query_handlers::list_compensation_actions),
         )
         // Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
         // NOTE: These routes are placed before graph routes to avoid path conflict
@@ -7559,7 +7488,7 @@ pub fn build_router_with_jwt_auth(
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/{intent_id}/compensation-actions",
-            get(list_compensation_actions),
+            get(compensation_query_handlers::list_compensation_actions),
         )
         // Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
         // NOTE: These routes are placed before graph routes to avoid path conflict
