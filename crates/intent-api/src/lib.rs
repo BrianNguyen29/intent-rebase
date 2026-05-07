@@ -25,7 +25,6 @@ use rebase_orchestrator::{
     apply_pipeline::ApplyOutcome, checkpoint_aligner::CheckpointAlignmentOutcome,
     RebaseOrchestrator, RuntimeExecutionStatus,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -91,12 +90,12 @@ pub use types::{
     OrchestrationDashboardQuery, OrchestrationDashboardResponse,
     OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
     OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
-    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicyGateEvaluationResponse,
-    PolicyGateMetadataResponse, PolicyGateSummaryResponse, PolicySnapshotResponse,
-    ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
-    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse, RequestId,
-    RiskMetadataResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
-    WaiveCompensationActionBody,
+    OrchestrationRunResponse, PlanCompensationActionsRequest, PlanCompensationActionsResponse,
+    PolicyGateEvaluationResponse, PolicyGateMetadataResponse, PolicyGateSummaryResponse,
+    PolicySnapshotResponse, ReapproveCompensationActionBody, RebaseApplyResponse,
+    RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest,
+    ReplayResponse, RequestId, RiskMetadataResponse, RunItemResultResponse, SideEffectSummary,
+    TriggerReapprovalRequest, TriggerReapprovalResponse, WaiveCompensationActionBody,
 };
 
 // Re-export formatting helpers needed by lib.rs coordination code
@@ -6396,88 +6395,6 @@ async fn plan_compensation_actions(
 // ============================================================================
 // Orchestration Run Handlers (Phase 3 Batch 1 bounded single-shot HTTP slice)
 // ============================================================================
-
-/// Response for an orchestration run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrchestrationRunResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub intent_id: Option<Uuid>,
-    pub action_ids: Vec<Uuid>,
-    pub status: String,
-    pub initiated_by: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub succeeded_count: usize,
-    pub failed_count: usize,
-    pub skipped_count: usize,
-    pub not_found_count: usize,
-    pub total_count: usize,
-    pub item_results: Vec<RunItemResultResponse>,
-}
-
-/// Per-item result within a run (API version).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunItemResultResponse {
-    pub action_id: Uuid,
-    pub action_taken: String,
-    pub success: bool,
-    pub reason: String,
-    pub resulting_status: String,
-}
-
-impl From<compensation_service::OrchestrationRun> for OrchestrationRunResponse {
-    fn from(run: compensation_service::OrchestrationRun) -> Self {
-        Self {
-            id: run.id,
-            tenant_id: run.tenant_id,
-            intent_id: run.intent_id,
-            action_ids: run.action_ids,
-            status: format_run_status(&run.status),
-            initiated_by: run.initiated_by,
-            created_at: run.created_at,
-            started_at: run.started_at,
-            completed_at: run.completed_at,
-            succeeded_count: run.succeeded_count,
-            failed_count: run.failed_count,
-            skipped_count: run.skipped_count,
-            not_found_count: run.not_found_count,
-            total_count: run.total_count,
-            item_results: run
-                .item_results
-                .into_iter()
-                .map(|r| RunItemResultResponse {
-                    action_id: r.action_id,
-                    action_taken: format_action_decision(&r.action_taken),
-                    success: r.success,
-                    reason: r.reason,
-                    resulting_status: r.resulting_status,
-                })
-                .collect(),
-        }
-    }
-}
-
-fn format_run_status(s: &compensation_service::RunStatus) -> String {
-    match s {
-        compensation_service::RunStatus::Pending => "pending".to_string(),
-        compensation_service::RunStatus::Running => "running".to_string(),
-        compensation_service::RunStatus::Completed => "completed".to_string(),
-        compensation_service::RunStatus::CompletedWithErrors => "completed_with_errors".to_string(),
-        compensation_service::RunStatus::Failed => "failed".to_string(),
-    }
-}
-
-fn format_action_decision(d: &compensation_service::OrchestrationActionDecision) -> String {
-    match d {
-        compensation_service::OrchestrationActionDecision::Approve => "approve".to_string(),
-        compensation_service::OrchestrationActionDecision::Reapprove => "reapprove".to_string(),
-        compensation_service::OrchestrationActionDecision::Execute => "execute".to_string(),
-        compensation_service::OrchestrationActionDecision::Skip => "skip".to_string(),
-        compensation_service::OrchestrationActionDecision::NotFound => "not_found".to_string(),
-    }
-}
 
 /// POST /compensation-actions/runs - Create and execute a single-shot orchestration run
 ///

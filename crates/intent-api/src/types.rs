@@ -1753,3 +1753,91 @@ pub struct HealthResponse {
 /// Request ID stored in request extensions by the request_id_middleware.
 #[derive(Clone)]
 pub struct RequestId(pub String);
+
+// =============================================================================
+// Orchestration Run Response Types (Phase 3 Batch 1 bounded extraction)
+// =============================================================================
+
+use compensation_service::{OrchestrationActionDecision, OrchestrationRun, RunStatus};
+
+/// Response for an orchestration run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationRunResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Option<Uuid>,
+    pub action_ids: Vec<Uuid>,
+    pub status: String,
+    pub initiated_by: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub succeeded_count: usize,
+    pub failed_count: usize,
+    pub skipped_count: usize,
+    pub not_found_count: usize,
+    pub total_count: usize,
+    pub item_results: Vec<RunItemResultResponse>,
+}
+
+/// Per-item result within a run (API version).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunItemResultResponse {
+    pub action_id: Uuid,
+    pub action_taken: String,
+    pub success: bool,
+    pub reason: String,
+    pub resulting_status: String,
+}
+
+impl From<OrchestrationRun> for OrchestrationRunResponse {
+    fn from(run: OrchestrationRun) -> Self {
+        Self {
+            id: run.id,
+            tenant_id: run.tenant_id,
+            intent_id: run.intent_id,
+            action_ids: run.action_ids,
+            status: format_run_status(&run.status),
+            initiated_by: run.initiated_by,
+            created_at: run.created_at,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
+            succeeded_count: run.succeeded_count,
+            failed_count: run.failed_count,
+            skipped_count: run.skipped_count,
+            not_found_count: run.not_found_count,
+            total_count: run.total_count,
+            item_results: run
+                .item_results
+                .into_iter()
+                .map(|r| RunItemResultResponse {
+                    action_id: r.action_id,
+                    action_taken: format_action_decision(&r.action_taken),
+                    success: r.success,
+                    reason: r.reason,
+                    resulting_status: r.resulting_status,
+                })
+                .collect(),
+        }
+    }
+}
+
+fn format_run_status(s: &RunStatus) -> String {
+    match s {
+        RunStatus::Pending => "pending".to_string(),
+        RunStatus::Running => "running".to_string(),
+        RunStatus::Completed => "completed".to_string(),
+        RunStatus::CompletedWithErrors => "completed_with_errors".to_string(),
+        RunStatus::Failed => "failed".to_string(),
+    }
+}
+
+fn format_action_decision(d: &OrchestrationActionDecision) -> String {
+    match d {
+        OrchestrationActionDecision::Approve => "approve".to_string(),
+        OrchestrationActionDecision::Reapprove => "reapprove".to_string(),
+        OrchestrationActionDecision::Execute => "execute".to_string(),
+        OrchestrationActionDecision::Skip => "skip".to_string(),
+        OrchestrationActionDecision::NotFound => "not_found".to_string(),
+    }
+}
