@@ -1,0 +1,363 @@
+//! Query handlers for side-effect and orchestration dashboard endpoints.
+//!
+//! Phase 3 Batch 1: Contains GET /intents/{intent_id}/side-effects and
+//! GET /intents/{intent_id}/orchestration-dashboard handlers for read-only queries.
+
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use intent_rebase_types::IntentRebaseError;
+use uuid::Uuid;
+
+use crate::{
+    types::{
+        CompensationActionStatusCounts, CompensationActionSummary, ListSideEffectsQuery,
+        ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
+        SideEffectSummary,
+    },
+    ApiErrorResponse, AppState,
+};
+
+#[cfg(feature = "jwt-auth")]
+use crate::auth;
+
+// ============================================================================
+// Side Effect Handlers (Phase 3 Batch 1 groundwork)
+// ============================================================================
+
+/// GET /intents/{intent_id}/side-effects - List side effects for an intent
+///
+/// Phase 3 Batch 1 (groundwork): Returns all side effects recorded for the given
+/// intent, scoped to the specified tenant. Side effects are ordered by
+/// occurred_at descending (newest first).
+///
+/// This endpoint provides the query API for compensation planning input.
+/// The actual compensation planning/execution is not included in this slice.
+#[cfg(feature = "jwt-auth")]
+pub async fn list_side_effects(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListSideEffectsQuery>,
+) -> Result<Json<ListSideEffectsResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("list_side_effects: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = side_effects.len();
+
+    Ok(Json(ListSideEffectsResponse {
+        side_effects,
+        total,
+    }))
+}
+
+/// GET /intents/{intent_id}/side-effects - List side effects for an intent (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn list_side_effects(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ListSideEffectsQuery>,
+) -> Result<Json<ListSideEffectsResponse>, ApiErrorResponse> {
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let total = side_effects.len();
+
+    Ok(Json(ListSideEffectsResponse {
+        side_effects,
+        total,
+    }))
+}
+
+// ============================================================================
+// Intent Orchestration Dashboard (Phase 3 Batch 1 bounded read-only slice)
+// ============================================================================
+
+/// GET /intents/{intent_id}/orchestration-dashboard - Get orchestration dashboard for an intent
+///
+/// Phase 3 Batch 1 (bounded read-only slice): Returns a consolidated view
+/// of side effects and compensation actions for a single intent within a tenant.
+///
+/// **This endpoint is READ-ONLY** - it does not trigger compensation execution,
+/// approval workflows, or any mutation. It only queries existing compensation
+/// action records and side effects, then computes summary statistics.
+///
+/// **Truthful summary fields:**
+/// - `side_effect_summary.total`: count of all side effects for this intent
+/// - `side_effect_summary.irreversible_count`: count of S4Irreversible side effects
+/// - `side_effect_summary.auto_compensatable_count`: count of S0/S1 side effects
+/// - `compensation_action_summary.status_counts.*`: count by CompensationStatus
+/// - `compensation_action_summary.retryable_failed_count`: Failed actions with retryable errors
+/// - `compensation_action_summary.dlq_candidate_count`: Failed + exhausted budget OR non-retryable error
+/// - `compensation_action_summary.reapprovable_count`: Failed + retryable error + remaining budget
+/// - `compensation_action_summary.auto_executable_count`: Approved + Automatic feasibility
+///
+/// **No batch execution or orchestration engine claims:**
+/// This endpoint only aggregates existing persisted data. It does not execute
+/// any compensation actions, trigger workflows, or involve background processing.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_orchestration_dashboard(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationDashboardQuery>,
+) -> Result<Json<OrchestrationDashboardResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_orchestration_dashboard: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Fetch side effects for this intent
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Fetch compensation actions for this intent
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Compute side effect summary
+    let side_effect_summary = {
+        let total = side_effects.len();
+        let irreversible_count = side_effects
+            .iter()
+            .filter(|se| se.effect_class == compensation_service::SideEffectClass::S4Irreversible)
+            .count();
+        let auto_compensatable_count = side_effects
+            .iter()
+            .filter(|se| se.is_auto_compensatable())
+            .count();
+        SideEffectSummary {
+            total,
+            irreversible_count,
+            auto_compensatable_count,
+        }
+    };
+
+    // Compute compensation action summary
+    let compensation_action_summary = {
+        let total = compensation_actions.len();
+
+        // Count by status
+        let mut status_counts = CompensationActionStatusCounts::default();
+        for action in &compensation_actions {
+            match action.status {
+                compensation_service::CompensationStatus::Pending => status_counts.pending += 1,
+                compensation_service::CompensationStatus::Approved => status_counts.approved += 1,
+                compensation_service::CompensationStatus::Executed => status_counts.executed += 1,
+                compensation_service::CompensationStatus::Failed => status_counts.failed += 1,
+                compensation_service::CompensationStatus::Waived => status_counts.waived += 1,
+            }
+        }
+
+        // Count retryable failed (Failed + retryable error code)
+        let retryable_failed_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                if action.status != compensation_service::CompensationStatus::Failed {
+                    return false;
+                }
+                // Check if error is retryable
+                if let Some(ref result) = action.execution_result_payload {
+                    if let Some(ref error_code) = result.error_code {
+                        let classification =
+                            compensation_service::CompensationAction::classify_error_code(
+                                error_code,
+                            );
+                        return classification.retryable
+                            == compensation_service::RetryableErrorClass::Retryable;
+                    }
+                }
+                false
+            })
+            .count();
+
+        // Count DLQ candidates (Failed + exhausted OR non-retryable)
+        let dlq_candidate_count = compensation_actions
+            .iter()
+            .filter(|action| action.is_dlq_candidate())
+            .count();
+
+        // Count reapprovable (Failed + retryable error + remaining budget)
+        let reapprovable_count = compensation_actions
+            .iter()
+            .filter(|action| action.can_be_reapproved())
+            .count();
+
+        // Count service-executable (Approved + service-executable: Rollback+Automatic or CounterAction+SemiAutomatic)
+        let auto_executable_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                action.status == compensation_service::CompensationStatus::Approved
+                    && action.is_service_executable()
+            })
+            .count();
+
+        CompensationActionSummary {
+            total,
+            status_counts,
+            retryable_failed_count,
+            dlq_candidate_count,
+            reapprovable_count,
+            auto_executable_count,
+        }
+    };
+
+    Ok(Json(OrchestrationDashboardResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        side_effects,
+        side_effect_summary,
+        compensation_actions,
+        compensation_action_summary,
+    }))
+}
+
+/// GET /intents/{intent_id}/orchestration-dashboard - Get orchestration dashboard for an intent
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_orchestration_dashboard(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationDashboardQuery>,
+) -> Result<Json<OrchestrationDashboardResponse>, ApiErrorResponse> {
+    // Fetch side effects for this intent
+    let side_effects = state
+        .side_effect_service
+        .list_side_effects_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Fetch compensation actions for this intent
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    // Compute side effect summary
+    let side_effect_summary = {
+        let total = side_effects.len();
+        let irreversible_count = side_effects
+            .iter()
+            .filter(|se| se.effect_class == compensation_service::SideEffectClass::S4Irreversible)
+            .count();
+        let auto_compensatable_count = side_effects
+            .iter()
+            .filter(|se| se.is_auto_compensatable())
+            .count();
+        SideEffectSummary {
+            total,
+            irreversible_count,
+            auto_compensatable_count,
+        }
+    };
+
+    // Compute compensation action summary
+    let compensation_action_summary = {
+        let total = compensation_actions.len();
+
+        // Count by status
+        let mut status_counts = CompensationActionStatusCounts::default();
+        for action in &compensation_actions {
+            match action.status {
+                compensation_service::CompensationStatus::Pending => status_counts.pending += 1,
+                compensation_service::CompensationStatus::Approved => status_counts.approved += 1,
+                compensation_service::CompensationStatus::Executed => status_counts.executed += 1,
+                compensation_service::CompensationStatus::Failed => status_counts.failed += 1,
+                compensation_service::CompensationStatus::Waived => status_counts.waived += 1,
+            }
+        }
+
+        // Count retryable failed (Failed + retryable error code)
+        let retryable_failed_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                if action.status != compensation_service::CompensationStatus::Failed {
+                    return false;
+                }
+                // Check if error is retryable
+                if let Some(ref result) = action.execution_result_payload {
+                    if let Some(ref error_code) = result.error_code {
+                        let classification =
+                            compensation_service::CompensationAction::classify_error_code(
+                                error_code,
+                            );
+                        return classification.retryable
+                            == compensation_service::RetryableErrorClass::Retryable;
+                    }
+                }
+                false
+            })
+            .count();
+
+        // Count DLQ candidates (Failed + exhausted OR non-retryable)
+        let dlq_candidate_count = compensation_actions
+            .iter()
+            .filter(|action| action.is_dlq_candidate())
+            .count();
+
+        // Count reapprovable (Failed + retryable error + remaining budget)
+        let reapprovable_count = compensation_actions
+            .iter()
+            .filter(|action| action.can_be_reapproved())
+            .count();
+
+        // Count service-executable (Approved + service-executable: Rollback+Automatic or CounterAction+SemiAutomatic)
+        let auto_executable_count = compensation_actions
+            .iter()
+            .filter(|action| {
+                action.status == compensation_service::CompensationStatus::Approved
+                    && action.is_service_executable()
+            })
+            .count();
+
+        CompensationActionSummary {
+            total,
+            status_counts,
+            retryable_failed_count,
+            dlq_candidate_count,
+            reapprovable_count,
+            auto_executable_count,
+        }
+    };
+
+    Ok(Json(OrchestrationDashboardResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        side_effects,
+        side_effect_summary,
+        compensation_actions,
+        compensation_action_summary,
+    }))
+}

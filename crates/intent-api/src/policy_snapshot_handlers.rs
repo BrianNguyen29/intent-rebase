@@ -2,13 +2,13 @@
 //!
 //! Extracted from lib.rs as a bounded handler decomposition slice.
 
+use crate::PolicySnapshotResponse;
 use crate::{ApiErrorResponse, AppState};
 use axum::{
     extract::{Path, State},
     Json,
 };
 use intent_rebase_types::IntentRebaseError;
-use crate::PolicySnapshotResponse;
 use uuid::Uuid;
 
 /// GET /policy-snapshots/{id} - Get a policy snapshot by ID
