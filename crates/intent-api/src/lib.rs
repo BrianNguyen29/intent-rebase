@@ -81,7 +81,7 @@ pub use types::{
     ForensicExportTimeRange, ForensicIntentVersionCoverage, ForensicPolicySnapshotCoverage,
     ForensicVerificationRequest, ForensicVerificationResponse, ForensicVerificationTimeRange,
     GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
-    IntentCompensationPolicyGateQuery, IntentOrchestrationCoordinationQuery,
+    HealthResponse, IntentCompensationPolicyGateQuery, IntentOrchestrationCoordinationQuery,
     ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
     ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
     ListForensicBundlesQuery, ListForensicBundlesResponse, ListGraphEdgesQuery,
@@ -94,7 +94,7 @@ pub use types::{
     PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicyGateEvaluationResponse,
     PolicyGateMetadataResponse, PolicyGateSummaryResponse, PolicySnapshotResponse,
     ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
-    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
+    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse, RequestId,
     RiskMetadataResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
     WaiveCompensationActionBody,
 };
@@ -4746,10 +4746,6 @@ pub fn init_tracing() {
 // Request-ID Extraction Middleware (Phase 3 Batch 2 Slice 2 — tracing foundation)
 // ============================================================================
 
-/// Request ID stored in request extensions by the request_id_middleware.
-#[derive(Clone)]
-pub struct RequestId(pub String);
-
 /// Middleware that extracts or generates a request ID for tracing correlation.
 ///
 /// Phase 3 Batch 2 Slice 2 (bounded tracing foundation):
@@ -4899,13 +4895,6 @@ pub async fn trace_context_middleware(
             axum::response::Response::new(axum::body::Body::empty())
         }
     }
-}
-
-/// Health check response
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub uptime_seconds: u64,
 }
 
 /// GET /health - Returns health status with uptime
