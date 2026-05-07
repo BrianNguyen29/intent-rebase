@@ -13,8 +13,8 @@ use axum::{
 use graph_service::GraphService;
 use intent_rebase_types::{
     get_current_trace_context, AffectedItemsStatus, CreateIntentRequest, CreateIntentResponse,
-    CreateVersionRequest, CreateVersionResponse, DiffRequest, IntentHeadResponse,
-    IntentRebaseError, IntentVersion, ListVersionsResponse, ValidateIntentResponse,
+    CreateVersionRequest, CreateVersionResponse, DiffRequest, IntentRebaseError,
+    ValidateIntentResponse,
 };
 use intent_service::IntentService;
 use rebase_engine::planner::CompensationPlanningSummary;
@@ -93,6 +93,9 @@ pub mod trigger_reapproval_handlers;
 
 /// Batch compensation action handlers (Phase 3 P3-S5 bounded slice)
 pub mod batch_handlers;
+
+/// Intent read-only query handlers (Phase 2 bounded slice)
+pub mod intent_read_handlers;
 
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
@@ -711,19 +714,6 @@ async fn create_intent(
     }
 }
 
-/// GET /intents/{intent_id} - Get intent head (current version)
-async fn get_intent_head(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-) -> Result<Json<IntentHeadResponse>, ApiErrorResponse> {
-    state
-        .service
-        .get_intent_head(intent_id)
-        .await
-        .map(Json)
-        .map_err(ApiErrorResponse)
-}
-
 /// POST /intents/{intent_id}/versions - Create a new version
 ///
 /// Optional OCC headers:
@@ -952,32 +942,6 @@ async fn validate_intent(Json(request): Json<CreateIntentRequest>) -> Json<Valid
             })
         }
     }
-}
-
-/// GET /intents/{intent_id}/versions - List all versions (descending order)
-async fn list_versions(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-) -> Result<Json<ListVersionsResponse>, ApiErrorResponse> {
-    state
-        .service
-        .list_versions(intent_id)
-        .await
-        .map(Json)
-        .map_err(ApiErrorResponse)
-}
-
-/// GET /intents/{intent_id}/versions/{version_number} - Get specific version
-async fn get_version(
-    State(state): State<AppState>,
-    Path((intent_id, version_number)): Path<(Uuid, i32)>,
-) -> Result<Json<IntentVersion>, ApiErrorResponse> {
-    state
-        .service
-        .get_version(intent_id, version_number)
-        .await
-        .map(Json)
-        .map_err(ApiErrorResponse)
 }
 
 /// POST /intents/{intent_id}/diff - Compute diff between two versions
@@ -2397,12 +2361,18 @@ pub fn build_router(
         .route("/metrics", get(health_routes::metrics_handler))
         .route("/v1/intents/validate", post(validate_intent))
         .route("/intents", post(create_intent))
-        .route("/intents/{intent_id}", get(get_intent_head))
+        .route(
+            "/intents/{intent_id}",
+            get(intent_read_handlers::get_intent_head),
+        )
         .route("/intents/{intent_id}/versions", post(create_version))
-        .route("/intents/{intent_id}/versions", get(list_versions))
+        .route(
+            "/intents/{intent_id}/versions",
+            get(intent_read_handlers::list_versions),
+        )
         .route(
             "/intents/{intent_id}/versions/{version_number}",
-            get(get_version),
+            get(intent_read_handlers::get_version),
         )
         .route("/intents/{intent_id}/diff", post(compute_diff))
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
@@ -2716,12 +2686,18 @@ pub fn build_router_with_jwt_auth(
         .route("/metrics", get(health_routes::metrics_handler))
         .route("/v1/intents/validate", post(validate_intent))
         .route("/intents", post(create_intent))
-        .route("/intents/{intent_id}", get(get_intent_head))
+        .route(
+            "/intents/{intent_id}",
+            get(intent_read_handlers::get_intent_head),
+        )
         .route("/intents/{intent_id}/versions", post(create_version))
-        .route("/intents/{intent_id}/versions", get(list_versions))
+        .route(
+            "/intents/{intent_id}/versions",
+            get(intent_read_handlers::list_versions),
+        )
         .route(
             "/intents/{intent_id}/versions/{version_number}",
-            get(get_version),
+            get(intent_read_handlers::get_version),
         )
         .route("/intents/{intent_id}/diff", post(compute_diff))
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
@@ -3121,6 +3097,9 @@ mod tests {
         batch_approve_compensation_actions, batch_execute_compensation_actions,
         batch_reapprove_compensation_actions,
     };
+
+    // Import intent read handlers for tests
+    use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};
 
     fn create_test_service() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
