@@ -9,7 +9,10 @@
 //! and complex composed types.
 
 use chrono::{DateTime, Utc};
-use forensic_service::{BundlePurpose, BundleStatus, ExportPurpose, ExportStatus, ForensicBundle};
+use forensic_service::{
+    BundlePurpose, BundleStatus, ExportPurpose, ExportStatus, ForensicBundle, VerificationPurpose,
+    VerificationStatus,
+};
 use intent_rebase_types::{
     AffectedItemsPreview, EdgeType, ExternalRef, GraphEdge, GraphNode, IntentVersion, NodeType,
     PolicySnapshot, ScopeDefinition, SideEffectCaptureContext,
@@ -1162,6 +1165,200 @@ impl From<ForensicBundle> for ForensicBundleSummary {
                 chain_verified: bundle.integrity.chain_verified,
                 verification_timestamp: bundle.integrity.verification_timestamp,
             },
+        }
+    }
+}
+
+// =============================================================================
+// Forensic Verification Types
+// =============================================================================
+
+/// Request body for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Verifies forensic bundle feasibility
+/// for the given parameters WITHOUT generating actual bundles or storing data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationRequest {
+    /// Tenant ID for multi-tenancy isolation
+    pub tenant_id: Uuid,
+    /// Intent ID to verify forensic coverage for
+    pub intent_id: Uuid,
+    /// Time range to verify
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of the verification
+    #[serde(default)]
+    pub purpose: VerificationPurpose,
+    /// Whether to verify artifact coverage
+    #[serde(default = "default_include_artifacts")]
+    pub include_artifacts: bool,
+    /// Whether to verify audit event coverage
+    #[serde(default = "default_include_audit_events")]
+    pub include_audit_events: bool,
+    /// Whether to verify policy snapshot coverage
+    #[serde(default = "default_include_policy_snapshots")]
+    pub include_policy_snapshots: bool,
+}
+
+fn default_include_artifacts() -> bool {
+    true
+}
+
+fn default_include_audit_events() -> bool {
+    true
+}
+
+fn default_include_policy_snapshots() -> bool {
+    true
+}
+
+/// Time range for forensic verification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationTimeRange {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// Response for forensic verification
+///
+/// **Phase 3 Batch 3b (bounded slice):** Reports what a forensic bundle WOULD contain
+/// if generated with the given parameters. This is verification/reporting ONLY.
+///
+/// **Truthful semantics:**
+/// - `status: "ready"` means all referenced entities exist and are within time range
+/// - `status: "incomplete"` means some entities are missing or time range has gaps
+/// - `estimated_bundle_item_count` is an estimate, NOT actual bundle size
+///
+/// **NOT claimed:**
+/// - Actual bundle generation (no data is collected)
+/// - Bundle storage (no S3 or persistence writes)
+/// - Bundle retrieval (no stored bundle download)
+/// - Bundle replay (no state reproduction)
+/// - Hash chain integrity (requires generated bundle)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicVerificationResponse {
+    /// Unique identifier for this verification
+    pub verification_id: Uuid,
+    /// When verification was performed
+    pub verified_at: DateTime<Utc>,
+    /// Verification status
+    pub status: VerificationStatus,
+    /// Human-readable status reason
+    pub status_reason: String,
+    /// Tenant ID
+    pub tenant_id: Uuid,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Time range that was verified
+    pub time_range: ForensicVerificationTimeRange,
+    /// Purpose of verification
+    pub purpose: VerificationPurpose,
+    /// Intent version coverage
+    pub intent_version_coverage: ForensicIntentVersionCoverage,
+    /// Artifact coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_coverage: Option<ForensicArtifactCoverage>,
+    /// Audit event coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_event_coverage: Option<ForensicAuditEventCoverage>,
+    /// Policy snapshot coverage (if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_snapshot_coverage: Option<ForensicPolicySnapshotCoverage>,
+    /// Estimated total items that would be in a full bundle
+    pub estimated_bundle_item_count: usize,
+}
+
+/// Intent version coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicIntentVersionCoverage {
+    /// Whether intent exists
+    pub intent_exists: bool,
+    /// Intent ID
+    pub intent_id: Uuid,
+    /// Number of versions within the time range
+    pub version_count: usize,
+    /// Earliest version timestamp within range
+    pub earliest_version: Option<DateTime<Utc>>,
+    /// Latest version timestamp within range
+    pub latest_version: Option<DateTime<Utc>>,
+    /// Whether all versions have artifact traceability
+    pub has_artifact_traceability: bool,
+}
+
+/// Artifact coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicArtifactCoverage {
+    /// Number of artifacts found for the intent
+    pub artifact_count: usize,
+    /// Number of artifacts with complete provenance chain
+    pub artifacts_with_provenance: usize,
+    /// Whether artifact coverage is complete
+    pub coverage_complete: bool,
+}
+
+/// Audit event coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicAuditEventCoverage {
+    /// Number of audit events found for the tenant in time range
+    pub event_count: usize,
+    /// Whether the time range has full coverage (no gaps)
+    pub time_range_complete: bool,
+    /// First event timestamp in range
+    pub first_event: Option<DateTime<Utc>>,
+    /// Last event timestamp in range
+    pub last_event: Option<DateTime<Utc>>,
+}
+
+/// Policy snapshot coverage in verification response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicPolicySnapshotCoverage {
+    /// Number of policy snapshots found for the intent
+    pub snapshot_count: usize,
+    /// Whether snapshots cover all versions
+    pub coverage_complete: bool,
+}
+
+impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificationResponse {
+    fn from(resp: forensic_service::ForensicVerificationResponse) -> Self {
+        Self {
+            verification_id: resp.verification_id,
+            verified_at: resp.verified_at,
+            status: resp.status,
+            status_reason: resp.status_reason,
+            tenant_id: resp.tenant_id,
+            intent_id: resp.intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: resp.time_range.start,
+                end: resp.time_range.end,
+            },
+            purpose: resp.purpose,
+            intent_version_coverage: ForensicIntentVersionCoverage {
+                intent_exists: resp.intent_version_coverage.intent_exists,
+                intent_id: resp.intent_version_coverage.intent_id,
+                version_count: resp.intent_version_coverage.version_count,
+                earliest_version: resp.intent_version_coverage.earliest_version,
+                latest_version: resp.intent_version_coverage.latest_version,
+                has_artifact_traceability: resp.intent_version_coverage.has_artifact_traceability,
+            },
+            artifact_coverage: resp.artifact_coverage.map(|ac| ForensicArtifactCoverage {
+                artifact_count: ac.artifact_count,
+                artifacts_with_provenance: ac.artifacts_with_provenance,
+                coverage_complete: ac.coverage_complete,
+            }),
+            audit_event_coverage: resp
+                .audit_event_coverage
+                .map(|aec| ForensicAuditEventCoverage {
+                    event_count: aec.event_count,
+                    time_range_complete: aec.time_range_complete,
+                    first_event: aec.first_event,
+                    last_event: aec.last_event,
+                }),
+            policy_snapshot_coverage: resp.policy_snapshot_coverage.map(|psc| {
+                ForensicPolicySnapshotCoverage {
+                    snapshot_count: psc.snapshot_count,
+                    coverage_complete: psc.coverage_complete,
+                }
+            }),
+            estimated_bundle_item_count: resp.estimated_bundle_item_count,
         }
     }
 }
