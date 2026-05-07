@@ -59,6 +59,9 @@ pub mod forensic_handlers;
 /// Simulation handlers (Phase 3 Batch 1 N4-4 bounded simulation slice)
 pub mod simulation_handlers;
 
+/// Replay handlers (Phase 2b bounded replay slice)
+pub mod replay_handlers;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -2082,7 +2085,7 @@ fn checkpoint_alignment_label(outcome: &CheckpointAlignmentOutcome) -> &'static 
     }
 }
 
-fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static str {
+pub(crate) fn runtime_execution_status_label(status: &RuntimeExecutionStatus) -> &'static str {
     match status {
         RuntimeExecutionStatus::NotApplicable => "not_applicable",
         RuntimeExecutionStatus::SkippedNotReady => "skipped_not_ready",
@@ -2309,7 +2312,7 @@ async fn cancel_specific_approved_and_audit(
 /// - Consumers (checkpoint-creator, snapshot-creator, notifier) — JetStream pull consumer now available
 /// - Dead-letter queue (DLQ) for failed event processing
 /// - Consumer startup wiring and lifecycle management
-async fn publish_audit_event(
+pub(crate) async fn publish_audit_event(
     event_publisher: &Option<Arc<dyn intent_rebase_types::EventPublisher>>,
     tenant_id: uuid::Uuid,
     event_type: &str,
@@ -3888,219 +3891,6 @@ async fn list_policy_snapshots(
     Ok(Json(ListPolicySnapshotsResponse {
         total: responses.len(),
         policy_snapshots: responses,
-    }))
-}
-
-// ============================================================================
-// Replay Handler (Phase 2b bounded replay slice)
-// ============================================================================
-
-/// POST /intents/{intent_id}/replay - Initiate a bounded replay operation
-///
-/// Phase 2b bounded replay slice: Uses existing cooperative signal-based replay
-/// seam via RebaseOrchestrator::replay(). This is NOT native Temporal reset.
-///
-/// Bounded checkpoint selection strategy:
-/// - If `checkpoint_id` is provided in request, use that specific checkpoint
-/// - Otherwise, use the most recent active checkpoint for the workflow
-///
-/// Returns bounded replay outcome with checkpoint alignment details.
-///
-/// Phase 3 P1-S5i: When valid JWT claims are present, this handler validates
-/// tenant ownership before initiating replay. Fails closed on tenant mismatch;
-/// fails open when JWT is absent (backward compatible).
-#[cfg(feature = "jwt-auth")]
-async fn replay_intent(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Path(intent_id): Path<Uuid>,
-    Json(request): Json<ReplayRequest>,
-) -> Result<Json<ReplayResponse>, ApiErrorResponse> {
-    // Phase 3 P1-S5i: Tenant mismatch rejection when JWT present
-    // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
-        // Get intent head to find workflow_id and tenant_id
-        let intent_head = state
-            .service
-            .get_intent_head(intent_id)
-            .await
-            .map_err(ApiErrorResponse)?;
-
-        // Tenant mismatch rejection: JWT tenant must match the intent's tenant
-        if intent_head.intent.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
-                rls_claims.tenant_id, intent_head.intent.tenant_id
-            );
-            tracing::warn!("replay_intent: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-
-        let from_version = request
-            .from_version
-            .unwrap_or(intent_head.version.version_number);
-        let to_version = request.to_version;
-
-        // Execute bounded replay via orchestrator
-        let replay_result = state
-            .orchestrator
-            .replay(
-                intent_id,
-                intent_head.intent.tenant_id,
-                intent_head.intent.workflow_id,
-                from_version,
-                to_version,
-                request.checkpoint_id,
-            )
-            .await
-            .map_err(ApiErrorResponse)?;
-
-        // Record ReplayInitiated audit event (best-effort)
-        let actor_id = "external-api/replay";
-        let audit_payload = intent_rebase_types::ReplayAuditPayload {
-            from_version: Some(from_version),
-            to_version: Some(to_version),
-            checkpoint_id: replay_result.aligned_checkpoint_id,
-            checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome.clone(),
-            replay_initiated_via: "post-intents-intent-id-replay".to_string(),
-            rationale: format!(
-                "Bounded replay initiated from v{} to v{} via public replay endpoint",
-                from_version, to_version
-            ),
-        };
-
-        if let Err(e) = state
-            .audit_service
-            .record_replay_initiated(
-                intent_head.intent.tenant_id,
-                actor_id,
-                intent_id,
-                audit_payload.clone(),
-                get_current_trace_context(),
-            )
-            .await
-        {
-            tracing::warn!("Failed to record ReplayInitiated audit event: {:?}", e);
-        } else {
-            // Phase 2b bounded event publishing: publish after successful audit persistence
-            publish_audit_event(
-                &state.event_publisher,
-                intent_head.intent.tenant_id,
-                "ReplayInitiated",
-                &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
-            )
-            .await;
-        }
-
-        return Ok(Json(ReplayResponse {
-            intent_id,
-            from_version,
-            to_version,
-            aligned_checkpoint_id: replay_result.aligned_checkpoint_id,
-            checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome,
-            runtime_execution_status: runtime_execution_status_label(
-                &replay_result.runtime_execution_result.status,
-            )
-            .to_string(),
-            signal_sent: replay_result.runtime_execution_result.signal_sent,
-            replay_attempted: replay_result.runtime_execution_result.replay_attempted,
-            replay_completed: replay_result.runtime_execution_result.replay_completed,
-        }));
-    }
-
-    // Non-JWT path (no JWT claims) - proceed without tenant validation
-    // Get intent head to find workflow_id and tenant_id
-    let intent_head = state
-        .service
-        .get_intent_head(intent_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let from_version = request
-        .from_version
-        .unwrap_or(intent_head.version.version_number);
-    let to_version = request.to_version;
-
-    // Phase 2b: Validate target version exists before attempting replay
-    state
-        .service
-        .get_version(intent_id, to_version)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Phase 2b: Validate source version exists if explicitly specified
-    if request.from_version.is_some() {
-        state
-            .service
-            .get_version(intent_id, from_version)
-            .await
-            .map_err(ApiErrorResponse)?;
-    }
-
-    // Execute bounded replay via orchestrator
-    let replay_result = state
-        .orchestrator
-        .replay(
-            intent_id,
-            intent_head.intent.tenant_id,
-            intent_head.intent.workflow_id,
-            from_version,
-            to_version,
-            request.checkpoint_id,
-        )
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Record ReplayInitiated audit event (best-effort)
-    let actor_id = "external-api/replay";
-    let audit_payload = intent_rebase_types::ReplayAuditPayload {
-        from_version: Some(from_version),
-        to_version: Some(to_version),
-        checkpoint_id: replay_result.aligned_checkpoint_id,
-        checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome.clone(),
-        replay_initiated_via: "post-intents-intent-id-replay".to_string(),
-        rationale: format!(
-            "Bounded replay initiated from v{} to v{} via public replay endpoint",
-            from_version, to_version
-        ),
-    };
-
-    if let Err(e) = state
-        .audit_service
-        .record_replay_initiated(
-            intent_head.intent.tenant_id,
-            actor_id,
-            intent_id,
-            audit_payload.clone(),
-            get_current_trace_context(),
-        )
-        .await
-    {
-        tracing::warn!("Failed to record ReplayInitiated audit event: {:?}", e);
-    } else {
-        // Phase 2b bounded event publishing: publish after successful audit persistence
-        publish_audit_event(
-            &state.event_publisher,
-            intent_head.intent.tenant_id,
-            "ReplayInitiated",
-            &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
-        )
-        .await;
-    }
-
-    Ok(Json(ReplayResponse {
-        intent_id,
-        from_version,
-        to_version,
-        aligned_checkpoint_id: replay_result.aligned_checkpoint_id,
-        checkpoint_selection_outcome: replay_result.checkpoint_selection_outcome,
-        runtime_execution_status: runtime_execution_status_label(
-            &replay_result.runtime_execution_result.status,
-        )
-        .to_string(),
-        signal_sent: replay_result.runtime_execution_result.signal_sent,
-        replay_attempted: replay_result.runtime_execution_result.replay_attempted,
-        replay_completed: replay_result.runtime_execution_result.replay_completed,
     }))
 }
 
@@ -7842,7 +7632,10 @@ pub fn build_router(
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
-        .route("/intents/{intent_id}/replay", post(replay_intent))
+        .route(
+            "/intents/{intent_id}/replay",
+            post(replay_handlers::replay_intent),
+        )
         // Side effect query endpoint (Phase 3 Batch 1 groundwork)
         .route("/intents/{intent_id}/side-effects", get(list_side_effects))
         // N4-4: Rebase simulation endpoint (Phase 3 Batch 1 bounded simulation slice)
@@ -8143,7 +7936,10 @@ pub fn build_router_with_jwt_auth(
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
-        .route("/intents/{intent_id}/replay", post(replay_intent))
+        .route(
+            "/intents/{intent_id}/replay",
+            post(replay_handlers::replay_intent),
+        )
         // Side effect query endpoint (Phase 3 Batch 1 groundwork)
         .route("/intents/{intent_id}/side-effects", get(list_side_effects))
         // N4-4: Rebase simulation endpoint (Phase 3 Batch 1 bounded simulation slice)
@@ -10098,7 +9894,7 @@ mod tests {
         intent_id: Uuid,
         request: ReplayRequest,
     ) -> Result<Json<ReplayResponse>, ApiErrorResponse> {
-        replay_intent(
+        crate::replay_handlers::replay_intent(
             State(state),
             auth::OptionalRlsTenantClaims(None), // No JWT - tests basic replay without tenant isolation
             Path(intent_id),
@@ -10113,7 +9909,7 @@ mod tests {
         intent_id: Uuid,
         request: ReplayRequest,
     ) -> Result<Json<ReplayResponse>, ApiErrorResponse> {
-        replay_intent(State(state), Path(intent_id), Json(request)).await
+        crate::replay_handlers::replay_intent(State(state), Path(intent_id), Json(request)).await
     }
 
     #[tokio::test]
@@ -17013,7 +16809,7 @@ mod tests {
             checkpoint_id: None,
         };
 
-        let result = replay_intent(
+        let result = crate::replay_handlers::replay_intent(
             State(state),
             create_test_optional_rls_claims(tenant_b), // JWT has TenantB - mismatch
             Path(intent_id),
@@ -17172,7 +16968,7 @@ mod tests {
             checkpoint_id: None,
         };
 
-        let result = replay_intent(
+        let result = crate::replay_handlers::replay_intent(
             State(state),
             create_test_optional_rls_claims(tenant_a), // Tenant A matches
             Path(intent_id),
