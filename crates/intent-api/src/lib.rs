@@ -74,20 +74,21 @@ pub use types::{
     CompensationSimulationRequest, CreateOrchestrationRunRequest, DiffResponse, ErrorDetails,
     ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
     ForensicBundleContentsSummary, ForensicBundleIntegrityInfo, ForensicBundleRequest,
-    ForensicBundleResponse, ForensicBundleTimeRange, GetLatestPolicySnapshotQuery,
-    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, ListBatchCandidatesQuery,
-    ListBatchCandidatesResponse, ListCompensationActionsQuery, ListCompensationActionsResponse,
-    ListDlqCandidatesQuery, ListDlqCandidatesResponse, ListGraphEdgesQuery, ListGraphNodesQuery,
-    ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
-    ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
-    ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-    OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
-    OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
-    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicySnapshotResponse,
-    ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
-    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
-    SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
-    WaiveCompensationActionBody,
+    ForensicBundleResponse, ForensicBundleTimeRange, ForensicExportContentsSummary,
+    ForensicExportRequest, ForensicExportResponse, ForensicExportTimeRange,
+    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
+    ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
+    ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
+    ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
+    ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
+    OrchestrationDashboardResponse, OrchestrationDryRunProposalResponse,
+    OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationDryRunSummaryResponse,
+    OrchestrationQuery, OrchestrationRunQuery, PlanCompensationActionsRequest,
+    PlanCompensationActionsResponse, PolicySnapshotResponse, ReapproveCompensationActionBody,
+    RebaseApplyResponse, RebasePreviewResponse, RebaseSimulationQuery, RejectApprovalRequestBody,
+    ReplayRequest, ReplayResponse, SideEffectSummary, TriggerReapprovalRequest,
+    TriggerReapprovalResponse, WaiveCompensationActionBody,
 };
 
 // ============================================================================
@@ -9632,117 +9633,6 @@ impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificati
             estimated_bundle_item_count: resp.estimated_bundle_item_count,
         }
     }
-}
-
-// === Forensic Export Types ===
-
-/// Request body for forensic archive export
-///
-/// **Phase 3 Batch 3b (bounded slice):** Triggers in-memory archive generation
-/// from the given parameters. The archive contains scaffolded/fictional data
-/// representing what a real bundle would contain.
-///
-/// **Truthful semantics:**
-/// - Generated archive is entirely in-memory with scaffolded entries
-/// - Does NOT query actual services for real intent versions, artifacts, etc.
-/// - `item_count` reflects the configured generator counts, not actual data
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicExportRequest {
-    /// Tenant ID for multi-tenancy isolation
-    pub tenant_id: Uuid,
-    /// Intent ID to generate archive for
-    pub intent_id: Uuid,
-    /// Time range to include in archive
-    pub time_range: ForensicExportTimeRange,
-    /// Purpose of the archive
-    #[serde(default)]
-    pub purpose: forensic_service::ExportPurpose,
-    /// Whether to include artifact entries
-    #[serde(default = "default_export_include_artifacts")]
-    pub include_artifacts: bool,
-    /// Whether to include audit event entries
-    #[serde(default = "default_export_include_audit_events")]
-    pub include_audit_events: bool,
-    /// Whether to include policy snapshot entries
-    #[serde(default = "default_export_include_policy_snapshots")]
-    pub include_policy_snapshots: bool,
-}
-
-fn default_export_include_artifacts() -> bool {
-    true
-}
-
-fn default_export_include_audit_events() -> bool {
-    true
-}
-
-fn default_export_include_policy_snapshots() -> bool {
-    true
-}
-
-/// Time range for forensic export
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicExportTimeRange {
-    pub start: chrono::DateTime<chrono::Utc>,
-    pub end: chrono::DateTime<chrono::Utc>,
-}
-
-/// Response for forensic archive export
-///
-/// **Phase 3 Batch 3b (bounded slice):** Returns archive metadata and size
-/// for the generated in-memory archive. The actual archive content is NOT
-/// embedded in this response — it is generated on-demand.
-///
-/// **Truthful semantics:**
-/// - `archive_id` is a unique identifier for the generated archive
-/// - `generated_at` timestamps when generation was triggered
-/// - `item_count` is the count of scaffolded entries generated
-/// - `archive_size_bytes` reflects the JSON-serialized size of the archive
-///
-/// **NOT claimed:**
-/// - Actual bundle generation from real services
-/// - Bundle storage (S3 or any persistence)
-/// - Async job orchestration
-/// - Real replay engine
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicExportResponse {
-    /// Unique identifier for this archive
-    pub archive_id: Uuid,
-    /// When archive was generated
-    pub generated_at: chrono::DateTime<chrono::Utc>,
-    /// Export status
-    pub status: forensic_service::ExportStatus,
-    /// Human-readable status reason
-    pub status_reason: String,
-    /// Tenant ID
-    pub tenant_id: Uuid,
-    /// Intent ID
-    pub intent_id: Uuid,
-    /// Time range covered
-    pub time_range: ForensicExportTimeRange,
-    /// Purpose of archive
-    pub purpose: forensic_service::ExportPurpose,
-    /// Summary of archive contents
-    pub contents: ForensicExportContentsSummary,
-    /// Total item count
-    pub item_count: usize,
-    /// Content type (application/json)
-    pub content_type: String,
-    /// Archive size in bytes
-    pub archive_size_bytes: usize,
-}
-
-/// Summary of contents in an export archive
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForensicExportContentsSummary {
-    /// Number of intent version entries
-    pub intent_versions: usize,
-    /// Number of artifact entries
-    pub artifacts: usize,
-    /// Number of audit event entries
-    pub audit_events: usize,
-    /// Number of policy snapshot entries
-    pub policy_snapshots: usize,
 }
 
 /// POST /forensic/verify - Verify forensic bundle feasibility
