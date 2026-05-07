@@ -85,6 +85,9 @@ pub mod approval_handlers_readonly;
 /// Approval mutation handlers (Phase 2b bounded mutation slice)
 pub mod approval_mutation_handlers;
 
+/// Artifact ingest handlers (Phase 3 Batch 1 bounded slice)
+pub mod ingest_handlers;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -600,89 +603,6 @@ pub fn validate_create_version_request(
         return Err(IntentRebaseError::InvalidIngestRequest(
             "payload.objective.domain cannot be empty".into(),
         ));
-    }
-
-    Ok(())
-}
-
-/// Validates required fields in ArtifactIngestRequest.
-/// Returns Err with specific validation error if any field is invalid.
-///
-/// Phase 3 Batch 1 (groundwork): When side_effect_context is provided, validates:
-/// - source_intent_id cannot be nil
-/// - source_intent_version must be > 0
-/// - effect_type cannot be empty or whitespace-only
-/// - target cannot be empty or whitespace-only
-pub fn validate_artifact_ingest_request(
-    request: &ArtifactIngestRequest,
-) -> Result<(), IntentRebaseError> {
-    // Validate tenant_id is not nil/zero UUID
-    if request.tenant_id == Uuid::nil() {
-        return Err(IntentRebaseError::InvalidIngestRequest(
-            "tenant_id cannot be nil".into(),
-        ));
-    }
-
-    // Validate workflow_id is not nil/zero UUID
-    if request.workflow_id == Uuid::nil() {
-        return Err(IntentRebaseError::InvalidIngestRequest(
-            "workflow_id cannot be nil".into(),
-        ));
-    }
-
-    // Validate label is not empty
-    if request.label.trim().is_empty() {
-        return Err(IntentRebaseError::InvalidIngestRequest(
-            "label cannot be empty".into(),
-        ));
-    }
-
-    // Validate external_ref.ref_id is not nil UUID
-    if request.external_ref.ref_id == Uuid::nil() {
-        return Err(IntentRebaseError::InvalidIngestRequest(
-            "external_ref.ref_id cannot be nil".into(),
-        ));
-    }
-
-    // Phase 3 Batch 1: Validate side_effect_context if provided
-    if let Some(ref context) = request.side_effect_context {
-        // source_intent_id cannot be nil
-        if context.source_intent_id == Uuid::nil() {
-            return Err(IntentRebaseError::InvalidIngestRequest(
-                "side_effect_context.source_intent_id cannot be nil".into(),
-            ));
-        }
-
-        // source_intent_version must be > 0
-        if context.source_intent_version <= 0 {
-            return Err(IntentRebaseError::InvalidIngestRequest(format!(
-                "side_effect_context.source_intent_version must be > 0, got {}",
-                context.source_intent_version
-            )));
-        }
-
-        // effect_type cannot be empty or whitespace-only
-        if context.effect_type.trim().is_empty() {
-            return Err(IntentRebaseError::InvalidIngestRequest(
-                "side_effect_context.effect_type cannot be empty".into(),
-            ));
-        }
-
-        // target cannot be empty or whitespace-only
-        if context.target.trim().is_empty() {
-            return Err(IntentRebaseError::InvalidIngestRequest(
-                "side_effect_context.target cannot be empty".into(),
-            ));
-        }
-
-        // idempotency_key, if provided, cannot be empty or whitespace-only
-        if let Some(ref key) = context.idempotency_key {
-            if key.trim().is_empty() {
-                return Err(IntentRebaseError::InvalidIngestRequest(
-                    "side_effect_context.idempotency_key cannot be empty".into(),
-                ));
-            }
-        }
     }
 
     Ok(())
@@ -3952,342 +3872,6 @@ async fn batch_execute_compensation_actions(
     Ok(Json(response))
 }
 
-/// POST /v1/graph/artifacts - Ingest an artifact with optional side effect capture
-///
-/// Phase 3 Batch 1 (groundwork): Creates an Artifact node in the graph and wires
-/// DependsOn edges to the specified IntentVersion nodes. When `side_effect_context`
-/// is provided with sufficient fields, also records a side effect to the compensation
-/// ledger (capture-on-write groundwork).
-///
-/// This is the primary path for artifact-producing operations to record side effects.
-#[cfg(feature = "jwt-auth")]
-async fn ingest_artifact(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Json(request): Json<ArtifactIngestRequest>,
-) -> Result<(StatusCode, Json<ArtifactIngestResponse>), ApiErrorResponse> {
-    // Phase 1: Input validation - validate request before processing
-    validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
-
-    // Extract side effect context before consuming request for side effect recording
-    // after successful graph ingest. This preserves the context for the compensation
-    // ledger write even though graph_service.ingest_artifact consumes the request.
-    let side_effect_context = request.side_effect_context.clone();
-
-    // Phase 3 P1-S5i: Use RLS-aware transaction wrapping when pool and JWT claims available
-    let ingest_result =
-        if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
-            // Phase 5.1: JWT tenant guard - fail closed on mismatch
-            if request.tenant_id != rls_claims.tenant_id {
-                let msg = format!(
-                    "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
-                    rls_claims.tenant_id, request.tenant_id
-                );
-                tracing::warn!("ingest_artifact: tenant mismatch rejection");
-                return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-            }
-
-            // Begin RLS-aware transaction
-            let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
-            let mut tx = match tx_result {
-                Ok(tx) => tx,
-                Err(e) => {
-                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
-                        "failed to begin RLS transaction: {}",
-                        e
-                    ))));
-                }
-            };
-
-            // Get the SQL repo and ingest artifact within the transaction
-            if let Some(sql_repo) = state.graph_service.repo().as_sqlx_repo() {
-                // Build the artifact request (consuming the request)
-                let graph_request = intent_rebase_types::ArtifactIngestRequest {
-                    tenant_id: request.tenant_id,
-                    workflow_id: request.workflow_id,
-                    external_ref: request.external_ref,
-                    label: request.label,
-                    depends_on_intent_versions: request.depends_on_intent_versions,
-                    properties: request.properties,
-                    side_effect_context: None, // Side effects recorded post-commit
-                };
-
-                let result = sql_repo
-                    .ingest_artifact_with_tx(&mut tx, graph_request)
-                    .await;
-                let ingest_result = match result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
-                            "RLS artifact ingest failed: {}",
-                            e
-                        ))));
-                    }
-                };
-
-                // Commit the transaction
-                if let Err(e) = tx.commit().await {
-                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
-                        "failed to commit RLS transaction: {}",
-                        e
-                    ))));
-                }
-
-                tracing::debug!(
-                    "ingest_artifact: RLS path success for tenant_id={}",
-                    rls_claims.tenant_id
-                );
-
-                ingest_result
-            } else {
-                // Fallback to non-RLS path if repo doesn't support SQL
-                tracing::warn!(
-                    "ingest_artifact: rls_pool set but repo doesn't support SQL, falling back"
-                );
-
-                // Delegate artifact ingest to graph_service - this handles prevalidation of
-                // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
-                // This avoids duplicating the core artifact ingest logic in intent-api.
-                let graph_request = intent_rebase_types::ArtifactIngestRequest {
-                    tenant_id: request.tenant_id,
-                    workflow_id: request.workflow_id,
-                    external_ref: request.external_ref,
-                    label: request.label,
-                    depends_on_intent_versions: request.depends_on_intent_versions,
-                    properties: request.properties,
-                    side_effect_context: None, // Consumed above for post-ingest recording
-                };
-
-                state
-                    .graph_service
-                    .ingest_artifact(graph_request)
-                    .await
-                    .map_err(ApiErrorResponse)?
-            }
-        } else {
-            // Non-RLS path (no JWT claims or rls_pool is None)
-
-            // Delegate artifact ingest to graph_service - this handles prevalidation of
-            // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
-            // This avoids duplicating the core artifact ingest logic in intent-api.
-            let graph_request = intent_rebase_types::ArtifactIngestRequest {
-                tenant_id: request.tenant_id,
-                workflow_id: request.workflow_id,
-                external_ref: request.external_ref,
-                label: request.label,
-                depends_on_intent_versions: request.depends_on_intent_versions,
-                properties: request.properties,
-                side_effect_context: None, // Consumed above for post-ingest recording
-            };
-
-            state
-                .graph_service
-                .ingest_artifact(graph_request)
-                .await
-                .map_err(ApiErrorResponse)?
-        };
-
-    // Phase 3 Batch 1 (groundwork): Optionally record side effect if context provided
-    let mut side_effect_recorded = false;
-    let mut side_effect_id = None;
-
-    if let Some(ref context) = side_effect_context {
-        let effect_class = match context.effect_class {
-            Some(intent_rebase_types::SideEffectClass::S0PureRead) => {
-                compensation_service::SideEffectClass::S0PureRead
-            }
-            Some(intent_rebase_types::SideEffectClass::S1InternalReversible) => {
-                compensation_service::SideEffectClass::S1InternalReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S2ExternalReversible) | None => {
-                compensation_service::SideEffectClass::S2ExternalReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S3ExternalPartiallyReversible) => {
-                compensation_service::SideEffectClass::S3ExternalPartiallyReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S4Irreversible) => {
-                compensation_service::SideEffectClass::S4Irreversible
-            }
-        };
-
-        let recorded = if let Some(ref idempotency_key) = context.idempotency_key {
-            state
-                .side_effect_service
-                .record_side_effect_with_idempotency(
-                    request.tenant_id,
-                    context.source_intent_id,
-                    context.source_intent_version,
-                    effect_class,
-                    &context.effect_type,
-                    &context.target,
-                    idempotency_key,
-                )
-                .await
-        } else {
-            state
-                .side_effect_service
-                .record_side_effect(
-                    request.tenant_id,
-                    context.source_intent_id,
-                    context.source_intent_version,
-                    effect_class,
-                    &context.effect_type,
-                    &context.target,
-                )
-                .await
-        };
-
-        match recorded {
-            Ok(effect) => {
-                side_effect_recorded = true;
-                side_effect_id = Some(effect.id);
-                tracing::debug!(
-                    "Recorded side effect {} for artifact {} (intent_id={}, version={})",
-                    effect.id,
-                    ingest_result.node.id,
-                    context.source_intent_id,
-                    context.source_intent_version
-                );
-            }
-            Err(e) => {
-                // Log but don't fail the artifact ingest if side effect recording fails
-                tracing::warn!(
-                    "Failed to record side effect for artifact {}: {:?}",
-                    ingest_result.node.id,
-                    e
-                );
-            }
-        }
-    }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(ArtifactIngestResponse {
-            node: ingest_result.node,
-            edges: ingest_result.edges,
-            side_effect_recorded,
-            side_effect_id,
-        }),
-    ))
-}
-
-/// POST /v1/graph/artifacts - Ingest an artifact with optional side effect capture (non-JWT fallback)
-#[cfg(not(feature = "jwt-auth"))]
-async fn ingest_artifact(
-    State(state): State<AppState>,
-    Json(request): Json<ArtifactIngestRequest>,
-) -> Result<(StatusCode, Json<ArtifactIngestResponse>), ApiErrorResponse> {
-    // Phase 1: Input validation - validate request before processing
-    validate_artifact_ingest_request(&request).map_err(ApiErrorResponse)?;
-
-    // Extract side effect context before consuming request for side effect recording
-    // after successful graph ingest. This preserves the context for the compensation
-    // ledger write even though graph_service.ingest_artifact consumes the request.
-    let side_effect_context = request.side_effect_context.clone();
-
-    // Delegate artifact ingest to graph_service - this handles prevalidation of
-    // IntentVersion nodes, artifact node creation, and DependsOn edge wiring.
-    // This avoids duplicating the core artifact ingest logic in intent-api.
-    let graph_request = intent_rebase_types::ArtifactIngestRequest {
-        tenant_id: request.tenant_id,
-        workflow_id: request.workflow_id,
-        external_ref: request.external_ref,
-        label: request.label,
-        depends_on_intent_versions: request.depends_on_intent_versions,
-        properties: request.properties,
-        side_effect_context: None, // Consumed above for post-ingest recording
-    };
-
-    let ingest_result = state
-        .graph_service
-        .ingest_artifact(graph_request)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Phase 3 Batch 1 (groundwork): Optionally record side effect if context provided
-    let mut side_effect_recorded = false;
-    let mut side_effect_id = None;
-
-    if let Some(ref context) = side_effect_context {
-        let effect_class = match context.effect_class {
-            Some(intent_rebase_types::SideEffectClass::S0PureRead) => {
-                compensation_service::SideEffectClass::S0PureRead
-            }
-            Some(intent_rebase_types::SideEffectClass::S1InternalReversible) => {
-                compensation_service::SideEffectClass::S1InternalReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S2ExternalReversible) | None => {
-                compensation_service::SideEffectClass::S2ExternalReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S3ExternalPartiallyReversible) => {
-                compensation_service::SideEffectClass::S3ExternalPartiallyReversible
-            }
-            Some(intent_rebase_types::SideEffectClass::S4Irreversible) => {
-                compensation_service::SideEffectClass::S4Irreversible
-            }
-        };
-
-        let recorded = if let Some(ref idempotency_key) = context.idempotency_key {
-            state
-                .side_effect_service
-                .record_side_effect_with_idempotency(
-                    request.tenant_id,
-                    context.source_intent_id,
-                    context.source_intent_version,
-                    effect_class,
-                    &context.effect_type,
-                    &context.target,
-                    idempotency_key,
-                )
-                .await
-        } else {
-            state
-                .side_effect_service
-                .record_side_effect(
-                    request.tenant_id,
-                    context.source_intent_id,
-                    context.source_intent_version,
-                    effect_class,
-                    &context.effect_type,
-                    &context.target,
-                )
-                .await
-        };
-
-        match recorded {
-            Ok(effect) => {
-                side_effect_recorded = true;
-                side_effect_id = Some(effect.id);
-                tracing::debug!(
-                    "Recorded side effect {} for artifact {} (intent_id={}, version={})",
-                    effect.id,
-                    ingest_result.node.id,
-                    context.source_intent_id,
-                    context.source_intent_version
-                );
-            }
-            Err(e) => {
-                // Log but don't fail the artifact ingest if side effect recording fails
-                tracing::warn!(
-                    "Failed to record side effect for artifact {}: {:?}",
-                    ingest_result.node.id,
-                    e
-                );
-            }
-        }
-    }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(ArtifactIngestResponse {
-            node: ingest_result.node,
-            edges: ingest_result.edges,
-            side_effect_recorded,
-            side_effect_id,
-        }),
-    ))
-}
-
 /// Build the Phase 1 router with CORS enabled
 ///
 /// Phase 2b: The `event_publisher` parameter enables bounded event streaming.
@@ -4467,7 +4051,10 @@ pub fn build_router(
             get(graph_handlers::list_edges_from_node),
         )
         // Artifact ingest with optional side effect capture (Phase 3 Batch 1 groundwork)
-        .route("/v1/graph/artifacts", post(ingest_artifact))
+        .route(
+            "/v1/graph/artifacts",
+            post(ingest_handlers::ingest_artifact),
+        )
         // Approval request endpoints (Phase 2b bounded slice)
         .route(
             "/approval-requests/pending",
@@ -4783,7 +4370,10 @@ pub fn build_router_with_jwt_auth(
             get(graph_handlers::list_edges_from_node),
         )
         // Artifact ingest with optional side effect capture (Phase 3 Batch 1 groundwork)
-        .route("/v1/graph/artifacts", post(ingest_artifact))
+        .route(
+            "/v1/graph/artifacts",
+            post(ingest_handlers::ingest_artifact),
+        )
         // Approval request endpoints (Phase 2b bounded slice)
         .route(
             "/approval-requests/pending",
@@ -5040,6 +4630,9 @@ mod tests {
         approve_compensation_action, execute_compensation_action, reapprove_compensation_action,
         waive_compensation_action,
     };
+
+    // Import ingest handlers for tests
+    use crate::ingest_handlers::{ingest_artifact, validate_artifact_ingest_request};
 
     fn create_test_service() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
