@@ -79,6 +79,9 @@ pub mod compensation_planner_handlers;
 /// Compensation action mutation handlers (Phase 3 bounded mutation slice)
 pub mod compensation_mutation_handlers;
 
+/// Read-only approval request handlers (Phase 2b bounded read-only slice)
+pub mod approval_handlers_readonly;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -2361,85 +2364,6 @@ pub(crate) async fn publish_audit_event(
 // Approval Request Handlers (Phase 2b bounded slice)
 // ============================================================================
 
-/// GET /approval-requests/pending - List pending approval requests for a tenant
-///
-/// Phase 1 P1-S5f bounded slice: When `state.rls_pool` is Some AND valid JWT claims
-/// are present, this handler validates that the query tenant_id matches the JWT tenant.
-/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
-#[cfg(feature = "jwt-auth")]
-async fn list_pending_approval_requests(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    axum::extract::Query(query): axum::extract::Query<ListPendingApprovalRequestsQuery>,
-) -> Result<Json<ListPendingApprovalRequestsResponse>, ApiErrorResponse> {
-    // Phase 1 P1-S5f: Check if RLS path is available (pool exists AND JWT claims present)
-    // Also performs tenant mismatch check
-    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
-        // Tenant mismatch rejection: query tenant_id must match JWT tenant
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("list_pending_approval_requests: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-
-        tracing::debug!(
-            "list_pending_approval_requests: RLS path validated for tenant_id={}",
-            rls_claims.tenant_id
-        );
-
-        let _ = rls_pool; // Used implicitly via RLS when repo supports SQL
-    }
-
-    let pending = state
-        .approval_request_repo
-        .list_pending_by_tenant(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let summaries: Vec<ApprovalRequestSummary> = pending
-        .into_iter()
-        .map(ApprovalRequestSummary::from)
-        .collect();
-
-    let total = summaries.len();
-
-    Ok(Json(ListPendingApprovalRequestsResponse {
-        approval_requests: summaries,
-        total,
-    }))
-}
-
-/// GET /approval-requests/pending - List pending approval requests for a tenant (non-JWT fallback)
-///
-/// Phase 2b bounded slice: Non-JWT path for backward compatibility.
-/// When jwt-auth feature is disabled, this handler operates without tenant validation.
-#[cfg(not(feature = "jwt-auth"))]
-async fn list_pending_approval_requests(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<ListPendingApprovalRequestsQuery>,
-) -> Result<Json<ListPendingApprovalRequestsResponse>, ApiErrorResponse> {
-    let pending = state
-        .approval_request_repo
-        .list_pending_by_tenant(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let summaries: Vec<ApprovalRequestSummary> = pending
-        .into_iter()
-        .map(ApprovalRequestSummary::from)
-        .collect();
-
-    let total = summaries.len();
-
-    Ok(Json(ListPendingApprovalRequestsResponse {
-        approval_requests: summaries,
-        total,
-    }))
-}
-
 /// POST /approval-requests/{id}/approve - Approve a pending approval request
 ///
 /// Phase 1 P1-S5b/c bounded slice: When `state.rls_pool` is Some AND valid JWT claims
@@ -3224,218 +3148,6 @@ async fn expire_approval_request(
         resolved_by: updated.resolved_by.unwrap_or_default(),
         resolved_at: updated.resolved_at,
         resolution_notes: updated.resolution_notes,
-    }))
-}
-
-/// GET /approval-requests/{approval_request_id}/revalidate - Check if approval remains valid
-///
-/// Phase 2b bounded read-only slice: Compares approval-basis snapshot scope_hash
-/// with latest snapshot scope_hash for the same intent.
-///
-/// Comparison strategy:
-/// - Get the policy snapshot for the approval's `intent_version_from` (the approval basis)
-/// - Get the latest policy snapshot for the same intent
-/// - Compare scope_hash values: if different, approval is no longer valid
-///
-/// Returns 404 if:
-/// - Approval request not found
-/// - Approval basis snapshot not found (should exist if approval exists)
-///
-/// Returns 200 with valid=false if latest snapshot is missing (policy not yet computed
-/// for current intent version) - this is NOT a 404, as the approval still exists
-/// but we cannot determine current validity without a latest snapshot.
-/// GET /approval-requests/{id}/revalidate - Check if an approval request is still valid
-///
-/// Phase 1 P1-S5g bounded slice: When `state.rls_pool` is Some AND valid JWT claims
-/// are present, this handler validates that the approval request tenant matches the JWT tenant.
-/// Falls back to non-RLS path when no JWT claims are present (backward compatible).
-#[cfg(feature = "jwt-auth")]
-async fn revalidate_approval_request(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Path(approval_request_id): Path<Uuid>,
-) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-    // Step 1: Fetch the approval request
-    let approval_request = state
-        .approval_request_repo
-        .get_approval_request(approval_request_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Phase 1 P1-S5g: Check if RLS path is available (pool exists AND JWT claims present)
-    // Also performs tenant mismatch check
-    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
-        // Tenant mismatch rejection: approval request tenant must match JWT tenant
-        if approval_request.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match approval request tenant_id ({})",
-                rls_claims.tenant_id, approval_request.tenant_id
-            );
-            tracing::warn!("revalidate_approval_request: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-
-        tracing::debug!(
-            "revalidate_approval_request: RLS path validated for tenant_id={}",
-            rls_claims.tenant_id
-        );
-
-        let _ = rls_pool; // Used implicitly via RLS when repo supports SQL
-    }
-
-    // Step 2: Fetch the approval-basis policy snapshot (snapshot for intent_version_from)
-    let approval_basis_snapshot = state
-        .policy_snapshot_repo
-        .get_by_intent_version(
-            approval_request.intent_id,
-            approval_request.intent_version_from,
-            approval_request.tenant_id,
-        )
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let approval_basis_scope_hash = match approval_basis_snapshot {
-        Some(snapshot) => snapshot.scope_hash,
-        None => {
-            // Approval basis snapshot missing - this is unexpected but return 404
-            return Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
-                approval_request.intent_id,
-            )));
-        }
-    };
-
-    // Step 3: Fetch the latest policy snapshot for this intent
-    let latest_snapshot = state
-        .policy_snapshot_repo
-        .get_latest_by_intent(approval_request.intent_id, approval_request.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Step 4: Compare scope_hash values
-    let (valid, reason) = match &latest_snapshot {
-        Some(latest) if latest.scope_hash == approval_basis_scope_hash => {
-            // Scope unchanged - approval remains valid
-            (
-                true,
-                "Scope unchanged since approval was granted".to_string(),
-            )
-        }
-        Some(latest) if latest.scope_hash != approval_basis_scope_hash => {
-            // Scope changed - approval no longer valid
-            (
-                false,
-                "Scope has changed since approval was granted".to_string(),
-            )
-        }
-        None => {
-            // No latest snapshot available - cannot determine validity
-            // Return valid=false but with a clear reason (not a 404)
-            (
-                false,
-                "No latest policy snapshot available for comparison".to_string(),
-            )
-        }
-        // Should not reach here, but handle defensively
-        _ => (false, "Unable to determine approval validity".to_string()),
-    };
-
-    let current_scope_hash = latest_snapshot.map(|s| s.scope_hash);
-
-    Ok(Json(ApprovalRevalidationResponse {
-        approval_id: approval_request_id,
-        valid,
-        reason,
-        approval_basis_scope_hash,
-        current_scope_hash,
-        revalidation_required: !valid,
-        intent_id: approval_request.intent_id,
-        approval_basis_version: approval_request.intent_version_from,
-    }))
-}
-
-/// GET /approval-requests/{id}/revalidate - Check if an approval request is still valid (non-JWT fallback)
-///
-/// Phase 2b bounded slice: Non-JWT path for backward compatibility.
-/// When jwt-auth feature is disabled, this handler operates without tenant validation.
-#[cfg(not(feature = "jwt-auth"))]
-async fn revalidate_approval_request(
-    State(state): State<AppState>,
-    Path(approval_request_id): Path<Uuid>,
-) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-    // Step 1: Fetch the approval request
-    let approval_request = state
-        .approval_request_repo
-        .get_approval_request(approval_request_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Step 2: Fetch the approval-basis policy snapshot (snapshot for intent_version_from)
-    let approval_basis_snapshot = state
-        .policy_snapshot_repo
-        .get_by_intent_version(
-            approval_request.intent_id,
-            approval_request.intent_version_from,
-            approval_request.tenant_id,
-        )
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let approval_basis_scope_hash = match approval_basis_snapshot {
-        Some(snapshot) => snapshot.scope_hash,
-        None => {
-            // Approval basis snapshot missing - this is unexpected but return 404
-            return Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
-                approval_request.intent_id,
-            )));
-        }
-    };
-
-    // Step 3: Fetch the latest policy snapshot for this intent
-    let latest_snapshot = state
-        .policy_snapshot_repo
-        .get_latest_by_intent(approval_request.intent_id, approval_request.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    // Step 4: Compare scope_hash values
-    let (valid, reason) = match &latest_snapshot {
-        Some(latest) if latest.scope_hash == approval_basis_scope_hash => {
-            // Scope unchanged - approval remains valid
-            (
-                true,
-                "Scope unchanged since approval was granted".to_string(),
-            )
-        }
-        Some(latest) if latest.scope_hash != approval_basis_scope_hash => {
-            // Scope changed - approval no longer valid
-            (
-                false,
-                "Scope has changed since approval was granted".to_string(),
-            )
-        }
-        None => {
-            // No latest snapshot available - cannot determine validity
-            // Return valid=false but with a clear reason (not a 404)
-            (
-                false,
-                "No latest policy snapshot available for comparison".to_string(),
-            )
-        }
-        // Should not reach here, but handle defensively
-        _ => (false, "Unable to determine approval validity".to_string()),
-    };
-
-    let current_scope_hash = latest_snapshot.map(|s| s.scope_hash);
-
-    Ok(Json(ApprovalRevalidationResponse {
-        approval_id: approval_request_id,
-        valid,
-        reason,
-        approval_basis_scope_hash,
-        current_scope_hash,
-        revalidation_required: !valid,
-        intent_id: approval_request.intent_id,
-        approval_basis_version: approval_request.intent_version_from,
     }))
 }
 
@@ -5547,7 +5259,7 @@ pub fn build_router(
         // Approval request endpoints (Phase 2b bounded slice)
         .route(
             "/approval-requests/pending",
-            get(list_pending_approval_requests),
+            get(approval_handlers_readonly::list_pending_approval_requests),
         )
         .route(
             "/approval-requests/{approval_request_id}/approve",
@@ -5565,7 +5277,7 @@ pub fn build_router(
         // GET revalidate - bounded read-only scope comparison (Phase 2b)
         .route(
             "/approval-requests/{approval_request_id}/revalidate",
-            get(revalidate_approval_request),
+            get(approval_handlers_readonly::revalidate_approval_request),
         )
         // ADR-07: POST trigger-reapproval - bounded re-approval trigger (Phase 2b)
         .route(
@@ -5863,7 +5575,7 @@ pub fn build_router_with_jwt_auth(
         // Approval request endpoints (Phase 2b bounded slice)
         .route(
             "/approval-requests/pending",
-            get(list_pending_approval_requests),
+            get(approval_handlers_readonly::list_pending_approval_requests),
         )
         .route(
             "/approval-requests/{approval_request_id}/approve",
@@ -5881,7 +5593,7 @@ pub fn build_router_with_jwt_auth(
         // GET revalidate - bounded read-only scope comparison (Phase 2b)
         .route(
             "/approval-requests/{approval_request_id}/revalidate",
-            get(revalidate_approval_request),
+            get(approval_handlers_readonly::revalidate_approval_request),
         )
         // ADR-07: POST trigger-reapproval - bounded re-approval trigger (Phase 2b)
         .route(
@@ -7888,7 +7600,7 @@ mod tests {
         state: AppState,
         approval_request_id: Uuid,
     ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-        revalidate_approval_request(
+        approval_handlers_readonly::revalidate_approval_request(
             State(state),
             auth::OptionalRlsTenantClaims(None),
             Path(approval_request_id),
@@ -7901,7 +7613,11 @@ mod tests {
         state: AppState,
         approval_request_id: Uuid,
     ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-        revalidate_approval_request(State(state), Path(approval_request_id)).await
+        approval_handlers_readonly::revalidate_approval_request(
+            State(state),
+            Path(approval_request_id),
+        )
+        .await
     }
 
     #[tokio::test]
