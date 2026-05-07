@@ -4470,76 +4470,7 @@ async fn execute_compensation_action(
     Ok(Json(CompensationActionResponse::from(updated)))
 }
 
-/// GET /compensation-actions/dlq - List DLQ (Dead Letter Queue) candidates
-///
-/// Phase 3 Batch 1 (bounded manual retry slice): Returns all compensation
-/// actions that are DLQ candidates.
-///
-/// **Derived DLQ condition:** An action is a DLQ candidate when:
-/// 1. Status is Failed AND
-/// 2. Either:
-///    a. attempt_count >= max_retries (exhausted retry budget), OR
-///    b. The error code is non-retryable (permanent failure)
-///
-/// **No DLQ table:** This is a read-only derived query from existing data.
-/// DLQ candidates cannot be reapproved - they represent failures that have
-/// exhausted automated retry possibilities.
-///
-/// **This endpoint is READ-ONLY** - it only queries existing data.
-/// **Manual intervention is the only path forward for DLQ candidates.**
-#[cfg(feature = "jwt-auth")]
-async fn list_dlq_candidates(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    axum::extract::Query(query): axum::extract::Query<ListDlqCandidatesQuery>,
-) -> Result<Json<ListDlqCandidatesResponse>, ApiErrorResponse> {
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if query.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
-                rls_claims.tenant_id, query.tenant_id
-            );
-            tracing::warn!("list_dlq_candidates: tenant mismatch rejection");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    let dlq_candidates = state
-        .compensation_action_service
-        .list_dlq_candidates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let total = dlq_candidates.len();
-
-    Ok(Json(ListDlqCandidatesResponse {
-        dlq_candidates,
-        total,
-    }))
-}
-
-/// **No DLQ table:** This is a read-only derived query from existing data.
-/// DLQ candidates cannot be reapproved - they represent failures that have
-/// exhausted automated retry possibilities.
-#[cfg(not(feature = "jwt-auth"))]
-async fn list_dlq_candidates(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<ListDlqCandidatesQuery>,
-) -> Result<Json<ListDlqCandidatesResponse>, ApiErrorResponse> {
-    let dlq_candidates = state
-        .compensation_action_service
-        .list_dlq_candidates(query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let total = dlq_candidates.len();
-
-    Ok(Json(ListDlqCandidatesResponse {
-        dlq_candidates,
-        total,
-    }))
-}
+// DLQ candidate handlers have been moved to compensation_query_handlers.rs
 
 /// GET /compensation-actions/batch-candidates - List batch candidates across all categories
 ///
@@ -7204,7 +7135,10 @@ pub fn build_router(
             "/compensation-actions/plan",
             post(plan_compensation_actions),
         )
-        .route("/compensation-actions/dlq", get(list_dlq_candidates))
+        .route(
+            "/compensation-actions/dlq",
+            get(compensation_query_handlers::list_dlq_candidates),
+        )
         // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
         .route(
             "/compensation-actions/batch-candidates",
@@ -7514,7 +7448,10 @@ pub fn build_router_with_jwt_auth(
             "/compensation-actions/plan",
             post(plan_compensation_actions),
         )
-        .route("/compensation-actions/dlq", get(list_dlq_candidates))
+        .route(
+            "/compensation-actions/dlq",
+            get(compensation_query_handlers::list_dlq_candidates),
+        )
         // Batch candidates query endpoint (Phase 3 Batch 1 bounded read-only batch candidate queue slice)
         .route(
             "/compensation-actions/batch-candidates",
