@@ -62,6 +62,9 @@ pub mod simulation_handlers;
 /// Replay handlers (Phase 2b bounded replay slice)
 pub mod replay_handlers;
 
+/// Policy snapshot handlers (Phase 2 bounded read-only slice, extracted as bounded handler decomposition slice)
+pub mod policy_snapshot_handlers;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -3814,84 +3817,6 @@ async fn trigger_reapproval(
             reason: request.reapproval_reason,
         }),
     ))
-}
-
-/// GET /policy-snapshots/{id} - Get a policy snapshot by ID
-async fn get_policy_snapshot(
-    State(state): State<AppState>,
-    Path(snapshot_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<GetPolicySnapshotQuery>,
-) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
-    let snapshot = state
-        .policy_snapshot_repo
-        .get_snapshot(snapshot_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    Ok(Json(PolicySnapshotResponse::from(snapshot)))
-}
-
-/// GET /policy-snapshots/intent/{intent_id}/latest - Get latest policy snapshot for an intent
-async fn get_latest_policy_snapshot(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<GetLatestPolicySnapshotQuery>,
-) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
-    let snapshot = state
-        .policy_snapshot_repo
-        .get_latest_by_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    match snapshot {
-        Some(s) => Ok(Json(PolicySnapshotResponse::from(s))),
-        None => Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
-            intent_id,
-        ))),
-    }
-}
-
-/// GET /policy-snapshots/intent/{intent_id}/versions/{version} - Get policy snapshot by intent version
-async fn get_policy_snapshot_by_version(
-    State(state): State<AppState>,
-    Path((intent_id, version)): Path<(Uuid, i32)>,
-    axum::extract::Query(query): axum::extract::Query<GetPolicySnapshotByVersionQuery>,
-) -> Result<Json<PolicySnapshotResponse>, ApiErrorResponse> {
-    let snapshot = state
-        .policy_snapshot_repo
-        .get_by_intent_version(intent_id, version, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    match snapshot {
-        Some(s) => Ok(Json(PolicySnapshotResponse::from(s))),
-        None => Err(ApiErrorResponse(IntentRebaseError::PolicySnapshotNotFound(
-            intent_id,
-        ))),
-    }
-}
-
-/// GET /policy-snapshots/intent/{intent_id} - List all policy snapshots for an intent
-async fn list_policy_snapshots(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    axum::extract::Query(query): axum::extract::Query<ListPolicySnapshotsQuery>,
-) -> Result<Json<ListPolicySnapshotsResponse>, ApiErrorResponse> {
-    let snapshots = state
-        .policy_snapshot_repo
-        .list_by_intent(intent_id, query.tenant_id)
-        .await
-        .map_err(ApiErrorResponse)?;
-
-    let responses: Vec<PolicySnapshotResponse> = snapshots
-        .into_iter()
-        .map(PolicySnapshotResponse::from)
-        .collect();
-
-    Ok(Json(ListPolicySnapshotsResponse {
-        total: responses.len(),
-        policy_snapshots: responses,
-    }))
 }
 
 /// Initialize tracing with optional OTLP export.
@@ -7775,18 +7700,21 @@ pub fn build_router(
             post(trigger_reapproval),
         )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
-        .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
+        .route(
+            "/policy-snapshots/{snapshot_id}",
+            get(policy_snapshot_handlers::get_policy_snapshot),
+        )
         .route(
             "/policy-snapshots/intent/{intent_id}/latest",
-            get(get_latest_policy_snapshot),
+            get(policy_snapshot_handlers::get_latest_policy_snapshot),
         )
         .route(
             "/policy-snapshots/intent/{intent_id}/versions/{version}",
-            get(get_policy_snapshot_by_version),
+            get(policy_snapshot_handlers::get_policy_snapshot_by_version),
         )
         .route(
             "/policy-snapshots/intent/{intent_id}",
-            get(list_policy_snapshots),
+            get(policy_snapshot_handlers::list_policy_snapshots),
         )
         // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
         .route(
@@ -8079,18 +8007,21 @@ pub fn build_router_with_jwt_auth(
             post(trigger_reapproval),
         )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
-        .route("/policy-snapshots/{snapshot_id}", get(get_policy_snapshot))
+        .route(
+            "/policy-snapshots/{snapshot_id}",
+            get(policy_snapshot_handlers::get_policy_snapshot),
+        )
         .route(
             "/policy-snapshots/intent/{intent_id}/latest",
-            get(get_latest_policy_snapshot),
+            get(policy_snapshot_handlers::get_latest_policy_snapshot),
         )
         .route(
             "/policy-snapshots/intent/{intent_id}/versions/{version}",
-            get(get_policy_snapshot_by_version),
+            get(policy_snapshot_handlers::get_policy_snapshot_by_version),
         )
         .route(
             "/policy-snapshots/intent/{intent_id}",
-            get(list_policy_snapshots),
+            get(policy_snapshot_handlers::list_policy_snapshots),
         )
         // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
         .route(
