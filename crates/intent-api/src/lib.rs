@@ -74,11 +74,12 @@ pub use types::{
     CompensationSimulationRequest, CreateOrchestrationRunRequest, DiffResponse, ErrorDetails,
     ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
     ForensicBundleContentsSummary, ForensicBundleIntegrityInfo, ForensicBundleRequest,
-    ForensicBundleResponse, ForensicBundleTimeRange, ForensicExportContentsSummary,
-    ForensicExportRequest, ForensicExportResponse, ForensicExportTimeRange,
-    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
-    ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
-    ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
+    ForensicBundleResponse, ForensicBundleSummary, ForensicBundleTimeRange,
+    ForensicExportContentsSummary, ForensicExportRequest, ForensicExportResponse,
+    ForensicExportTimeRange, GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery,
+    GetPolicySnapshotQuery, ListBatchCandidatesQuery, ListBatchCandidatesResponse,
+    ListCompensationActionsQuery, ListCompensationActionsResponse, ListDlqCandidatesQuery,
+    ListDlqCandidatesResponse, ListForensicBundlesQuery, ListForensicBundlesResponse,
     ListGraphEdgesQuery, ListGraphNodesQuery, ListPendingApprovalRequestsQuery,
     ListPendingApprovalRequestsResponse, ListPolicySnapshotsQuery, ListPolicySnapshotsResponse,
     ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
@@ -9221,65 +9222,6 @@ async fn create_forensic_bundle(
             message: response.message,
         }),
     ))
-}
-
-/// Query parameters for listing forensic bundles
-#[derive(Debug, Deserialize)]
-pub struct ListForensicBundlesQuery {
-    pub tenant_id: Uuid,
-    /// Optional limit for the number of bundles to return
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-/// Response for listing forensic bundles
-#[derive(Debug, Serialize)]
-pub struct ListForensicBundlesResponse {
-    pub bundles: Vec<ForensicBundleSummary>,
-    pub total: usize,
-}
-
-/// Summary of a forensic bundle for list responses
-#[derive(Debug, Serialize)]
-pub struct ForensicBundleSummary {
-    pub bundle_id: Uuid,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub created_by: String,
-    pub tenant_id: Uuid,
-    pub time_range: ForensicBundleTimeRange,
-    pub status: forensic_service::BundleStatus,
-    pub purpose: forensic_service::BundlePurpose,
-    pub contents: ForensicBundleContentsSummary,
-    pub integrity: ForensicBundleIntegrityInfo,
-}
-
-impl From<forensic_service::ForensicBundle> for ForensicBundleSummary {
-    fn from(bundle: forensic_service::ForensicBundle) -> Self {
-        Self {
-            bundle_id: bundle.bundle_id,
-            created_at: bundle.created_at,
-            created_by: bundle.created_by,
-            tenant_id: bundle.tenant_id,
-            time_range: ForensicBundleTimeRange {
-                start: bundle.time_range.start,
-                end: bundle.time_range.end,
-            },
-            status: bundle.status,
-            purpose: bundle.purpose,
-            contents: ForensicBundleContentsSummary {
-                intent_versions: bundle.contents.intent_versions,
-                artifacts: bundle.contents.artifacts,
-                approvals: bundle.contents.approvals,
-                audit_events: bundle.contents.audit_events,
-                policy_snapshots: bundle.contents.policy_snapshots,
-            },
-            integrity: ForensicBundleIntegrityInfo {
-                manifest_hash: bundle.integrity.manifest_hash,
-                chain_verified: bundle.integrity.chain_verified,
-                verification_timestamp: bundle.integrity.verification_timestamp,
-            },
-        }
-    }
 }
 
 /// GET /forensic/bundles - List forensic bundles for a tenant
