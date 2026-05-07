@@ -13,9 +13,10 @@ use uuid::Uuid;
 use crate::{
     types::{
         BatchCandidatesSummary, CompensationPolicyGateQuery, CompensationPolicyGateResponse,
-        IntentCompensationPolicyGateQuery, ListBatchCandidatesQuery, ListBatchCandidatesResponse,
-        ListCompensationActionsQuery, ListCompensationActionsResponse, ListDlqCandidatesQuery,
-        ListDlqCandidatesResponse,
+        IntentCompensationPolicyGateQuery, IntentOrchestrationCoordinationQuery,
+        ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
+        ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
+        OrchestrationCoordinationQuery, OrchestrationCoordinationResponse,
     },
     ApiErrorResponse, AppState,
 };
@@ -403,6 +404,150 @@ pub async fn get_intent_compensation_policy_gate(
         .map_err(ApiErrorResponse)?;
 
     let mut response = CompensationPolicyGateResponse::from(result);
+    response.tenant_id = query.tenant_id;
+    response.intent_id = Some(intent_id);
+
+    Ok(Json(response))
+}
+
+// ============================================================================
+// Orchestration Coordination Handlers (Phase 3 Batch 1 bounded read-only orchestration view)
+// ============================================================================
+
+/// GET /compensation-actions/orchestration-coordination - Tenant-scoped orchestration coordination status
+///
+/// Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+/// coordination status for all compensation actions belonging to the specified tenant.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing data.
+///
+/// **Canonical coordination statuses:**
+/// - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+/// - `awaiting_policy`: Action awaits policy approval (Pending status)
+/// - `awaiting_manual_review`: Action requires human intervention
+/// - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+/// - `terminal`: Action has reached terminal state (Executed, Waived)
+///
+/// **Response includes:**
+/// - Per-item coordination records with status, reason, and action details
+/// - Summary counts by coordination status
+///
+/// **Derivation:** Coordination status is derived from existing CompensationAction fields
+/// at query time. No new orchestration engine is queried.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_orchestration_coordination(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_orchestration_coordination: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
+    response.tenant_id = query.tenant_id;
+
+    Ok(Json(response))
+}
+
+/// GET /compensation-actions/orchestration-coordination - Tenant-scoped orchestration coordination status
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_orchestration_coordination(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status(query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
+    response.tenant_id = query.tenant_id;
+
+    Ok(Json(response))
+}
+
+/// GET /intents/{intent_id}/orchestration-coordination - Intent-scoped orchestration coordination status
+///
+/// Phase 3 Batch 1 (bounded read-only orchestration coordination view): Returns
+/// coordination status for all compensation actions belonging to the specified intent.
+///
+/// **This endpoint is READ-ONLY** - it only queries existing data.
+///
+/// **Canonical coordination statuses:**
+/// - `ready`: Action can proceed (Approved + Automatic feasibility + no blocking conditions)
+/// - `awaiting_policy`: Action awaits policy approval (Pending status)
+/// - `awaiting_manual_review`: Action requires human intervention
+/// - `blocked`: Action cannot proceed (DLQ, non-retryable error, exhausted budget)
+/// - `terminal`: Action has reached terminal state (Executed, Waived)
+///
+/// **Response includes:**
+/// - Per-item coordination records with status, reason, and action details
+/// - Summary counts by coordination status
+///
+/// **Derivation:** Coordination status is derived from existing CompensationAction fields
+/// at query time. No new orchestration engine is queried.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_intent_orchestration_coordination(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<IntentOrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_intent_orchestration_coordination: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
+    response.tenant_id = query.tenant_id;
+    response.intent_id = Some(intent_id);
+
+    Ok(Json(response))
+}
+
+/// GET /intents/{intent_id}/orchestration-coordination - Intent-scoped orchestration coordination status
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_intent_orchestration_coordination(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<IntentOrchestrationCoordinationQuery>,
+) -> Result<Json<OrchestrationCoordinationResponse>, ApiErrorResponse> {
+    let result = state
+        .compensation_action_service
+        .evaluate_coordination_status_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let mut response = OrchestrationCoordinationResponse::from(result);
     response.tenant_id = query.tenant_id;
     response.intent_id = Some(intent_id);
 
