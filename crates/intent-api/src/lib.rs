@@ -72,21 +72,23 @@ pub use types::{
     BatchOrchestrationRequest, BatchOrchestrationResponse, BatchOrchestrationSummaryResponse,
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
     CompensationPolicyGateQuery, CompensationPolicyGateResponse, CompensationSimulationRequest,
-    CreateOrchestrationRunRequest, DiffResponse, ErrorClassificationResponse, ErrorDetails,
-    ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
-    ForensicArtifactCoverage, ForensicAuditEventCoverage, ForensicBundleContentsSummary,
-    ForensicBundleIntegrityInfo, ForensicBundleRequest, ForensicBundleResponse,
-    ForensicBundleSummary, ForensicBundleTimeRange, ForensicExportContentsSummary,
-    ForensicExportRequest, ForensicExportResponse, ForensicExportTimeRange,
-    ForensicIntentVersionCoverage, ForensicPolicySnapshotCoverage, ForensicVerificationRequest,
-    ForensicVerificationResponse, ForensicVerificationTimeRange, GetLatestPolicySnapshotQuery,
-    GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery, IntentCompensationPolicyGateQuery,
+    CoordinationRecordResponse, CoordinationSummaryResponse, CreateOrchestrationRunRequest,
+    DiffResponse, ErrorClassificationResponse, ErrorDetails, ExecuteCompensationActionBody,
+    ExpireApprovalRequestBody, FeasibilityCounts, ForensicArtifactCoverage,
+    ForensicAuditEventCoverage, ForensicBundleContentsSummary, ForensicBundleIntegrityInfo,
+    ForensicBundleRequest, ForensicBundleResponse, ForensicBundleSummary, ForensicBundleTimeRange,
+    ForensicExportContentsSummary, ForensicExportRequest, ForensicExportResponse,
+    ForensicExportTimeRange, ForensicIntentVersionCoverage, ForensicPolicySnapshotCoverage,
+    ForensicVerificationRequest, ForensicVerificationResponse, ForensicVerificationTimeRange,
+    GetLatestPolicySnapshotQuery, GetPolicySnapshotByVersionQuery, GetPolicySnapshotQuery,
+    IntentCompensationPolicyGateQuery, IntentOrchestrationCoordinationQuery,
     ListBatchCandidatesQuery, ListBatchCandidatesResponse, ListCompensationActionsQuery,
     ListCompensationActionsResponse, ListDlqCandidatesQuery, ListDlqCandidatesResponse,
     ListForensicBundlesQuery, ListForensicBundlesResponse, ListGraphEdgesQuery,
     ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
-    ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
+    ListSideEffectsResponse, OrchestrationCoordinationQuery, OrchestrationCoordinationResponse,
+    OrchestrationDashboardQuery, OrchestrationDashboardResponse,
     OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
     OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
     PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicyGateEvaluationResponse,
@@ -98,7 +100,7 @@ pub use types::{
 };
 
 // Re-export formatting helpers needed by lib.rs coordination code
-pub(crate) use types::{format_compensation_status, format_feasibility, format_strategy_type};
+pub(crate) use types::format_compensation_status;
 
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
@@ -6911,128 +6913,6 @@ async fn get_intent_compensation_policy_gate(
     response.intent_id = Some(intent_id);
 
     Ok(Json(response))
-}
-
-// ============================================================================
-// Orchestration Coordination Status (Phase 3 Batch 1 bounded read-only view)
-// ============================================================================
-
-/// Query parameters for tenant-scoped orchestration coordination status
-#[derive(Debug, Deserialize)]
-pub struct OrchestrationCoordinationQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Query parameters for intent-scoped orchestration coordination status
-#[derive(Debug, Deserialize)]
-pub struct IntentOrchestrationCoordinationQuery {
-    pub tenant_id: Uuid,
-}
-
-/// Response DTOs for orchestration coordination status
-use compensation_service::{
-    CoordinationRecord as ServiceCoordinationRecord,
-    CoordinationResult as ServiceCoordinationResult,
-    CoordinationStatus as ServiceCoordinationStatus,
-    CoordinationSummary as ServiceCoordinationSummary,
-};
-
-/// API response for orchestration coordination status
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrchestrationCoordinationResponse {
-    pub tenant_id: Uuid,
-    pub intent_id: Option<Uuid>,
-    pub records: Vec<CoordinationRecordResponse>,
-    pub summary: CoordinationSummaryResponse,
-}
-
-/// Coordination record for a single action (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoordinationRecordResponse {
-    pub action: compensation_service::CompensationAction,
-    pub coordination_status: String,
-    pub coordination_reason: String,
-    pub auto_executable: bool,
-    pub is_dlq_candidate: bool,
-    pub can_reapprove: bool,
-    pub retry_budget_exhausted: bool,
-    pub feasibility: String,
-    pub strategy_type: String,
-    pub status: String,
-    pub attempt_count: i32,
-    pub max_retries: i32,
-}
-
-/// Summary of coordination records (API version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoordinationSummaryResponse {
-    pub total_actions: usize,
-    pub ready_count: usize,
-    pub awaiting_policy_count: usize,
-    pub awaiting_manual_review_count: usize,
-    pub blocked_count: usize,
-    pub terminal_count: usize,
-    pub dlq_candidate_count: usize,
-    pub auto_executable_count: usize,
-}
-
-impl From<ServiceCoordinationResult> for OrchestrationCoordinationResponse {
-    fn from(result: ServiceCoordinationResult) -> Self {
-        Self {
-            tenant_id: Uuid::nil(), // Will be set by caller
-            intent_id: None,        // Will be set by caller
-            records: result
-                .records
-                .into_iter()
-                .map(CoordinationRecordResponse::from)
-                .collect(),
-            summary: CoordinationSummaryResponse::from(result.summary),
-        }
-    }
-}
-
-impl From<ServiceCoordinationRecord> for CoordinationRecordResponse {
-    fn from(record: ServiceCoordinationRecord) -> Self {
-        Self {
-            action: record.action,
-            coordination_status: format_coordination_status(&record.coordination_status),
-            coordination_reason: record.coordination_reason,
-            auto_executable: record.auto_executable,
-            is_dlq_candidate: record.is_dlq_candidate,
-            can_reapprove: record.can_reapprove,
-            retry_budget_exhausted: record.retry_budget_exhausted,
-            feasibility: format_feasibility(&record.feasibility),
-            strategy_type: format_strategy_type(&record.strategy_type),
-            status: format_compensation_status(&record.status),
-            attempt_count: record.attempt_count,
-            max_retries: record.max_retries,
-        }
-    }
-}
-
-impl From<ServiceCoordinationSummary> for CoordinationSummaryResponse {
-    fn from(summary: ServiceCoordinationSummary) -> Self {
-        Self {
-            total_actions: summary.total_actions,
-            ready_count: summary.ready_count,
-            awaiting_policy_count: summary.awaiting_policy_count,
-            awaiting_manual_review_count: summary.awaiting_manual_review_count,
-            blocked_count: summary.blocked_count,
-            terminal_count: summary.terminal_count,
-            dlq_candidate_count: summary.dlq_candidate_count,
-            auto_executable_count: summary.auto_executable_count,
-        }
-    }
-}
-
-fn format_coordination_status(status: &ServiceCoordinationStatus) -> String {
-    match status {
-        ServiceCoordinationStatus::Ready => "ready".to_string(),
-        ServiceCoordinationStatus::AwaitingPolicy => "awaiting_policy".to_string(),
-        ServiceCoordinationStatus::AwaitingManualReview => "awaiting_manual_review".to_string(),
-        ServiceCoordinationStatus::Blocked => "blocked".to_string(),
-        ServiceCoordinationStatus::Terminal => "terminal".to_string(),
-    }
 }
 
 /// GET /compensation-actions/orchestration-coordination - Tenant-scoped orchestration coordination status
