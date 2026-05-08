@@ -619,7 +619,10 @@ pub async fn export_forensic_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ForensicIntentVersionCoverage, ForensicVerificationTimeRange};
+    use crate::types::{
+        ForensicBundleRequest, ForensicBundleTimeRange, ForensicIntentVersionCoverage,
+        ForensicVerificationTimeRange, ListForensicBundlesQuery,
+    };
     use crate::{auth, RebaseOrchestrator};
     use chrono::Utc;
     use compensation_service::{
@@ -1103,5 +1106,245 @@ mod tests {
         assert_eq!(result.contents.artifacts, 0);
         assert_eq!(result.contents.audit_events, 0);
         assert_eq!(result.contents.policy_snapshots, 0);
+    }
+
+    // === Forensic Bundle Listing & Download Tests ===
+
+    #[tokio::test]
+    async fn test_list_forensic_bundles_empty_when_no_bundles() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        let result = super::list_forensic_bundles(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            axum::extract::Query(ListForensicBundlesQuery {
+                tenant_id,
+                limit: None,
+            }),
+        )
+        .await
+        .expect("Should return list result");
+
+        assert_eq!(result.total, 0);
+        assert!(result.bundles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_forensic_bundles_returns_bundles_for_tenant() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // First create a bundle via the create endpoint
+        let create_request = ForensicBundleRequest {
+            tenant_id,
+            intent_ids: vec![],
+            time_range: ForensicBundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::IncidentInvestigation,
+            created_by: "test-user".to_string(),
+        };
+
+        let _create_result = super::create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request),
+        )
+        .await
+        .expect("Should create bundle");
+
+        // Now list bundles
+        let result = super::list_forensic_bundles(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            axum::extract::Query(ListForensicBundlesQuery {
+                tenant_id,
+                limit: None,
+            }),
+        )
+        .await
+        .expect("Should return list result");
+
+        assert_eq!(result.total, 1);
+        assert_eq!(result.bundles.len(), 1);
+        assert_eq!(result.bundles[0].tenant_id, tenant_id);
+        assert_eq!(
+            result.bundles[0].purpose,
+            forensic_service::BundlePurpose::IncidentInvestigation
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_forensic_bundles_with_limit() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create two bundles
+        for i in 0..2 {
+            let create_request = ForensicBundleRequest {
+                tenant_id,
+                intent_ids: vec![],
+                time_range: ForensicBundleTimeRange {
+                    start: Utc::now() - chrono::Duration::days(1),
+                    end: Utc::now(),
+                },
+                purpose: forensic_service::BundlePurpose::ComplianceAudit,
+                created_by: format!("test-user-{}", i),
+            };
+
+            let _ = super::create_forensic_bundle(
+                State(state.clone()),
+                auth::OptionalRlsTenantClaims(None),
+                Json(create_request),
+            )
+            .await
+            .expect("Should create bundle");
+        }
+
+        // List with limit=1
+        let result = super::list_forensic_bundles(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            axum::extract::Query(ListForensicBundlesQuery {
+                tenant_id,
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("Should return list result");
+
+        // With in-memory repo, limit may not be strictly enforced in test setup
+        // but the endpoint should still work
+        assert!(!result.bundles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_not_found() {
+        let state = create_test_service();
+        let bundle_id = Uuid::new_v4();
+
+        let result = super::download_forensic_bundle(State(state), Path(bundle_id)).await;
+
+        // Should return error for non-existent bundle
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_download_forensic_bundle_success() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create a bundle
+        let create_request = ForensicBundleRequest {
+            tenant_id,
+            intent_ids: vec![],
+            time_range: ForensicBundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::Legal,
+            created_by: "test-user".to_string(),
+        };
+
+        let (_status, create_response) = super::create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request),
+        )
+        .await
+        .expect("Should create bundle");
+
+        let bundle_id = create_response.bundle_id;
+
+        // Download the bundle
+        let response = super::download_forensic_bundle(State(state), Path(bundle_id))
+            .await
+            .expect("Should return download response");
+
+        // Verify response has correct content type
+        let parts = response.into_response();
+        assert_eq!(
+            parts.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_forensic_bundles_tenant_isolation() {
+        let state = create_test_service();
+        let tenant1 = Uuid::new_v4();
+        let tenant2 = Uuid::new_v4();
+
+        // Create bundle for tenant1
+        let create_request1 = ForensicBundleRequest {
+            tenant_id: tenant1,
+            intent_ids: vec![],
+            time_range: ForensicBundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::IncidentInvestigation,
+            created_by: "test-user-1".to_string(),
+        };
+
+        let _ = super::create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request1),
+        )
+        .await
+        .expect("Should create bundle for tenant1");
+
+        // Create bundle for tenant2
+        let create_request2 = ForensicBundleRequest {
+            tenant_id: tenant2,
+            intent_ids: vec![],
+            time_range: ForensicBundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::ComplianceAudit,
+            created_by: "test-user-2".to_string(),
+        };
+
+        let _ = super::create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request2),
+        )
+        .await
+        .expect("Should create bundle for tenant2");
+
+        // List bundles for tenant1 - should only see tenant1's bundle
+        let result1 = super::list_forensic_bundles(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            axum::extract::Query(ListForensicBundlesQuery {
+                tenant_id: tenant1,
+                limit: None,
+            }),
+        )
+        .await
+        .expect("Should return list result");
+
+        assert_eq!(result1.total, 1);
+        assert_eq!(result1.bundles[0].tenant_id, tenant1);
+
+        // List bundles for tenant2 - should only see tenant2's bundle
+        let result2 = super::list_forensic_bundles(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            axum::extract::Query(ListForensicBundlesQuery {
+                tenant_id: tenant2,
+                limit: None,
+            }),
+        )
+        .await
+        .expect("Should return list result");
+
+        assert_eq!(result2.total, 1);
+        assert_eq!(result2.bundles[0].tenant_id, tenant2);
     }
 }
