@@ -625,88 +625,17 @@ mod tests {
     };
     use crate::{auth, RebaseOrchestrator};
     use chrono::Utc;
-    use compensation_service::{
-        CompensationActionService, InMemoryCompensationActionRepository,
-        InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
-    };
-    use forensic_service::{
-        ForensicBundleService, InMemoryBundleRepository, InMemoryBundleStorage,
-        InMemoryForensicArchiveGenerator, InMemoryForensicDataCollector,
-        InMemoryForensicVerificationService,
-    };
-    use graph_service::{GraphService, InMemoryGraphRepository};
-    use intent_rebase_types::InMemoryAuditRepository;
-    use intent_service::{
-        InMemoryApprovalRequestRepository, InMemoryCheckpointRepository, InMemoryIntentRepository,
-        InMemoryPolicySnapshotRepository, IntentService,
-    };
+
+    use graph_service::GraphService;
+
+    use intent_service::IntentService;
     use runtime_adapter::MockAdapter;
     use std::sync::Arc;
     use std::time::Instant;
     use uuid::Uuid;
 
-    /// Create minimal AppState for forensic handler tests
-    fn create_test_service() -> AppState {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo));
-        let service = Arc::new(IntentService::new(repo));
-        let orchestrator = Arc::new(RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        let audit_repo = Arc::new(InMemoryAuditRepository::new())
-            as Arc<dyn intent_rebase_types::AuditRepository>;
-        let approval_repo = Arc::new(InMemoryApprovalRequestRepository::new())
-            as Arc<dyn intent_service::ApprovalRequestRepository>;
-        let policy_snapshot_repo = Arc::new(InMemoryPolicySnapshotRepository::new())
-            as Arc<dyn intent_service::PolicySnapshotRepository>;
-        let side_effect_repo = Arc::new(InMemorySideEffectRepository::new());
-        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
-            side_effect_repo,
-        ));
-        let compensation_action_repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let compensation_action_svc =
-            Arc::new(CompensationActionService::new(compensation_action_repo));
-        let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        let forensic_svc = Arc::new(InMemoryForensicVerificationService::new())
-            as Arc<dyn forensic_service::ForensicVerificationService>;
-        let forensic_archive_gen = Arc::new(
-            InMemoryForensicArchiveGenerator::new()
-                .with_intent_version_count(5)
-                .with_artifact_count(10)
-                .with_audit_event_count(100)
-                .with_policy_snapshot_count(3),
-        );
-        let forensic_bundle_svc = Arc::new(ForensicBundleService::new(
-            Arc::new(InMemoryBundleRepository::new()),
-            Arc::new(InMemoryBundleStorage::new("test-bucket")),
-            Arc::new(InMemoryForensicDataCollector::new()),
-        ));
-        AppState {
-            service,
-            graph_service: graph_svc,
-            side_effect_service: side_effect_svc,
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: audit_repo,
-            approval_request_repo: approval_repo,
-            policy_snapshot_repo,
-            event_publisher: None,
-            forensic_service: forensic_svc,
-            forensic_archive_generator: forensic_archive_gen,
-            forensic_bundle_service: forensic_bundle_svc,
-            start_time: Instant::now(),
-            rls_pool: None,
-        }
-    }
+    // Use shared helper with forensic config
+    use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
     // === Forensic Verification Tests ===
 
