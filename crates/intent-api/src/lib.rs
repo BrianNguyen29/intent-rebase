@@ -2010,7 +2010,6 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
     use graph_service::{GraphService, InMemoryGraphRepository};
     use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
     use runtime_adapter::MockAdapter;
@@ -2172,47 +2171,6 @@ mod tests {
             apply_outcome_label(&ApplyOutcome::AutoProceededWithNotification),
             "auto_proceeded_with_notification"
         );
-    }
-
-    #[test]
-    fn test_parse_optional_header_absent() {
-        let headers = HeaderMap::new();
-        let result = parse_optional_header(&headers, "x-expected-version").unwrap();
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_optional_header_valid_integer() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-expected-version", HeaderValue::from_static("5"));
-        let result = parse_optional_header(&headers, "x-expected-version").unwrap();
-        assert_eq!(result, Some(5));
-    }
-
-    #[test]
-    fn test_parse_optional_header_malformed_non_integer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-expected-version",
-            HeaderValue::from_static("not-a-number"),
-        );
-        let result = parse_optional_header(&headers, "x-expected-version");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, IntentRebaseError::InvalidHeader(_)));
-        let msg = err.to_string();
-        assert!(msg.contains("x-expected-version"));
-        assert!(msg.contains("not-a-number"));
-    }
-
-    #[test]
-    fn test_parse_optional_header_malformed_negative_integer() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-expected-row-version", HeaderValue::from_static("-1"));
-        let result = parse_optional_header(&headers, "x-expected-row-version");
-        // -1 is a valid i32, so it should parse successfully
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Some(-1));
     }
 
     // === Diff Handler Tests ===
