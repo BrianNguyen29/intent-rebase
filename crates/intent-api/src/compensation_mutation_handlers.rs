@@ -771,17 +771,21 @@ pub async fn reapprove_compensation_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "jwt-auth")]
+    use crate::auth;
     use crate::types::{
         ApproveCompensationActionBody, CompensationActionResponse, ExecuteCompensationActionBody,
-        WaiveCompensationActionBody,
+        ReapproveCompensationActionBody, WaiveCompensationActionBody,
     };
     use crate::RebaseOrchestrator;
+    #[cfg(not(feature = "jwt-auth"))]
     use axum::http::StatusCode;
-    use chrono::Utc;
+    #[cfg(not(feature = "jwt-auth"))]
+    use compensation_service::SideEffectService;
     use compensation_service::{
         CompensationActionService, CompensationFeasibility, InMemoryCompensationActionRepository,
         InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
-        RebaseContext, SideEffectService, StrategyType,
+        RebaseContext, StrategyType,
     };
     use forensic_service::{
         ForensicBundleService, InMemoryBundleRepository, InMemoryBundleStorage,
@@ -1054,5 +1058,539 @@ mod tests {
         assert_eq!(response.feasibility, "manual_only");
         assert_eq!(response.tenant_id, tenant_id);
         assert_eq!(response.intent_id, intent_id);
+    }
+
+    // =====================================================================
+    // Phase B: RLC Compensation Action Tenant Mismatch Tests (jwt-auth only)
+    // =====================================================================
+
+    /// Create minimal AppState for compensation action handler tests
+    #[cfg(feature = "jwt-auth")]
+    fn create_test_service() -> AppState {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        let side_effect_repo = Arc::new(InMemorySideEffectRepository::new());
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+            side_effect_repo,
+        ));
+        let compensation_action_repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let compensation_action_svc =
+            Arc::new(CompensationActionService::new(compensation_action_repo));
+        let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
+        let forensic_svc = Arc::new(InMemoryForensicVerificationService::new())
+            as Arc<dyn forensic_service::ForensicVerificationService>;
+        let forensic_archive_gen = Arc::new(InMemoryForensicArchiveGenerator::new());
+        let forensic_bundle_svc = Arc::new(ForensicBundleService::new(
+            Arc::new(InMemoryBundleRepository::new()),
+            Arc::new(InMemoryBundleStorage::new("test-bucket")),
+            Arc::new(InMemoryForensicDataCollector::new()),
+        ));
+        AppState {
+            service,
+            graph_service: graph_svc,
+            side_effect_service: side_effect_svc,
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: None,
+            forensic_service: forensic_svc,
+            forensic_archive_generator: forensic_archive_gen,
+            forensic_bundle_service: forensic_bundle_svc,
+            start_time: Instant::now(),
+            rls_pool: None,
+        }
+    }
+
+    /// Helper to create RlsTenantClaims for testing
+    #[cfg(feature = "jwt-auth")]
+    fn create_test_rls_claims(tenant_id: Uuid) -> auth::RlsTenantClaims {
+        let claims = auth::Claims {
+            sub: "test-user".to_string(),
+            tenant_id: tenant_id.to_string(),
+            roles: vec!["admin".to_string()],
+            exp: 9999999999,
+            iat: 0,
+        };
+        // new_unchecked is #[cfg(test)] so this only works in tests
+        auth::RlsTenantClaims::new_unchecked(tenant_id, claims)
+    }
+
+    /// Helper to create OptionalRlsTenantClaims for testing
+    #[cfg(feature = "jwt-auth")]
+    fn create_test_optional_rls_claims(tenant_id: Uuid) -> auth::OptionalRlsTenantClaims {
+        auth::OptionalRlsTenantClaims(Some(create_test_rls_claims(tenant_id)))
+    }
+
+    // -------------------------------------------------------------------------
+    // approve_compensation_action Tenant Mismatch Tests
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_approve_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to approve with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = ApproveCompensationActionBody {
+            lock_version: created.lock_version,
+            approved_by: Some("test-approver".to_string()),
+        };
+
+        let result = super::approve_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_approve_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Approve with TenantA (matching)
+        let request = ApproveCompensationActionBody {
+            lock_version: created.lock_version,
+            approved_by: Some("test-approver".to_string()),
+        };
+
+        let result = super::approve_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "approved");
+    }
+
+    // -------------------------------------------------------------------------
+    // execute_compensation_action Tenant Mismatch Tests
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_execute_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Approve the action first (necessary for execution)
+        state
+            .compensation_action_service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Try to execute with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = ExecuteCompensationActionBody {
+            executed_by: Some("test-executor".to_string()),
+        };
+
+        let result = super::execute_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_execute_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        // Use Automatic feasibility so execution succeeds
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic, // Must be Automatic for execution
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Approve the action first (necessary for execution)
+        state
+            .compensation_action_service
+            .approve_action(created.id, created.lock_version, None)
+            .await
+            .unwrap();
+
+        // Execute with TenantA (matching)
+        let request = ExecuteCompensationActionBody {
+            executed_by: Some("test-executor".to_string()),
+        };
+
+        let result = super::execute_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "executed");
+    }
+
+    // -------------------------------------------------------------------------
+    // waive_compensation_action Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_waive_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Try to waive with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = WaiveCompensationActionBody {
+            lock_version: created.lock_version,
+            waived_by: Some("test-waiver".to_string()),
+        };
+
+        let result = super::waive_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_waive_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Waive with TenantA (matching)
+        let request = WaiveCompensationActionBody {
+            lock_version: created.lock_version,
+            waived_by: Some("test-waiver".to_string()),
+        };
+
+        let result = super::waive_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "waived");
+    }
+
+    // -------------------------------------------------------------------------
+    // reapprove_compensation_action Tenant Mismatch Tests (RLC-2)
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_reapprove_compensation_action_rejects_tenant_mismatch() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        // (can't easily create a Failed action through normal flow in test)
+        use compensation_service::CompensationStatus;
+        let failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Try to reapprove with TenantB (mismatch)
+        let tenant_b = Uuid::new_v4();
+        let request = ReapproveCompensationActionBody {
+            lock_version: failed_action.lock_version,
+        };
+
+        let result = super::reapprove_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_b), // Tenant B mismatch
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should fail with Unauthorized
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.0.to_string();
+        assert!(
+            err_msg.contains("Tenant mismatch"),
+            "Expected tenant mismatch error, got: {}",
+            err_msg
+        );
+    }
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_reapprove_compensation_action_succeeds_with_matching_tenant() {
+        let state = create_test_service();
+
+        // Create a compensation action with TenantA
+        let tenant_a = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_a,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Manually set to Failed status to make it reapprovable
+        use compensation_service::CompensationStatus;
+        let failed_action = state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        // Reapprove with TenantA (matching)
+        let request = ReapproveCompensationActionBody {
+            lock_version: failed_action.lock_version,
+        };
+
+        let result = super::reapprove_compensation_action(
+            State(state),
+            create_test_optional_rls_claims(tenant_a), // Tenant A matches
+            Path(created.id),
+            Json(request),
+        )
+        .await;
+
+        // Should succeed
+        assert!(
+            result.is_ok(),
+            "Expected success with matching tenant, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.status, "pending");
     }
 }
