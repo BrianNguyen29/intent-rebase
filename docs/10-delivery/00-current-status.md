@@ -225,7 +225,7 @@ For detailed P0/P1/P2 production readiness backlog, see [Production Readiness Ba
 | **P1** | Load testing (L3-L5) | Execute staged and production load tests | SRE |
 | **P1** | Penetration testing | Engage external pen test and remediate findings | Security |
 | **P2** | Panic hardening (local-executable) | Add panic handlers and graceful degradation | Backend Lead |
-| **P2** | File decomposition (local-executable) | Large module decomposition for maintainability | Backend Lead |
+| **P2** | File decomposition (local-executable) | Bounded maintainability slices delivered for panic hardening, DTO/type extraction, handler decomposition, and first pure test relocation; continue with test fixture cleanup and defer `rebase_apply` until helper/test cleanup is complete | Backend Lead |
 | **P2** | DLQ/NATS lifecycle | Implement full DLQ replay worker (after G1-G5 gates) | Backend Lead |
 | **P2** | Cross-process trace propagation | Revisit when Temporal SDK supports safe per-request gRPC metadata injection | Backend Lead / SRE |
 | **P2/Phase4** | Forensic replay | Full replay capability + Object Lock/chain-hash for snapshots | Backend Lead |

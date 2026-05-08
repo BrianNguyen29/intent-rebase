@@ -175,11 +175,11 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Large module decomposition for maintainability |
-| **Current State** | First slice delivered — `panic_hardening.rs` extracted from `lib.rs` (Phase 2b bounded slice); panic hook helpers moved to separate module with tests |
+| **Current State** | Multiple bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, and first pure test relocation slice; remaining work includes `rebase_apply`, router/test fixture decomposition, and broader test-module cleanup |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 IN PROGRESS (first slice) — Phase 4 continues with additional bounded slices |
+| **Status** | 🟡 IN PROGRESS (bounded decomposition slices delivered) — Phase 4 continues with additional bounded slices |
 | **Dependencies** | None (local code only) |
-| **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; `lib.rs` shrank by ~150 lines |
+| **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; DTOs/types and many API handlers have been moved into focused modules; pure artifact ingest validation tests started the test-module decomposition. No production-readiness claim is implied by this maintainability work. |
 
 ---
 
