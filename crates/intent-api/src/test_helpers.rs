@@ -64,6 +64,9 @@ use runtime_adapter::MockAdapter;
 use std::sync::Arc;
 
 #[cfg(test)]
+use intent_rebase_types::EventPublisher;
+
+#[cfg(test)]
 use crate::AppState;
 
 #[cfg(test)]
@@ -139,6 +142,14 @@ pub fn create_test_service() -> AppState {
         start_time: Instant::now(),
         rls_pool: None,
     }
+}
+
+/// Create AppState with a custom event publisher.
+#[cfg(test)]
+pub fn create_test_service_with_publisher(publisher: Arc<dyn EventPublisher>) -> AppState {
+    let mut state = create_test_service();
+    state.event_publisher = Some(publisher);
+    state
 }
 
 /// Create AppState for lib.rs tests with configured forensic archive generator.
