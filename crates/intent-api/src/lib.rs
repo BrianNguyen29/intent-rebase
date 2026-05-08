@@ -98,6 +98,9 @@ pub mod intent_read_handlers;
 /// Intent validation handlers (Phase 2 bounded slice - extracted handler decomposition)
 pub mod intent_validation_handlers;
 
+/// Diff computation handlers (Phase 2 bounded slice - extracted handler decomposition)
+pub mod diff_handlers;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -186,11 +189,6 @@ fn record_rebase_preview_request(status: &'static str) {
 /// Record rebase apply request outcome
 fn record_rebase_apply_request(status: &'static str) {
     metrics::counter!("intent_api_rebase_apply_requests_total", "status" => status).increment(1);
-}
-
-/// Record diff compute duration
-fn record_diff_compute_duration(duration_secs: f64) {
-    metrics::histogram!("intent_api_diff_compute_duration_seconds").record(duration_secs);
 }
 
 /// Record rebase preview duration
@@ -874,36 +872,6 @@ fn parse_optional_header(
                 ))
             })
         }
-    }
-}
-
-/// POST /intents/{intent_id}/diff - Compute diff between two versions
-///
-/// Request body: { from_version, to_version }
-/// Response: version context plus diff and risk analysis
-async fn compute_diff(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    Json(request): Json<DiffRequest>,
-) -> Result<Json<DiffResponse>, ApiErrorResponse> {
-    let start = std::time::Instant::now();
-    let result = state
-        .service
-        .compute_diff(intent_id, request.from_version, request.to_version)
-        .await;
-
-    let duration = start.elapsed().as_secs_f64();
-    record_diff_compute_duration(duration);
-
-    match result {
-        Ok((from_version, to_version, diff, risk)) => Ok(Json(DiffResponse {
-            intent_id,
-            from_version,
-            to_version,
-            diff,
-            risk,
-        })),
-        Err(e) => Err(ApiErrorResponse(e)),
     }
 }
 
@@ -2310,7 +2278,10 @@ pub fn build_router(
             "/intents/{intent_id}/versions/{version_number}",
             get(intent_read_handlers::get_version),
         )
-        .route("/intents/{intent_id}/diff", post(compute_diff))
+        .route(
+            "/intents/{intent_id}/diff",
+            post(diff_handlers::compute_diff),
+        )
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
@@ -2638,7 +2609,10 @@ pub fn build_router_with_jwt_auth(
             "/intents/{intent_id}/versions/{version_number}",
             get(intent_read_handlers::get_version),
         )
-        .route("/intents/{intent_id}/diff", post(compute_diff))
+        .route(
+            "/intents/{intent_id}/diff",
+            post(diff_handlers::compute_diff),
+        )
         .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
@@ -3043,6 +3017,9 @@ mod tests {
     // Import intent validation handlers for tests
     use crate::intent_validation_handlers::validate_intent;
 
+    // Import diff handlers for tests
+    use crate::diff_handlers::compute_diff;
+
     fn create_test_service() -> AppState {
         let repo = Arc::new(InMemoryIntentRepository::new());
         let graph_repo = Arc::new(InMemoryGraphRepository::new());
@@ -3129,7 +3106,10 @@ mod tests {
                 "/intents/{intent_id}/versions/{version_number}",
                 get(get_version),
             )
-            .route("/intents/{intent_id}/diff", post(compute_diff))
+            .route(
+                "/intents/{intent_id}/diff",
+                post(diff_handlers::compute_diff),
+            )
             .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
             .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
             .with_state(state);
