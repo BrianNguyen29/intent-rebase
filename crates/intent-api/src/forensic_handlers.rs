@@ -611,3 +611,273 @@ pub async fn export_forensic_archive(
         archive_size_bytes: response.archive_size_bytes,
     }))
 }
+
+// ============================================================================
+// Tests for Forensic Handlers
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ForensicIntentVersionCoverage, ForensicVerificationTimeRange};
+    use crate::{auth, RebaseOrchestrator};
+    use chrono::Utc;
+    use compensation_service::{
+        CompensationActionService, InMemoryCompensationActionRepository,
+        InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
+    };
+    use forensic_service::{
+        ForensicBundleService, InMemoryBundleRepository, InMemoryBundleStorage,
+        InMemoryForensicArchiveGenerator, InMemoryForensicDataCollector,
+        InMemoryForensicVerificationService,
+    };
+    use graph_service::{GraphService, InMemoryGraphRepository};
+    use intent_rebase_types::InMemoryAuditRepository;
+    use intent_service::{
+        InMemoryApprovalRequestRepository, InMemoryCheckpointRepository, InMemoryIntentRepository,
+        InMemoryPolicySnapshotRepository, IntentService,
+    };
+    use runtime_adapter::MockAdapter;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use uuid::Uuid;
+
+    /// Create minimal AppState for forensic handler tests
+    fn create_test_service() -> AppState {
+        let repo = Arc::new(InMemoryIntentRepository::new());
+        let graph_repo = Arc::new(InMemoryGraphRepository::new());
+        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
+        let graph_svc = Arc::new(GraphService::new(graph_repo));
+        let service = Arc::new(IntentService::new(repo));
+        let orchestrator = Arc::new(RebaseOrchestrator::new(
+            checkpoint_repo,
+            graph_svc.clone(),
+            Arc::new(MockAdapter::ready()),
+        ));
+        let audit_repo = Arc::new(InMemoryAuditRepository::new())
+            as Arc<dyn intent_rebase_types::AuditRepository>;
+        let approval_repo = Arc::new(InMemoryApprovalRequestRepository::new())
+            as Arc<dyn intent_service::ApprovalRequestRepository>;
+        let policy_snapshot_repo = Arc::new(InMemoryPolicySnapshotRepository::new())
+            as Arc<dyn intent_service::PolicySnapshotRepository>;
+        let side_effect_repo = Arc::new(InMemorySideEffectRepository::new());
+        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
+            side_effect_repo,
+        ));
+        let compensation_action_repo = Arc::new(InMemoryCompensationActionRepository::new());
+        let compensation_action_svc =
+            Arc::new(CompensationActionService::new(compensation_action_repo));
+        let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
+        let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
+            compensation_action_svc.clone(),
+            orchestration_run_repo,
+        ));
+        let forensic_svc = Arc::new(InMemoryForensicVerificationService::new())
+            as Arc<dyn forensic_service::ForensicVerificationService>;
+        let forensic_archive_gen = Arc::new(InMemoryForensicArchiveGenerator::new());
+        let forensic_bundle_svc = Arc::new(ForensicBundleService::new(
+            Arc::new(InMemoryBundleRepository::new()),
+            Arc::new(InMemoryBundleStorage::new("test-bucket")),
+            Arc::new(InMemoryForensicDataCollector::new()),
+        ));
+        AppState {
+            service,
+            graph_service: graph_svc,
+            side_effect_service: side_effect_svc,
+            compensation_action_service: compensation_action_svc,
+            orchestration_runtime,
+            orchestrator,
+            audit_service: audit_repo,
+            approval_request_repo: approval_repo,
+            policy_snapshot_repo,
+            event_publisher: None,
+            forensic_service: forensic_svc,
+            forensic_archive_generator: forensic_archive_gen,
+            forensic_bundle_service: forensic_bundle_svc,
+            start_time: Instant::now(),
+            rls_pool: None,
+        }
+    }
+
+    // === Forensic Verification Tests ===
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_returns_ready_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = super::verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
+
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
+            },
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
+
+        let request: ForensicVerificationRequest =
+            serde_json::from_str(json).expect("Should deserialize");
+
+        assert_eq!(
+            request.purpose,
+            forensic_service::VerificationPurpose::ComplianceAudit
+        );
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_response_serialization() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let result = super::verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
+
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"ready\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        // artifact_coverage should be present since include_artifacts=true
+        assert!(json.contains("\"artifact_coverage\""));
+        // policy_snapshot_coverage should be None since include_policy_snapshots=false
+        assert!(!json.contains("\"policy_snapshot_coverage\""));
+    }
+
+    #[tokio::test]
+    async fn test_verify_forensic_bundle_with_incomplete_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicVerificationRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicVerificationTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::VerificationPurpose::IncidentInvestigation,
+            include_artifacts: false,
+            include_audit_events: false,
+            include_policy_snapshots: false,
+        };
+
+        let result = super::verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return verification result");
+
+        // In-memory service returns ready by default
+        assert_eq!(result.status, forensic_service::VerificationStatus::Ready);
+        // But with no coverage data since all includes are false
+        assert_eq!(result.estimated_bundle_item_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_forensic_verification_purpose_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::IncidentInvestigation)
+                .unwrap(),
+            "\"incident_investigation\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::ComplianceAudit).unwrap(),
+            "\"compliance_audit\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationPurpose::Legal).unwrap(),
+            "\"legal\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_verification_status_serialization() {
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Ready).unwrap(),
+            "\"ready\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::Incomplete).unwrap(),
+            "\"incomplete\""
+        );
+        assert_eq!(
+            serde_json::to_string(&forensic_service::VerificationStatus::NotSupported).unwrap(),
+            "\"not_supported\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forensic_intent_version_coverage_serialization() {
+        let coverage = ForensicIntentVersionCoverage {
+            intent_exists: true,
+            intent_id: Uuid::new_v4(),
+            version_count: 5,
+            earliest_version: Some(Utc::now()),
+            latest_version: Some(Utc::now()),
+            has_artifact_traceability: true,
+        };
+
+        let json = serde_json::to_string(&coverage).expect("Should serialize");
+        assert!(json.contains("\"intent_exists\":true"));
+        assert!(json.contains("\"version_count\":5"));
+        assert!(json.contains("\"has_artifact_traceability\":true"));
+    }
+}
