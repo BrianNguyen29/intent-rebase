@@ -878,82 +878,20 @@ mod tests {
 
     use crate::test_helpers::create_test_service;
     use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-    use graph_service::{GraphRepository, GraphService, InMemoryGraphRepository};
-    use intent_service::{InMemoryCheckpointRepository, InMemoryIntentRepository, IntentService};
-    use runtime_adapter::MockAdapter;
+    use graph_service::{GraphService, InMemoryGraphRepository};
     use std::sync::Arc;
-    use std::time::Instant;
 
-    /// Helper to create AppState with shared graph service but separate side effect repos.
-    /// Returns (state, side_effect_repo, graph_repo) so tests can create nodes directly
-    /// via the graph_repo without needing to access the private repo field.
-    fn create_test_service_with_tenant_isolated_side_effect_repo() -> (
-        crate::AppState,
-        Arc<compensation_service::InMemorySideEffectRepository>,
-        Arc<InMemoryGraphRepository>,
-    ) {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo.clone()));
-        let service = Arc::new(IntentService::new(repo));
-        let orchestrator = Arc::new(crate::RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
-            as Arc<dyn intent_rebase_types::AuditRepository>;
-        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
-            as Arc<dyn intent_service::ApprovalRequestRepository>;
-        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
-            as Arc<dyn intent_service::PolicySnapshotRepository>;
-        // Isolated side effect repo for testing tenant isolation
-        let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
-        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
-            side_effect_repo.clone(),
-        ));
-        let compensation_action_repo =
-            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
-        let compensation_action_svc = Arc::new(
-            compensation_service::CompensationActionService::new(compensation_action_repo),
-        );
-        let orchestration_run_repo =
-            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new())
-            as Arc<dyn forensic_service::ForensicVerificationService>;
-        let forensic_archive_gen =
-            Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new());
-        let state = crate::AppState {
-            service,
-            graph_service: graph_svc,
-            side_effect_service: side_effect_svc,
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: audit_repo,
-            approval_request_repo: approval_repo,
-            policy_snapshot_repo,
-            event_publisher: None,
-            forensic_service: forensic_svc,
-            forensic_archive_generator: forensic_archive_gen,
-            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
-                Arc::new(forensic_service::InMemoryBundleRepository::new()),
-                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
-                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
-            )),
-            start_time: Instant::now(),
-            rls_pool: None,
-        };
-        (state, side_effect_repo, graph_repo)
+    /// Returns (state, graph_repo) so tests can create nodes directly via the graph_repo.
+    fn create_test_service_with_graph_repo(
+    ) -> (crate::AppState, Arc<dyn graph_service::GraphRepository>) {
+        let state = create_test_service();
+        let graph_repo = state.graph_service.repo().clone();
+        (state, graph_repo)
     }
 
     #[tokio::test]
     async fn test_ingest_artifact_success() {
+        use graph_service::GraphRepository;
         use intent_rebase_types::{ExternalRef, ExternalRefType, NodeType};
 
         // Create a graph repo with an IntentVersion node that the artifact can depend on
@@ -1392,13 +1330,11 @@ mod tests {
     async fn test_ingest_artifact_side_effect_tenant_isolation_cross_tenant_query() {
         // Test that side effects recorded by tenant A's artifact ingest
         // are NOT visible when tenant B queries by intent
-        use graph_service::GraphRepository;
         use intent_rebase_types::{
             ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
         };
 
-        let (state, _side_effect_repo, graph_repo) =
-            create_test_service_with_tenant_isolated_side_effect_repo();
+        let (state, graph_repo) = create_test_service_with_graph_repo();
         let tenant_a = Uuid::new_v4();
         let tenant_b = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
@@ -1483,13 +1419,11 @@ mod tests {
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_tenant_isolation_separate_intents() {
         // Test that side effects for different tenants are isolated even with same intent ID
-        use graph_service::GraphRepository;
         use intent_rebase_types::{
             ExternalRef, ExternalRefType, NodeType, SideEffectCaptureContext,
         };
 
-        let (state, _side_effect_repo, graph_repo) =
-            create_test_service_with_tenant_isolated_side_effect_repo();
+        let (state, graph_repo) = create_test_service_with_graph_repo();
         let tenant_a = Uuid::new_v4();
         let tenant_b = Uuid::new_v4();
         let workflow_id = Uuid::new_v4();
