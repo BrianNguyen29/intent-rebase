@@ -674,7 +674,13 @@ mod tests {
         ));
         let forensic_svc = Arc::new(InMemoryForensicVerificationService::new())
             as Arc<dyn forensic_service::ForensicVerificationService>;
-        let forensic_archive_gen = Arc::new(InMemoryForensicArchiveGenerator::new());
+        let forensic_archive_gen = Arc::new(
+            InMemoryForensicArchiveGenerator::new()
+                .with_intent_version_count(5)
+                .with_artifact_count(10)
+                .with_audit_event_count(100)
+                .with_policy_snapshot_count(3),
+        );
         let forensic_bundle_svc = Arc::new(ForensicBundleService::new(
             Arc::new(InMemoryBundleRepository::new()),
             Arc::new(InMemoryBundleStorage::new("test-bucket")),
@@ -879,5 +885,223 @@ mod tests {
         assert!(json.contains("\"intent_exists\":true"));
         assert!(json.contains("\"version_count\":5"));
         assert!(json.contains("\"has_artifact_traceability\":true"));
+    }
+
+    // === Forensic Export Tests ===
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_returns_generated_status() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = super::export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
+
+        assert_eq!(result.status, forensic_service::ExportStatus::Generated);
+        assert_eq!(result.tenant_id, tenant_id);
+        assert_eq!(result.intent_id, intent_id);
+        // Item count = 5 (intent versions) + 10 (artifacts) + 100 (audit events) + 3 (policy snapshots)
+        assert_eq!(result.item_count, 118);
+        assert_eq!(result.content_type, "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_request_deserialization() {
+        let json = r#"{
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+            "intent_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "time_range": {
+                "start": "2025-01-01T00:00:00Z",
+                "end": "2025-01-31T23:59:59Z"
+            },
+            "purpose": "compliance_audit",
+            "include_artifacts": true,
+            "include_audit_events": false,
+            "include_policy_snapshots": true
+        }"#;
+
+        let request: ForensicExportRequest =
+            serde_json::from_str(json).expect("Should deserialize");
+
+        assert_eq!(
+            request.purpose,
+            forensic_service::ExportPurpose::ComplianceAudit
+        );
+        assert!(request.include_artifacts);
+        assert!(!request.include_audit_events);
+        assert!(request.include_policy_snapshots);
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_response_serialization() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::Legal,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: false,
+        };
+
+        let result = super::export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
+
+        // Verify serialization works
+        let json = serde_json::to_string(&result.0).expect("Should serialize");
+        assert!(json.contains("\"status\":\"generated\""));
+        assert!(json.contains("\"tenant_id\""));
+        assert!(json.contains("\"intent_id\""));
+        assert!(json.contains("\"content_type\":\"application/json\""));
+        // item_count = 5 + 10 + 100 = 115 (no policy snapshots)
+        assert!(json.contains("\"item_count\":115"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_status_reason_truthful() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+
+        let request = ForensicExportRequest {
+            tenant_id,
+            intent_id,
+            time_range: ForensicExportTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::IncidentInvestigation,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = super::export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
+
+        // Status reason should be truthful about in-memory generation
+        assert!(
+            result.status_reason.contains("in-memory")
+                || result.status_reason.contains("scaffolded")
+        );
+        assert!(!result.status_reason.contains("S3"));
+        assert!(!result.status_reason.contains("persisted"));
+    }
+
+    #[tokio::test]
+    async fn test_export_forensic_archive_empty_counts() {
+        // Use a generator with zero counts to test empty archive scenario
+        let generator = Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new())
+            as Arc<dyn forensic_service::ForensicArchiveGenerator>;
+
+        let state = AppState {
+            service: Arc::new(IntentService::new(Arc::new(
+                intent_service::InMemoryIntentRepository::new(),
+            ))),
+            graph_service: Arc::new(GraphService::new(Arc::new(
+                graph_service::InMemoryGraphRepository::new(),
+            ))),
+            orchestrator: Arc::new(RebaseOrchestrator::new(
+                Arc::new(intent_service::InMemoryCheckpointRepository::new()),
+                Arc::new(GraphService::new(Arc::new(
+                    graph_service::InMemoryGraphRepository::new(),
+                ))),
+                Arc::new(MockAdapter::ready()),
+            )),
+            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
+                as Arc<dyn intent_rebase_types::AuditRepository>,
+            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
+                as Arc<dyn intent_service::ApprovalRequestRepository>,
+            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
+                as Arc<dyn intent_service::PolicySnapshotRepository>,
+            event_publisher: None,
+            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
+                compensation_service::InMemorySideEffectRepository::new(),
+            ))),
+            compensation_action_service: Arc::new(
+                compensation_service::CompensationActionService::new(Arc::new(
+                    compensation_service::InMemoryCompensationActionRepository::new(),
+                )),
+            ),
+            orchestration_runtime: Arc::new(compensation_service::OrchestrationRuntime::new(
+                Arc::new(compensation_service::CompensationActionService::new(
+                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
+                )),
+                Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new()),
+            )),
+            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new()),
+            forensic_archive_generator: generator,
+            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
+                Arc::new(forensic_service::InMemoryBundleRepository::new()),
+                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
+                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
+            )),
+            start_time: Instant::now(),
+            rls_pool: None,
+        };
+
+        let request = ForensicExportRequest {
+            tenant_id: Uuid::new_v4(),
+            intent_id: Uuid::new_v4(),
+            time_range: ForensicExportTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::ExportPurpose::ComplianceAudit,
+            include_artifacts: true,
+            include_audit_events: true,
+            include_policy_snapshots: true,
+        };
+
+        let result = super::export_forensic_archive(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Json(request),
+        )
+        .await
+        .expect("Should return export result");
+
+        // Zero counts should produce zero items
+        assert_eq!(result.item_count, 0);
+        assert_eq!(result.contents.intent_versions, 0);
+        assert_eq!(result.contents.artifacts, 0);
+        assert_eq!(result.contents.audit_events, 0);
+        assert_eq!(result.contents.policy_snapshots, 0);
     }
 }
