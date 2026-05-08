@@ -6,8 +6,11 @@
 //! # Included Helpers
 //!
 //! - `create_test_service()`: Creates minimal AppState for handler tests
+//! - `create_test_service_with_forensic_config()`: AppState with forensic archive config
 //! - `create_test_rls_claims()`: Creates RlsTenantClaims for JWT auth testing
 //! - `create_test_optional_rls_claims()`: Creates OptionalRlsTenantClaims wrapper
+//! - `create_test_payload()`: Creates IntentPayload with default "Test intent" summary
+//! - `create_test_payload_with_params()`: Creates IntentPayload with custom summary and in_scope
 
 #[cfg(test)]
 use std::time::Instant;
@@ -42,7 +45,11 @@ use forensic_service::{
 use graph_service::{GraphService, InMemoryGraphRepository};
 
 #[cfg(test)]
-use intent_rebase_types::InMemoryAuditRepository;
+use intent_rebase_types::{
+    AcceptanceCriteria, InMemoryAuditRepository, IntentAssumptions, IntentAuthority,
+    IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences,
+    IntentReferences, IntentScope, RiskTier, Urgency,
+};
 
 #[cfg(test)]
 use intent_service::{
@@ -227,4 +234,58 @@ pub fn create_test_rls_claims(tenant_id: Uuid) -> RlsTenantClaims {
 #[cfg(test)]
 pub fn create_test_optional_rls_claims(tenant_id: Uuid) -> OptionalRlsTenantClaims {
     OptionalRlsTenantClaims(Some(create_test_rls_claims(tenant_id)))
+}
+
+/// Create IntentPayload with custom summary and in_scope items.
+///
+/// This parameterized variant allows tests to preserve their exact summary strings
+/// while sharing the common payload structure.
+#[cfg(test)]
+pub fn create_test_payload_with_params(summary: &str, in_scope: &[&str]) -> IntentPayload {
+    IntentPayload {
+        objective: IntentObjective {
+            summary: summary.to_string(),
+            success_statement: "Success".to_string(),
+            domain: "testing".to_string(),
+        },
+        scope: IntentScope {
+            in_scope: in_scope.iter().map(|s| s.to_string()).collect(),
+            out_of_scope: vec![],
+        },
+        constraints: IntentConstraints {
+            functional: vec![],
+            non_functional: vec![],
+            policy: vec![],
+            budget: vec![],
+            time: vec![],
+        },
+        acceptance_criteria: AcceptanceCriteria {
+            required: vec![],
+            optional: vec![],
+        },
+        authority: IntentAuthority {
+            allowed_actions: vec![],
+            forbidden_actions: vec![],
+            approval_requirements: vec![],
+        },
+        preferences: IntentPreferences { tradeoffs: vec![] },
+        references: IntentReferences {
+            specs: vec![],
+            tickets: vec![],
+            repos: vec![],
+            policies: vec![],
+        },
+        assumptions: IntentAssumptions { explicit: vec![] },
+        metadata: IntentMetadataV1 {
+            risk_tier: RiskTier::Medium,
+            urgency: Urgency::Medium,
+            confidence: 0.9,
+        },
+    }
+}
+
+/// Create IntentPayload with default "Test intent" summary and "item1" in_scope.
+#[cfg(test)]
+pub fn create_test_payload() -> IntentPayload {
+    create_test_payload_with_params("Test intent", &["item1"])
 }

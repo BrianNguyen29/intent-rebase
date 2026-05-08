@@ -54,6 +54,7 @@ pub async fn compute_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::create_test_payload;
     use axum::{http::StatusCode, response::IntoResponse};
     use intent_rebase_types::{
         AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
@@ -117,49 +118,6 @@ mod tests {
             )),
             start_time: Instant::now(),
             rls_pool: None,
-        }
-    }
-
-    fn create_test_payload() -> IntentPayload {
-        IntentPayload {
-            objective: IntentObjective {
-                summary: "Test intent".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "testing".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec!["item1".to_string()],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Medium,
-                urgency: Urgency::Medium,
-                confidence: 0.9,
-            },
         }
     }
 

@@ -1239,6 +1239,9 @@ mod tests {
     // Use shared helper with forensic config for lib.rs tests
     use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
+    // Use shared payload helpers
+    use crate::test_helpers::{create_test_payload, create_test_payload_with_params};
+
     #[tokio::test]
     async fn test_router_builds_successfully() {
         let state = create_test_service();
@@ -1300,54 +1303,9 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_preview_success() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
-            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
-            Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, DiffRequest,
+            SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
 
@@ -1494,54 +1452,9 @@ mod tests {
     async fn test_rebase_preview_with_graph_classifies_affected_items() {
         use graph_service::{GraphRepository, GraphService, InMemoryGraphRepository};
         use intent_rebase_types::{
-            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            DiffRequest, ExternalRef, ExternalRefType, IntentAuthority, IntentConstraints,
-            IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-            IntentScope, NodeType, RiskTier, SourceRef, Urgency,
+            ChangeChannel, CreateIntentRequest, CreateVersionRequest, ExternalRef, ExternalRefType,
+            NodeType, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent with graph".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         // Create service with graph service available
         let repo = Arc::new(InMemoryIntentRepository::new());
@@ -1606,7 +1519,7 @@ mod tests {
                 ref_type: "spec".to_string(),
                 id: "spec://test".to_string(),
             }],
-            payload: create_test_payload(),
+            payload: create_test_payload_with_params("Test intent with graph", &["item1"]),
             created_by: intent_rebase_types::ActorRef {
                 actor_type: "user".to_string(),
                 actor_id: "test-user".to_string(),
@@ -1623,7 +1536,7 @@ mod tests {
 
         // Create version 2
         let version_request = CreateVersionRequest {
-            payload: create_test_payload(),
+            payload: create_test_payload_with_params("Test intent with graph", &["item1"]),
             change_reason: "v2".to_string(),
             change_channel: ChangeChannel::UserEdit,
             created_by: intent_rebase_types::ActorRef {
@@ -1712,54 +1625,8 @@ mod tests {
     async fn test_rebase_preview_fallback_when_graph_node_not_found() {
         use graph_service::{GraphService, InMemoryGraphRepository};
         use intent_rebase_types::{
-            AffectedItemsStatus, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
-            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
-            Urgency,
+            ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent no graph".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: intent_rebase_types::AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         // Create service with graph service but NO graph data
         let repo = Arc::new(InMemoryIntentRepository::new());
@@ -1824,7 +1691,7 @@ mod tests {
                 ref_type: "spec".to_string(),
                 id: "spec://test".to_string(),
             }],
-            payload: create_test_payload(),
+            payload: create_test_payload_with_params("Test intent no graph", &["item1"]),
             created_by: intent_rebase_types::ActorRef {
                 actor_type: "user".to_string(),
                 actor_id: "test-user".to_string(),
@@ -1841,7 +1708,7 @@ mod tests {
 
         // Create version 2
         let version_request = CreateVersionRequest {
-            payload: create_test_payload(),
+            payload: create_test_payload_with_params("Test intent no graph", &["item1"]),
             change_reason: "v2".to_string(),
             change_channel: ChangeChannel::UserEdit,
             created_by: intent_rebase_types::ActorRef {
@@ -3032,53 +2899,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_empty_side_effects() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3149,53 +2971,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_with_side_effects() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3306,53 +3083,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_stochastic_mode_with_seed() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3425,53 +3157,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_invalid_version_ordering() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3537,53 +3224,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_invalid_version_bounds() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3689,53 +3331,8 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_simulation_invalid_mode_fallback() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3807,53 +3404,8 @@ mod tests {
     #[tokio::test]
     async fn test_compensation_simulation_run_empty_side_effects() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -3926,53 +3478,8 @@ mod tests {
     #[tokio::test]
     async fn test_compensation_simulation_run_with_side_effects() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -4060,53 +3567,8 @@ mod tests {
     #[tokio::test]
     async fn test_compensation_simulation_run_invalid_version_ordering() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -4178,53 +3640,8 @@ mod tests {
     #[tokio::test]
     async fn test_compensation_simulation_run_invalid_version_bounds() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -4369,53 +3786,8 @@ mod tests {
     #[tokio::test]
     async fn test_compensation_simulation_run_with_side_effect_ids_filter() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
-            IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
         let tenant_id = Uuid::new_v4();
@@ -5466,54 +4838,9 @@ mod tests {
     #[tokio::test]
     async fn test_rebase_apply_rejects_tenant_mismatch() {
         use intent_rebase_types::{
-            AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
-            DiffRequest, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
-            IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef,
-            Urgency,
+            ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, DiffRequest,
+            SourceRef,
         };
-
-        fn create_test_payload() -> IntentPayload {
-            IntentPayload {
-                objective: IntentObjective {
-                    summary: "Test intent".to_string(),
-                    success_statement: "Success".to_string(),
-                    domain: "testing".to_string(),
-                },
-                scope: IntentScope {
-                    in_scope: vec!["item1".to_string()],
-                    out_of_scope: vec![],
-                },
-                constraints: IntentConstraints {
-                    functional: vec![],
-                    non_functional: vec![],
-                    policy: vec![],
-                    budget: vec![],
-                    time: vec![],
-                },
-                acceptance_criteria: AcceptanceCriteria {
-                    required: vec![],
-                    optional: vec![],
-                },
-                authority: IntentAuthority {
-                    allowed_actions: vec![],
-                    forbidden_actions: vec![],
-                    approval_requirements: vec![],
-                },
-                preferences: IntentPreferences { tradeoffs: vec![] },
-                references: IntentReferences {
-                    specs: vec![],
-                    tickets: vec![],
-                    repos: vec![],
-                    policies: vec![],
-                },
-                assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-                metadata: IntentMetadataV1 {
-                    risk_tier: RiskTier::Medium,
-                    urgency: Urgency::Medium,
-                    confidence: 0.9,
-                },
-            }
-        }
 
         let state = create_test_service();
 
