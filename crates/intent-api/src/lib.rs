@@ -106,6 +106,9 @@ pub mod error_response;
 /// Diff computation handlers (Phase 2 bounded slice - extracted handler decomposition)
 pub mod diff_handlers;
 
+/// Rebase preview handlers (Phase 2 bounded slice - extracted handler decomposition)
+pub mod rebase_preview_handlers;
+
 /// Approval invalidation and audit helpers (Phase 2b bounded slice - extracted helper decomposition)
 pub mod approval_invalidation;
 
@@ -199,20 +202,9 @@ pub use intent_mutation_handlers::{
 // - intent_api_rebase_preview_duration_seconds
 // - intent_api_rebase_apply_duration_seconds
 
-/// Record rebase preview request outcome
-fn record_rebase_preview_request(status: &'static str) {
-    metrics::counter!("intent_api_rebase_preview_requests_total", "status" => status).increment(1);
-}
-
 /// Record rebase apply request outcome
 fn record_rebase_apply_request(status: &'static str) {
     metrics::counter!("intent_api_rebase_apply_requests_total", "status" => status).increment(1);
-}
-
-/// Record rebase preview duration
-fn record_rebase_preview_duration(duration_secs: f64, graph_size: &'static str) {
-    metrics::histogram!("intent_api_rebase_preview_duration_seconds", "graph_size" => graph_size)
-        .record(duration_secs);
 }
 
 /// Record rebase apply duration
@@ -389,204 +381,6 @@ pub async fn api_key_extractor_middleware(
     // Phase 1: Pass through without blocking
     // Phase 2: Add actual validation here
     next.run(request).await
-}
-
-// /// POST /intents/{intent_id}/rebase-preview - Generate rebase preview plan
-// ///
-// /// Request body: { from_version, to_version }
-// /// Response: rebase preview with decision class, rationale, section decisions,
-// /// and graph-integrated affected items when available.
-// ///
-// /// Phase 1 PR #16: Includes graph-integrated affected items when graph service
-// /// is available. The `affected_items.status` field indicates whether classification
-// /// succeeded. When `status` is `Unavailable`, the endpoint remains functional but
-// /// the affected items arrays may be incomplete.
-
-#[cfg(feature = "jwt-auth")]
-async fn rebase_preview(
-    State(state): State<AppState>,
-    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
-    Path(intent_id): Path<Uuid>,
-    Json(request): Json<DiffRequest>,
-) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-    let start = std::time::Instant::now();
-
-    // Phase 5.1: Fetch intent head to get tenant_id for JWT validation
-    let intent_head = match state.service.get_intent_head(intent_id).await {
-        Ok(h) => h,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-
-    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
-        if intent_head.intent.tenant_id != rls_claims.tenant_id {
-            let msg = format!(
-                "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
-                rls_claims.tenant_id, intent_head.intent.tenant_id
-            );
-            tracing::warn!("rebase_preview: tenant mismatch rejection");
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
-        }
-    }
-
-    // Always use graph-integrated preview - the service handles unavailability gracefully
-    let plan_result = state
-        .service
-        .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
-        .await;
-
-    let plan = match plan_result {
-        Ok(p) => p,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-
-    // Get version info for response context
-    let from_version = match state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-    let to_version = match state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-
-    // Record latency with graph_size label (use "unknown" if affected_items unavailable)
-    let graph_size = match &plan.affected_items.status {
-        intent_rebase_types::AffectedItemsStatus::Available => {
-            let total = plan.affected_items.affected_artifacts.len()
-                + plan.affected_items.affected_approvals.len()
-                + plan.affected_items.side_effects.len();
-            if total < 10 {
-                "small"
-            } else if total < 100 {
-                "medium"
-            } else {
-                "large"
-            }
-        }
-        _ => "unknown",
-    };
-
-    let duration = start.elapsed().as_secs_f64();
-    record_rebase_preview_duration(duration, graph_size);
-    record_rebase_preview_request("success");
-
-    Ok(Json(RebasePreviewResponse {
-        intent_id,
-        from_version,
-        to_version,
-        decision_class: plan.decision_class,
-        rationale: plan.rationale,
-        section_decisions: plan.section_decisions,
-        affected_items: plan.affected_items,
-        manual_review_recommended: plan.manual_review_recommended,
-        risk_tier: plan.risk_tier,
-        risk_level: plan.risk_level,
-        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
-    }))
-}
-
-#[cfg(not(feature = "jwt-auth"))]
-async fn rebase_preview(
-    State(state): State<AppState>,
-    Path(intent_id): Path<Uuid>,
-    Json(request): Json<DiffRequest>,
-) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-    let start = std::time::Instant::now();
-
-    // Always use graph-integrated preview - the service handles unavailability gracefully
-    let plan_result = state
-        .service
-        .compute_rebase_preview_with_graph(intent_id, request.from_version, request.to_version)
-        .await;
-
-    let plan = match plan_result {
-        Ok(p) => p,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-
-    // Get version info for response context
-    let from_version = match state
-        .service
-        .get_version(intent_id, request.from_version)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-    let to_version = match state
-        .service
-        .get_version(intent_id, request.to_version)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            record_rebase_preview_request("error");
-            return Err(ApiErrorResponse(e));
-        }
-    };
-
-    // Record latency with graph_size label (use "unknown" if affected_items unavailable)
-    let graph_size = match &plan.affected_items.status {
-        intent_rebase_types::AffectedItemsStatus::Available => {
-            let total = plan.affected_items.affected_artifacts.len()
-                + plan.affected_items.affected_approvals.len()
-                + plan.affected_items.side_effects.len();
-            if total < 10 {
-                "small"
-            } else if total < 100 {
-                "medium"
-            } else {
-                "large"
-            }
-        }
-        _ => "unknown",
-    };
-
-    let duration = start.elapsed().as_secs_f64();
-    record_rebase_preview_duration(duration, graph_size);
-    record_rebase_preview_request("success");
-
-    Ok(Json(RebasePreviewResponse {
-        intent_id,
-        from_version,
-        to_version,
-        decision_class: plan.decision_class,
-        rationale: plan.rationale,
-        section_decisions: plan.section_decisions,
-        affected_items: plan.affected_items,
-        manual_review_recommended: plan.manual_review_recommended,
-        risk_tier: plan.risk_tier,
-        risk_level: plan.risk_level,
-        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
-    }))
 }
 
 /// POST /intents/{intent_id}/rebase-apply - Apply a rebase to an intent
@@ -1514,7 +1308,10 @@ pub fn build_router(
             "/intents/{intent_id}/diff",
             post(diff_handlers::compute_diff),
         )
-        .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+        .route(
+            "/intents/{intent_id}/rebase-preview",
+            post(rebase_preview_handlers::rebase_preview),
+        )
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
         .route(
@@ -1848,7 +1645,10 @@ pub fn build_router_with_jwt_auth(
             "/intents/{intent_id}/diff",
             post(diff_handlers::compute_diff),
         )
-        .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+        .route(
+            "/intents/{intent_id}/rebase-preview",
+            post(rebase_preview_handlers::rebase_preview),
+        )
         .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
         // Replay endpoint (Phase 2b bounded replay slice)
         .route(
@@ -2348,7 +2148,10 @@ mod tests {
                 "/intents/{intent_id}/diff",
                 post(diff_handlers::compute_diff),
             )
-            .route("/intents/{intent_id}/rebase-preview", post(rebase_preview))
+            .route(
+                "/intents/{intent_id}/rebase-preview",
+                post(rebase_preview_handlers::rebase_preview),
+            )
             .route("/intents/{intent_id}/rebase-apply", post(rebase_apply))
             .with_state(state);
         // Router builds successfully - this is a compile-time check essentially
@@ -2644,7 +2447,7 @@ mod tests {
         intent_id: Uuid,
         request: DiffRequest,
     ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-        rebase_preview(
+        rebase_preview_handlers::rebase_preview(
             State(state),
             auth::OptionalRlsTenantClaims(None),
             Path(intent_id),
@@ -2659,7 +2462,7 @@ mod tests {
         intent_id: Uuid,
         request: DiffRequest,
     ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-        rebase_preview(State(state), Path(intent_id), Json(request)).await
+        rebase_preview_handlers::rebase_preview(State(state), Path(intent_id), Json(request)).await
     }
 
     #[tokio::test]
