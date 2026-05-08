@@ -785,67 +785,12 @@ mod tests {
 
     use uuid::Uuid;
 
-    /// Create minimal AppState for compensation action handler tests
-    #[cfg(not(feature = "jwt-auth"))]
-    fn create_test_service_with_executor() -> AppState {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo));
-        let service = Arc::new(IntentService::new(repo));
-        let orchestrator = Arc::new(RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        let audit_repo = Arc::new(InMemoryAuditRepository::new())
-            as Arc<dyn intent_rebase_types::AuditRepository>;
-        let approval_repo = Arc::new(InMemoryApprovalRequestRepository::new())
-            as Arc<dyn intent_service::ApprovalRequestRepository>;
-        let policy_snapshot_repo = Arc::new(InMemoryPolicySnapshotRepository::new())
-            as Arc<dyn intent_service::PolicySnapshotRepository>;
-        let side_effect_repo = Arc::new(InMemorySideEffectRepository::new());
-        let side_effect_svc = Arc::new(SideEffectService::new(side_effect_repo));
-        // Use in-memory compensation action repo with stub executor
-        let compensation_action_repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let compensation_action_svc = Arc::new(CompensationActionService::new(
-            compensation_action_repo.clone(),
-        ));
-        let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        AppState {
-            service,
-            graph_service: graph_svc,
-            side_effect_service: side_effect_svc,
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: audit_repo,
-            approval_request_repo: approval_repo,
-            policy_snapshot_repo,
-            event_publisher: None,
-            forensic_service: Arc::new(InMemoryForensicVerificationService::new())
-                as Arc<dyn forensic_service::ForensicVerificationService>,
-            forensic_archive_generator: Arc::new(InMemoryForensicArchiveGenerator::new()),
-            forensic_bundle_service: Arc::new(ForensicBundleService::new(
-                Arc::new(InMemoryBundleRepository::new()),
-                Arc::new(InMemoryBundleStorage::new("test-bucket")),
-                Arc::new(InMemoryForensicDataCollector::new()),
-            )),
-            start_time: Instant::now(),
-            rls_pool: None,
-        }
-    }
-
     // === Compensation Action API Tests ===
 
     #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_approve_compensation_action_success() {
-        let state = create_test_service_with_executor();
+        let state = create_test_service();
 
         // Create a compensation action directly via the service
         let tenant_id = Uuid::new_v4();
@@ -884,7 +829,7 @@ mod tests {
     #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_approve_compensation_action_not_found() {
-        let state = create_test_service_with_executor();
+        let state = create_test_service();
 
         let request = ApproveCompensationActionBody {
             lock_version: 0,
@@ -899,7 +844,7 @@ mod tests {
     #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_waive_compensation_action_success() {
-        let state = create_test_service_with_executor();
+        let state = create_test_service();
 
         // Create a compensation action
         let tenant_id = Uuid::new_v4();
@@ -937,7 +882,7 @@ mod tests {
     #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_execute_compensation_action_success() {
-        let state = create_test_service_with_executor();
+        let state = create_test_service();
 
         // Create a compensation action
         let tenant_id = Uuid::new_v4();
@@ -982,7 +927,7 @@ mod tests {
     #[cfg(not(feature = "jwt-auth"))]
     #[tokio::test]
     async fn test_execute_compensation_action_fails_on_pending() {
-        let state = create_test_service_with_executor();
+        let state = create_test_service();
 
         // Create a compensation action (starts in Pending status)
         let tenant_id = Uuid::new_v4();

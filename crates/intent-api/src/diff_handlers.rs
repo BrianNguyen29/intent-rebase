@@ -55,71 +55,13 @@ pub async fn compute_diff(
 mod tests {
     use super::*;
     use crate::test_helpers::create_test_payload;
+    use crate::test_helpers::create_test_service_with_forensic_config as create_test_service_for_diff;
     use axum::{http::StatusCode, response::IntoResponse};
     use intent_rebase_types::{
         AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
         IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
         IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
     };
-    use intent_service::InMemoryIntentRepository;
-    use std::sync::Arc;
-    use std::time::Instant;
-
-    /// Minimal test service creator for diff handler tests.
-    /// Creates an AppState with only the components needed for compute_diff testing.
-    fn create_test_service_for_diff() -> AppState {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let service = Arc::new(intent_service::IntentService::new(repo));
-        AppState {
-            service,
-            graph_service: Arc::new(graph_service::GraphService::new(Arc::new(
-                graph_service::InMemoryGraphRepository::new(),
-            ))),
-            orchestrator: Arc::new(rebase_orchestrator::RebaseOrchestrator::new(
-                Arc::new(intent_service::InMemoryCheckpointRepository::new()),
-                Arc::new(graph_service::GraphService::new(Arc::new(
-                    graph_service::InMemoryGraphRepository::new(),
-                ))),
-                Arc::new(runtime_adapter::MockAdapter::ready()),
-            )),
-            audit_service: Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
-                as Arc<dyn intent_rebase_types::AuditRepository>,
-            approval_request_repo: Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
-                as Arc<dyn intent_service::ApprovalRequestRepository>,
-            policy_snapshot_repo: Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
-                as Arc<dyn intent_service::PolicySnapshotRepository>,
-            event_publisher: None,
-            side_effect_service: Arc::new(compensation_service::SideEffectService::new(Arc::new(
-                compensation_service::InMemorySideEffectRepository::new(),
-            ))),
-            compensation_action_service: Arc::new(
-                compensation_service::CompensationActionService::new(Arc::new(
-                    compensation_service::InMemoryCompensationActionRepository::new(),
-                )),
-            ),
-            orchestration_runtime: Arc::new(compensation_service::OrchestrationRuntime::new(
-                Arc::new(compensation_service::CompensationActionService::new(
-                    Arc::new(compensation_service::InMemoryCompensationActionRepository::new()),
-                )),
-                Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new()),
-            )),
-            forensic_service: Arc::new(forensic_service::InMemoryForensicVerificationService::new()),
-            forensic_archive_generator: Arc::new(
-                forensic_service::InMemoryForensicArchiveGenerator::new()
-                    .with_intent_version_count(5)
-                    .with_artifact_count(10)
-                    .with_audit_event_count(100)
-                    .with_policy_snapshot_count(3),
-            ),
-            forensic_bundle_service: Arc::new(forensic_service::ForensicBundleService::new(
-                Arc::new(forensic_service::InMemoryBundleRepository::new()),
-                Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket")),
-                Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
-            )),
-            start_time: Instant::now(),
-            rls_pool: None,
-        }
-    }
 
     #[tokio::test]
     async fn test_compute_diff_success() {
