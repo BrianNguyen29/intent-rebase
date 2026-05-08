@@ -343,113 +343,17 @@ pub(crate) async fn replay_intent(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "jwt-auth")]
-    use crate::auth;
+    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
     use crate::types::ReplayRequest;
-    use crate::AppState;
+
     use axum::extract::{Path, State};
     use axum::Json;
-    use compensation_service::{
-        CompensationActionService, InMemoryCompensationActionRepository,
-        InMemoryOrchestrationRunRepository, InMemorySideEffectRepository, OrchestrationRuntime,
-        SideEffectService,
-    };
-    use forensic_service::{
-        ForensicBundleService, InMemoryBundleRepository, InMemoryBundleStorage,
-        InMemoryForensicArchiveGenerator, InMemoryForensicDataCollector,
-        InMemoryForensicVerificationService,
-    };
-    use graph_service::{GraphService, InMemoryGraphRepository};
-    use intent_rebase_types::InMemoryAuditRepository;
     use intent_rebase_types::{
         AcceptanceCriteria, ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest,
         IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective, IntentPayload,
         IntentPreferences, IntentReferences, IntentScope, RiskTier, SourceRef, Urgency,
     };
-    use intent_service::{
-        InMemoryApprovalRequestRepository, InMemoryCheckpointRepository, InMemoryIntentRepository,
-        InMemoryPolicySnapshotRepository, IntentService,
-    };
-    use runtime_adapter::MockAdapter;
-    use std::sync::Arc;
-    use std::time::Instant;
     use uuid::Uuid;
-
-    /// Create minimal AppState for replay handler tests
-    #[cfg(feature = "jwt-auth")]
-    fn create_test_service() -> AppState {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo));
-        let service = Arc::new(IntentService::new(repo));
-        let orchestrator = Arc::new(crate::RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        let audit_repo = Arc::new(InMemoryAuditRepository::new())
-            as Arc<dyn intent_rebase_types::AuditRepository>;
-        let approval_repo = Arc::new(InMemoryApprovalRequestRepository::new())
-            as Arc<dyn intent_service::ApprovalRequestRepository>;
-        let policy_snapshot_repo = Arc::new(InMemoryPolicySnapshotRepository::new())
-            as Arc<dyn intent_service::PolicySnapshotRepository>;
-        let side_effect_repo = Arc::new(InMemorySideEffectRepository::new());
-        let side_effect_svc = Arc::new(SideEffectService::new(side_effect_repo));
-        let compensation_action_repo = Arc::new(InMemoryCompensationActionRepository::new());
-        let compensation_action_svc =
-            Arc::new(CompensationActionService::new(compensation_action_repo));
-        let orchestration_run_repo = Arc::new(InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        let forensic_svc = Arc::new(InMemoryForensicVerificationService::new())
-            as Arc<dyn forensic_service::ForensicVerificationService>;
-        let forensic_archive_gen = Arc::new(InMemoryForensicArchiveGenerator::new());
-        let forensic_bundle_svc = Arc::new(ForensicBundleService::new(
-            Arc::new(InMemoryBundleRepository::new()),
-            Arc::new(InMemoryBundleStorage::new("test-bucket")),
-            Arc::new(InMemoryForensicDataCollector::new()),
-        ));
-        AppState {
-            service,
-            graph_service: graph_svc,
-            side_effect_service: side_effect_svc,
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: audit_repo,
-            approval_request_repo: approval_repo,
-            policy_snapshot_repo,
-            event_publisher: None,
-            forensic_service: forensic_svc,
-            forensic_archive_generator: forensic_archive_gen,
-            forensic_bundle_service: forensic_bundle_svc,
-            start_time: Instant::now(),
-            rls_pool: None,
-        }
-    }
-
-    /// Helper to create OptionalRlsTenantClaims for testing
-    #[cfg(feature = "jwt-auth")]
-    fn create_test_optional_rls_claims(tenant_id: Uuid) -> auth::OptionalRlsTenantClaims {
-        auth::OptionalRlsTenantClaims(Some(create_test_rls_claims(tenant_id)))
-    }
-
-    /// Helper to create RlsTenantClaims for testing
-    #[cfg(feature = "jwt-auth")]
-    fn create_test_rls_claims(tenant_id: Uuid) -> auth::RlsTenantClaims {
-        let claims = auth::Claims {
-            sub: "test-user".to_string(),
-            tenant_id: tenant_id.to_string(),
-            roles: vec!["admin".to_string()],
-            exp: 9999999999,
-            iat: 0,
-        };
-        // new_unchecked is #[cfg(test)] so this only works in tests
-        auth::RlsTenantClaims::new_unchecked(tenant_id, claims)
-    }
 
     // -------------------------------------------------------------------------
     // replay_intent Tenant Mismatch Tests (P1-S5i)

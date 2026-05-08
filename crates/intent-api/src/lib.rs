@@ -1210,6 +1210,10 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     }))
 }
 
+/// Shared test helpers for intent-api handler tests (Phase 3 bounded slice)
+#[cfg(test)]
+pub mod test_helpers;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1229,79 +1233,11 @@ mod tests {
     // Import intent read handlers for tests
     use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};
 
-    fn create_test_service() -> AppState {
-        let repo = Arc::new(InMemoryIntentRepository::new());
-        let graph_repo = Arc::new(InMemoryGraphRepository::new());
-        let checkpoint_repo = Arc::new(InMemoryCheckpointRepository::new());
-        let graph_svc = Arc::new(GraphService::new(graph_repo));
-        let service = Arc::new(IntentService::new(repo));
-        let orchestrator = Arc::new(RebaseOrchestrator::new(
-            checkpoint_repo,
-            graph_svc.clone(),
-            Arc::new(MockAdapter::ready()),
-        ));
-        let audit_repo = Arc::new(intent_rebase_types::InMemoryAuditRepository::new())
-            as Arc<dyn intent_rebase_types::AuditRepository>;
-        let approval_repo = Arc::new(intent_service::InMemoryApprovalRequestRepository::new())
-            as Arc<dyn intent_service::ApprovalRequestRepository>;
-        let policy_snapshot_repo = Arc::new(intent_service::InMemoryPolicySnapshotRepository::new())
-            as Arc<dyn intent_service::PolicySnapshotRepository>;
-        // Phase 3 Batch 1: In-memory side effect repository for tests
-        let side_effect_repo = Arc::new(compensation_service::InMemorySideEffectRepository::new());
-        let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(
-            side_effect_repo,
-        ));
-        // Phase 3 Batch 1: In-memory compensation action repository for tests
-        let compensation_action_repo =
-            Arc::new(compensation_service::InMemoryCompensationActionRepository::new());
-        let compensation_action_svc = Arc::new(
-            compensation_service::CompensationActionService::new(compensation_action_repo),
-        );
-        // Phase 3 Batch 1: In-memory orchestration run repository for tests
-        let orchestration_run_repo =
-            Arc::new(compensation_service::InMemoryOrchestrationRunRepository::new());
-        let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
-            compensation_action_svc.clone(),
-            orchestration_run_repo,
-        ));
-        // Phase 3 Batch 3b: In-memory forensic verification service for tests
-        let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
-        // Phase 3 Batch 3b: In-memory forensic archive generator for tests
-        let forensic_archive_gen = Arc::new(
-            forensic_service::InMemoryForensicArchiveGenerator::new()
-                .with_intent_version_count(5)
-                .with_artifact_count(10)
-                .with_audit_event_count(100)
-                .with_policy_snapshot_count(3),
-        );
-        // P4: In-memory forensic bundle service for tests (uses in-memory repo and storage)
-        let bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
-        let bundle_storage = Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
-        // Use a mock collector that returns empty data for basic tests
-        let bundle_collector = Arc::new(forensic_service::InMemoryForensicDataCollector::new());
-        let forensic_bundle_svc = Arc::new(forensic_service::ForensicBundleService::new(
-            bundle_repo,
-            bundle_storage,
-            bundle_collector,
-        ));
-        AppState {
-            service,
-            graph_service: graph_svc,
-            side_effect_service: side_effect_svc,
-            compensation_action_service: compensation_action_svc,
-            orchestration_runtime,
-            orchestrator,
-            audit_service: audit_repo,
-            approval_request_repo: approval_repo,
-            policy_snapshot_repo,
-            event_publisher: None, // Phase 2b: event publishing optional in tests
-            forensic_service: forensic_svc,
-            forensic_archive_generator: forensic_archive_gen,
-            forensic_bundle_service: forensic_bundle_svc,
-            start_time: Instant::now(),
-            rls_pool: None,
-        }
-    }
+    // Re-export test helpers for internal use
+    use crate::test_helpers::create_test_optional_rls_claims;
+
+    // Use shared helper with forensic config for lib.rs tests
+    use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
     #[tokio::test]
     async fn test_router_builds_successfully() {
@@ -5522,24 +5458,6 @@ mod tests {
     // Tests for JWT tenant ownership validation on high-risk handlers.
     // These tests verify fail-closed behavior on tenant mismatch.
     // =========================================================================
-
-    /// Helper to create RlsTenantClaims for testing
-    fn create_test_rls_claims(tenant_id: Uuid) -> auth::RlsTenantClaims {
-        let claims = auth::Claims {
-            sub: "test-user".to_string(),
-            tenant_id: tenant_id.to_string(),
-            roles: vec!["admin".to_string()],
-            exp: 9999999999,
-            iat: 0,
-        };
-        // new_unchecked is #[cfg(test)] so this only works in tests
-        auth::RlsTenantClaims::new_unchecked(tenant_id, claims)
-    }
-
-    /// Helper to create OptionalRlsTenantClaims for testing
-    fn create_test_optional_rls_claims(tenant_id: Uuid) -> auth::OptionalRlsTenantClaims {
-        auth::OptionalRlsTenantClaims(Some(create_test_rls_claims(tenant_id)))
-    }
 
     // -------------------------------------------------------------------------
     // rebase_apply Tenant Mismatch Tests
