@@ -431,3 +431,444 @@ pub async fn ingest_artifact(
         }),
     ))
 }
+
+// ============================================================================
+// Tests (Phase 3 Batch 1 bounded test decomposition slice)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ArtifactIngestRequest;
+    use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
+
+    // =========================================================================
+    // Artifact Ingest Validation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_validate_artifact_ingest_request_valid() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_tenant_id() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::nil(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("tenant_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_workflow_id() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::nil(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("workflow_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_empty_label() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("label"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_whitespace_label() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "   ".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("label"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_nil_external_ref_id() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::nil(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: None,
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("external_ref.ref_id"));
+    }
+
+    // =========================================================================
+    // Side Effect Context Validation Tests (Phase 3 Batch 1)
+    // =========================================================================
+
+    #[test]
+    fn test_validate_artifact_ingest_request_valid_side_effect_context() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_nil_source_intent_id() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::nil(), // Invalid: nil UUID
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.source_intent_id"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_zero_version() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 0, // Invalid: must be > 0
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("source_intent_version"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_negative_version() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: -1, // Invalid: must be > 0
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("source_intent_version"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_effect_type() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "".to_string(), // Invalid: empty
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.effect_type"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_effect_type() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "   ".to_string(), // Invalid: whitespace-only
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.effect_type"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_target() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "".to_string(), // Invalid: empty
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.target"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_target() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "   ".to_string(), // Invalid: whitespace-only
+                effect_class: None,
+                idempotency_key: None,
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err.to_string().contains("side_effect_context.target"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_empty_idempotency_key() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("".to_string()), // Invalid: empty
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.idempotency_key"));
+    }
+
+    #[test]
+    fn test_validate_artifact_ingest_request_side_effect_context_whitespace_idempotency_key() {
+        let request = ArtifactIngestRequest {
+            tenant_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            external_ref: ExternalRef {
+                ref_type: ExternalRefType::Artifact,
+                ref_id: Uuid::new_v4(),
+            },
+            label: "Valid Label".to_string(),
+            depends_on_intent_versions: vec![],
+            properties: None,
+            side_effect_context: Some(SideEffectCaptureContext {
+                source_intent_id: Uuid::new_v4(),
+                source_intent_version: 1,
+                effect_type: "artifact_created".to_string(),
+                target: "https://artifact.example.com/123".to_string(),
+                effect_class: None,
+                idempotency_key: Some("   ".to_string()), // Invalid: whitespace-only
+            }),
+        };
+
+        let result = validate_artifact_ingest_request(&request);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::InvalidIngestRequest(_)));
+        assert!(err
+            .to_string()
+            .contains("side_effect_context.idempotency_key"));
+    }
+}
