@@ -621,18 +621,26 @@ mod tests {
     use super::*;
     #[cfg(feature = "jwt-auth")]
     use crate::auth;
+    use crate::types::ForensicIntentVersionCoverage;
+    #[cfg(feature = "jwt-auth")]
     use crate::types::{
-        ForensicBundleRequest, ForensicBundleTimeRange, ForensicIntentVersionCoverage,
-        ForensicVerificationTimeRange, ListForensicBundlesQuery,
+        ForensicBundleRequest, ForensicBundleTimeRange, ForensicVerificationTimeRange,
+        ListForensicBundlesQuery,
     };
+    #[cfg(feature = "jwt-auth")]
     use crate::RebaseOrchestrator;
     use chrono::Utc;
 
+    #[cfg(feature = "jwt-auth")]
     use graph_service::GraphService;
 
+    #[cfg(feature = "jwt-auth")]
     use intent_service::IntentService;
+    #[cfg(feature = "jwt-auth")]
     use runtime_adapter::MockAdapter;
+    #[cfg(feature = "jwt-auth")]
     use std::sync::Arc;
+    #[cfg(feature = "jwt-auth")]
     use std::time::Instant;
     use uuid::Uuid;
 

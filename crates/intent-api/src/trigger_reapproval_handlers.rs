@@ -11,13 +11,13 @@ use crate::{publish_audit_event, types::TriggerReapprovalResponse, ApiErrorRespo
 use crate::auth;
 
 // Test imports
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use axum::http::StatusCode;
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use axum::response::IntoResponse;
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use intent_service::ApprovalRequestStatus;
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use uuid::Uuid;
 
 // ============================================================================
@@ -424,10 +424,9 @@ pub async fn trigger_reapproval(
 // Tests for Trigger Reapproval Handlers
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 mod tests {
     use super::*;
-    #[cfg(feature = "jwt-auth")]
     use crate::test_helpers::create_test_optional_rls_claims;
     use crate::test_helpers::create_test_service;
     use crate::types::TriggerReapprovalRequest;

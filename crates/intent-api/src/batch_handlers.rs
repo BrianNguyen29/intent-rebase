@@ -1044,6 +1044,7 @@ pub async fn batch_execute_compensation_actions(
 mod tests {
     #[cfg(feature = "jwt-auth")]
     use crate::test_helpers::create_test_optional_rls_claims;
+    #[cfg(feature = "jwt-auth")]
     use crate::test_helpers::create_test_service;
     use crate::types::{BatchOrchestrationRequest, OrchestrationQuery};
 

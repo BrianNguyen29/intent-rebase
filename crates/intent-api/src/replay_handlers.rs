@@ -342,7 +342,7 @@ pub(crate) async fn replay_intent(
 // Tests for Replay Handlers
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 mod tests {
     #[cfg(feature = "jwt-auth")]
     use crate::test_helpers::create_test_optional_rls_claims;

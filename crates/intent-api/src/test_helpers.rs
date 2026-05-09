@@ -15,7 +15,7 @@
 #[cfg(test)]
 use std::time::Instant;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use uuid::Uuid;
 
 #[cfg(all(test, feature = "jwt-auth"))]

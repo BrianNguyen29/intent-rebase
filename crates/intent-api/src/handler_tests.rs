@@ -7,9 +7,12 @@ use std::sync::Arc;
 // Import forensic handlers for tests (verification/export/bundle tests moved to forensic_handlers.rs)
 
 // Import simulation handlers for tests
-use crate::simulation_handlers::{compensation_simulation_run, rebase_simulation};
+#[cfg(feature = "jwt-auth")]
+use crate::simulation_handlers::compensation_simulation_run;
+use crate::simulation_handlers::rebase_simulation;
 
 // Import query handlers for tests
+#[cfg(feature = "jwt-auth")]
 use crate::query_handlers::get_orchestration_dashboard;
 
 // Import intent read handlers for tests

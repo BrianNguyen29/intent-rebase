@@ -876,12 +876,17 @@ mod tests {
     // Artifact Ingest Handler Tests (Phase 3 Batch 1 groundwork)
     // =========================================================================
 
+    #[cfg(feature = "jwt-auth")]
     use crate::test_helpers::create_test_service;
+    #[cfg(feature = "jwt-auth")]
     use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+    #[cfg(feature = "jwt-auth")]
     use graph_service::{GraphService, InMemoryGraphRepository};
+    #[cfg(feature = "jwt-auth")]
     use std::sync::Arc;
 
     /// Returns (state, graph_repo) so tests can create nodes directly via the graph_repo.
+    #[cfg(feature = "jwt-auth")]
     fn create_test_service_with_graph_repo(
     ) -> (crate::AppState, Arc<dyn graph_service::GraphRepository>) {
         let state = create_test_service();

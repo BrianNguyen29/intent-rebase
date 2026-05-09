@@ -302,7 +302,7 @@ pub async fn orchestration_dry_run(
 // Tests for Compensation Planner and Dry-Run Handlers
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 mod tests {
     use super::*;
     #[cfg(feature = "jwt-auth")]

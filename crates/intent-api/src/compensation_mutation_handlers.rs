@@ -775,15 +775,14 @@ mod tests {
 
     use crate::types::{
         ApproveCompensationActionBody, CompensationActionResponse, ExecuteCompensationActionBody,
-        ReapproveCompensationActionBody, WaiveCompensationActionBody,
     };
+    #[cfg(feature = "jwt-auth")]
+    use crate::types::{ReapproveCompensationActionBody, WaiveCompensationActionBody};
 
     #[cfg(not(feature = "jwt-auth"))]
     use axum::http::StatusCode;
     #[cfg(not(feature = "jwt-auth"))]
     use axum::response::IntoResponse;
-    #[cfg(not(feature = "jwt-auth"))]
-    use compensation_service::SideEffectService;
     use compensation_service::{CompensationFeasibility, RebaseContext, StrategyType};
 
     use uuid::Uuid;
