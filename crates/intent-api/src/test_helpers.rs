@@ -18,13 +18,13 @@ use std::time::Instant;
 #[cfg(test)]
 use uuid::Uuid;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use crate::auth::Claims;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use crate::auth::RlsTenantClaims;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 use crate::auth::OptionalRlsTenantClaims;
 
 #[cfg(test)]
@@ -226,7 +226,7 @@ pub fn create_test_service_with_forensic_config() -> AppState {
 ///
 /// Creates test JWT claims with the specified tenant_id.
 /// Uses `new_unchecked` which is only available in test context.
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 pub fn create_test_rls_claims(tenant_id: Uuid) -> RlsTenantClaims {
     let claims = Claims {
         sub: "test-user".to_string(),
@@ -242,7 +242,7 @@ pub fn create_test_rls_claims(tenant_id: Uuid) -> RlsTenantClaims {
 /// Helper to create OptionalRlsTenantClaims for testing.
 ///
 /// Wraps the result of `create_test_rls_claims` in an Option.
-#[cfg(test)]
+#[cfg(all(test, feature = "jwt-auth"))]
 pub fn create_test_optional_rls_claims(tenant_id: Uuid) -> OptionalRlsTenantClaims {
     OptionalRlsTenantClaims(Some(create_test_rls_claims(tenant_id)))
 }

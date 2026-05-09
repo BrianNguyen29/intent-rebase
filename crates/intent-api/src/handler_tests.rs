@@ -16,6 +16,7 @@ use crate::query_handlers::get_orchestration_dashboard;
 use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};
 
 // Re-export test helpers for internal use
+#[cfg(feature = "jwt-auth")]
 use crate::test_helpers::create_test_optional_rls_claims;
 
 // Use shared helper with forensic config for lib.rs tests
@@ -1181,6 +1182,7 @@ async fn test_build_router_accepts_event_publisher() {
 // Orchestration Dashboard Tests (Phase 3 Batch 1 bounded read-only slice)
 // =========================================================================
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_empty_state() {
     let state = create_test_service();
@@ -1206,6 +1208,7 @@ async fn test_orchestration_dashboard_empty_state() {
     assert_eq!(result.compensation_action_summary.status_counts.pending, 0);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_with_side_effects() {
     let state = create_test_service();
@@ -1255,6 +1258,7 @@ async fn test_orchestration_dashboard_with_side_effects() {
     assert_eq!(result.side_effect_summary.auto_compensatable_count, 1);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_with_compensation_actions() {
     let state = create_test_service();
@@ -1359,6 +1363,7 @@ async fn test_orchestration_dashboard_with_compensation_actions() {
     // Approved + Automatic
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_dlq_candidates() {
     let state = create_test_service();
@@ -1420,6 +1425,7 @@ async fn test_orchestration_dashboard_dlq_candidates() {
     assert_eq!(result.compensation_action_summary.reapprovable_count, 0);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_exhausted_budget_dlq() {
     let state = create_test_service();
@@ -1483,6 +1489,7 @@ async fn test_orchestration_dashboard_exhausted_budget_dlq() {
     assert_eq!(result.compensation_action_summary.reapprovable_count, 0);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_response_shape() {
     use compensation_service::{CompensationFeasibility, RebaseContext, StrategyType};
@@ -1551,6 +1558,7 @@ async fn test_orchestration_dashboard_response_shape() {
     // SemiAutomatic is not auto
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_orchestration_dashboard_tenant_isolation() {
     let state = create_test_service();
@@ -2128,6 +2136,7 @@ async fn test_rebase_simulation_invalid_mode_fallback() {
 // N4-4 POST: Compensation Simulation Run Tests (Phase 3 Batch 1 bounded simulation slice)
 // =========================================================================
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_empty_side_effects() {
     use intent_rebase_types::{
@@ -2202,6 +2211,7 @@ async fn test_compensation_simulation_run_empty_side_effects() {
     assert_eq!(result.failed_count, 0);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_with_side_effects() {
     use intent_rebase_types::{
@@ -2291,6 +2301,7 @@ async fn test_compensation_simulation_run_with_side_effects() {
     assert!(result.outcomes[0].predicted_success);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_invalid_version_ordering() {
     use intent_rebase_types::{
@@ -2364,6 +2375,7 @@ async fn test_compensation_simulation_run_invalid_version_ordering() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_invalid_version_bounds() {
     use intent_rebase_types::{
@@ -2481,6 +2493,7 @@ async fn test_compensation_simulation_run_invalid_version_bounds() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_intent_not_found() {
     let state = create_test_service();
@@ -2510,6 +2523,7 @@ async fn test_compensation_simulation_run_intent_not_found() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_compensation_simulation_run_with_side_effect_ids_filter() {
     use intent_rebase_types::{
@@ -3304,6 +3318,7 @@ async fn test_cancel_specific_approved_and_audit_only_cancels_approved_status() 
 // rebase_apply Tenant Mismatch Tests
 // -------------------------------------------------------------------------
 
+#[cfg(feature = "jwt-auth")]
 #[tokio::test]
 async fn test_rebase_apply_rejects_tenant_mismatch() {
     use intent_rebase_types::{

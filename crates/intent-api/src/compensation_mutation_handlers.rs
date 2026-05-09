@@ -781,6 +781,8 @@ mod tests {
     #[cfg(not(feature = "jwt-auth"))]
     use axum::http::StatusCode;
     #[cfg(not(feature = "jwt-auth"))]
+    use axum::response::IntoResponse;
+    #[cfg(not(feature = "jwt-auth"))]
     use compensation_service::SideEffectService;
     use compensation_service::{CompensationFeasibility, RebaseContext, StrategyType};
 
@@ -992,7 +994,9 @@ mod tests {
     // Phase B: RLC Compensation Action Tenant Mismatch Tests (jwt-auth only)
     // =====================================================================
 
-    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
+    #[cfg(feature = "jwt-auth")]
+    use crate::test_helpers::create_test_optional_rls_claims;
+    use crate::test_helpers::create_test_service;
 
     // -------------------------------------------------------------------------
     // approve_compensation_action Tenant Mismatch Tests

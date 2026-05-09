@@ -889,6 +889,7 @@ mod tests {
         (state, graph_repo)
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_success() {
         use graph_service::GraphRepository;
@@ -950,6 +951,7 @@ mod tests {
         assert!(!result.1.side_effect_recorded);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_nil_tenant_id_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType};
@@ -980,6 +982,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_nil_workflow_id_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType};
@@ -1010,6 +1013,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_empty_label_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType};
@@ -1040,6 +1044,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_whitespace_label_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType};
@@ -1070,6 +1075,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_nil_external_ref_id_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType};
@@ -1100,6 +1106,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_invalid_source_intent_id_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1137,6 +1144,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_invalid_version_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1174,6 +1182,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_empty_effect_type_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1211,6 +1220,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_empty_target_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1248,6 +1258,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_empty_idempotency_key_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1285,6 +1296,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_context_whitespace_idempotency_key_rejected() {
         use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
@@ -1326,6 +1338,7 @@ mod tests {
     // Side Effect Tenant Isolation Tests (Phase 3 Batch 1)
     // =========================================================================
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_tenant_isolation_cross_tenant_query() {
         // Test that side effects recorded by tenant A's artifact ingest
@@ -1416,6 +1429,7 @@ mod tests {
         assert_eq!(side_effects_a[0].effect_type, "artifact_created");
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_ingest_artifact_side_effect_tenant_isolation_separate_intents() {
         // Test that side effects for different tenants are isolated even with same intent ID

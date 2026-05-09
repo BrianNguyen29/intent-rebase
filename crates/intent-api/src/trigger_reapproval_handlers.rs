@@ -427,7 +427,9 @@ pub async fn trigger_reapproval(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
+    #[cfg(feature = "jwt-auth")]
+    use crate::test_helpers::create_test_optional_rls_claims;
+    use crate::test_helpers::create_test_service;
     use crate::types::TriggerReapprovalRequest;
     use intent_rebase_types::{
         AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
@@ -439,6 +441,7 @@ mod tests {
     // ADR-07: Approval Revalidation/Re-approval Trigger Tests (bounded slice)
     // =====================================================================
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_creates_pending_approval_when_scope_differs() {
         let state = create_test_service();
@@ -544,6 +547,7 @@ mod tests {
         assert_eq!(created_approval.intent_version_to, 2);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_returns_bad_request_when_scope_matches() {
         let state = create_test_service();
@@ -632,6 +636,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_returns_not_found_when_intent_missing() {
         let state = create_test_service();
@@ -658,6 +663,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_cancels_existing_approved_approvals() {
         let state = create_test_service();
@@ -798,6 +804,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_does_not_cancel_pending_approvals() {
         let state = create_test_service();
@@ -928,6 +935,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_trigger_reapproval_does_not_create_or_cancel_when_scope_matches() {
         let state = create_test_service();

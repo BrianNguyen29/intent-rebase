@@ -1042,7 +1042,9 @@ pub async fn batch_execute_compensation_actions(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
+    #[cfg(feature = "jwt-auth")]
+    use crate::test_helpers::create_test_optional_rls_claims;
+    use crate::test_helpers::create_test_service;
     use crate::types::{BatchOrchestrationRequest, OrchestrationQuery};
 
     use axum::extract::{Query, State};
@@ -1434,5 +1436,176 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.summary.succeeded, 1);
         assert_eq!(response.summary.failed, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Non-JWT Fallback Tests (no-default-features)
+    // -------------------------------------------------------------------------
+
+    /// Smoke test: non-JWT batch_approve_compensation_actions returns valid response shape.
+    #[cfg(not(feature = "jwt-auth"))]
+    #[tokio::test]
+    async fn test_batch_approve_no_jwt_smoke() {
+        let state = crate::test_helpers::create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = super::batch_approve_compensation_actions(
+            State(state),
+            Query(OrchestrationQuery { tenant_id }),
+            Json(request),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected Ok with valid action, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.total, 1);
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+        assert!(response.outcomes[0].success);
+    }
+
+    /// Smoke test: non-JWT batch_reapprove_compensation_actions returns valid response shape.
+    #[cfg(not(feature = "jwt-auth"))]
+    #[tokio::test]
+    async fn test_batch_reapprove_no_jwt_smoke() {
+        let state = crate::test_helpers::create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::ManualOnly,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Set action to Failed so it can be reapproved
+        use compensation_service::CompensationStatus;
+        state
+            .compensation_action_service
+            .update_status(created.id, CompensationStatus::Failed, created.lock_version)
+            .await
+            .unwrap();
+
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = super::batch_reapprove_compensation_actions(
+            State(state),
+            Query(OrchestrationQuery { tenant_id }),
+            Json(request),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected Ok with valid Failed action, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.total, 1);
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+        assert!(response.outcomes[0].success);
+    }
+
+    /// Smoke test: non-JWT batch_execute_compensation_actions returns valid response shape.
+    #[cfg(not(feature = "jwt-auth"))]
+    #[tokio::test]
+    async fn test_batch_execute_no_jwt_smoke() {
+        let state = crate::test_helpers::create_test_service();
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let side_effect_id = Uuid::new_v4();
+        let rebase_context =
+            compensation_service::RebaseContext::new(intent_id, 1, 2, Uuid::new_v4());
+        let action = compensation_service::CompensationAction::new(
+            tenant_id,
+            side_effect_id,
+            intent_id,
+            rebase_context,
+            compensation_service::CompensationFeasibility::Automatic,
+            compensation_service::StrategyType::Rollback,
+            "Test rollback",
+        );
+        let created = state
+            .compensation_action_service
+            .create_action(action)
+            .await
+            .unwrap();
+
+        // Set action to Approved so it can be executed
+        use compensation_service::CompensationStatus;
+        state
+            .compensation_action_service
+            .update_status(
+                created.id,
+                CompensationStatus::Approved,
+                created.lock_version,
+            )
+            .await
+            .unwrap();
+
+        let request = BatchOrchestrationRequest {
+            action_ids: vec![created.id],
+            initiated_by: Some("test-initiator".to_string()),
+        };
+
+        let result = super::batch_execute_compensation_actions(
+            State(state),
+            Query(OrchestrationQuery { tenant_id }),
+            Json(request),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected Ok with valid Approved action, got: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response.summary.total, 1);
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+        assert!(response.outcomes[0].success);
     }
 }

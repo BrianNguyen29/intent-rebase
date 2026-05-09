@@ -344,7 +344,9 @@ pub(crate) async fn replay_intent(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
+    #[cfg(feature = "jwt-auth")]
+    use crate::test_helpers::create_test_optional_rls_claims;
+    use crate::test_helpers::create_test_service;
     use crate::types::ReplayRequest;
 
     use axum::extract::{Path, State};

@@ -619,11 +619,13 @@ pub async fn export_forensic_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "jwt-auth")]
+    use crate::auth;
     use crate::types::{
         ForensicBundleRequest, ForensicBundleTimeRange, ForensicIntentVersionCoverage,
         ForensicVerificationTimeRange, ListForensicBundlesQuery,
     };
-    use crate::{auth, RebaseOrchestrator};
+    use crate::RebaseOrchestrator;
     use chrono::Utc;
 
     use graph_service::GraphService;
@@ -639,6 +641,7 @@ mod tests {
 
     // === Forensic Verification Tests ===
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_verify_forensic_bundle_returns_ready_status() {
         let state = create_test_service();
@@ -698,6 +701,7 @@ mod tests {
         assert!(request.include_policy_snapshots);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_verify_forensic_bundle_response_serialization() {
         let state = create_test_service();
@@ -736,6 +740,7 @@ mod tests {
         assert!(!json.contains("\"policy_snapshot_coverage\""));
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_verify_forensic_bundle_with_incomplete_status() {
         let state = create_test_service();
@@ -821,6 +826,7 @@ mod tests {
 
     // === Forensic Export Tests ===
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_export_forensic_archive_returns_generated_status() {
         let state = create_test_service();
@@ -883,6 +889,7 @@ mod tests {
         assert!(request.include_policy_snapshots);
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_export_forensic_archive_response_serialization() {
         let state = create_test_service();
@@ -920,6 +927,7 @@ mod tests {
         assert!(json.contains("\"item_count\":115"));
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_export_forensic_archive_status_reason_truthful() {
         let state = create_test_service();
@@ -956,6 +964,7 @@ mod tests {
         assert!(!result.status_reason.contains("persisted"));
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_export_forensic_archive_empty_counts() {
         // Use a generator with zero counts to test empty archive scenario
@@ -1039,6 +1048,7 @@ mod tests {
 
     // === Forensic Bundle Listing & Download Tests ===
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_list_forensic_bundles_empty_when_no_bundles() {
         let state = create_test_service();
@@ -1059,6 +1069,7 @@ mod tests {
         assert!(result.bundles.is_empty());
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_list_forensic_bundles_returns_bundles_for_tenant() {
         let state = create_test_service();
@@ -1105,6 +1116,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_list_forensic_bundles_with_limit() {
         let state = create_test_service();
@@ -1160,6 +1172,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_download_forensic_bundle_success() {
         let state = create_test_service();
@@ -1200,6 +1213,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_list_forensic_bundles_tenant_isolation() {
         let state = create_test_service();

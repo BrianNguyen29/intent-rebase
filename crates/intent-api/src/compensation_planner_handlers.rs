@@ -305,7 +305,9 @@ pub async fn orchestration_dry_run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
+    #[cfg(feature = "jwt-auth")]
+    use crate::test_helpers::create_test_optional_rls_claims;
+    use crate::test_helpers::create_test_service;
     use crate::types::{OrchestrationDryRunRequest, OrchestrationQuery};
 
     use axum::extract::{Query, State};
