@@ -34,6 +34,9 @@ pub mod nats_jetstream;
 /// Panic hardening module (Phase 2b bounded slice — first file decomposition slice)
 pub mod panic_hardening;
 
+/// API key authentication scaffold (Phase 1 bounded decomposition slice)
+pub mod api_key;
+
 /// Tracing initialization module (Phase 3 Batch 2 Slice 2 bounded slice)
 pub mod tracing_init;
 
@@ -120,6 +123,9 @@ pub mod dlq_metrics;
 
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
+
+// Re-export API key scaffold for convenience
+pub use api_key::{api_key_extractor_middleware, ApiKey, ApiKeyExtensionKey, ApiKeyRejection};
 
 // Re-export tracing_init::init_tracing for convenience
 pub use tracing_init::init_tracing;
@@ -260,99 +266,6 @@ pub struct AppState {
     /// creation in RLS-set transactions. When None, falls back to non-RLS path.
     pub rls_pool: Option<graph_service::RlsAwarePool>,
     pub start_time: Instant,
-}
-
-// ============================================================================
-// API Key Authentication Scaffold (Phase 1)
-// ============================================================================
-
-/// API key extracted from X-API-Key header.
-/// Phase 1: This is stored in request extensions but NOT validated.
-/// Phase 2: Will integrate with actual API key validation and tenant resolution.
-#[derive(Debug, Clone)]
-pub struct ApiKey(pub String);
-
-/// Extension key for storing API key in request extensions.
-#[derive(Clone, Copy)]
-pub struct ApiKeyExtensionKey;
-
-impl std::fmt::Display for ApiKeyExtensionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ApiKeyExtensionKey")
-    }
-}
-
-/// Rejection type for API key extraction — implements IntoResponse for axum compatibility.
-#[derive(Debug)]
-pub struct ApiKeyRejection(pub String);
-
-impl IntoResponse for ApiKeyRejection {
-    fn into_response(self) -> axum::response::Response {
-        let body = ApiError {
-            error: ErrorDetails {
-                code: "INVALID_API_KEY".to_string(),
-                message: self.0,
-                retryable: false,
-                details: None,
-            },
-        };
-        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
-    }
-}
-
-#[async_trait::async_trait]
-impl<S> axum::extract::FromRequestParts<S> for ApiKey
-where
-    S: Clone + Send + Sync,
-{
-    type Rejection = ApiKeyRejection;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        // Phase 1: Look for X-API-Key header, return empty if not present
-        // Phase 2: This will become mandatory and validated against a key store
-        match parts.headers.get("x-api-key") {
-            Some(value) => {
-                let key = value
-                    .to_str()
-                    .map_err(|_| ApiKeyRejection("X-API-Key header is not valid UTF-8".into()))?;
-                Ok(ApiKey(key.to_string()))
-            }
-            None => {
-                // Phase 1: Return empty API key (no blocking)
-                // The middleware logs this for observability
-                Ok(ApiKey(String::new()))
-            }
-        }
-    }
-}
-
-/// Middleware that extracts X-API-Key header and stores it in request extensions.
-/// Phase 1: This middleware logs the presence/absence of API keys but does NOT block requests.
-/// Phase 2: Will validate API keys and enforce authentication.
-pub async fn api_key_extractor_middleware(
-    request: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let api_key = request
-        .headers()
-        .get("x-api-key")
-        .map(|v| v.to_str().unwrap_or("<invalid utf8>"));
-
-    match api_key {
-        Some(key) if !key.is_empty() => {
-            tracing::debug!("API key present: {}...", &key[..key.len().min(8)]);
-        }
-        _ => {
-            tracing::debug!("No API key present in request (Phase 1 - allowed)");
-        }
-    }
-
-    // Phase 1: Pass through without blocking
-    // Phase 2: Add actual validation here
-    next.run(request).await
 }
 
 // Health check routes and middleware have been moved to health_routes.rs
