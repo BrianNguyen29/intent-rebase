@@ -254,7 +254,7 @@ done
 
 ### Metrics to Expose
 
-> **⚠️ Metric Naming Note:** All `intent_api_*` metrics listed below are defined as stubs in `crates/intent-api/src/metrics.rs`. They follow the `intent_api_` prefix convention used throughout the intent-api crate. These metrics are **designed but not yet instrumented** — DLQ worker implementation is Phase 4 scope (G1–G5 gates must pass first).
+> **⚠️ Metric Naming Note:** All `intent_api_*` metrics listed below are defined as stubs in `crates/intent-api/src/dlq_metrics.rs`. They follow the `intent_api_` prefix convention used throughout the intent-api crate. These metrics are **designed but not yet fully instrumented** — gauge/depth/age emission awaits Phase 4 DLQ worker lifecycle wiring (G1–G5 gates must pass first).
 
 | Metric | Description | Alert Threshold |
 |--------|-------------|-----------------|

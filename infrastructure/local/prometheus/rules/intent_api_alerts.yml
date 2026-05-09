@@ -239,7 +239,7 @@ groups:
   # ============================================================
   # DLQ Alerts — Phase 3 Batch 2 Slice 3
   # Scope: local/staging only — production alerting requires external SRE routing/signoff
-  # Metric names: intent_api_dlq_* (stubs exist in crates/intent-api/src/metrics.rs)
+  # Metric names: intent_api_dlq_* (helpers live in crates/intent-api/src/dlq_metrics.rs)
   # ============================================================
   - name: intent_api_dlq
     interval: 30s
