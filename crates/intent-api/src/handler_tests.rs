@@ -26,6 +26,64 @@ use crate::test_helpers::{create_test_payload, create_test_payload_with_params};
 
 use crate::test_helpers::create_test_service_with_publisher;
 
+/// Create a minimal low-risk IntentPayload for tests.
+///
+/// Matches the 7 identical inline IntentPayload blocks in handler_tests.rs:
+/// - summary: "Test"
+/// - success_statement: "Success"
+/// - domain: "test"
+/// - empty scope/constraints/authority/references/assumptions
+/// - risk_tier: Low
+/// - urgency: Low
+/// - confidence: 1.0
+#[cfg(test)]
+fn create_minimal_low_risk_payload() -> intent_rebase_types::IntentPayload {
+    use intent_rebase_types::{
+        AcceptanceCriteria, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
+        IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, Urgency,
+    };
+    IntentPayload {
+        objective: IntentObjective {
+            summary: "Test".to_string(),
+            success_statement: "Success".to_string(),
+            domain: "test".to_string(),
+        },
+        scope: IntentScope {
+            in_scope: vec![],
+            out_of_scope: vec![],
+        },
+        constraints: IntentConstraints {
+            functional: vec![],
+            non_functional: vec![],
+            policy: vec![],
+            budget: vec![],
+            time: vec![],
+        },
+        acceptance_criteria: AcceptanceCriteria {
+            required: vec![],
+            optional: vec![],
+        },
+        authority: IntentAuthority {
+            allowed_actions: vec![],
+            forbidden_actions: vec![],
+            approval_requirements: vec![],
+        },
+        preferences: IntentPreferences { tradeoffs: vec![] },
+        references: IntentReferences {
+            specs: vec![],
+            tickets: vec![],
+            repos: vec![],
+            policies: vec![],
+        },
+        assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
+        metadata: IntentMetadataV1 {
+            risk_tier: RiskTier::Low,
+            urgency: Urgency::Low,
+            confidence: 1.0,
+        },
+    }
+}
+
 #[tokio::test]
 async fn test_router_builds_successfully() {
     let state = create_test_service();
@@ -150,11 +208,7 @@ async fn test_rebase_preview_success() {
 
 #[tokio::test]
 async fn test_rebase_preview_invalid_version_ordering() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
 
     let state = create_test_service();
 
@@ -163,46 +217,7 @@ async fn test_rebase_preview_invalid_version_ordering() {
         tenant_id: None,
         workflow_id: Uuid::new_v4(),
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -2608,11 +2623,7 @@ async fn test_compensation_simulation_run_with_side_effect_ids_filter() {
 
 #[tokio::test]
 async fn test_cancel_existing_approved_and_audit_cancels_approved_approvals() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
     use intent_service::ApprovalRequestStatus;
 
     let state = create_test_service();
@@ -2623,46 +2634,7 @@ async fn test_cancel_existing_approved_and_audit_cancels_approved_approvals() {
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -2773,11 +2745,7 @@ async fn test_cancel_existing_approved_and_audit_cancels_approved_approvals() {
 
 #[tokio::test]
 async fn test_cancel_existing_approved_and_audit_does_not_cancel_pending() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
     use intent_service::ApprovalRequestStatus;
 
     let state = create_test_service();
@@ -2787,46 +2755,7 @@ async fn test_cancel_existing_approved_and_audit_does_not_cancel_pending() {
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -2919,11 +2848,7 @@ async fn test_cancel_existing_approved_and_audit_does_not_cancel_pending() {
 
 #[tokio::test]
 async fn test_cancel_existing_approved_and_audit_returns_zero_when_none_exist() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
 
     let state = create_test_service();
 
@@ -2932,46 +2857,7 @@ async fn test_cancel_existing_approved_and_audit_returns_zero_when_none_exist() 
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -3037,11 +2923,7 @@ async fn test_cancel_existing_approved_and_audit_returns_zero_when_none_exist() 
 
 #[tokio::test]
 async fn test_cancel_specific_approved_and_audit_cancels_specific_approvals() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
     use intent_service::ApprovalRequestStatus;
 
     let state = create_test_service();
@@ -3051,46 +2933,7 @@ async fn test_cancel_specific_approved_and_audit_cancels_specific_approvals() {
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -3233,11 +3076,7 @@ async fn test_cancel_specific_approved_and_audit_cancels_specific_approvals() {
 
 #[tokio::test]
 async fn test_cancel_specific_approved_and_audit_with_empty_stale_ids() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
     use intent_service::ApprovalRequestStatus;
 
     let state = create_test_service();
@@ -3247,46 +3086,7 @@ async fn test_cancel_specific_approved_and_audit_with_empty_stale_ids() {
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
@@ -3385,11 +3185,7 @@ async fn test_cancel_specific_approved_and_audit_with_empty_stale_ids() {
 
 #[tokio::test]
 async fn test_cancel_specific_approved_and_audit_only_cancels_approved_status() {
-    use intent_rebase_types::{
-        AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
-        IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
-        IntentScope, RiskTier, Urgency,
-    };
+    use intent_rebase_types::{ActorRef, CreateIntentRequest};
     use intent_service::ApprovalRequestStatus;
 
     let state = create_test_service();
@@ -3399,46 +3195,7 @@ async fn test_cancel_specific_approved_and_audit_only_cancels_approved_status() 
         tenant_id: None,
         workflow_id,
         source_refs: vec![],
-        payload: IntentPayload {
-            objective: IntentObjective {
-                summary: "Test".to_string(),
-                success_statement: "Success".to_string(),
-                domain: "test".to_string(),
-            },
-            scope: IntentScope {
-                in_scope: vec![],
-                out_of_scope: vec![],
-            },
-            constraints: IntentConstraints {
-                functional: vec![],
-                non_functional: vec![],
-                policy: vec![],
-                budget: vec![],
-                time: vec![],
-            },
-            acceptance_criteria: AcceptanceCriteria {
-                required: vec![],
-                optional: vec![],
-            },
-            authority: IntentAuthority {
-                allowed_actions: vec![],
-                forbidden_actions: vec![],
-                approval_requirements: vec![],
-            },
-            preferences: IntentPreferences { tradeoffs: vec![] },
-            references: IntentReferences {
-                specs: vec![],
-                tickets: vec![],
-                repos: vec![],
-                policies: vec![],
-            },
-            assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-            metadata: IntentMetadataV1 {
-                risk_tier: RiskTier::Low,
-                urgency: Urgency::Low,
-                confidence: 1.0,
-            },
-        },
+        payload: create_minimal_low_risk_payload(),
         created_by: ActorRef {
             actor_type: "user".to_string(),
             actor_id: "test".to_string(),
