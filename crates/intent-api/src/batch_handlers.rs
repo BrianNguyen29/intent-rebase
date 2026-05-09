@@ -22,6 +22,9 @@ use crate::auth;
 #[cfg(feature = "jwt-auth")]
 use uuid::Uuid;
 
+#[cfg(feature = "jwt-auth")]
+use std::sync::Arc;
+
 // ============================================================================
 // Private helpers for JWT-auth batch handlers
 // ============================================================================
@@ -73,6 +76,54 @@ async fn pre_validate_batch_action_tenants(
         }
     }
     Ok(not_found)
+}
+
+/// Runs the appropriate executor for a batch execute action, returning the
+/// `ExecutionResult` or an error string.
+///
+/// The caller handles error propagation (pushing `BatchItemOutcomeResponse`,
+/// updating summary counts, and continuing to the next action).
+#[cfg(feature = "jwt-auth")]
+async fn dispatch_batch_execute_action(
+    action: &compensation_service::CompensationAction,
+    side_effect_repo: Option<Arc<dyn compensation_service::SideEffectRepository>>,
+) -> Result<compensation_service::ExecutionResult, String> {
+    let side_effect_repo =
+        side_effect_repo.ok_or_else(|| "Side effect repository not available".to_string())?;
+
+    use compensation_service::CompensationExecutor;
+
+    match (action.strategy_type, action.feasibility) {
+        (
+            compensation_service::StrategyType::Rollback,
+            compensation_service::CompensationFeasibility::Automatic,
+        ) => {
+            let executor = compensation_service::RollbackExecutor::new(side_effect_repo);
+            executor.execute(action).await.map_err(|e| e.to_string())
+        }
+        (
+            compensation_service::StrategyType::CounterAction,
+            compensation_service::CompensationFeasibility::SemiAutomatic,
+        ) => {
+            let executor = compensation_service::CounterActionExecutor::new(side_effect_repo);
+            executor.execute(action).await.map_err(|e| e.to_string())
+        }
+        (
+            compensation_service::StrategyType::FollowupNotice,
+            compensation_service::CompensationFeasibility::ManualOnly,
+        ) => {
+            let executor = compensation_service::FollowupNoticeExecutor::new(side_effect_repo);
+            executor.execute(action).await.map_err(|e| e.to_string())
+        }
+        (
+            compensation_service::StrategyType::Escalation,
+            compensation_service::CompensationFeasibility::NotPossible,
+        ) => {
+            let executor = compensation_service::EscalationExecutor::new(side_effect_repo);
+            executor.execute(action).await.map_err(|e| e.to_string())
+        }
+        _ => Err("Unsupported strategy/feasibility combo".to_string()),
+    }
 }
 
 // ============================================================================
@@ -717,115 +768,23 @@ pub async fn batch_execute_compensation_actions(
                     .unwrap_or("compensation-service/system");
 
                 // Phase 1 P1-S5h: Run the appropriate bounded executor (read-only - returns ExecutionResult)
-                use compensation_service::CompensationExecutor;
-                let executor_result = if let Some(side_effect_repo) =
-                    state.compensation_action_service.side_effect_repo()
+                let executor_result = match dispatch_batch_execute_action(
+                    &action,
+                    state.compensation_action_service.side_effect_repo(),
+                )
+                .await
                 {
-                    match (action.strategy_type, action.feasibility) {
-                        (
-                            compensation_service::StrategyType::Rollback,
-                            compensation_service::CompensationFeasibility::Automatic,
-                        ) => {
-                            let executor = compensation_service::RollbackExecutor::new(
-                                side_effect_repo.clone(),
-                            );
-                            match executor.execute(&action).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    outcomes.push(BatchItemOutcomeResponse {
-                                        action_id: *action_id,
-                                        success: false,
-                                        result: None,
-                                        error: Some(e.to_string()),
-                                    });
-                                    summary.failed += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                        (
-                            compensation_service::StrategyType::CounterAction,
-                            compensation_service::CompensationFeasibility::SemiAutomatic,
-                        ) => {
-                            let executor = compensation_service::CounterActionExecutor::new(
-                                side_effect_repo.clone(),
-                            );
-                            match executor.execute(&action).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    outcomes.push(BatchItemOutcomeResponse {
-                                        action_id: *action_id,
-                                        success: false,
-                                        result: None,
-                                        error: Some(e.to_string()),
-                                    });
-                                    summary.failed += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                        (
-                            compensation_service::StrategyType::FollowupNotice,
-                            compensation_service::CompensationFeasibility::ManualOnly,
-                        ) => {
-                            let executor = compensation_service::FollowupNoticeExecutor::new(
-                                side_effect_repo.clone(),
-                            );
-                            match executor.execute(&action).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    outcomes.push(BatchItemOutcomeResponse {
-                                        action_id: *action_id,
-                                        success: false,
-                                        result: None,
-                                        error: Some(e.to_string()),
-                                    });
-                                    summary.failed += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                        (
-                            compensation_service::StrategyType::Escalation,
-                            compensation_service::CompensationFeasibility::NotPossible,
-                        ) => {
-                            let executor = compensation_service::EscalationExecutor::new(
-                                side_effect_repo.clone(),
-                            );
-                            match executor.execute(&action).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    outcomes.push(BatchItemOutcomeResponse {
-                                        action_id: *action_id,
-                                        success: false,
-                                        result: None,
-                                        error: Some(e.to_string()),
-                                    });
-                                    summary.failed += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                        _ => {
-                            outcomes.push(BatchItemOutcomeResponse {
-                                action_id: *action_id,
-                                success: false,
-                                result: None,
-                                error: Some("Unsupported strategy/feasibility combo".to_string()),
-                            });
-                            summary.failed += 1;
-                            continue;
-                        }
+                    Ok(r) => r,
+                    Err(e) => {
+                        outcomes.push(BatchItemOutcomeResponse {
+                            action_id: *action_id,
+                            success: false,
+                            result: None,
+                            error: Some(e),
+                        });
+                        summary.failed += 1;
+                        continue;
                     }
-                } else {
-                    outcomes.push(BatchItemOutcomeResponse {
-                        action_id: *action_id,
-                        success: false,
-                        result: None,
-                        error: Some("Side effect repository not available".to_string()),
-                    });
-                    summary.failed += 1;
-                    continue;
                 };
 
                 // Phase 1 P1-S5h: RLS tx wrapping for record_result + rollback_record create
