@@ -5,6 +5,7 @@
 //! compensation planning and dry-run orchestration.
 
 use axum::{extract::State, Json};
+#[allow(unused_imports)]
 use intent_rebase_types::IntentRebaseError;
 
 use crate::{

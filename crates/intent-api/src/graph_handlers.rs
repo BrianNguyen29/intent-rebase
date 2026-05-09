@@ -10,9 +10,9 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use intent_rebase_types::{
-    CreateGraphEdgeRequest, CreateGraphNodeRequest, GraphEdge, GraphNode, IntentRebaseError,
-};
+#[allow(unused_imports)]
+use intent_rebase_types::IntentRebaseError;
+use intent_rebase_types::{CreateGraphEdgeRequest, CreateGraphNodeRequest, GraphEdge, GraphNode};
 use uuid::Uuid;
 
 /// POST /v1/graph/nodes - Create a new graph node

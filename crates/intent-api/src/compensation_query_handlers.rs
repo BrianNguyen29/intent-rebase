@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+#[allow(unused_imports)]
 use intent_rebase_types::IntentRebaseError;
 use uuid::Uuid;
 

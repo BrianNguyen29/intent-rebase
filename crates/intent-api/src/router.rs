@@ -3,8 +3,9 @@
 //! This module contains the canonical router builders used to wire up the HTTP transport layer.
 //! It is extracted from lib.rs as a bounded module decomposition slice.
 
+#[allow(unused_imports)]
+use axum::http::StatusCode;
 use axum::{
-    http::StatusCode,
     routing::{get, post},
     Router,
 };

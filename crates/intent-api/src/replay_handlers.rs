@@ -10,6 +10,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+#[allow(unused_imports)]
 use intent_rebase_types::{get_current_trace_context, IntentRebaseError, ReplayAuditPayload};
 use uuid::Uuid;
 
