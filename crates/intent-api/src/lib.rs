@@ -112,6 +112,9 @@ pub mod approval_invalidation;
 /// Router building and authentication middleware (Phase 3 bounded router extraction slice)
 pub mod router;
 
+/// DLQ metric helper functions (Phase 3 DLQ design — extracted helper decomposition)
+pub mod dlq_metrics;
+
 // Re-export panic_hardening::init_panic_hook for convenience
 pub use panic_hardening::init_panic_hook;
 
@@ -179,6 +182,12 @@ pub use intent_mutation_handlers::{
     parse_optional_header, validate_create_intent_request, validate_create_version_request,
 };
 
+// Re-export DLQ metric helpers for backward compatibility (wired from nats_jetstream.rs)
+pub use dlq_metrics::{
+    record_dlq_message, record_dlq_message_age_seconds, record_dlq_messages_current,
+    record_dlq_replay, record_dlq_replay_failure,
+};
+
 // ============================================================================
 // Metrics Definitions (Phase 3 Batch 2 Slice 3 — bounded metrics foundation)
 // ============================================================================
@@ -205,42 +214,6 @@ pub use intent_mutation_handlers::{
 // - intent_api_diff_compute_duration_seconds
 // - intent_api_rebase_preview_duration_seconds
 // - intent_api_rebase_apply_duration_seconds
-
-// =============================================================================
-// DLQ Metric Helper Functions (Phase 3 DLQ design — G3 evidence)
-// =============================================================================
-// Counter helpers (record_dlq_replay, record_dlq_replay_failure, record_dlq_message)
-// ARE wired and called from DlqHelper in nats_jetstream.rs.
-//
-// Gauge/depth/age helpers (record_dlq_messages_current, record_dlq_message_age_seconds)
-// remain as stubs — their runtime emission awaits lifecycle worker wiring (Phase 4/G3).
-
-/// Record current DLQ depth (number of messages in dead-letter queue)
-#[allow(dead_code)]
-fn record_dlq_messages_current(count: f64) {
-    metrics::gauge!("intent_api_dlq_messages_current").set(count);
-}
-
-/// Record age of oldest message in DLQ (seconds)
-#[allow(dead_code)]
-fn record_dlq_message_age_seconds(age_secs: f64) {
-    metrics::gauge!("intent_api_dlq_message_age_seconds").set(age_secs);
-}
-
-/// Record DLQ replay operation
-pub fn record_dlq_replay(status: &'static str) {
-    metrics::counter!("intent_api_dlq_replay_total", "status" => status).increment(1);
-}
-
-/// Record failed DLQ replay attempt
-pub fn record_dlq_replay_failure() {
-    metrics::counter!("intent_api_dlq_replay_failures_total").increment(1);
-}
-
-/// Record message sent to DLQ
-pub fn record_dlq_message() {
-    metrics::counter!("intent_api_dlq_messages_total").increment(1);
-}
 
 /// Application state shared across handlers
 #[derive(Clone)]
