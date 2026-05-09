@@ -277,10 +277,11 @@ pub struct AppState {
 // DLQ candidate handlers have been moved to compensation_query_handlers.rs
 
 // Re-export router builders for backward compatibility
-pub use router::{
-    build_router, build_router_with_jwt_auth, build_router_with_sql_audit_and_approval,
-    build_router_with_sql_audit_and_approval_jwt,
-};
+pub use router::{build_router, build_router_with_sql_audit_and_approval};
+
+// JWT-auth-gated router builders (require jwt-auth feature)
+#[cfg(feature = "jwt-auth")]
+pub use router::{build_router_with_jwt_auth, build_router_with_sql_audit_and_approval_jwt};
 
 /// Shared test helpers for intent-api handler tests (Phase 3 bounded slice)
 #[cfg(test)]

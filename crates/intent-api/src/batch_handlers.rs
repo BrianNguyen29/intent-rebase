@@ -20,6 +20,44 @@ use crate::{
 use crate::auth;
 
 // ============================================================================
+// Private helper: maps BatchOrchestrationResult to BatchOrchestrationResponse
+// ============================================================================
+
+/// Maps a `BatchOrchestrationResult` from the compensation service to a
+/// `BatchOrchestrationResponse`, preserving outcome/summary/not_found semantics.
+fn map_batch_result_to_response(
+    result: compensation_service::BatchOrchestrationResult,
+) -> BatchOrchestrationResponse {
+    let outcomes = result
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            let (result, error) = match &o.result {
+                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
+                Err(e) => (None, Some(e.clone())),
+            };
+            BatchItemOutcomeResponse {
+                action_id: o.action_id,
+                success: o.success,
+                result,
+                error,
+            }
+        })
+        .collect();
+
+    BatchOrchestrationResponse {
+        outcomes,
+        not_found: result.not_found,
+        summary: BatchOrchestrationSummaryResponse {
+            total: result.summary.total,
+            succeeded: result.summary.succeeded,
+            failed: result.summary.failed,
+            not_found: result.summary.not_found,
+        },
+    }
+}
+
+// ============================================================================
 // Batch Compensation Action Handlers (Phase 3 P3-S5 bounded slice)
 // ============================================================================
 
@@ -270,35 +308,7 @@ pub async fn batch_approve_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 /// POST /compensation-actions/batch-approve - Batch approve compensation actions (non-JWT fallback)
@@ -321,35 +331,7 @@ pub async fn batch_approve_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 /// POST /compensation-actions/batch-reapprove - Batch reapprove compensation actions
@@ -576,35 +558,7 @@ pub async fn batch_reapprove_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 /// POST /compensation-actions/batch-reapprove - Batch reapprove compensation actions (non-JWT fallback)
@@ -623,35 +577,7 @@ pub async fn batch_reapprove_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 /// POST /compensation-actions/batch-execute - Batch execute compensation actions
@@ -1084,35 +1010,7 @@ pub async fn batch_execute_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 /// POST /compensation-actions/batch-execute - Batch execute compensation actions (non-JWT fallback)
@@ -1135,35 +1033,7 @@ pub async fn batch_execute_compensation_actions(
         .await
         .map_err(ApiErrorResponse)?;
 
-    let outcomes = result
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            let (result, error) = match &o.result {
-                Ok(a) => (Some(CompensationActionResponse::from(a.clone())), None),
-                Err(e) => (None, Some(e.clone())),
-            };
-            BatchItemOutcomeResponse {
-                action_id: o.action_id,
-                success: o.success,
-                result,
-                error,
-            }
-        })
-        .collect();
-
-    let response = BatchOrchestrationResponse {
-        outcomes,
-        not_found: result.not_found,
-        summary: BatchOrchestrationSummaryResponse {
-            total: result.summary.total,
-            succeeded: result.summary.succeeded,
-            failed: result.summary.failed,
-            not_found: result.summary.not_found,
-        },
-    };
-
-    Ok(Json(response))
+    Ok(Json(map_batch_result_to_response(result)))
 }
 
 // ============================================================================
