@@ -19,6 +19,62 @@ use crate::{
 #[cfg(feature = "jwt-auth")]
 use crate::auth;
 
+#[cfg(feature = "jwt-auth")]
+use uuid::Uuid;
+
+// ============================================================================
+// Private helpers for JWT-auth batch handlers
+// ============================================================================
+
+/// Pre-validates that all actions in the batch belong to the JWT's tenant.
+///
+/// Returns `Ok(not_found_ids)` if all found actions match the tenant.
+/// Returns `Err(ApiErrorResponse::Unauthorized)` if any found action has a
+/// different tenant (fail-closed).
+/// Returns `Err(ApiErrorResponse(e))` if any other error occurs.
+///
+/// This is only used by JWT-auth batch approve/reapprove handlers which
+/// fail-closed on tenant mismatch. The execute handler uses per-item
+/// fail-closed instead (different semantics).
+#[cfg(feature = "jwt-auth")]
+async fn pre_validate_batch_action_tenants(
+    state: &AppState,
+    action_ids: &[Uuid],
+    rls_claims: &auth::RlsTenantClaims,
+) -> Result<Vec<Uuid>, ApiErrorResponse> {
+    let mut not_found = Vec::new();
+    for action_id in action_ids {
+        match state
+            .compensation_action_service
+            .get_action(*action_id)
+            .await
+        {
+            Ok(action) => {
+                if action.tenant_id != rls_claims.tenant_id {
+                    let msg = format!(
+                        "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
+                        rls_claims.tenant_id, action_id, action.tenant_id
+                    );
+                    tracing::warn!(
+                        "pre_validate_batch_action_tenants: tenant mismatch rejection for action {}",
+                        action_id
+                    );
+                    return Err(ApiErrorResponse(
+                        intent_rebase_types::IntentRebaseError::Unauthorized(msg),
+                    ));
+                }
+            }
+            Err(intent_rebase_types::IntentRebaseError::CompensationActionNotFound(_)) => {
+                not_found.push(*action_id);
+            }
+            Err(e) => {
+                return Err(ApiErrorResponse(e));
+            }
+        }
+    }
+    Ok(not_found)
+}
+
 // ============================================================================
 // Private helper: maps BatchOrchestrationResult to BatchOrchestrationResponse
 // ============================================================================
@@ -94,37 +150,8 @@ pub async fn batch_approve_compensation_actions(
     // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
     // Fail-closed if ANY action has a different tenant
     if let Some(rls_claims) = optional_rls_claims {
-        // Pre-validate: track not_found items but don't fail on them
-        let mut not_found = Vec::new();
-        for action_id in &request.action_ids {
-            match state
-                .compensation_action_service
-                .get_action(*action_id)
-                .await
-            {
-                Ok(action) => {
-                    if action.tenant_id != rls_claims.tenant_id {
-                        let msg = format!(
-                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
-                            rls_claims.tenant_id, action_id, action.tenant_id
-                        );
-                        tracing::warn!(
-                            "batch_approve_compensation_actions: tenant mismatch rejection for action {}",
-                            action_id
-                        );
-                        return Err(ApiErrorResponse(
-                            intent_rebase_types::IntentRebaseError::Unauthorized(msg),
-                        ));
-                    }
-                }
-                Err(intent_rebase_types::IntentRebaseError::CompensationActionNotFound(_)) => {
-                    not_found.push(*action_id);
-                }
-                Err(e) => {
-                    return Err(ApiErrorResponse(e));
-                }
-            }
-        }
+        let mut not_found =
+            pre_validate_batch_action_tenants(&state, &request.action_ids, &rls_claims).await?;
 
         // RLS path: per-item transactions preserving partial-success semantics
         let mut outcomes = Vec::new();
@@ -361,37 +388,8 @@ pub async fn batch_reapprove_compensation_actions(
     // Phase 3 P3-S5: When JWT is present, validate ALL actions belong to JWT's tenant
     // Fail-closed if ANY action has a different tenant
     if let Some(rls_claims) = optional_rls_claims {
-        // Pre-validate: track not_found items but don't fail on them
-        let mut not_found = Vec::new();
-        for action_id in &request.action_ids {
-            match state
-                .compensation_action_service
-                .get_action(*action_id)
-                .await
-            {
-                Ok(action) => {
-                    if action.tenant_id != rls_claims.tenant_id {
-                        let msg = format!(
-                            "Tenant mismatch: JWT tenant_id ({}) does not match action {} tenant_id ({})",
-                            rls_claims.tenant_id, action_id, action.tenant_id
-                        );
-                        tracing::warn!(
-                            "batch_reapprove_compensation_actions: tenant mismatch rejection for action {}",
-                            action_id
-                        );
-                        return Err(ApiErrorResponse(
-                            intent_rebase_types::IntentRebaseError::Unauthorized(msg),
-                        ));
-                    }
-                }
-                Err(intent_rebase_types::IntentRebaseError::CompensationActionNotFound(_)) => {
-                    not_found.push(*action_id);
-                }
-                Err(e) => {
-                    return Err(ApiErrorResponse(e));
-                }
-            }
-        }
+        let mut not_found =
+            pre_validate_batch_action_tenants(&state, &request.action_ids, &rls_claims).await?;
 
         // RLS path: per-item transactions preserving partial-success semantics
         let mut outcomes = Vec::new();
