@@ -39,6 +39,81 @@ pub(crate) fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'sta
 }
 
 // ============================================================================
+// Slice 2 bounded post-hoc RLS graph update helper
+// ============================================================================
+
+/// Post-hoc RLS transaction check/update for graph node state updates.
+///
+/// After `apply_rebase()` returns an AutoProceeded outcome, this helper runs a
+/// tenant-scoped RLS tx and re-applies/idempotently verifies graph node state
+/// changes through `SqlxGraphRepository::update_node_state_with_tx`.
+///
+/// Logs warning on RLS tx failure rather than rolling back the non-RLS path.
+#[cfg(feature = "jwt-auth")]
+async fn rls_graph_update(
+    rls_pool: &graph_service::RlsAwarePool,
+    rls_claims: &crate::auth::RlsTenantClaims,
+    graph_service: &graph_service::GraphService,
+    graph_updates: &[rebase_orchestrator::GraphUpdateResult],
+) {
+    let sql_repo = match graph_service.repo().as_sqlx_repo() {
+        Some(repo) => repo,
+        None => {
+            tracing::debug!("rls_graph_update: SQL graph repo not available, skipping");
+            return;
+        }
+    };
+
+    // Only begin tx if there are successful graph updates to verify
+    let has_updates = graph_updates
+        .iter()
+        .any(|u| u.success && u.action.is_some());
+    if !has_updates {
+        tracing::debug!("rls_graph_update: no successful graph updates to verify, skipping");
+        return;
+    }
+
+    let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::warn!("rls_graph_update: RLS tx begin failed: {}", e);
+            return;
+        }
+    };
+
+    for update in graph_updates {
+        if !update.success {
+            continue;
+        }
+        let Some(ref action) = update.action else {
+            continue;
+        };
+
+        if let Err(e) = sql_repo
+            .update_node_state_with_tx(&mut tx, action.node_id, action.new_state.clone())
+            .await
+        {
+            tracing::warn!(
+                "rls_graph_update: failed to verify/update node {} to {:?}: {}",
+                action.node_id,
+                action.new_state,
+                e
+            );
+        } else {
+            tracing::debug!(
+                "rls_graph_update: verified node {} state {:?}",
+                action.node_id,
+                action.new_state
+            );
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        tracing::warn!("rls_graph_update: RLS tx commit failed: {}", e);
+    }
+}
+
+// ============================================================================
 // Rebase Apply Handler (JWT-auth variant)
 // ============================================================================
 
@@ -202,6 +277,27 @@ pub(crate) async fn rebase_apply(
             &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
         )
         .await;
+    }
+
+    // Slice 2 bounded post-hoc RLS graph update for AutoProceeded paths
+    #[cfg(feature = "jwt-auth")]
+    {
+        if matches!(
+            apply_result.outcome,
+            ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
+        ) {
+            if let (Some(ref rls_pool), Some(ref rls_claims)) =
+                (&state.rls_pool, &optional_rls_claims)
+            {
+                rls_graph_update(
+                    rls_pool,
+                    rls_claims,
+                    &state.graph_service,
+                    &apply_result.graph_updates,
+                )
+                .await;
+            }
+        }
     }
 
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E
@@ -858,6 +954,27 @@ pub(crate) async fn rebase_apply(
             &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
         )
         .await;
+    }
+
+    // Slice 2 bounded post-hoc RLS graph update for AutoProceeded paths
+    #[cfg(feature = "jwt-auth")]
+    {
+        if matches!(
+            apply_result.outcome,
+            ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
+        ) {
+            if let (Some(ref rls_pool), Some(ref rls_claims)) =
+                (&state.rls_pool, &optional_rls_claims)
+            {
+                rls_graph_update(
+                    rls_pool,
+                    rls_claims,
+                    &state.graph_service,
+                    &apply_result.graph_updates,
+                )
+                .await;
+            }
+        }
     }
 
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E

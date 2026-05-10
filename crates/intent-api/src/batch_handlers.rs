@@ -126,6 +126,17 @@ async fn dispatch_batch_execute_action(
     }
 }
 
+/// Parameters for creating a rollback record within an RLS transaction.
+#[cfg(feature = "jwt-auth")]
+struct RollbackRecordParams {
+    tenant_id: Uuid,
+    compensation_plan_id: Uuid,
+    side_effect_id: Uuid,
+    intent_id: Uuid,
+    action_id: Uuid,
+    actor_id: String,
+}
+
 /// Creates a rollback record within an RLS transaction (best-effort, fail-open).
 ///
 /// Logs and swallows any errors from `create_with_tx` - this is intentional
@@ -134,12 +145,7 @@ async fn dispatch_batch_execute_action(
 async fn create_rls_rollback_record(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     executor_result: &compensation_service::ExecutionResult,
-    tenant_id: Uuid,
-    compensation_plan_id: Uuid,
-    side_effect_id: Uuid,
-    intent_id: Uuid,
-    actor_id: &str,
-    action_id: Uuid,
+    params: &RollbackRecordParams,
     state: &AppState,
 ) {
     use compensation_service::SideEffectRollbackRecord;
@@ -155,33 +161,33 @@ async fn create_rls_rollback_record(
 
     let rollback_record = if executor_result.success {
         SideEffectRollbackRecord::success(
-            tenant_id,
-            compensation_plan_id,
-            side_effect_id,
-            intent_id,
+            params.tenant_id,
+            params.compensation_plan_id,
+            params.side_effect_id,
+            params.intent_id,
             &executor_result.summary,
-            Some(actor_id),
+            Some(&params.actor_id),
         )
     } else {
         SideEffectRollbackRecord::failure_with_actor(
-            tenant_id,
-            compensation_plan_id,
-            side_effect_id,
-            intent_id,
+            params.tenant_id,
+            params.compensation_plan_id,
+            params.side_effect_id,
+            params.intent_id,
             &executor_result.summary,
             executor_result
                 .error_code
                 .as_deref()
                 .unwrap_or("UNKNOWN_ERROR"),
             executor_result.error_detail.clone(),
-            Some(actor_id),
+            Some(&params.actor_id),
         )
     };
 
     if let Err(e) = sql_rollback_repo.create_with_tx(tx, rollback_record).await {
         tracing::warn!(
             "batch_execute: failed to create rollback record for action {}: {:?}",
-            action_id,
+            params.action_id,
             e
         );
         // Best-effort: continue even if rollback record creation fails
@@ -910,12 +916,14 @@ pub async fn batch_execute_compensation_actions(
                 create_rls_rollback_record(
                     &mut tx,
                     &executor_result,
-                    tenant_id,
-                    compensation_plan_id,
-                    action.side_effect_id,
-                    intent_id,
-                    actor_id,
-                    *action_id,
+                    &RollbackRecordParams {
+                        tenant_id,
+                        compensation_plan_id,
+                        side_effect_id: action.side_effect_id,
+                        intent_id,
+                        action_id: *action_id,
+                        actor_id: actor_id.to_string(),
+                    },
                     &state,
                 )
                 .await;

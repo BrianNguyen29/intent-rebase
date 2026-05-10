@@ -728,13 +728,14 @@ Blocking Issues (explicit blockers — must resolve before Phase 4):
 3. 🔴 Production infrastructure not provisioned (docker-compose local only)
 4. 🔴 Load testing L3-L5 blocked (staging/production infra required)
 5. 🔴 Penetration testing not executed (external engagement required)
-6. 🔴 P1 RLS transaction wrapping (P1-S5i SqlxBundleRepository + forensic bundle RLS pending)
+6. 🟡 P1 RLS transaction wrapping (P1-S5i bounded orchestration/replay guard + artifact/graph RLS tx delivered; forensic bundle RLS bounded verified; full wrapping still blocked by checkpoint/runtime signal tx seams and external gates)
 7. 🟡 Artifact side-effect out-of-tx/best-effort (design note ADR-08 created; implementation deferred)
+8. 🟡 rebase_apply RLS wrapping — bounded Slice 1/2 delivered (graph post-hoc check + manual-review tx); checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open
 
 Local Engineering Backlog (Phase 3 residual — P2 priority):
-- P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (🔴 PENDING)
+- P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (✅ BOUNDED VERIFIED; full production/external gates still open)
 - OpenAPI: batch-execute RLS semantics documentation (🟡 PENDING)
-- rebase_apply review (🟡 PENDING)
+- rebase_apply review (🟡 PARTIAL — bounded Slice 1/2 graph RLS seam + post-hoc check delivered; checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open)
 - Artifact side-effect tx boundary (ADR-08 created; implementation Phase 4+)
 - Phase 4 deferred: forensic S3/DLQ/trace propagation (🔴 DEFERRED)
 

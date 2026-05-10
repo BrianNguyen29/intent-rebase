@@ -326,7 +326,7 @@ impl SqlxBundleRepository {
 
         let retention: Option<BundleRetention> = row
             .get::<Option<serde_json::Value>, _>("retention")
-            .map(|v| serde_json::from_value(v))
+            .map(serde_json::from_value)
             .transpose()
             .map_err(|e| IntentRebaseError::Internal(format!("deserialize retention: {}", e)))?;
 
@@ -403,8 +403,7 @@ impl BundleRepository for SqlxBundleRepository {
         let retention_json = bundle
             .retention
             .as_ref()
-            .map(|r| serde_json::to_value(r).ok())
-            .flatten();
+            .and_then(|r| serde_json::to_value(r).ok());
 
         sqlx::query(
             r#"

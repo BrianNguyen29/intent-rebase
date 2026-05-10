@@ -192,13 +192,13 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Review rebase_apply handler for RLS transaction wrapping and tenant isolation correctness |
-| **Current State** | 🟡 PARTIAL — review found application-level tenant mismatch protection and a bounded `BlockedManualReview` approval create/cancel RLS slice is verified; full `AutoProceeded` graph/checkpoint/runtime path remains a design blocker |
-| **Evidence** | `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; bounded slice adds `begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit` for the manual-review approval path |
+| **Current State** | 🟡 PARTIAL — bounded Slice 1/2 delivered: `BlockedManualReview` approval create/cancel RLS slice verified; `SqlxGraphRepository::update_node_state_with_tx` graph RLS seam added; JWT AutoProceeded/AutoProceededWithNotification post-hoc RLS tx check/update applied after successful graph updates; fallback preserved when no RLS pool/claims/SQL repo |
+| **Evidence** | `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; `crates/graph-service/src/sqlx_graph_repository.rs`; bounded slice adds `begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit` for the manual-review approval path; graph slice adds `update_node_state_with_tx` with post-hoc JWT RLS check/update for AutoProceeded paths |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 PARTIAL — bounded slice verified; full RLS wrapping NO-GO until tx-aware graph/checkpoint/orchestrator seams exist |
-| **Dependencies** | Full wrapping depends on `GraphRepository::update_node_state_with_tx`, checkpoint tx methods, and post-commit runtime-adapter boundary design |
+| **Status** | 🟡 PARTIAL — bounded Slice 1/2 verified; full RLS wrapping NO-GO until checkpoint tx methods and post-commit runtime-adapter boundary design are resolved |
+| **Dependencies** | Full wrapping depends on checkpoint tx methods, runtime signal tx/orchestrator decomposition, and external SRE/security/load/pen gates |
 
-**No overclaim:** This is not full `rebase_apply` RLS coverage. The `AutoProceeded` graph/checkpoint/runtime path remains outside an RLS transaction until broader repository/orchestrator tx seams are designed.
+**No overclaim:** This is not full `rebase_apply` RLS coverage. The `AutoProceeded` graph update uses a post-hoc RLS check/update after the graph mutation, not a single atomic tx covering checkpoint and runtime signal. Checkpoint alignment and runtime signal remain outside the RLS transaction.
 
 ---
 

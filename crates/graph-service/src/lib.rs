@@ -691,6 +691,64 @@ impl SqlxGraphRepository {
 
         Ok(IngestorResult { node, edges })
     }
+
+    /// Update a graph node's state within an existing transaction.
+    ///
+    /// This method is used for transaction-aware state updates where the transaction
+    /// is managed externally (e.g., by `RlsAwarePool::begin_with_tenant`).
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `id` - The UUID of the node to update
+    /// * `state` - The new `NodeState` to set
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not found or the update fails.
+    pub async fn update_node_state_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+        state: NodeState,
+    ) -> Result<GraphNode, IntentRebaseError> {
+        let now = Utc::now();
+        let state_str = node_state_to_string(&state);
+
+        let result = sqlx::query(
+            r#"
+            UPDATE graph_nodes SET state = $1, updated_at = $2 WHERE node_id = $3
+            "#,
+        )
+        .bind(state_str)
+        .bind(now)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("update node state: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(IntentRebaseError::GraphNodeNotFound(id));
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+            FROM graph_nodes
+            WHERE node_id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch graph node: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_node(r),
+            None => Err(IntentRebaseError::GraphNodeNotFound(id)),
+        }
+    }
 }
 
 #[async_trait]
