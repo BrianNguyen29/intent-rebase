@@ -539,7 +539,7 @@ JWT / RLS / Audit:
 | T-06 | P1 | Penetration testing | Security | 🔴 BLOCKED | Threat model v2 in `docs/14-governance/06-threat-model-v2.md`; pen scope in `docs/08-security/06-pen-test-scope.md` | Engage external pen test team | GO: External pen test report; no blocking findings |
 | T-07 | P1 | Artifact side-effect tx boundary design-first | Backend Lead | ✅ DESIGN NOTE | ADR-08 in `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` | None — design complete | GO: Design-first approach followed; implementation Phase 4+ |
 | T-08 | P1 | SqlxBundleRepository + forensic bundle RLS wiring (RLC-13) | Backend Lead | 🔴 PENDING | `crates/forensic-service/src/bundle_repo.rs` (InMemory only); no SqlxBundleRepository | Implement migration + SqlxBundleRepository; add RLC-13 test | GO: SqlxBundleRepository exists; RLC-13 test passes |
-| T-09 | P2 | OpenAPI batch-execute RLS semantics documentation | Backend Lead | 🟡 PENDING | `crates/intent-api/src/lib.rs` (batch_execute handler) | Update OpenAPI spec to document per-item RLS tx semantics | GO: OpenAPI spec updated |
+| T-09 | P2 | OpenAPI batch-execute RLS semantics documentation | Backend Lead | ✅ DOCUMENTED | `docs/04-api/openapi.yaml` (batch-execute description updated) | OpenAPI spec updated with per-item RLS tx semantics | GO: OpenAPI spec updated |
 | T-10 | P2 | rebase_apply handler review | Backend Lead | 🟡 PENDING | `crates/intent-api/src/lib.rs` (rebase_apply handler) | Review RLS tx wrapping and tenant isolation correctness | GO: Review complete; no blocking issues found |
 | T-11 | P0 | No-CI posture maintained | Backend Lead | ✅ INTENTIONAL | GitHub Actions disabled; local gates are source of truth | None | GO: CI remains disabled; no CI-green claims |
 

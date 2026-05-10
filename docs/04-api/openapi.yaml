@@ -1486,11 +1486,28 @@ paths:
         Phase 3 Batch 1 (bounded manual orchestration slice): Executes multiple Approved
         compensation actions that are auto-executable, with partial-success semantics.
 
-        **Bounded partial-success semantics:** Same as batch-approve.
+        **Per-item RLS transaction semantics (JWT-auth path):**
+        When valid JWT claims are present, each action is processed within its own RLS transaction:
+        1. `begin_with_tenant` — acquires tenant-scoped transaction
+        2. Executor dispatch — executes the appropriate bounded executor (read-only, returns ExecutionResult)
+        3. `record_result_with_tx` — persists execution result within the RLS transaction
+        4. `create_with_tx` — creates rollback record within the RLS transaction (best-effort, fail-open)
+        5. `commit` — commits the RLS transaction
+
+        If RLS pool is unavailable or JWT claims are absent, falls back to non-RLS service method.
+
+        **Bounded partial-success semantics:**
+        - Tenant mismatch per item: fail closed (item rejected, batch continues)
+        - Action not found: recorded as not_found, batch continues
+        - Executor failure: recorded as failed, batch continues
+        - RLS transaction failure: item failed, batch continues
+        - Rollback record creation failure: best-effort (logged, does not abort commit)
 
         **Executor gate:** Only Approved + service-executable combos can execute:
         - Rollback + Automatic feasibility (S1InternalReversible)
         - CounterAction + SemiAutomatic feasibility (S2ExternalReversible)
+        - FollowupNotice + ManualOnly feasibility (S3ExternalPartiallyReversible)
+        - Escalation + NotPossible feasibility (S4Irreversible)
 
         **No background worker or queue claiming:**
         This is a direct service method that processes actions sequentially.

@@ -177,10 +177,10 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Document RLS semantics for batch-execute endpoints (`POST /compensation-actions/batch-execute`) in OpenAPI spec |
-| **Current State** | Batch execute endpoints exist and use per-item RLS transactions; RLS semantics not documented in OpenAPI |
-| **Evidence** | `crates/intent-api/src/lib.rs` (batch_execute_compensation_actions handler); per-item `begin_with_tenant → executor → record_result_with_tx + create_with_tx → commit` |
+| **Current State** | ✅ DOCUMENTED — OpenAPI spec updated with per-item RLS transaction semantics, partial-success aggregation, and best-effort rollback record semantics |
+| **Evidence** | `docs/04-api/openapi.yaml` — batch-execute description updated with: (1) per-item RLS tx pattern `begin_with_tenant → executor dispatch → record_result_with_tx + create_with_tx → commit`; (2) partial-success semantics for tenant mismatch/not_found/executor failures; (3) fail-open best-effort rollback record creation |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 PENDING — documentation only; OpenAPI spec update |
+| **Status** | ✅ DOCUMENTED — P2-L2 closed |
 | **Dependencies** | None (documentation only) |
 
 **No overclaim:** OpenAPI spec update is documentation-only. Implementation already exists with per-item RLS transactions.
@@ -301,7 +301,7 @@ These items cannot proceed until specific external conditions are met.
 | **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
 | **P2** | SqlxBundleRepository + forensic bundle RLS | 🔴 PENDING | Local engineering backlog (P2-L1); forensic bundle RLS wiring |
-| **P2** | OpenAPI batch-execute RLS semantics | 🟡 PENDING | Local engineering backlog (P2-L2); documentation update |
+| **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
 | **P2** | rebase_apply handler review | 🟡 PENDING | Local engineering backlog (P2-L3); review item |
 | **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
@@ -334,7 +334,7 @@ The following items are local-executable and do not require external dependencie
 | Item | Priority | Status | Notes |
 |------|----------|--------|-------|
 | SqlxBundleRepository + forensic bundle RLS | P1 | 🔴 PENDING | P2-L1 in this doc; forensic bundle RLS enforcement |
-| OpenAPI batch-execute RLS semantics | P2 | 🟡 PENDING | P2-L2 in this doc; documentation update |
+| OpenAPI batch-execute RLS semantics | P2 | ✅ DOCUMENTED | P2-L2 in this doc; documentation complete |
 | rebase_apply handler review | P2 | 🟡 PENDING | P2-L3 in this doc; review item |
 | Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
