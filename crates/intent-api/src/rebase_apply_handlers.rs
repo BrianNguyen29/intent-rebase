@@ -14,6 +14,10 @@ use rebase_engine::{classify_approvals, RiskTier};
 use rebase_orchestrator::apply_pipeline::ApplyOutcome;
 use uuid::Uuid;
 
+use intent_rebase_types::IntentVersion;
+use rebase_engine::RebasePlan;
+use rebase_orchestrator::RebaseApplyResult;
+
 use crate::{
     approval_invalidation::{
         apply_outcome_label, apply_status_code, cancel_existing_approved_and_audit,
@@ -36,6 +40,16 @@ pub(crate) fn record_rebase_apply_request(status: &'static str) {
 pub(crate) fn record_rebase_apply_duration(duration_secs: f64, risk_class: &'static str) {
     metrics::histogram!("intent_api_rebase_apply_duration_seconds", "risk_class" => risk_class)
         .record(duration_secs);
+}
+
+/// Map a RiskTier to its metric label.
+fn risk_class_label(risk_tier: &RiskTier) -> &'static str {
+    match risk_tier {
+        RiskTier::Low => "low",
+        RiskTier::Medium => "medium",
+        RiskTier::High => "high",
+        RiskTier::Critical => "critical",
+    }
 }
 
 // ============================================================================
@@ -110,6 +124,54 @@ async fn rls_graph_update(
 
     if let Err(e) = tx.commit().await {
         tracing::warn!("rls_graph_update: RLS tx commit failed: {}", e);
+    }
+}
+
+/// Build the RebaseApplyResponse from plan and apply result.
+fn build_rebase_apply_response(
+    intent_id: Uuid,
+    from_version: IntentVersion,
+    to_version: IntentVersion,
+    plan: &RebasePlan,
+    apply_result: &RebaseApplyResult,
+) -> RebaseApplyResponse {
+    RebaseApplyResponse {
+        intent_id,
+        from_version,
+        to_version,
+        decision_class: plan.decision_class,
+        risk_tier: plan.risk_tier.clone(),
+        risk_level: plan.risk_level,
+        outcome: apply_outcome_label(&apply_result.outcome).to_string(),
+        manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),
+        notification_required: apply_result.notification_required,
+        rationale: apply_result.rationale.clone(),
+        aligned_checkpoint_id: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.checkpoint_id),
+        checkpoint_alignment_outcome: apply_result
+            .aligned_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint_alignment_label(&checkpoint.outcome).to_string()),
+        runtime_execution_status: runtime_execution_status_label(
+            &apply_result.runtime_execution_result.status,
+        )
+        .to_string(),
+        signal_sent: apply_result.runtime_execution_result.signal_sent,
+        replay_attempted: apply_result.runtime_execution_result.replay_attempted,
+        replay_completed: apply_result.runtime_execution_result.replay_completed,
+        graph_updates_applied: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| update.success)
+            .count(),
+        graph_updates_failed: apply_result
+            .graph_updates
+            .iter()
+            .filter(|update| !update.success)
+            .count(),
+        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
     }
 }
 
@@ -208,14 +270,8 @@ pub(crate) async fn rebase_apply(
     };
 
     // Record latency with risk_class label
-    let risk_class = match plan.risk_tier {
-        RiskTier::Low => "low",
-        RiskTier::Medium => "medium",
-        RiskTier::High => "high",
-        RiskTier::Critical => "critical",
-    };
     let duration = start.elapsed().as_secs_f64();
-    record_rebase_apply_duration(duration, risk_class);
+    record_rebase_apply_duration(duration, risk_class_label(&plan.risk_tier));
 
     // Phase 2b bounded slice: Record audit event for all external apply outcomes
     // Best-effort actor attribution: fallback external-api/unknown
@@ -765,44 +821,8 @@ pub(crate) async fn rebase_apply(
         }
     }
 
-    let response = RebaseApplyResponse {
-        intent_id,
-        from_version,
-        to_version,
-        decision_class: plan.decision_class,
-        risk_tier: plan.risk_tier,
-        risk_level: plan.risk_level,
-        outcome: apply_outcome_label(&apply_result.outcome).to_string(),
-        manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),
-        notification_required: apply_result.notification_required,
-        rationale: apply_result.rationale.clone(),
-        aligned_checkpoint_id: apply_result
-            .aligned_checkpoint
-            .as_ref()
-            .and_then(|checkpoint| checkpoint.checkpoint_id),
-        checkpoint_alignment_outcome: apply_result
-            .aligned_checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint_alignment_label(&checkpoint.outcome).to_string()),
-        runtime_execution_status: runtime_execution_status_label(
-            &apply_result.runtime_execution_result.status,
-        )
-        .to_string(),
-        signal_sent: apply_result.runtime_execution_result.signal_sent,
-        replay_attempted: apply_result.runtime_execution_result.replay_attempted,
-        replay_completed: apply_result.runtime_execution_result.replay_completed,
-        graph_updates_applied: apply_result
-            .graph_updates
-            .iter()
-            .filter(|update| update.success)
-            .count(),
-        graph_updates_failed: apply_result
-            .graph_updates
-            .iter()
-            .filter(|update| !update.success)
-            .count(),
-        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
-    };
+    let response =
+        build_rebase_apply_response(intent_id, from_version, to_version, &plan, &apply_result);
 
     record_rebase_apply_request("success");
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
@@ -885,14 +905,8 @@ pub(crate) async fn rebase_apply(
     };
 
     // Record latency with risk_class label
-    let risk_class = match plan.risk_tier {
-        RiskTier::Low => "low",
-        RiskTier::Medium => "medium",
-        RiskTier::High => "high",
-        RiskTier::Critical => "critical",
-    };
     let duration = start.elapsed().as_secs_f64();
-    record_rebase_apply_duration(duration, risk_class);
+    record_rebase_apply_duration(duration, risk_class_label(&plan.risk_tier));
 
     // Phase 2b bounded slice: Record audit event for all external apply outcomes
     // Best-effort actor attribution: fallback external-api/unknown
@@ -1179,44 +1193,8 @@ pub(crate) async fn rebase_apply(
         }
     }
 
-    let response = RebaseApplyResponse {
-        intent_id,
-        from_version,
-        to_version,
-        decision_class: plan.decision_class,
-        risk_tier: plan.risk_tier,
-        risk_level: plan.risk_level,
-        outcome: apply_outcome_label(&apply_result.outcome).to_string(),
-        manual_review_required: matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview),
-        notification_required: apply_result.notification_required,
-        rationale: apply_result.rationale.clone(),
-        aligned_checkpoint_id: apply_result
-            .aligned_checkpoint
-            .as_ref()
-            .and_then(|checkpoint| checkpoint.checkpoint_id),
-        checkpoint_alignment_outcome: apply_result
-            .aligned_checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint_alignment_label(&checkpoint.outcome).to_string()),
-        runtime_execution_status: runtime_execution_status_label(
-            &apply_result.runtime_execution_result.status,
-        )
-        .to_string(),
-        signal_sent: apply_result.runtime_execution_result.signal_sent,
-        replay_attempted: apply_result.runtime_execution_result.replay_attempted,
-        replay_completed: apply_result.runtime_execution_result.replay_completed,
-        graph_updates_applied: apply_result
-            .graph_updates
-            .iter()
-            .filter(|update| update.success)
-            .count(),
-        graph_updates_failed: apply_result
-            .graph_updates
-            .iter()
-            .filter(|update| !update.success)
-            .count(),
-        compensation_planning: CompensationPlanningSummary::from(&plan.deferred.compensation),
-    };
+    let response =
+        build_rebase_apply_response(intent_id, from_version, to_version, &plan, &apply_result);
 
     record_rebase_apply_request("success");
     Ok((apply_status_code(&apply_result.outcome), Json(response)))
