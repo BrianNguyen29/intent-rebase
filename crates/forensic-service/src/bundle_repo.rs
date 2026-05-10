@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::bundle::{BundlePurpose, BundleStatus, ForensicBundle};
+use super::bundle::{
+    BundleIntegrity, BundlePurpose, BundleRetention, BundleStatus, BundleTimeRange, ForensicBundle,
+};
 use super::bundle_contents::BundleContents;
 
 /// Repository trait for forensic bundle storage.
@@ -292,6 +294,351 @@ impl BundleRepository for InMemoryBundleRepository {
         }
 
         Ok(result)
+    }
+}
+
+// =============================================================================
+// SQLx-backed Bundle Repository
+// =============================================================================
+
+use sqlx::postgres::{PgPool, PgRow};
+use sqlx::Row;
+
+/// SQL-backed repository for forensic bundle storage using PostgreSQL.
+pub struct SqlxBundleRepository {
+    pool: PgPool,
+}
+
+impl SqlxBundleRepository {
+    /// Create a new SqlxBundleRepository.
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    fn row_to_bundle(&self, row: PgRow) -> Result<ForensicBundle, IntentRebaseError> {
+        let contents_json: serde_json::Value = row.get("contents");
+        let contents: BundleContents = serde_json::from_value(contents_json)
+            .map_err(|e| IntentRebaseError::Internal(format!("deserialize contents: {}", e)))?;
+
+        let integrity_json: serde_json::Value = row.get("integrity");
+        let integrity: BundleIntegrity = serde_json::from_value(integrity_json)
+            .map_err(|e| IntentRebaseError::Internal(format!("deserialize integrity: {}", e)))?;
+
+        let retention: Option<BundleRetention> = row
+            .get::<Option<serde_json::Value>, _>("retention")
+            .map(|v| serde_json::from_value(v))
+            .transpose()
+            .map_err(|e| IntentRebaseError::Internal(format!("deserialize retention: {}", e)))?;
+
+        let time_range = BundleTimeRange {
+            start: row.get("time_range_start"),
+            end: row.get("time_range_end"),
+        };
+
+        Ok(ForensicBundle {
+            bundle_id: row.get("bundle_id"),
+            tenant_id: row.get("tenant_id"),
+            bundle_version: row.get("bundle_version"),
+            created_at: row.get("created_at"),
+            created_by: row.get("created_by"),
+            time_range,
+            purpose: bundle_purpose_from_string(&row.get::<String, _>("purpose"))?,
+            status: bundle_status_from_string(&row.get::<String, _>("status"))?,
+            contents,
+            integrity,
+            retention,
+        })
+    }
+}
+
+fn bundle_status_to_string(s: BundleStatus) -> &'static str {
+    match s {
+        BundleStatus::Pending => "pending",
+        BundleStatus::Generating => "generating",
+        BundleStatus::Ready => "ready",
+        BundleStatus::Failed => "failed",
+    }
+}
+
+fn bundle_status_from_string(s: &str) -> Result<BundleStatus, IntentRebaseError> {
+    match s {
+        "pending" => Ok(BundleStatus::Pending),
+        "generating" => Ok(BundleStatus::Generating),
+        "ready" => Ok(BundleStatus::Ready),
+        "failed" => Ok(BundleStatus::Failed),
+        other => Err(IntentRebaseError::Internal(format!(
+            "unknown bundle status: {}",
+            other
+        ))),
+    }
+}
+
+fn bundle_purpose_to_string(p: BundlePurpose) -> &'static str {
+    match p {
+        BundlePurpose::IncidentInvestigation => "incident_investigation",
+        BundlePurpose::ComplianceAudit => "compliance_audit",
+        BundlePurpose::Legal => "legal",
+    }
+}
+
+fn bundle_purpose_from_string(s: &str) -> Result<BundlePurpose, IntentRebaseError> {
+    match s {
+        "incident_investigation" => Ok(BundlePurpose::IncidentInvestigation),
+        "compliance_audit" => Ok(BundlePurpose::ComplianceAudit),
+        "legal" => Ok(BundlePurpose::Legal),
+        other => Err(IntentRebaseError::Internal(format!(
+            "unknown bundle purpose: {}",
+            other
+        ))),
+    }
+}
+
+#[async_trait]
+impl BundleRepository for SqlxBundleRepository {
+    async fn create(&self, bundle: ForensicBundle) -> Result<ForensicBundle, IntentRebaseError> {
+        let contents_json = serde_json::to_value(&bundle.contents)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize contents: {}", e)))?;
+        let integrity_json = serde_json::to_value(&bundle.integrity)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize integrity: {}", e)))?;
+        let retention_json = bundle
+            .retention
+            .as_ref()
+            .map(|r| serde_json::to_value(r).ok())
+            .flatten();
+
+        sqlx::query(
+            r#"
+            INSERT INTO forensic_bundles (
+                bundle_id, tenant_id, bundle_version, created_at, created_by,
+                time_range_start, time_range_end, purpose, status,
+                contents, integrity, retention
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+        )
+        .bind(bundle.bundle_id)
+        .bind(bundle.tenant_id)
+        .bind(&bundle.bundle_version)
+        .bind(bundle.created_at)
+        .bind(&bundle.created_by)
+        .bind(bundle.time_range.start)
+        .bind(bundle.time_range.end)
+        .bind(bundle_purpose_to_string(bundle.purpose))
+        .bind(bundle_status_to_string(bundle.status))
+        .bind(contents_json)
+        .bind(integrity_json)
+        .bind(retention_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert forensic bundle: {}", e)))?;
+
+        Ok(bundle)
+    }
+
+    async fn get(&self, bundle_id: Uuid) -> Result<ForensicBundle, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE bundle_id = $1
+            "#,
+        )
+        .bind(bundle_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch forensic bundle: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<ForensicBundle>, IntentRebaseError> {
+        let limit = limit.unwrap_or(100) as i32;
+        let rows = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE tenant_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list forensic bundles by tenant: {}", e))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    async fn list_by_tenant_and_status(
+        &self,
+        tenant_id: Uuid,
+        status: BundleStatus,
+    ) -> Result<Vec<ForensicBundle>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE tenant_id = $1 AND status = $2
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(bundle_status_to_string(status))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "list forensic bundles by tenant and status: {}",
+                e
+            ))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    async fn list_by_tenant_and_purpose(
+        &self,
+        tenant_id: Uuid,
+        purpose: BundlePurpose,
+    ) -> Result<Vec<ForensicBundle>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE tenant_id = $1 AND purpose = $2
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(bundle_purpose_to_string(purpose))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "list forensic bundles by tenant and purpose: {}",
+                e
+            ))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    async fn update_status(
+        &self,
+        bundle_id: Uuid,
+        new_status: BundleStatus,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        // Fetch current bundle to validate transition
+        let current = self.get(bundle_id).await?;
+        if !current.status.can_transition_to(new_status) {
+            return Err(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", current.status),
+                to_status: format!("{:?}", new_status),
+                reason: "invalid status transition".to_string(),
+            });
+        }
+
+        let row = sqlx::query(
+            r#"
+            UPDATE forensic_bundles
+            SET status = $2
+            WHERE bundle_id = $1
+            RETURNING bundle_id, tenant_id, bundle_version, created_at, created_by,
+                      time_range_start, time_range_end, purpose, status,
+                      contents, integrity, retention
+            "#,
+        )
+        .bind(bundle_id)
+        .bind(bundle_status_to_string(new_status))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update forensic bundle status: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
+    }
+
+    async fn update_contents(
+        &self,
+        bundle_id: Uuid,
+        contents: BundleContents,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        let contents_json = serde_json::to_value(&contents)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize contents: {}", e)))?;
+
+        let row = sqlx::query(
+            r#"
+            UPDATE forensic_bundles
+            SET contents = $2
+            WHERE bundle_id = $1
+            RETURNING bundle_id, tenant_id, bundle_version, created_at, created_by,
+                      time_range_start, time_range_end, purpose, status,
+                      contents, integrity, retention
+            "#,
+        )
+        .bind(bundle_id)
+        .bind(contents_json)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update forensic bundle contents: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
+    }
+
+    async fn list_terminal_bundles(
+        &self,
+        tenant_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<ForensicBundle>, IntentRebaseError> {
+        let limit = limit.unwrap_or(100) as i32;
+        let rows = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE tenant_id = $1 AND status IN ('ready', 'failed')
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list terminal forensic bundles: {}", e))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
     }
 }
 

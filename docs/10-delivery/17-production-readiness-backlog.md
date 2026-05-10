@@ -161,14 +161,14 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Implement `SqlxBundleRepository` with RLS policy for forensic bundles; wire into forensic-service runtime |
-| **Current State** | Runtime currently uses in-memory bundle repository; no SQL-backed forensic bundle repo exists yet |
-| **Evidence** | `crates/forensic-service/src/bundle_repo.rs` (BundleRepository trait + InMemoryBundleRepository); no SqlxBundleRepository yet |
+| **Current State** | ✅ BOUNDED VERIFIED — SQL-backed forensic bundle repository, RLS migration, runtime SQL wiring, and targeted live RLC-13 tenant isolation test delivered |
+| **Evidence** | `infrastructure/migrations/016_create_forensic_bundles.sql`; `crates/forensic-service/src/bundle_repo.rs` (`SqlxBundleRepository`); `crates/intent-api/src/main.rs` SQL wiring; `crates/intent-api/tests/rls_integration.rs` RLC-13 |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 PENDING — P1-S5i residual; blocks forensic bundle production RLS enforcement |
-| **Dependencies** | None (local code only); can proceed before external sign-offs |
-| **Implementation Notes** | Migration needed for `forensic_bundles` table with RLS policy; implement SqlxBundleRepository following SqlxOrchestrationRunRepository pattern; wire into ForensicBundleService; RLC-13 test for forensic bundle RLS |
+| **Status** | ✅ BOUNDED VERIFIED — local code slice complete; targeted live RLC-13 passed on isolated local Postgres |
+| **Dependencies** | Broader live RLS suite still requires local PostgreSQL; external sign-off remains separate |
+| **Implementation Notes** | Migration 016 creates `forensic_bundles` with tenant RLS enabled/forced; runtime SQL path uses `SqlxBundleRepository`; in-memory fallback remains |
 
-**No overclaim:** `SqlxBundleRepository` does not exist yet. Forensic bundle storage is in-memory only. Production deployment requires SQL-backed RLS storage.
+**No overclaim:** This closes the bounded local SQL/RLS repository slice only. Production deployment still requires external SRE/security review, infrastructure, and live integration evidence.
 
 ---
 
@@ -294,13 +294,13 @@ These items cannot proceed until specific external conditions are met.
 | Priority | Item | Status | Evidence Required |
 |----------|------|--------|------------------|
 | **P0** | CI/Actions disabled by design | ✅ INTENTIONAL | Local gates are source of truth |
-| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..12) | 🔴 IN PROGRESS | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f (trigger full-tx) BOUNDED DONE (local); S5g (approve/waive/reapprove + batch) BOUNDED DONE (local); S5h (execute single/batch) BOUNDED DONE (pushed 7167223) — per-item RLS tx with `side_effect_repo()` accessor; S5i (orchestration_runs bounded slice + artifact graph RLS tx) BOUNDED DONE (local/pushed); forensic SQL bundle PENDING (SqlxBundleRepository); RLC-4..RLC-12 BOUNDED DONE (local, 13 tests passed) |
+| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..13) | 🟡 BOUNDED LOCAL VERIFIED | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f/S5g/S5h bounded slices delivered; S5i orchestration/artifact graph bounded slices delivered; forensic SQL bundle repo + migration 016 delivered; targeted live RLC-13 passed on isolated local Postgres |
 | **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
 | **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
 | **P1** | Production infra | 🔴 BLOCKED | Production env verified |
 | **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
-| **P2** | SqlxBundleRepository + forensic bundle RLS | 🔴 PENDING | Local engineering backlog (P2-L1); forensic bundle RLS wiring |
+| **P2** | SqlxBundleRepository + forensic bundle RLS | ✅ BOUNDED VERIFIED | Local engineering backlog (P2-L1); migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
 | **P2** | rebase_apply handler review | 🟡 PARTIAL | Local engineering backlog (P2-L3); bounded manual-review RLS slice verified; full wrapping blocked by design seams |
 | **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
@@ -333,7 +333,7 @@ The following items are local-executable and do not require external dependencie
 
 | Item | Priority | Status | Notes |
 |------|----------|--------|-------|
-| SqlxBundleRepository + forensic bundle RLS | P1 | 🔴 PENDING | P2-L1 in this doc; forensic bundle RLS enforcement |
+| SqlxBundleRepository + forensic bundle RLS | P1 | ✅ BOUNDED VERIFIED | P2-L1 in this doc; migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | OpenAPI batch-execute RLS semantics | P2 | ✅ DOCUMENTED | P2-L2 in this doc; documentation complete |
 | rebase_apply handler review | P2 | 🟡 PARTIAL | P2-L3 in this doc; bounded manual-review RLS slice verified; full wrapping blocked by graph/checkpoint tx seams |
 | Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |

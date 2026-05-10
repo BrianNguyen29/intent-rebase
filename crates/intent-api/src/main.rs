@@ -397,7 +397,7 @@ async fn build_sql_router_with_consumer_jwt(
         Arc::new(RealForensicVerificationService::new(forensic_collector));
     let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
         Arc::new(InMemoryForensicArchiveGenerator::new());
-    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::SqlxBundleRepository::new(pool.clone()));
     let forensic_bundle_storage = select_forensic_bundle_storage().await;
     let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
         Arc::new(forensic_service::InMemoryForensicDataCollector::new());
@@ -537,7 +537,7 @@ async fn build_sql_router_with_consumer_impl(
         Arc::new(RealForensicVerificationService::new(forensic_collector));
     let forensic_archive_generator: Arc<dyn ForensicArchiveGenerator> =
         Arc::new(InMemoryForensicArchiveGenerator::new());
-    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::SqlxBundleRepository::new(pool.clone()));
     let forensic_bundle_storage = select_forensic_bundle_storage().await;
     let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
         Arc::new(forensic_service::InMemoryForensicDataCollector::new());

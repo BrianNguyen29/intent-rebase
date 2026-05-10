@@ -116,6 +116,7 @@ const RLS_SCOPED_TABLES: &[&str] = &[
     "side_effect_rollback_records",
     "policy_snapshot",
     "orchestration_runs",
+    "forensic_bundles",
 ];
 
 /// Test result type for clearer error handling
@@ -144,7 +145,7 @@ fn should_skip_migrations() -> bool {
     // Default to skip migrations (true) to avoid checksum mismatch issues
     // Only run migrations if explicitly requested via RLS_TEST_RUN_MIGRATIONS=true
     std::env::var("RLS_TEST_RUN_MIGRATIONS")
-        .map(|v| v.to_lowercase() == "true")
+        .map(|v| v.to_lowercase() != "true")
         .unwrap_or(true) // Default: skip migrations
 }
 
@@ -776,6 +777,63 @@ async fn count_test_orchestration_runs_for_current_tenant(
     Ok(count)
 }
 
+/// Create a test forensic_bundle for the given tenant within an RLS-scoped transaction.
+async fn create_test_forensic_bundle_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    bundle_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO forensic_bundles (
+            bundle_id, tenant_id, bundle_version, created_at, created_by,
+            time_range_start, time_range_end, purpose, status,
+            contents, integrity, retention
+        )
+        VALUES ($1, $2, 'v1', NOW(), 'rls-test', NOW(), NOW(),
+                'incident_investigation', 'pending',
+                '{"intent_versions":0,"artifacts":0,"approvals":0,"audit_events":0,"policy_snapshots":0}',
+                '{"manifest_hash":"test","chain_verified":false,"verification_timestamp":"2024-01-01T00:00:00Z"}',
+                NULL)
+        "#,
+    )
+    .bind(bundle_id)
+    .bind(tenant_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test forensic_bundle: {}", e))?;
+
+    Ok(())
+}
+
+/// Count forensic_bundles visible to the current tenant context.
+async fn count_test_forensic_bundles_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    bundle_ids: &[Uuid],
+) -> TestResult<i64> {
+    if bundle_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = bundle_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM forensic_bundles WHERE bundle_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in bundle_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test forensic_bundles: {}", e))?;
+    Ok(count)
+}
+
 /// Verify RLS is enforced by checking pg_tables relrowsecurity flag.
 async fn verify_rls_enabled_on_tables(pool: &sqlx::PgPool) -> TestResult<()> {
     for table_name in RLS_SCOPED_TABLES {
@@ -889,6 +947,7 @@ async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
         "GRANT INSERT, SELECT ON compensation_actions TO",
         "GRANT INSERT, SELECT ON side_effect_rollback_records TO",
         "GRANT INSERT, SELECT ON policy_snapshot TO",
+        "GRANT INSERT, SELECT ON forensic_bundles TO",
     ];
 
     for grant in &grants {
@@ -3063,4 +3122,247 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
 
     pool.close().await;
     println!("test_rlc12_tenant_isolation_orchestration_runs PASSED");
+}
+
+/// Test: RLC-13 - Tenant isolation on forensic_bundles table.
+///
+/// Verifies that forensic_bundles rows are correctly isolated between tenants.
+/// Uses the non-bypass test role pattern from RLC-3 when the admin connection
+/// is a superuser/bypass role.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc13_tenant_isolation_forensic_bundles() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    // ===========================================================================
+    // Step 1: Connect as admin and ensure migrations
+    // ===========================================================================
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&admin_pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    // ===========================================================================
+    // Step 2: Check if we need a non-bypass role for testing
+    // ===========================================================================
+    let (is_bypass, current_role) = check_current_role_is_bypass(&admin_pool)
+        .await
+        .expect("Failed to check current role bypass status");
+
+    let test_pool: sqlx::PgPool;
+    let test_role_name: &str;
+
+    if is_bypass {
+        println!(
+            "WARNING: Current role '{}' is superuser/bypass - RLS policies are bypassed!",
+            current_role
+        );
+        println!("Creating dedicated non-bypass test role for RLS isolation verification...");
+
+        let test_url = create_test_role(&admin_pool)
+            .await
+            .expect("Failed to create non-bypass test role - cannot run RLS isolation test");
+
+        test_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect(&test_url)
+            .await
+            .expect("Failed to connect with non-bypass test role");
+        test_role_name = TEST_ROLE_NAME;
+
+        println!(
+            "Using non-bypass role '{}' for RLS isolation test (role '{}' is bypass)",
+            TEST_ROLE_NAME, current_role
+        );
+    } else {
+        println!(
+            "Using current role '{}' for RLS isolation test (not a bypass role)",
+            current_role
+        );
+        test_pool = admin_pool.clone();
+        test_role_name = &current_role;
+    }
+
+    // ===========================================================================
+    // Phase 1: Create test data for Tenant A
+    // ===========================================================================
+    println!("Setting up Tenant A data...");
+
+    let tenant_a_bundle_id = Uuid::new_v4();
+
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A");
+
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        create_test_forensic_bundle_for_current_tenant(&mut tx, tenant_a_id, tenant_a_bundle_id)
+            .await
+            .expect("Failed to create test forensic_bundle for Tenant A");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A transaction");
+        println!(
+            "Tenant A setup complete - created forensic_bundle {}",
+            tenant_a_bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 2: Create test data for Tenant B
+    // ===========================================================================
+    println!("Setting up Tenant B data...");
+
+    let tenant_b_bundle_id = Uuid::new_v4();
+
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B");
+
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        create_test_forensic_bundle_for_current_tenant(&mut tx, tenant_b_id, tenant_b_bundle_id)
+            .await
+            .expect("Failed to create test forensic_bundle for Tenant B");
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B transaction");
+        println!(
+            "Tenant B setup complete - created forensic_bundle {}",
+            tenant_b_bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 3: Verify Tenant Isolation (using non-bypass role)
+    // ===========================================================================
+    println!(
+        "Verifying tenant isolation under RLS using role '{}'...",
+        test_role_name
+    );
+
+    // Tenant A context: should see Tenant A's bundle, NOT Tenant B's
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let count_own =
+            count_test_forensic_bundles_for_current_tenant(&mut tx, &[tenant_a_bundle_id])
+                .await
+                .expect("Failed to count Tenant A forensic_bundles");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see exactly 1 forensic_bundle (their own) - RLS isolation may be broken!"
+        );
+
+        let count_other =
+            count_test_forensic_bundles_for_current_tenant(&mut tx, &[tenant_b_bundle_id])
+                .await
+                .expect("Failed to count Tenant B forensic_bundles from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should see 0 forensic_bundles from Tenant B - RLS isolation may be broken!"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+        println!(
+            "Tenant A isolation verified - only sees bundle {} (own), not Tenant B's {}",
+            tenant_a_bundle_id, tenant_b_bundle_id
+        );
+    }
+
+    // Tenant B context: should see Tenant B's bundle, NOT Tenant A's
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let count_own =
+            count_test_forensic_bundles_for_current_tenant(&mut tx, &[tenant_b_bundle_id])
+                .await
+                .expect("Failed to count Tenant B forensic_bundles");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see exactly 1 forensic_bundle (their own) - RLS isolation may be broken!"
+        );
+
+        let count_other =
+            count_test_forensic_bundles_for_current_tenant(&mut tx, &[tenant_a_bundle_id])
+                .await
+                .expect("Failed to count Tenant A forensic_bundles from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should see 0 forensic_bundles from Tenant A - RLS isolation may be broken!"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+        println!(
+            "Tenant B isolation verified - only sees bundle {} (own), not Tenant A's {}",
+            tenant_b_bundle_id, tenant_a_bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Cleanup: Drop test role if we created one
+    // ===========================================================================
+    if is_bypass {
+        println!("Cleaning up test role '{}'...", TEST_ROLE_NAME);
+        drop_test_role(&admin_pool)
+            .await
+            .expect("Failed to drop test role");
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
+    println!("test_rlc13_tenant_isolation_forensic_bundles PASSED");
 }
