@@ -126,6 +126,68 @@ async fn dispatch_batch_execute_action(
     }
 }
 
+/// Creates a rollback record within an RLS transaction (best-effort, fail-open).
+///
+/// Logs and swallows any errors from `create_with_tx` - this is intentional
+/// so that rollback record creation failures do not abort the parent transaction.
+#[cfg(feature = "jwt-auth")]
+async fn create_rls_rollback_record(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    executor_result: &compensation_service::ExecutionResult,
+    tenant_id: Uuid,
+    compensation_plan_id: Uuid,
+    side_effect_id: Uuid,
+    intent_id: Uuid,
+    actor_id: &str,
+    action_id: Uuid,
+    state: &AppState,
+) {
+    use compensation_service::SideEffectRollbackRecord;
+
+    let sql_rollback_repo = match state
+        .compensation_action_service
+        .rollback_record_repo()
+        .and_then(|r| r.as_sqlx_repo())
+    {
+        Some(repo) => repo,
+        None => return,
+    };
+
+    let rollback_record = if executor_result.success {
+        SideEffectRollbackRecord::success(
+            tenant_id,
+            compensation_plan_id,
+            side_effect_id,
+            intent_id,
+            &executor_result.summary,
+            Some(actor_id),
+        )
+    } else {
+        SideEffectRollbackRecord::failure_with_actor(
+            tenant_id,
+            compensation_plan_id,
+            side_effect_id,
+            intent_id,
+            &executor_result.summary,
+            executor_result
+                .error_code
+                .as_deref()
+                .unwrap_or("UNKNOWN_ERROR"),
+            executor_result.error_detail.clone(),
+            Some(actor_id),
+        )
+    };
+
+    if let Err(e) = sql_rollback_repo.create_with_tx(tx, rollback_record).await {
+        tracing::warn!(
+            "batch_execute: failed to create rollback record for action {}: {:?}",
+            action_id,
+            e
+        );
+        // Best-effort: continue even if rollback record creation fails
+    }
+}
+
 // ============================================================================
 // Private helper: maps BatchOrchestrationResult to BatchOrchestrationResponse
 // ============================================================================
@@ -845,49 +907,18 @@ pub async fn batch_execute_compensation_actions(
                 };
 
                 // Create rollback record within RLS tx (best-effort, fail-open)
-                if let Some(sql_rollback_repo) = state
-                    .compensation_action_service
-                    .rollback_record_repo()
-                    .and_then(|r| r.as_sqlx_repo())
-                {
-                    use compensation_service::SideEffectRollbackRecord;
-                    let rollback_record = if executor_result.success {
-                        SideEffectRollbackRecord::success(
-                            tenant_id,
-                            compensation_plan_id,
-                            action.side_effect_id,
-                            intent_id,
-                            &executor_result.summary,
-                            Some(actor_id),
-                        )
-                    } else {
-                        SideEffectRollbackRecord::failure_with_actor(
-                            tenant_id,
-                            compensation_plan_id,
-                            action.side_effect_id,
-                            intent_id,
-                            &executor_result.summary,
-                            executor_result
-                                .error_code
-                                .as_deref()
-                                .unwrap_or("UNKNOWN_ERROR"),
-                            executor_result.error_detail.clone(),
-                            Some(actor_id),
-                        )
-                    };
-
-                    if let Err(e) = sql_rollback_repo
-                        .create_with_tx(&mut tx, rollback_record)
-                        .await
-                    {
-                        tracing::warn!(
-                            "batch_execute: failed to create rollback record for action {}: {:?}",
-                            action_id,
-                            e
-                        );
-                        // Best-effort: continue even if rollback record creation fails
-                    }
-                }
+                create_rls_rollback_record(
+                    &mut tx,
+                    &executor_result,
+                    tenant_id,
+                    compensation_plan_id,
+                    action.side_effect_id,
+                    intent_id,
+                    actor_id,
+                    *action_id,
+                    &state,
+                )
+                .await;
 
                 // Commit RLS tx
                 if let Err(e) = tx.commit().await {
