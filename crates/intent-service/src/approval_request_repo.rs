@@ -818,6 +818,74 @@ impl SqlxApprovalRequestRepository {
         Ok(result.rows_affected() as usize)
     }
 
+    /// Cancel specific Approved approval requests by their IDs within an external RLS-aware transaction.
+    ///
+    /// This method performs a bulk UPDATE using the provided transaction.
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// and committing/rolling back after this call.
+    ///
+    /// Only cancels approvals that are BOTH in the provided IDs list AND in Approved status.
+    /// Other statuses (pending, rejected, expired, cancelled) are not affected.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A mutable reference to a `sqlx::Transaction` that already has
+    ///   RLS tenant context set via `SET LOCAL app.current_tenant_id`
+    /// * `approval_ids` - The approval request IDs to cancel
+    /// * `tenant_id` - The tenant ID
+    /// * `cancelled_by` - Actor ID who cancelled the approvals
+    /// * `reason` - Reason for cancellation
+    ///
+    /// Returns the number of cancelled approval requests.
+    pub async fn cancel_approved_by_ids_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        approval_ids: &[Uuid],
+        tenant_id: Uuid,
+        cancelled_by: &str,
+        reason: &str,
+    ) -> Result<usize, IntentRebaseError> {
+        if approval_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now();
+
+        let num_ids = approval_ids.len();
+        let id_placeholders: Vec<String> = (1..=num_ids).map(|i| format!("${}", i + 3)).collect();
+        let in_clause = format!("({})", id_placeholders.join(", "));
+        let tenant_idx = 3 + num_ids + 1;
+
+        let query = format!(
+            r#"
+            UPDATE approval_requests
+            SET status = 'cancelled',
+                updated_at = $1,
+                resolved_at = $1,
+                resolved_by = $2,
+                resolution_notes = $3
+            WHERE id IN {} AND tenant_id = ${} AND status = 'approved'
+            "#,
+            in_clause, tenant_idx
+        );
+
+        let mut q = sqlx::query(&query);
+        q = q.bind(now).bind(cancelled_by).bind(reason);
+        for id in approval_ids {
+            q = q.bind(id);
+        }
+        q = q.bind(tenant_id);
+
+        let result = q.execute(&mut **tx).await.map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "cancel specific approved approval requests by ids: {}",
+                e
+            ))
+        })?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
     /// Mark an approval request as expired within an external RLS-aware transaction.
     ///
     /// This method performs an atomic conditional UPDATE using the provided transaction.

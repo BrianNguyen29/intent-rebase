@@ -66,7 +66,7 @@ pub(crate) async fn rebase_apply(
 
     // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
     // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
+    if let Some(ref rls_claims) = optional_rls_claims {
         if intent_head.intent.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match intent tenant_id ({})",
@@ -253,77 +253,359 @@ pub(crate) async fn rebase_apply(
             &apply_result.rationale,
         );
 
-        // Only proceed with cancellation if creation succeeded
-        match state
-            .approval_request_repo
-            .create_approval_request(approval_request)
-            .await
-        {
-            Ok(created) => {
-                // Slice 1 bounded targeted cancellation: Use classifier when graph data is available
-                //
-                // Check if graph data is available for targeted cancellation:
-                // - affected_items.status == Available indicates graph classification succeeded
-                // - Non-empty affected_approvals means we have specific approvals to target
-                //
-                // Fallback to flat cancellation when:
-                // - Graph data is unavailable (status == Unavailable)
-                // - No affected approvals identified
-                // - Classifier returns empty stale_ids
-                //
-                // This ensures no approvals remain valid due to missing graph/classifier data.
-                let use_classifier = plan.affected_items.status == AffectedItemsStatus::Available
-                    && !plan.affected_items.affected_approvals.is_empty();
+        // P3-S5 bounded RLS slice: attempt RLS-wrapped create+cancel when available
+        let mut rls_created: Option<intent_service::ApprovalRequest> = None;
+        let mut rls_cancelled_count: usize = 0;
+        let mut rls_cancel_reason: Option<String> = None;
 
-                if use_classifier {
-                    // Get all current approval IDs for the intent to pass to classifier
-                    match state
-                        .approval_request_repo
-                        .list_by_intent(intent_id, intent_head.intent.tenant_id)
-                        .await
-                    {
-                        Ok(current_approvals) => {
-                            // Extract approval IDs as strings for the classifier
-                            let current_approval_ids: Vec<String> =
-                                current_approvals.iter().map(|a| a.id.to_string()).collect();
-
-                            // Classify approvals to determine which are stale
-                            let classification = classify_approvals(&plan, &current_approval_ids);
-
-                            if !classification.stale_ids.is_empty() {
-                                // Use targeted cancellation with classifier-determined stale_ids
-                                tracing::debug!(
-                                    "Classifier identified {} stale approvals for targeted cancellation",
-                                    classification.stale_ids.len()
+        if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+            if let Some(sql_repo) = state.approval_request_repo.as_sqlx_approval_repo() {
+                match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                    Ok(mut tx) => {
+                        match sql_repo
+                            .create_approval_request_with_tx(&mut tx, &approval_request)
+                            .await
+                        {
+                            Ok(created) => {
+                                let cancellation_reason = format!(
+                                    "Superseded by new approval request {} due to rebase apply",
+                                    created.id
                                 );
-                                let cancelled_count = cancel_specific_approved_and_audit(
-                                    &state.approval_request_repo,
-                                    &state.audit_service,
-                                    &state.event_publisher,
-                                    &classification.stale_ids,
-                                    CancelApprovalContext {
-                                        intent_id,
-                                        tenant_id: intent_head.intent.tenant_id,
-                                        actor_id: actor_id.to_string(),
-                                        from_version: request.from_version,
-                                        to_version: request.to_version,
-                                        decision_class: format!("{:?}", plan.decision_class),
-                                        new_approval_id: created.id,
-                                    },
-                                )
-                                .await;
 
-                                // Fall back to flat cancellation if targeted cancellation cancelled
-                                // fewer approvals than expected. This handles the case where
-                                // external_ref.ref_id didn't correlate correctly with ApprovalRequest.id
-                                // (e.g., production graph not populated or ID mapping incomplete).
-                                if cancelled_count < classification.stale_ids.len() {
-                                    tracing::warn!(
-                                        "Targeted cancellation cancelled {} of {} expected approvals, falling back to flat cancellation",
-                                        cancelled_count,
+                                let use_classifier = plan.affected_items.status
+                                    == AffectedItemsStatus::Available
+                                    && !plan.affected_items.affected_approvals.is_empty();
+
+                                let cancelled_count = if use_classifier {
+                                    match state
+                                        .approval_request_repo
+                                        .list_by_intent(intent_id, intent_head.intent.tenant_id)
+                                        .await
+                                    {
+                                        Ok(current_approvals) => {
+                                            let current_approval_ids: Vec<String> =
+                                                current_approvals
+                                                    .iter()
+                                                    .map(|a| a.id.to_string())
+                                                    .collect();
+                                            let classification =
+                                                classify_approvals(&plan, &current_approval_ids);
+
+                                            if !classification.stale_ids.is_empty() {
+                                                let parsed_ids: Vec<Uuid> = classification
+                                                    .stale_ids
+                                                    .iter()
+                                                    .filter_map(|id_str| {
+                                                        Uuid::parse_str(id_str)
+                                                            .map_err(|e| {
+                                                                tracing::warn!(
+                                                                    "Failed to parse stale approval ID '{}': {}",
+                                                                    id_str, e
+                                                                );
+                                                            })
+                                                            .ok()
+                                                    })
+                                                    .collect();
+
+                                                if !parsed_ids.is_empty() {
+                                                    match sql_repo
+                                                        .cancel_approved_by_ids_with_tx(
+                                                            &mut tx,
+                                                            &parsed_ids,
+                                                            intent_head.intent.tenant_id,
+                                                            actor_id,
+                                                            &cancellation_reason,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(count) => {
+                                                            if count
+                                                                < classification.stale_ids.len()
+                                                            {
+                                                                tracing::warn!(
+                                                                    "Targeted cancellation cancelled {} of {} expected approvals, falling back to flat cancellation",
+                                                                    count,
+                                                                    classification.stale_ids.len()
+                                                                );
+                                                                match sql_repo
+                                                                    .cancel_approved_by_intent_with_tx(
+                                                                        &mut tx,
+                                                                        intent_id,
+                                                                        intent_head.intent.tenant_id,
+                                                                        actor_id,
+                                                                        &cancellation_reason,
+                                                                    )
+                                                                    .await
+                                                                {
+                                                                    Ok(flat_count) => {
+                                                                        count + flat_count
+                                                                    }
+                                                                    Err(e) => {
+                                                                        tracing::warn!("Flat cancellation in RLS tx failed: {}", e);
+                                                                        count
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                count
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::warn!("Targeted cancellation in RLS tx failed, falling back to flat cancellation: {}", e);
+                                                            match sql_repo
+                                                                .cancel_approved_by_intent_with_tx(
+                                                                    &mut tx,
+                                                                    intent_id,
+                                                                    intent_head.intent.tenant_id,
+                                                                    actor_id,
+                                                                    &cancellation_reason,
+                                                                )
+                                                                .await
+                                                            {
+                                                                Ok(count) => count,
+                                                                Err(e) => {
+                                                                    tracing::warn!("Flat cancellation in RLS tx failed: {}", e);
+                                                                    0
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    match sql_repo
+                                                        .cancel_approved_by_intent_with_tx(
+                                                            &mut tx,
+                                                            intent_id,
+                                                            intent_head.intent.tenant_id,
+                                                            actor_id,
+                                                            &cancellation_reason,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(count) => count,
+                                                        Err(e) => {
+                                                            tracing::warn!("Flat cancellation in RLS tx failed: {}", e);
+                                                            0
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                match sql_repo
+                                                    .cancel_approved_by_intent_with_tx(
+                                                        &mut tx,
+                                                        intent_id,
+                                                        intent_head.intent.tenant_id,
+                                                        actor_id,
+                                                        &cancellation_reason,
+                                                    )
+                                                    .await
+                                                {
+                                                    Ok(count) => count,
+                                                    Err(e) => {
+                                                        tracing::warn!("Flat cancellation in RLS tx failed: {}", e);
+                                                        0
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to list approvals for classifier in RLS tx, falling back to flat cancellation: {:?}",
+                                                e
+                                            );
+                                            match sql_repo
+                                                .cancel_approved_by_intent_with_tx(
+                                                    &mut tx,
+                                                    intent_id,
+                                                    intent_head.intent.tenant_id,
+                                                    actor_id,
+                                                    &cancellation_reason,
+                                                )
+                                                .await
+                                            {
+                                                Ok(count) => count,
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        "Flat cancellation in RLS tx failed: {}",
+                                                        e
+                                                    );
+                                                    0
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    match sql_repo
+                                        .cancel_approved_by_intent_with_tx(
+                                            &mut tx,
+                                            intent_id,
+                                            intent_head.intent.tenant_id,
+                                            actor_id,
+                                            &cancellation_reason,
+                                        )
+                                        .await
+                                    {
+                                        Ok(count) => count,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Flat cancellation in RLS tx failed: {}",
+                                                e
+                                            );
+                                            0
+                                        }
+                                    }
+                                };
+
+                                if let Err(e) = tx.commit().await {
+                                    tracing::warn!("rebase_apply: RLS tx commit failed: {}", e);
+                                } else {
+                                    rls_created = Some(created);
+                                    rls_cancelled_count = cancelled_count;
+                                    rls_cancel_reason = Some(cancellation_reason);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("rebase_apply: RLS create failed: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("rebase_apply: RLS tx begin failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        if let Some(_created) = rls_created {
+            // Post-commit: emit cancellation audit event (best-effort)
+            if rls_cancelled_count > 0 {
+                let cancel_audit_payload = intent_rebase_types::ApprovalCancelledAuditPayload {
+                    intent_id,
+                    cancelled_version_from: request.from_version,
+                    cancelled_version_to: request.to_version,
+                    decision_class: format!("{:?}", plan.decision_class),
+                    cancelled_by: actor_id.to_string(),
+                    cancellation_reason: rls_cancel_reason.unwrap_or_default(),
+                    cancelled_count: rls_cancelled_count,
+                };
+
+                let audit_payload_for_publish = cancel_audit_payload.clone();
+
+                if let Err(e) = state
+                    .audit_service
+                    .record_approval_cancelled(
+                        intent_head.intent.tenant_id,
+                        actor_id,
+                        intent_id,
+                        cancel_audit_payload,
+                        get_current_trace_context(),
+                    )
+                    .await
+                {
+                    tracing::warn!("Failed to record ApprovalCancelled audit event: {:?}", e);
+                } else {
+                    publish_audit_event(
+                        &state.event_publisher,
+                        intent_head.intent.tenant_id,
+                        "ApprovalCancelled",
+                        &serde_json::to_value(audit_payload_for_publish)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                    )
+                    .await;
+                }
+            }
+        } else {
+            // Non-RLS fallback: existing best-effort create+cancel path
+            match state
+                .approval_request_repo
+                .create_approval_request(approval_request)
+                .await
+            {
+                Ok(created) => {
+                    // Slice 1 bounded targeted cancellation: Use classifier when graph data is available
+                    //
+                    // Check if graph data is available for targeted cancellation:
+                    // - affected_items.status == Available indicates graph classification succeeded
+                    // - Non-empty affected_approvals means we have specific approvals to target
+                    //
+                    // Fallback to flat cancellation when:
+                    // - Graph data is unavailable (status == Unavailable)
+                    // - No affected approvals identified
+                    // - Classifier returns empty stale_ids
+                    //
+                    // This ensures no approvals remain valid due to missing graph/classifier data.
+                    let use_classifier = plan.affected_items.status
+                        == AffectedItemsStatus::Available
+                        && !plan.affected_items.affected_approvals.is_empty();
+
+                    if use_classifier {
+                        // Get all current approval IDs for the intent to pass to classifier
+                        match state
+                            .approval_request_repo
+                            .list_by_intent(intent_id, intent_head.intent.tenant_id)
+                            .await
+                        {
+                            Ok(current_approvals) => {
+                                // Extract approval IDs as strings for the classifier
+                                let current_approval_ids: Vec<String> =
+                                    current_approvals.iter().map(|a| a.id.to_string()).collect();
+
+                                // Classify approvals to determine which are stale
+                                let classification =
+                                    classify_approvals(&plan, &current_approval_ids);
+
+                                if !classification.stale_ids.is_empty() {
+                                    // Use targeted cancellation with classifier-determined stale_ids
+                                    tracing::debug!(
+                                        "Classifier identified {} stale approvals for targeted cancellation",
                                         classification.stale_ids.len()
                                     );
-                                    let _fallback_count = cancel_existing_approved_and_audit(
+                                    let cancelled_count = cancel_specific_approved_and_audit(
+                                        &state.approval_request_repo,
+                                        &state.audit_service,
+                                        &state.event_publisher,
+                                        &classification.stale_ids,
+                                        CancelApprovalContext {
+                                            intent_id,
+                                            tenant_id: intent_head.intent.tenant_id,
+                                            actor_id: actor_id.to_string(),
+                                            from_version: request.from_version,
+                                            to_version: request.to_version,
+                                            decision_class: format!("{:?}", plan.decision_class),
+                                            new_approval_id: created.id,
+                                        },
+                                    )
+                                    .await;
+
+                                    // Fall back to flat cancellation if targeted cancellation cancelled
+                                    // fewer approvals than expected. This handles the case where
+                                    // external_ref.ref_id didn't correlate correctly with ApprovalRequest.id
+                                    // (e.g., production graph not populated or ID mapping incomplete).
+                                    if cancelled_count < classification.stale_ids.len() {
+                                        tracing::warn!(
+                                            "Targeted cancellation cancelled {} of {} expected approvals, falling back to flat cancellation",
+                                            cancelled_count,
+                                            classification.stale_ids.len()
+                                        );
+                                        let _fallback_count = cancel_existing_approved_and_audit(
+                                            &state.approval_request_repo,
+                                            &state.audit_service,
+                                            &state.event_publisher,
+                                            intent_id,
+                                            intent_head.intent.tenant_id,
+                                            actor_id,
+                                            request.from_version,
+                                            request.to_version,
+                                            &format!("{:?}", plan.decision_class),
+                                            created.id,
+                                        )
+                                        .await;
+                                    }
+                                } else {
+                                    // Classifier returned no stale_ids - fall back to flat cancellation
+                                    // to ensure no approvals remain valid due to missing data
+                                    tracing::debug!(
+                                        "Classifier returned empty stale_ids, falling back to flat cancellation"
+                                    );
+                                    let _cancelled_count = cancel_existing_approved_and_audit(
                                         &state.approval_request_repo,
                                         &state.audit_service,
                                         &state.event_publisher,
@@ -337,11 +619,12 @@ pub(crate) async fn rebase_apply(
                                     )
                                     .await;
                                 }
-                            } else {
-                                // Classifier returned no stale_ids - fall back to flat cancellation
-                                // to ensure no approvals remain valid due to missing data
-                                tracing::debug!(
-                                    "Classifier returned empty stale_ids, falling back to flat cancellation"
+                            }
+                            Err(e) => {
+                                // Failed to list approvals - fall back to flat cancellation
+                                tracing::warn!(
+                                    "Failed to list approvals for classifier, falling back to flat cancellation: {:?}",
+                                    e
                                 );
                                 let _cancelled_count = cancel_existing_approved_and_audit(
                                     &state.approval_request_repo,
@@ -358,50 +641,30 @@ pub(crate) async fn rebase_apply(
                                 .await;
                             }
                         }
-                        Err(e) => {
-                            // Failed to list approvals - fall back to flat cancellation
-                            tracing::warn!(
-                                "Failed to list approvals for classifier, falling back to flat cancellation: {:?}",
-                                e
-                            );
-                            let _cancelled_count = cancel_existing_approved_and_audit(
-                                &state.approval_request_repo,
-                                &state.audit_service,
-                                &state.event_publisher,
-                                intent_id,
-                                intent_head.intent.tenant_id,
-                                actor_id,
-                                request.from_version,
-                                request.to_version,
-                                &format!("{:?}", plan.decision_class),
-                                created.id,
-                            )
-                            .await;
-                        }
+                    } else {
+                        // Graph data unavailable or no affected approvals - use flat cancellation fallback
+                        // This preserves existing behavior when classifier input is missing/uncertain
+                        tracing::debug!(
+                            "Graph data unavailable for targeted cancellation, using flat cancellation fallback"
+                        );
+                        let _cancelled_count = cancel_existing_approved_and_audit(
+                            &state.approval_request_repo,
+                            &state.audit_service,
+                            &state.event_publisher,
+                            intent_id,
+                            intent_head.intent.tenant_id,
+                            actor_id,
+                            request.from_version,
+                            request.to_version,
+                            &format!("{:?}", plan.decision_class),
+                            created.id,
+                        )
+                        .await;
                     }
-                } else {
-                    // Graph data unavailable or no affected approvals - use flat cancellation fallback
-                    // This preserves existing behavior when classifier input is missing/uncertain
-                    tracing::debug!(
-                        "Graph data unavailable for targeted cancellation, using flat cancellation fallback"
-                    );
-                    let _cancelled_count = cancel_existing_approved_and_audit(
-                        &state.approval_request_repo,
-                        &state.audit_service,
-                        &state.event_publisher,
-                        intent_id,
-                        intent_head.intent.tenant_id,
-                        actor_id,
-                        request.from_version,
-                        request.to_version,
-                        &format!("{:?}", plan.decision_class),
-                        created.id,
-                    )
-                    .await;
                 }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create approval_request record: {:?}", e);
+                Err(e) => {
+                    tracing::warn!("Failed to create approval_request record: {:?}", e);
+                }
             }
         }
     }

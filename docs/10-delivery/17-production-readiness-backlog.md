@@ -192,13 +192,13 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Review rebase_apply handler for RLS transaction wrapping and tenant isolation correctness |
-| **Current State** | rebase_apply handler delivered in Phase 2b; RLS wiring review pending |
-| **Evidence** | `crates/intent-api/src/lib.rs` (rebase_apply handler) |
+| **Current State** | 🟡 PARTIAL — review found application-level tenant mismatch protection and a bounded `BlockedManualReview` approval create/cancel RLS slice is verified; full `AutoProceeded` graph/checkpoint/runtime path remains a design blocker |
+| **Evidence** | `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; bounded slice adds `begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit` for the manual-review approval path |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 PENDING — review item; bounded decomposition slice delivered |
-| **Dependencies** | None (local review only) |
+| **Status** | 🟡 PARTIAL — bounded slice verified; full RLS wrapping NO-GO until tx-aware graph/checkpoint/orchestrator seams exist |
+| **Dependencies** | Full wrapping depends on `GraphRepository::update_node_state_with_tx`, checkpoint tx methods, and post-commit runtime-adapter boundary design |
 
-**No overclaim:** This is a review item to verify existing implementation. No new code expected unless issues found.
+**No overclaim:** This is not full `rebase_apply` RLS coverage. The `AutoProceeded` graph/checkpoint/runtime path remains outside an RLS transaction until broader repository/orchestrator tx seams are designed.
 
 ---
 
@@ -302,7 +302,7 @@ These items cannot proceed until specific external conditions are met.
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
 | **P2** | SqlxBundleRepository + forensic bundle RLS | 🔴 PENDING | Local engineering backlog (P2-L1); forensic bundle RLS wiring |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
-| **P2** | rebase_apply handler review | 🟡 PENDING | Local engineering backlog (P2-L3); review item |
+| **P2** | rebase_apply handler review | 🟡 PARTIAL | Local engineering backlog (P2-L3); bounded manual-review RLS slice verified; full wrapping blocked by design seams |
 | **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
 | **P2** | File decomposition (local-executable) | 🟡 FIRST SLICE DELIVERED | panic_hardening.rs extracted; Phase 4 continues |
@@ -335,7 +335,7 @@ The following items are local-executable and do not require external dependencie
 |------|----------|--------|-------|
 | SqlxBundleRepository + forensic bundle RLS | P1 | 🔴 PENDING | P2-L1 in this doc; forensic bundle RLS enforcement |
 | OpenAPI batch-execute RLS semantics | P2 | ✅ DOCUMENTED | P2-L2 in this doc; documentation complete |
-| rebase_apply handler review | P2 | 🟡 PENDING | P2-L3 in this doc; review item |
+| rebase_apply handler review | P2 | 🟡 PARTIAL | P2-L3 in this doc; bounded manual-review RLS slice verified; full wrapping blocked by graph/checkpoint tx seams |
 | Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
 
