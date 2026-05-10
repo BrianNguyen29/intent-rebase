@@ -228,7 +228,7 @@ Load Testing:
 □ L3-L5 pending staging/production environment
 
 Pen Test:
-□ Threat model v2 documented in docs/08-security/06-threat-model-v2.md
+□ Threat model v2 documented in docs/14-governance/06-threat-model-v2.md
 □ Pen test scope defined; execution pending
 
 Self-Review Date: <date>
@@ -561,7 +561,7 @@ The following claims must **NOT** appear in any Phase 3 documentation:
 | `DLQ worker implemented` | `DLQ design approved (gated); worker implementation blocked on G1-G5` |
 | `NATS consumer lifecycle implemented` | `NATS adapter exists; consumer lifecycle blocked on G1-G5` |
 | `production-ready` | `non-production feature completion` |
-| `remote CI passed` | `local canonical gates pass` |
+| `remote CI passed` | `local canonical gates are the required source of truth` |
 | `staging environment` (when referring to docker-compose) | `docker-compose local environment (staging-like, not staging-prod)` |
 
 ---

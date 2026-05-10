@@ -525,6 +525,36 @@ JWT / RLS / Audit:
 
 ---
 
+## Phase 3 Completion Todo List
+
+> **Purpose:** Single explicit todo-list for Phase 3 completion. All items must show STOP (gate closed) before Phase 4 begins. External items are owner-labeled but require external engagement to close.
+
+| # | Priority | Item | Owner | Status | Evidence | Next Action | Stop/Go Criteria |
+|---|----------|------|-------|--------|----------|-------------|------------------|
+| T-01 | P0 | Phase 3 exit gate | All | 🔴 OPEN | Gate status in `checklist-phase-3.md` | Populate gate sign-off lines; collect remaining local evidence | GO: Gate sign-offs obtained; GO when external sign-offs received |
+| T-02 | P1 | External SRE sign-off | SRE | 🔴 PENDING | SRE sign-off packet in `10-external-review-packet.md` | Prepare SRE review packet; engage external SRE | GO: External SRE name/date/statement recorded |
+| T-03 | P1 | External security review | Security | 🔴 PENDING | Security sign-off packet in `10-external-review-packet.md` | Prepare security review packet; engage external reviewer | GO: External security reviewer name/date/statement recorded |
+| T-04 | P1 | Production infrastructure | SRE | 🔴 BLOCKED | docker-compose local only | Requires production env provisioning | GO: Production env verified operational |
+| T-05 | P1 | Load testing L3–L5 | SRE | 🔴 BLOCKED | L1/L2 results in `docs/11-quality/load-test-results.md` | Requires staging/production infra | GO: L3 staging-like results; GO when L4/L5 pass |
+| T-06 | P1 | Penetration testing | Security | 🔴 BLOCKED | Threat model v2 in `docs/14-governance/06-threat-model-v2.md`; pen scope in `docs/08-security/06-pen-test-scope.md` | Engage external pen test team | GO: External pen test report; no blocking findings |
+| T-07 | P1 | Artifact side-effect tx boundary design-first | Backend Lead | ✅ DESIGN NOTE | ADR-08 in `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` | None — design complete | GO: Design-first approach followed; implementation Phase 4+ |
+| T-08 | P1 | SqlxBundleRepository + forensic bundle RLS wiring (RLC-13) | Backend Lead | 🔴 PENDING | `crates/forensic-service/src/bundle_repo.rs` (InMemory only); no SqlxBundleRepository | Implement migration + SqlxBundleRepository; add RLC-13 test | GO: SqlxBundleRepository exists; RLC-13 test passes |
+| T-09 | P2 | OpenAPI batch-execute RLS semantics documentation | Backend Lead | 🟡 PENDING | `crates/intent-api/src/lib.rs` (batch_execute handler) | Update OpenAPI spec to document per-item RLS tx semantics | GO: OpenAPI spec updated |
+| T-10 | P2 | rebase_apply handler review | Backend Lead | 🟡 PENDING | `crates/intent-api/src/lib.rs` (rebase_apply handler) | Review RLS tx wrapping and tenant isolation correctness | GO: Review complete; no blocking issues found |
+| T-11 | P0 | No-CI posture maintained | Backend Lead | ✅ INTENTIONAL | GitHub Actions disabled; local gates are source of truth | None | GO: CI remains disabled; no CI-green claims |
+
+**Gate Closure Rule:** Phase 3 gate closes when T-01 shows GO (gate sign-offs obtained) AND all P1 items (T-02 through T-08) show either GO or explicit user acknowledgement. T-09 and T-10 are P2 — can remain open into Phase 4 with owner tracking.
+
+**External Dependencies Note:** T-02, T-03, T-04, T-05, T-06 require external engagement and cannot be closed by solo self-review alone.
+
+**See Also:**
+- [checklist-phase-3.md](./checklists/checklist-phase-3.md) — Phase 3 exit gate with batch deliverable status
+- [16-solo-ops-evidence-plan.md](./16-solo-ops-evidence-plan.md) — Solo self-review evidence templates
+- [10-external-review-packet.md](../09-operations/10-external-review-packet.md) — SRE/security review packet templates
+- [11-pen-load-test-packet.md](../09-operations/11-pen-load-test-packet.md) — Pen/load test execution packet templates
+
+---
+
 ## Document Wiring
 
 This document is linked from:
@@ -543,7 +573,7 @@ This document is linked from:
 The following must NOT appear in any Phase 3 documentation:
 
 - `production-ready` (use: "non-production feature completion")
-- `remote CI passed` (use: "local canonical gates pass")
+- `remote CI passed` (use: "local canonical gates are the required source of truth")
 - `S3BundleStorage wired` (use: "S3BundleStorage seam exists but not wired")
 - `DLQ worker implemented` (use: "design approved; implementation gated on G1–G5")
 - `NATS consumer lifecycle implemented` (use: "adapter exists; lifecycle blocked on G1-G5")

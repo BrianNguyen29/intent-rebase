@@ -694,23 +694,56 @@
 
 ## Exit Gate Confirmation
 
-```
-ALL ITEMS COMPLETE: □ Yes □ No
+> **⚠️ Phase 3 Gate Status: OPEN — External Sign-offs Required**
+>
+> Phase 3 local deliverables are substantially complete (see batch status above). However, the exit gate remains **OPEN** pending external SRE and security sign-off, production infrastructure, and load/penetration testing. Do not represent this project as production-ready or CI-green.
 
+```
 Phase 3 Exit Gate Review Date: ___________
 Reviewed By: ___________
-Product Owner Sign-off: ___________
-Security Sign-off: ___________
-SRE Sign-off: ___________
-Compliance Sign-off: ___________
 
-Blocking Issues (if any):
-1.
-2.
-3.
+LOCAL DELIVERABLES STATUS:
+  Batch 0 (scaffold/planning): ✅ COMPLETE
+  Batch 1 (compensation engine + orchestration): ✅ COMPLETE
+  Batch 2 (SRE/observability): 🟡 LARGELY COMPLETE (external gates remain)
+  Batch 3a (tenant isolation): 🟡 LARGELY COMPLETE (P1 RLS wrapping in progress)
+  Batch 3b (forensic bundle): 🟡 LARGELY COMPLETE (S3 wiring deferred to Phase 4)
+  Batch 4a (performance): 🟡 LARGELY COMPLETE (L1/L2 delivered; L3-L5 blocked)
+  Batch 4b (security): 🟡 LARGELY COMPLETE (threat model + pen scope; pen test pending)
+
+ALL LOCAL ITEMS COMPLETE: 🟡 PARTIAL — see batch status above
+EXTERNAL GATES CLOSED: □ No — external sign-offs still required
+
+Product Owner Sign-off: ___________
+Security Sign-off: ___________ (🔴 PENDING — external security review not engaged)
+SRE Sign-off: ___________ (🔴 PENDING — external SRE review not engaged)
+Compliance Sign-off: ___________ (🔴 PENDING — certification audit not conducted)
+
+LOCAL VERIFICATION SOURCE: cargo test, cargo clippy, cargo fmt (local gates)
+REMOTE CI STATUS: GitHub Actions intentionally disabled (no-CI-spend posture; local verification is source of truth)
+
+Blocking Issues (explicit blockers — must resolve before Phase 4):
+1. 🔴 External SRE sign-off not obtained (solo self-review only; external review pending)
+2. 🔴 External security review not engaged (solo self-review only; external review pending)
+3. 🔴 Production infrastructure not provisioned (docker-compose local only)
+4. 🔴 Load testing L3-L5 blocked (staging/production infra required)
+5. 🔴 Penetration testing not executed (external engagement required)
+6. 🔴 P1 RLS transaction wrapping (P1-S5i SqlxBundleRepository + forensic bundle RLS pending)
+7. 🟡 Artifact side-effect out-of-tx/best-effort (design note ADR-08 created; implementation deferred)
+
+Local Engineering Backlog (Phase 3 residual — P2 priority):
+- P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (🔴 PENDING)
+- OpenAPI: batch-execute RLS semantics documentation (🟡 PENDING)
+- rebase_apply review (🟡 PENDING)
+- Artifact side-effect tx boundary (ADR-08 created; implementation Phase 4+)
+- Phase 4 deferred: forensic S3/DLQ/trace propagation (🔴 DEFERRED)
 
 Notes:
--
+- Local verification: cargo test --workspace (source of truth; no remote CI)
+- GitHub Actions: intentionally disabled (no-CI-spend posture; personal project)
+- No production-ready claim. Non-production feature completion only.
+- No CI-green claim. Local canonical gates are the required source of truth.
+- External sign-offs are distinct milestones not achieved by solo self-review.
 ```
 
 **Next Phase:** [Phase 4 — Enterprise Expansion](./checklist-phase-4.md)

@@ -19,6 +19,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 | [ADR-05](./05-observability-baseline.md) | Observability Baseline | **Accepted — Partially implemented** | P0–P1 |
 | [ADR-06](./06-rule-pack-versioning.md) | Rule Pack Versioning | **Accepted — Partially implemented** | P0–P1 |
 | [ADR-07](./07-approval-scope-canonicalization.md) | Approval Scope & Policy Snapshot Canonicalization | **Accepted — Partially implemented** | P1 |
+| [ADR-08](./08-artifact-side-effect-tx-boundary.md) | Artifact Side-Effect Transaction Boundary | **Accepted — Design decision; implementation deferred** | P2 |
 
 ---
 

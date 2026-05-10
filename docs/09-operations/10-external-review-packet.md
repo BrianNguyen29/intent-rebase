@@ -439,6 +439,7 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 | Document | Relationship |
 |----------|--------------|
 | `docs/10-delivery/16-solo-ops-evidence-plan.md` | References this template for Phase C (external review) |
+| `docs/10-delivery/15-phase-3-completion-execution-plan.md` | Master todo-list for Phase 3 completion (T-02 SRE sign-off, T-03 security sign-off, T-05 load testing, T-06 pen test) |
 | `docs/09-operations/04-sre-and-slos.md` | SLO definitions under review |
 | `docs/08-security/06-pen-test-scope.md` | Pen test scope document |
 | `docs/09-operations/05-runbooks.md` | Runbooks under review |

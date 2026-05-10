@@ -156,6 +156,67 @@ P2 items are important but not blocking Phase 3 exit. They split into **local-ex
 
 These items can be started without waiting for external dependencies.
 
+#### P2-L1: SqlxBundleRepository + Forensic Bundle RLS Wiring
+
+| Field | Value |
+|-------|-------|
+| **Description** | Implement `SqlxBundleRepository` with RLS policy for forensic bundles; wire into forensic-service runtime |
+| **Current State** | Runtime currently uses in-memory bundle repository; no SQL-backed forensic bundle repo exists yet |
+| **Evidence** | `crates/forensic-service/src/bundle_repo.rs` (BundleRepository trait + InMemoryBundleRepository); no SqlxBundleRepository yet |
+| **Owner** | Backend Lead |
+| **Status** | 🔴 PENDING — P1-S5i residual; blocks forensic bundle production RLS enforcement |
+| **Dependencies** | None (local code only); can proceed before external sign-offs |
+| **Implementation Notes** | Migration needed for `forensic_bundles` table with RLS policy; implement SqlxBundleRepository following SqlxOrchestrationRunRepository pattern; wire into ForensicBundleService; RLC-13 test for forensic bundle RLS |
+
+**No overclaim:** `SqlxBundleRepository` does not exist yet. Forensic bundle storage is in-memory only. Production deployment requires SQL-backed RLS storage.
+
+---
+
+#### P2-L2: OpenAPI Batch-Execute RLS Semantics Documentation
+
+| Field | Value |
+|-------|-------|
+| **Description** | Document RLS semantics for batch-execute endpoints (`POST /compensation-actions/batch-execute`) in OpenAPI spec |
+| **Current State** | Batch execute endpoints exist and use per-item RLS transactions; RLS semantics not documented in OpenAPI |
+| **Evidence** | `crates/intent-api/src/lib.rs` (batch_execute_compensation_actions handler); per-item `begin_with_tenant → executor → record_result_with_tx + create_with_tx → commit` |
+| **Owner** | Backend Lead |
+| **Status** | 🟡 PENDING — documentation only; OpenAPI spec update |
+| **Dependencies** | None (documentation only) |
+
+**No overclaim:** OpenAPI spec update is documentation-only. Implementation already exists with per-item RLS transactions.
+
+---
+
+#### P2-L3: rebase_apply Handler Review
+
+| Field | Value |
+|-------|-------|
+| **Description** | Review rebase_apply handler for RLS transaction wrapping and tenant isolation correctness |
+| **Current State** | rebase_apply handler delivered in Phase 2b; RLS wiring review pending |
+| **Evidence** | `crates/intent-api/src/lib.rs` (rebase_apply handler) |
+| **Owner** | Backend Lead |
+| **Status** | 🟡 PENDING — review item; bounded decomposition slice delivered |
+| **Dependencies** | None (local review only) |
+
+**No overclaim:** This is a review item to verify existing implementation. No new code expected unless issues found.
+
+---
+
+#### P2-L4: Artifact Side-Effect Transaction Boundary (ADR-08)
+
+| Field | Value |
+|-------|-------|
+| **Description** | Design note for artifact side-effect out-of-transaction/best-effort semantics |
+| **Current State** | ADR-08 created; documents current design (best-effort side-effect recording) and three options for Phase 4+ |
+| **Evidence** | `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` |
+| **Owner** | Backend Lead |
+| **Status** | ✅ DESIGN NOTE CREATED — implementation deferred to Phase 4+ |
+| **Dependencies** | None (design only) |
+
+**No overclaim:** ADR-08 is a design note. Implementation is Phase 4+ scope.
+
+---
+
 #### P2-1: Panic Hardening
 
 | Field | Value |
@@ -233,12 +294,16 @@ These items cannot proceed until specific external conditions are met.
 | Priority | Item | Status | Evidence Required |
 |----------|------|--------|------------------|
 | **P0** | CI/Actions disabled by design | ✅ INTENTIONAL | Local gates are source of truth |
-| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..12) | 🔴 IN PROGRESS | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f (trigger full-tx) BOUNDED DONE (local); S5g (approve/waive/reapprove + batch) BOUNDED DONE (local); S5h (execute single/batch) BOUNDED DONE (pushed 7167223) — per-item RLS tx with `side_effect_repo()` accessor; S5i (orchestration_runs bounded slice + artifact graph RLS tx) BOUNDED DONE (local/pushed); forensic SQL bundle PENDING; RLC-4..RLC-12 BOUNDED DONE (local, 13 tests passed) |
+| **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..12) | 🔴 IN PROGRESS | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f (trigger full-tx) BOUNDED DONE (local); S5g (approve/waive/reapprove + batch) BOUNDED DONE (local); S5h (execute single/batch) BOUNDED DONE (pushed 7167223) — per-item RLS tx with `side_effect_repo()` accessor; S5i (orchestration_runs bounded slice + artifact graph RLS tx) BOUNDED DONE (local/pushed); forensic SQL bundle PENDING (SqlxBundleRepository); RLC-4..RLC-12 BOUNDED DONE (local, 13 tests passed) |
 | **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
 | **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
 | **P1** | Production infra | 🔴 BLOCKED | Production env verified |
 | **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
+| **P2** | SqlxBundleRepository + forensic bundle RLS | 🔴 PENDING | Local engineering backlog (P2-L1); forensic bundle RLS wiring |
+| **P2** | OpenAPI batch-execute RLS semantics | 🟡 PENDING | Local engineering backlog (P2-L2); documentation update |
+| **P2** | rebase_apply handler review | 🟡 PENDING | Local engineering backlog (P2-L3); review item |
+| **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
 | **P2** | File decomposition (local-executable) | 🟡 FIRST SLICE DELIVERED | panic_hardening.rs extracted; Phase 4 continues |
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
@@ -262,6 +327,18 @@ The following external evidence/gates remain pending and are not yet available:
 | Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |
 | Forensic replay + Object Lock | 🔴 DEFERRED | Phase 4+ |
 
+## Local Engineering Backlog (Phase 3 Residual — P2 Priority)
+
+The following items are local-executable and do not require external dependencies. They can proceed in parallel with external sign-off collection.
+
+| Item | Priority | Status | Notes |
+|------|----------|--------|-------|
+| SqlxBundleRepository + forensic bundle RLS | P1 | 🔴 PENDING | P2-L1 in this doc; forensic bundle RLS enforcement |
+| OpenAPI batch-execute RLS semantics | P2 | 🟡 PENDING | P2-L2 in this doc; documentation update |
+| rebase_apply handler review | P2 | 🟡 PENDING | P2-L3 in this doc; review item |
+| Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
+| Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
+
 ---
 
 ## Forbidden Claims
@@ -271,7 +348,7 @@ The following must NOT appear in any documentation:
 | Forbidden Claim | Correct Wording |
 |-----------------|----------------|
 | `production-ready` | `non-production feature completion` or `bounded slice delivered` |
-| `remote CI passed` | `local canonical gates pass` or `remote CI startup_failure` |
+| `remote CI passed` | `local canonical gates are the required source of truth` or `remote CI startup_failure` |
 | `remote CI green` | `remote CI reports startup_failure` |
 | `full RLS enforced` | `RLS policies defined; full wiring pending` |
 | `production load test passed` | `L1/L2 bounded local evidence; L3-L5 blocked` |
@@ -288,3 +365,6 @@ The following must NOT appear in any documentation:
 - [SRE Approval Checklist](./sre-approval-checklist.md) — Detailed SRE review items
 - [CI/CD](../09-operations/02-ci-cd.md) — Actual vs aspirational CI/CD state
 - [Solo Ops Evidence Plan](./16-solo-ops-evidence-plan.md) — Solo self-review evidence templates
+- [External Review Packet](../09-operations/10-external-review-packet.md) — SRE/security review packet template
+- [Pen/Load Test Packet](../09-operations/11-pen-load-test-packet.md) — Pen/load test execution packet template
+- [ADR-08: Artifact Side-Effect Tx Boundary](../13-adrs/08-artifact-side-effect-tx-boundary.md) — Design note for artifact side-effect transaction boundary
