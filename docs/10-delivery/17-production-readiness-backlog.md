@@ -236,7 +236,7 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Large module decomposition for maintainability |
-| **Current State** | Multiple bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, and first pure test relocation slice; remaining work includes `rebase_apply`, router/test fixture decomposition, and broader test-module cleanup |
+| **Current State** | Multiple bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, and first pure test relocation slice; remaining work includes router/test fixture decomposition and broader test-module cleanup |
 | **Owner** | Backend Lead |
 | **Status** | 🟡 IN PROGRESS (bounded decomposition slices delivered) — Phase 4 continues with additional bounded slices |
 | **Dependencies** | None (local code only) |
