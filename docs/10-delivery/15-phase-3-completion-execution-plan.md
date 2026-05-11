@@ -285,25 +285,27 @@ SRE Review (if external):
 ### P1-6: SRE/Security Sign-Off Evidence Checklist
 
 > **Two Tracks:** This checklist supports both solo self-review (personal project) and external sign-off tracks. Solo self-review is **weaker evidence**. See [16-solo-ops-evidence-plan.md](./16-solo-ops-evidence-plan.md) for the solo self-review path.
+>
+> **WAIVED-SOLO Policy (Non-Production Phase 3 Only):** External gates may be marked WAIVED-SOLO for non-production Phase 3 close-out. This is valid **only for feature completion tracking** and **must be revisited with named external evidence before any production deployment or production-readiness claim**.
 
 | Area | Item | Evidence Required | Owner | Solo Self-Review Status | External Sign-Off Status |
 |------|------|-------------------|-------|------------------------|-------------------------|
-| **SLOs** | SLO definitions confirmed | SRE confirms provisional SLO targets are acceptable | SRE | 🟡 Self-reviewed (solo) | 🔴 PENDING — requires SRE |
-| **SLOs** | SLO dashboard available | Grafana dashboard URL or screenshot | SRE | 🟡 Self-reviewed (local) | 🔴 PENDING — requires prod |
-| **SLOs** | Error budget panels active | Grafana panels showing burn rate | SRE | 🟡 Self-reviewed (local) | 🔴 PENDING — requires prod |
-| **Alerting** | Alertmanager config deployed | Alertmanager config or curl output | SRE | 🟡 Config self-reviewed (local) | 🔴 PENDING — requires prod |
-| **Alerting** | Alert routing confirmed | Alerts route to correct channels | SRE | 🔴 BLOCKED (requires prod) | 🔴 PENDING — requires prod |
-| **Telemetry** | OTLP endpoint connected | OTEL collector receiving data | SRE | 🔴 BLOCKED (requires prod) | 🔴 PENDING — requires prod |
-| **Telemetry** | Trace context propagated | W3C traceparent in logs/traces | SRE | 🟡 PARTIAL — in-process done | 🟡 PARTIAL — cross-process in progress |
-| **Runbooks** | RB1–RB11 available | Runbooks in `docs/09-operations/05-runbooks.md` | SRE | ✅ Self-approved (solo) | 🟡 PENDING — requires SRE approval |
-| **Load Testing** | Full production load test | Timestamped k6/Artillery report | SRE | 🔴 BLOCKED — see P1-5 | 🔴 BLOCKED — see P1-5 |
-| **Pen Test** | Penetration testing executed | Pen test report (external) | Security | 🔴 BLOCKED (requires external) | 🔴 BLOCKED — requires external |
-| **Pen Test** | Findings remediated | Evidence of fix for each finding | Security | 🔴 BLOCKED (requires pen test) | 🔴 BLOCKED — requires pen test |
-| **External Review** | External security review sign-off | External reviewer name/date/statement | Security | 🔴 BLOCKED (requires external) | 🔴 PENDING — requires external |
-| **Compliance** | SOC2/GDPR/ISO27001 checklist | Compliance checklist with all items checked | Security | 🟡 Self-reviewed (solo) | 🟡 PENDING — requires audit |
-| **Incident Response** | IR plan documented and tested | IR plan doc + test evidence | SRE | 🟡 Plan self-reviewed (solo) | 🟡 PENDING — tabletop not run |
-| **Failover** | Failover/recovery tested | Test results | SRE | 🔴 BLOCKED (requires prod) | 🔴 PENDING — requires prod |
-| **Deployment** | Production deployment verified | Deployment runbook + verification | SRE | 🔴 BLOCKED (requires prod) | 🔴 PENDING — requires prod |
+| **SLOs** | SLO definitions confirmed | SRE confirms provisional SLO targets are acceptable | SRE | 🟡 Self-reviewed (solo) | 🟡 WAIVED-SOLO — requires SRE before production |
+| **SLOs** | SLO dashboard available | Grafana dashboard URL or screenshot | SRE | 🟡 Self-reviewed (local) | 🟡 WAIVED-SOLO — requires prod before production |
+| **SLOs** | Error budget panels active | Grafana panels showing burn rate | SRE | 🟡 Self-reviewed (local) | 🟡 WAIVED-SOLO — requires prod before production |
+| **Alerting** | Alertmanager config deployed | Alertmanager config or curl output | SRE | 🟡 Config self-reviewed (local) | 🟡 WAIVED-SOLO — requires prod before production |
+| **Alerting** | Alert routing confirmed | Alerts route to correct channels | SRE | 🔴 BLOCKED (requires prod) | 🟡 WAIVED-SOLO — requires prod before production |
+| **Telemetry** | OTLP endpoint connected | OTEL collector receiving data | SRE | 🔴 BLOCKED (requires prod) | 🟡 WAIVED-SOLO — requires prod before production |
+| **Telemetry** | Trace context propagated | W3C traceparent in logs/traces | SRE | 🟡 PARTIAL — in-process done | 🟡 WAIVED-SOLO — cross-process in progress |
+| **Runbooks** | RB1–RB11 available | Runbooks in `docs/09-operations/05-runbooks.md` | SRE | ✅ Self-approved (solo) | 🟡 WAIVED-SOLO — requires SRE approval before production |
+| **Load Testing** | Full production load test | Timestamped k6/Artillery report | SRE | 🔴 BLOCKED — see P1-5 | 🟡 WAIVED-SOLO — see P1-5 |
+| **Pen Test** | Penetration testing executed | Pen test report (external) | Security | 🔴 BLOCKED (requires external) | 🟡 WAIVED-SOLO — requires external before production |
+| **Pen Test** | Findings remediated | Evidence of fix for each finding | Security | 🔴 BLOCKED (requires pen test) | 🟡 WAIVED-SOLO — requires pen test before production |
+| **External Review** | External security review sign-off | External reviewer name/date/statement | Security | 🔴 BLOCKED (requires external) | 🟡 WAIVED-SOLO — requires external before production |
+| **Compliance** | SOC2/GDPR/ISO27001 checklist | Compliance checklist with all items checked | Security | 🟡 Self-reviewed (solo) | 🟡 WAIVED-SOLO — requires audit before production |
+| **Incident Response** | IR plan documented and tested | IR plan doc + test evidence | SRE | 🟡 Plan self-reviewed (solo) | 🟡 WAIVED-SOLO — tabletop not run before production |
+| **Failover** | Failover/recovery tested | Test results | SRE | 🔴 BLOCKED (requires prod) | 🟡 WAIVED-SOLO — requires prod before production |
+| **Deployment** | Production deployment verified | Deployment runbook + verification | SRE | 🔴 BLOCKED (requires prod) | 🟡 WAIVED-SOLO — requires prod before production |
 
 **SRE Sign-Off Evidence Template (Solo Self-Review Track):**
 
@@ -518,10 +520,10 @@ JWT / RLS / Audit:
 | E-02 | S3 decision (Option B default) | Backend Lead | This document | ✅ DECIDED |
 | E-03 | Option A risk acknowledgement (if chosen) | User | Signed acknowledgement form | 🔴 BLOCKED (if Option A desired) |
 | E-04 | DLQ G1–G5 gate evidence | Backend Lead / SRE | Gate checklist with signatures | 🟡 PARTIAL/PASS (bounded solo evidence) — G1 solo, G2 validated, G3 stubs, G4 RB11, G5 bounded tests; external sign-off/app-level DLQ routing not claimed |
-| E-05 | Production load test report | SRE | Timestamped k6/Artillery report | 🔴 BLOCKED |
-| E-06 | SRE sign-off | SRE | Signed SRE checklist | 🔴 PENDING |
-| E-07 | Security sign-off | Security | Signed security checklist | 🔴 PENDING |
-| E-08 | Phase 3 exit gate closed | All | Gate status updated | 🔴 BLOCKED |
+| E-05 | Production load test report | SRE | Timestamped k6/Artillery report | 🟡 WAIVED-SOLO (non-production Phase 3 only) |
+| E-06 | SRE sign-off | SRE | Signed SRE checklist | 🟡 WAIVED-SOLO (non-production Phase 3 only) |
+| E-07 | Security sign-off | Security | Signed security checklist | 🟡 WAIVED-SOLO (non-production Phase 3 only) |
+| E-08 | Phase 3 exit gate closed | All | Gate status updated | 🟡 OPEN — WAIVED-SOLO external gates accepted for non-production Phase 3 only; must close with named external evidence before production claim |
 
 ---
 
@@ -531,21 +533,23 @@ JWT / RLS / Audit:
 
 | # | Priority | Item | Owner | Status | Evidence | Next Action | Stop/Go Criteria |
 |---|----------|------|-------|--------|----------|-------------|------------------|
-| T-01 | P0 | Phase 3 exit gate | All | 🔴 OPEN | Gate status in `checklist-phase-3.md` | Populate gate sign-off lines; collect remaining local evidence | GO: Gate sign-offs obtained; GO when external sign-offs received |
-| T-02 | P1 | External SRE sign-off | SRE | 🔴 PENDING | SRE sign-off packet in `10-external-review-packet.md` | Prepare SRE review packet; engage external SRE | GO: External SRE name/date/statement recorded |
-| T-03 | P1 | External security review | Security | 🔴 PENDING | Security sign-off packet in `10-external-review-packet.md` | Prepare security review packet; engage external reviewer | GO: External security reviewer name/date/statement recorded |
-| T-04 | P1 | Production infrastructure | SRE | 🔴 BLOCKED | docker-compose local only | Requires production env provisioning | GO: Production env verified operational |
-| T-05 | P1 | Load testing L3–L5 | SRE | 🔴 BLOCKED | L1/L2 results in `docs/11-quality/load-test-results.md` | Requires staging/production infra | GO: L3 staging-like results; GO when L4/L5 pass |
-| T-06 | P1 | Penetration testing | Security | 🔴 BLOCKED | Threat model v2 in `docs/14-governance/06-threat-model-v2.md`; pen scope in `docs/08-security/06-pen-test-scope.md` | Engage external pen test team | GO: External pen test report; no blocking findings |
+| T-01 | P0 | Phase 3 exit gate | All | 🟡 OPEN — WAIVED-SOLO accepted for non-production Phase 3 only | Gate status in `checklist-phase-3.md` | Populate gate sign-off lines; collect remaining local evidence | GO: Gate sign-offs obtained or WAIVED-SOLO documented; must close with named external evidence before production claim |
+| T-02 | P1 | External SRE sign-off | SRE | 🟡 WAIVED-SOLO (non-production Phase 3 only) | SRE sign-off packet in `10-external-review-packet.md` | Prepare SRE review packet; engage external SRE | GO: External SRE name/date/statement recorded before production claim |
+| T-03 | P1 | External security review | Security | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Security sign-off packet in `10-external-review-packet.md` | Prepare security review packet; engage external reviewer | GO: External security reviewer name/date/statement recorded before production claim |
+| T-04 | P1 | Production infrastructure | SRE | 🟡 WAIVED-SOLO (non-production Phase 3 only) | docker-compose local only | Requires production env provisioning | GO: Production env verified operational before deployment |
+| T-05 | P1 | Load testing L3–L5 | SRE | 🟡 WAIVED-SOLO (non-production Phase 3 only) | L1/L2 results in `docs/11-quality/load-test-results.md` | Requires staging/production infra | GO: L3 staging-like results; GO when L4/L5 pass before production claim |
+| T-06 | P1 | Penetration testing | Security | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Threat model v2 in `docs/14-governance/06-threat-model-v2.md`; pen scope in `docs/08-security/06-pen-test-scope.md` | Engage external pen test team | GO: External pen test report; no blocking findings before production claim |
 | T-07 | P1 | Artifact side-effect tx boundary design-first | Backend Lead | ✅ DESIGN NOTE | ADR-08 in `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` | None — design complete | GO: Design-first approach followed; implementation Phase 4+ |
 | T-08 | P1 | SqlxBundleRepository + forensic bundle RLS wiring (RLC-13) | Backend Lead | ✅ BOUNDED VERIFIED | `infrastructure/migrations/016_create_forensic_bundles.sql`; `crates/forensic-service/src/bundle_repo.rs`; `crates/intent-api/tests/rls_integration.rs` | SQL-backed forensic bundle repo, migration 016, runtime SQL wiring, and RLC-13 tenant isolation test delivered | GO: Bounded local slice verified; targeted live RLC-13 passed on isolated local Postgres |
 | T-09 | P2 | OpenAPI batch-execute RLS semantics documentation | Backend Lead | ✅ DOCUMENTED | `docs/04-api/openapi.yaml` (batch-execute description updated) | OpenAPI spec updated with per-item RLS tx semantics | GO: OpenAPI spec updated |
 | T-10 | P2 | rebase_apply handler review | Backend Lead | ✅ DESIGN RESOLVED — ADR-09 accepted; bounded Slice 1/2 graph RLS seam + post-hoc check delivered | `docs/13-adrs/09-rebase-apply-rls-transaction-boundary.md`; `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; `crates/graph-service/src/sqlx_graph_repository.rs` | Bounded `BlockedManualReview` approval create/cancel RLS slice verified. Bounded graph RLS slice delivered: `SqlxGraphRepository::update_node_state_with_tx` added; JWT AutoProceeded/AutoProceededWithNotification post-hoc RLS tx check/update applied after successful graph updates; fallback preserved when no RLS pool/claims/SQL repo. ADR-09 records accepted three-phase design (read-only tx → write tx → post-commit signal) with caller-side orchestration and non-RLS fallback. Remaining implementation (D1–D7) is Phase 4 scope. | GO: Design resolved per ADR-09; D1–D7 deferred to Phase 4; external SRE/security/load/pen still blocked |
 | T-11 | P0 | No-CI posture maintained | Backend Lead | ✅ INTENTIONAL | GitHub Actions disabled; local gates are source of truth | None | GO: CI remains disabled; no CI-green claims |
 
-**Gate Closure Rule:** Phase 3 gate closes when T-01 shows GO (gate sign-offs obtained) AND all P1 items (T-02 through T-08) show either GO or explicit user acknowledgement. T-09 and T-10 are P2 — can remain open into Phase 4 with owner tracking.
+**Gate Closure Rule:** Phase 3 gate closes when T-01 shows GO (gate sign-offs obtained or WAIVED-SOLO documented) AND all P1 items (T-02 through T-08) show either GO, explicit user acknowledgement, or WAIVED-SOLO with documented rationale. T-09 and T-10 are P2 — can remain open into Phase 4 with owner tracking.
 
-**External Dependencies Note:** T-02, T-03, T-04, T-05, T-06 require external engagement and cannot be closed by solo self-review alone.
+**WAIVED-SOLO Policy:** T-02 through T-06 may be marked WAIVED-SOLO for non-production Phase 3 close-out only. This is valid for feature completion tracking and does not constitute production readiness. All WAIVED-SOLO items must be revisited and closed with named external evidence before any production deployment or production-readiness claim.
+
+**External Dependencies Note:** T-02, T-03, T-04, T-05, T-06 require external engagement for production readiness. Solo self-review (WAIVED-SOLO) is accepted only for non-production Phase 3 close-out.
 
 **See Also:**
 - [checklist-phase-3.md](./checklists/checklist-phase-3.md) — Phase 3 exit gate with batch deliverable status

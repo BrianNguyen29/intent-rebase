@@ -299,6 +299,50 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 
 **No overclaim:** This is a bounded L4 observability slice — one metric, one code path, local docker-compose only. Full L4 observability (all metrics, all paths, alerting validation, production scrape config) remains future scope.
 
+### L4 Multi-Path Follow-Up — 2026-05-11
+
+**Goal:** Attempt to validate additional metric paths (diff, rebase-preview, rebase-apply) by generating traffic across multiple endpoints.
+
+**Setup:**
+- intent-api binary run via `cargo run -p intent-api --no-default-features` (disabled default `jwt-auth` feature to rule out JWT middleware as the cause)
+- Server bound `0.0.0.0:8080`, in-memory repositories
+- `POST /intents` succeeded and created intent with ID `23e9748e-7c11-4316-a7e1-e63b675a480d`
+- Total `intent_api_intent_version_created_total` incremented to 11
+
+**Multi-path traffic attempt:**
+
+| Endpoint | Method | Payload | Result | Notes |
+|----------|--------|---------|--------|-------|
+| `/intents/{intent_id}/versions` | POST | Valid CreateVersionRequest | 404 | Parameterized route not matched |
+| `/intents/{intent_id}/diff` | POST | `{"from_version":1,"to_version":2}` | 404 | Parameterized route not matched |
+| `/intents/{intent_id}/rebase-preview` | POST | `{"from_version":1,"to_version":2}` | 404 | Parameterized route not matched |
+| `/intents/{intent_id}/rebase-apply` | POST | `{"from_version":1,"to_version":2}` | 404 | Parameterized route not matched |
+| `/intents/{intent_id}/versions` | GET | — | 404 | Parameterized route not matched |
+| `/intents/{intent_id}/versions/{version_number}` | GET | — | 404 | Parameterized route not matched |
+| `/v1/graph/nodes` | POST | `{}` | 422 | Route matched (missing field error) |
+| `/v1/graph/nodes/{node_id}` | GET | — | 404 | Parameterized route not matched |
+| `/approval-requests/pending` | GET | — | 400 | Route matched (missing query param) |
+| `/forensic/verify` | POST | `{}` | 422 | Route matched (missing field error) |
+
+**Root cause analysis:**
+- All non-parameterized routes (`/health`, `/metrics`, `/intents`, `/v1/graph/nodes`, `/approval-requests/pending`, `/forensic/verify`) match correctly and return expected status codes
+- All parameterized routes (`/intents/{intent_id}`, `/intents/{intent_id}/versions`, `/intents/{intent_id}/diff`, etc.) return 404
+- This behavior persists regardless of `jwt-auth` feature state
+- Hypothesis: The `build_inmemory_router()` → `build_router()` chain may have a route registration issue specifically for parameterized paths when running as a standalone binary, or there is a subtle axum route-matching behavior not present in the test harness
+- This is a runtime validation blocker, not a metrics implementation issue
+
+**Metrics validated:**
+- ✅ `intent_api_intent_version_created_total` — validated via 11 successful `POST /intents` requests
+
+**Metrics blocked:**
+- 🔴 `intent_api_diff_compute_duration_seconds` — blocked by 404 on `/intents/{intent_id}/diff`
+- 🔴 `intent_api_rebase_preview_requests_total` — blocked by 404 on `/intents/{intent_id}/rebase-preview`
+- 🔴 `intent_api_rebase_preview_duration_seconds` — blocked by 404 on `/intents/{intent_id}/rebase-preview`
+- 🔴 `intent_api_rebase_apply_requests_total` — blocked by 404 on `/intents/{intent_id}/rebase-apply`
+- 🔴 `intent_api_rebase_apply_duration_seconds` — blocked by 404 on `/intents/{intent_id}/rebase-apply`
+
+**No overclaim:** Only one of six core metrics was validated. The remaining five are blocked by a parameterized route 404 issue in the standalone binary. Full L4 multi-path observability validation remains incomplete.
+
 ---
 
 ## Limitations
@@ -311,7 +355,8 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 - **Synthetic payloads** — small, fixed-size request bodies
 - **No connection pool exhaustion test** — bounded concurrent clients only
 - **Prometheus metrics empty (initial/SQLx runs)** — 2026-05-11 initial and SQLx runs returned empty vectors for both non-existent aggregate names and actual metric names because the in-process test harness did not expose a scrapeable metrics endpoint
-- **Prometheus one-metric validated (L4 bounded follow-up)** — 2026-05-11 L4 follow-up successfully scraped `intent_api_intent_version_created_total` from a running intent-api binary; full L4 observability (all metrics, all paths, alerting) remains unvalidated
+- **Prometheus one-metric validated (L4 bounded follow-up)** — 2026-05-11 L4 follow-up successfully scraped `intent_api_intent_version_created_total` from a running intent-api binary
+- **L4 multi-path blocked** — 2026-05-11 multi-path follow-up attempted diff, rebase-preview, and rebase-apply traffic but all parameterized routes returned 404 in the standalone binary; only 1 of 6 core metrics validated; full L4 observability remains incomplete
 - **NATS unhealthy (initial run)** — 2026-05-11 initial run showed NATS container as unhealthy; fixed in follow-up by adding `-m 8222` to NATS command
 
 ### SQLx Tests

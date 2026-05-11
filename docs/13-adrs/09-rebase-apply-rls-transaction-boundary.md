@@ -183,6 +183,19 @@ Rejected. That couples domain orchestration to API/RLS infrastructure and makes 
 
 ---
 
+## Phase 3 Risk Acceptance
+
+For non-production Phase 3 close-out, the residual risk of the non-RLS `rebase_apply` primary path is **accepted** with the following mitigations:
+
+1. **Post-hoc RLS graph check** — The `AutoProceeded` and `AutoProceededWithNotification` paths use a post-hoc RLS transaction check/update after the non-RLS graph mutation succeeds. This is **detection-only** (not prevention): if the RLS check fails, a warning is logged but the mutation is not rolled back.
+2. **BlockedManualReview path is RLS-wrapped** — The approval create/cancel path for `BlockedManualReview` outcomes runs inside a full RLS transaction (`begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit`).
+3. **Tenant mismatch rejection** — Handler-level JWT tenant guard rejects cross-tenant requests before any graph mutation begins (fail-closed).
+4. **RLC-14 tenant isolation test** — A dedicated tenant mismatch rejection test exists in `crates/intent-api/src/rebase_apply_handler_tests.rs`.
+
+**Residual risk:** A compromised or misconfigured non-RLS graph mutation on the `AutoProceeded` path could write cross-tenant data before the post-hoc check detects it. The probability is low (requires both JWT bypass AND graph mutation bypass), but the impact is high (cross-tenant data leakage).
+
+**Decision:** Accept this residual risk for non-production Phase 3. Full primary-path RLS wrapping (D1–D7) remains Phase 4 scope and must be completed before any production deployment claim.
+
 ## Related ADRs
 
 - ADR-02 (Data Plane): Tenant isolation and RLS baseline.

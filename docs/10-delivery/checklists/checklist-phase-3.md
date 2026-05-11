@@ -694,9 +694,11 @@
 
 ## Exit Gate Confirmation
 
-> **⚠️ Phase 3 Gate Status: OPEN — External Sign-offs Required**
+> **⚠️ Phase 3 Gate Status: OPEN — External Sign-offs Required (Non-Production Only)**
 >
 > Phase 3 local deliverables are substantially complete (see batch status above). However, the exit gate remains **OPEN** pending external SRE and security sign-off, production infrastructure, and load/penetration testing. Do not represent this project as production-ready or CI-green.
+>
+> **External Gate Solo Acceptance Policy:** For non-production Phase 3 close-out only, external SRE/security/load/pen gates may be marked **WAIVED-SOLO** with explicit documentation that solo self-review is weaker evidence than external verification. This waiver is valid **only for non-production feature completion tracking** and **must be revisited before any deployment or production readiness claim**. Production deployment requires named external sign-offs.
 
 ```
 Phase 3 Exit Gate Review Date: ___________
@@ -723,14 +725,14 @@ LOCAL VERIFICATION SOURCE: cargo test, cargo clippy, cargo fmt (local gates)
 REMOTE CI STATUS: GitHub Actions intentionally disabled (no-CI-spend posture; local verification is source of truth)
 
 Blocking Issues (explicit blockers — must resolve before Phase 4):
-1. 🔴 External SRE sign-off not obtained (solo self-review only; external review pending)
-2. 🔴 External security review not engaged (solo self-review only; external review pending)
-3. 🔴 Production infrastructure not provisioned (docker-compose local only)
-4. 🔴 Load testing L3-L5 blocked (staging/production infra required)
-5. 🔴 Penetration testing not executed (external engagement required)
+1. 🟡 External SRE sign-off — **WAIVED-SOLO for non-production Phase 3 only** (solo self-review completed; external sign-off required before production claim)
+2. 🟡 External security review — **WAIVED-SOLO for non-production Phase 3 only** (solo self-review completed; external review required before production claim)
+3. 🟡 Production infrastructure not provisioned — **WAIVED-SOLO for non-production Phase 3 only** (docker-compose local only; production env required before deployment)
+4. 🟡 Load testing L3-L5 — **WAIVED-SOLO for non-production Phase 3 only** (L1/L2 local evidence collected; L3-L5 staging/production required before production claim)
+5. 🟡 Penetration testing — **WAIVED-SOLO for non-production Phase 3 only** (threat model v2 + pen scope defined; external pen test required before production claim)
 6. 🟡 P1 RLS transaction wrapping (P1-S5i bounded orchestration/replay guard + artifact/graph RLS tx delivered; forensic bundle RLS bounded verified; full wrapping still blocked by checkpoint/runtime signal tx seams and external gates)
 7. 🟡 Artifact side-effect out-of-tx/best-effort (design note ADR-08 created; implementation deferred)
-8. ✅ rebase_apply RLS design resolved — ADR-09 accepted; bounded Slice 1/2 delivered (graph post-hoc check + manual-review tx); checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open and are tracked as Phase 4 D1–D7
+8. ✅ rebase_apply RLS design resolved — ADR-09 accepted with Phase 3 risk acceptance; bounded Slice 1/2 delivered (graph post-hoc check + manual-review tx); checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open and are tracked as Phase 4 D1–D7
 
 Local Engineering Backlog (Phase 3 residual — P2 priority):
 - P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (✅ BOUNDED VERIFIED; full production/external gates still open)
@@ -745,6 +747,7 @@ Notes:
 - No production-ready claim. Non-production feature completion only.
 - No CI-green claim. Local canonical gates are the required source of truth.
 - External sign-offs are distinct milestones not achieved by solo self-review.
+- **External gate solo acceptance (WAIVED-SOLO):** Valid only for non-production Phase 3 close-out. All WAIVED-SOLO items must be revisited and closed with named external evidence before any production deployment or production-readiness claim.
 ```
 
 **Next Phase:** [Phase 4 — Enterprise Expansion](./checklist-phase-4.md)

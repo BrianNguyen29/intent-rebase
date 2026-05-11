@@ -295,11 +295,11 @@ These items cannot proceed until specific external conditions are met.
 |----------|------|--------|------------------|
 | **P0** | CI/Actions disabled by design | ✅ INTENTIONAL | Local gates are source of truth |
 | **P1** | RLS transaction wrapping (P1-S1..S5 + RLC-4..13) | 🟡 BOUNDED LOCAL VERIFIED | S1-S4 BOUNDED DONE (pushed); S5a..S5e BOUNDED DONE (pushed); S5f/S5g/S5h bounded slices delivered; S5i orchestration/artifact graph bounded slices delivered; forensic SQL bundle repo + migration 016 delivered; targeted live RLC-13 passed on isolated local Postgres |
-| **P1** | External SRE sign-off | 🔴 PENDING | External SRE name/date/statement |
-| **P1** | External security sign-off | 🔴 PENDING | External reviewer name/date/statement |
-| **P1** | Production infra | 🔴 BLOCKED | Production env verified |
-| **P1** | Load testing (L3-L5) | 🔴 BLOCKED | Staged/production results |
-| **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
+| **P1** | External SRE sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External SRE name/date/statement required before production claim |
+| **P1** | External security sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External reviewer name/date/statement required before production claim |
+| **P1** | Production infra | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production env verified required before deployment |
+| **P1** | Load testing (L3-L5) | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staged/production results required before production claim |
+| **P1** | Penetration testing | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External pen test report required before production claim |
 | **P2** | SqlxBundleRepository + forensic bundle RLS | ✅ BOUNDED VERIFIED | Local engineering backlog (P2-L1); migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
 | **P2** | rebase_apply handler review | ✅ DESIGN RESOLVED | Local engineering backlog (P2-L3); ADR-09 accepted; design no longer blocked; implementation deferred to Phase 4 D1–D7 |
@@ -318,14 +318,16 @@ The following external evidence/gates remain pending and are not yet available:
 
 | Packet | Status | Blocking |
 |--------|--------|----------|
-| External SRE sign-off | 🔴 PENDING | Production deployment |
-| External security review | 🔴 PENDING | Production deployment |
-| Penetration test report | 🔴 PENDING | Production deployment |
-| Load test L3-L5 results | 🔴 PENDING | Production deployment |
-| Production infrastructure | 🔴 BLOCKED | Staging/production deployment |
+| External SRE sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
+| External security review | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
+| Penetration test report | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
+| Load test L3-L5 results | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
+| Production infrastructure | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staging/production deployment |
 | DLQ replay worker | 🔴 DEFERRED | Phase 4 (requires G1-G5 gates) |
 | Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |
 | Forensic replay + Object Lock | 🔴 DEFERRED | Phase 4+ |
+
+**WAIVED-SOLO Policy:** External gates marked WAIVED-SOLO are accepted for non-production Phase 3 close-out only. Solo self-review is weaker evidence than external verification. All WAIVED-SOLO items must be revisited and closed with named external evidence before any production deployment or production-readiness claim.
 
 ## Local Engineering Backlog (Phase 3 Residual — P2 Priority)
 
@@ -338,6 +340,7 @@ The following items are local-executable and do not require external dependencie
 | rebase_apply handler review | P2 | ✅ DESIGN RESOLVED | P2-L3 in this doc; ADR-09 accepted; design no longer blocked; implementation deferred to Phase 4 D1–D7 |
 | Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
+| Forensic replay real-repo evidence | P2 | 📋 CONSIDERED | Next candidate slice for real-repo validation; not yet implemented |
 
 ---
 
