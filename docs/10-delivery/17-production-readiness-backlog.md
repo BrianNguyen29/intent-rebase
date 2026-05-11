@@ -236,11 +236,11 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Large module decomposition for maintainability |
-| **Current State** | Bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, and handler test-module extractions complete (rebase simulation, approval invalidation, compensation simulation, rebase preview); `handler_tests.rs` reduced to router smoke/residual wiring test; remaining higher-risk work is router decomposition |
+| **Current State** | Bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, handler test-module extractions complete (rebase simulation, approval invalidation, compensation simulation, rebase preview), and `build_router_with_jwt_auth` deduplication (`commit dbd8758`); `build_router_with_jwt_auth` now delegates to canonical `build_router` with `rls_pool: None` and layers JWT middleware, eliminating duplicate route registration; `handler_tests.rs` reduced to router smoke/residual wiring test; remaining higher-risk work is broader router route grouping/split |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 IN PROGRESS (bounded decomposition slices delivered) — Phase 4 continues with router decomposition and additional bounded slices |
+| **Status** | 🟡 IN PROGRESS (bounded decomposition slices delivered) — Phase 4 continues with broader router decomposition and additional bounded slices |
 | **Dependencies** | None (local code only) |
-| **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; DTOs/types and many API handlers moved into focused modules; handler test groups extracted to `rebase_simulation_tests.rs`, `approval_invalidation_tests.rs`, `compensation_simulation_tests.rs`, and `rebase_preview_tests.rs`; `handler_tests.rs` now contains only the router smoke test and trace-context comment. Router split remains a higher-risk production refactor deferred to Phase 4. No production-readiness claim is implied by this maintainability work. |
+| **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; DTOs/types and many API handlers moved into focused modules; handler test groups extracted to `rebase_simulation_tests.rs`, `approval_invalidation_tests.rs`, `compensation_simulation_tests.rs`, and `rebase_preview_tests.rs`; `handler_tests.rs` now contains only the router smoke test and trace-context comment. Router JWT builder deduplication (`dbd8758`) removes duplicated route/state/middleware body from `build_router_with_jwt_auth` by delegating to `build_router(..., None)` and layering JWT middleware using the same pattern as `build_router_with_sql_audit_and_approval_jwt`. Broader router route grouping or file split remains a higher-risk production refactor deferred to Phase 4. No production-readiness claim is implied by this maintainability work. |
 
 ---
 
@@ -305,7 +305,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2** | rebase_apply handler review | 🟡 PARTIAL | Local engineering backlog (P2-L3); bounded manual-review RLS slice verified; full wrapping blocked by design seams |
 | **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
-| **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; router split remains Phase 4 |
+| **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; `build_router_with_jwt_auth` deduplicated (delegates to `build_router`); broader router route grouping/split remains Phase 4 |
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🔴 DEFERRED | Phase 4+ scope |
