@@ -398,7 +398,11 @@ async fn jwt_auth_async(
 /// Public routes (health, ready, metrics) are NOT protected by JWT.
 /// All other routes require a valid JWT in the Authorization header.
 ///
-/// Use this instead of `build_router` when JWT authentication is enabled.
+/// This builder delegates to [`build_router`] with `rls_pool: None`, so it is
+/// intended for in-memory or testing JWT setups. Production deployments that
+/// require both JWT authentication and SQL-backed audit/approval repositories
+/// (with optional RLS) should use [`build_router_with_sql_audit_and_approval_jwt`]
+/// instead.
 #[cfg(feature = "jwt-auth")]
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_variables)]

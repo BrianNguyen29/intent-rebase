@@ -1,7 +1,11 @@
 //! JWT authentication types for intent-api
 //!
 //! This module provides JWT authentication when the `jwt-auth` feature is enabled.
-//! Use `build_router_with_jwt_auth` instead of `build_router` to enable JWT authentication.
+//!
+//! For in-memory or testing setups, use [`crate::router::build_router_with_jwt_auth`].
+//! For production deployments that need JWT together with SQL-backed audit/approval
+//! repositories (and optional RLS), use
+//! [`crate::router::build_router_with_sql_audit_and_approval_jwt`] instead.
 
 use axum::{
     extract::FromRequestParts,
