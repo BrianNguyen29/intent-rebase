@@ -735,7 +735,7 @@ Blocking Issues (explicit blockers — must resolve before Phase 4):
 Local Engineering Backlog (Phase 3 residual — P2 priority):
 - P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (✅ BOUNDED VERIFIED; full production/external gates still open)
 - OpenAPI: batch-execute RLS semantics documentation (🟡 PENDING)
-- rebase_apply review (🟡 PARTIAL — bounded Slice 1/2 graph RLS seam + post-hoc check delivered; checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open)
+- rebase_apply review (🟡 PARTIAL — bounded Slice 1/2 graph RLS seam + post-hoc check delivered; RLC-14 tenant mismatch test extracted to `crates/intent-api/src/rebase_apply_handler_tests.rs`; checkpoint read-only outside tx, runtime signal post-commit/out-of-band, full orchestrator decomposition remain open)
 - Artifact side-effect tx boundary (ADR-08 created; implementation Phase 4+)
 - Phase 4 deferred: forensic S3/DLQ/trace propagation (🔴 DEFERRED)
 

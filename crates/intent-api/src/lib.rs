@@ -289,3 +289,6 @@ pub mod test_helpers;
 
 #[cfg(test)]
 mod handler_tests;
+
+#[cfg(test)]
+mod rebase_apply_handler_tests;
