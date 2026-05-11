@@ -300,3 +300,57 @@ pub fn create_test_payload_with_params(summary: &str, in_scope: &[&str]) -> Inte
 pub fn create_test_payload() -> IntentPayload {
     create_test_payload_with_params("Test intent", &["item1"])
 }
+
+/// Create a minimal low-risk IntentPayload for tests.
+///
+/// Matches the 7 identical inline IntentPayload blocks in handler_tests.rs:
+/// - summary: "Test"
+/// - success_statement: "Success"
+/// - domain: "test"
+/// - empty scope/constraints/authority/references/assumptions
+/// - risk_tier: Low
+/// - urgency: Low
+/// - confidence: 1.0
+#[cfg(test)]
+pub fn create_minimal_low_risk_payload() -> IntentPayload {
+    IntentPayload {
+        objective: IntentObjective {
+            summary: "Test".to_string(),
+            success_statement: "Success".to_string(),
+            domain: "test".to_string(),
+        },
+        scope: IntentScope {
+            in_scope: vec![],
+            out_of_scope: vec![],
+        },
+        constraints: IntentConstraints {
+            functional: vec![],
+            non_functional: vec![],
+            policy: vec![],
+            budget: vec![],
+            time: vec![],
+        },
+        acceptance_criteria: AcceptanceCriteria {
+            required: vec![],
+            optional: vec![],
+        },
+        authority: IntentAuthority {
+            allowed_actions: vec![],
+            forbidden_actions: vec![],
+            approval_requirements: vec![],
+        },
+        preferences: IntentPreferences { tradeoffs: vec![] },
+        references: IntentReferences {
+            specs: vec![],
+            tickets: vec![],
+            repos: vec![],
+            policies: vec![],
+        },
+        assumptions: IntentAssumptions { explicit: vec![] },
+        metadata: IntentMetadataV1 {
+            risk_tier: RiskTier::Low,
+            urgency: Urgency::Low,
+            confidence: 1.0,
+        },
+    }
+}

@@ -17,65 +17,9 @@ use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
 // Use shared payload helpers
-use crate::test_helpers::{create_test_payload, create_test_payload_with_params};
-
-/// Create a minimal low-risk IntentPayload for tests.
-///
-/// Matches the 7 identical inline IntentPayload blocks in handler_tests.rs:
-/// - summary: "Test"
-/// - success_statement: "Success"
-/// - domain: "test"
-/// - empty scope/constraints/authority/references/assumptions
-/// - risk_tier: Low
-/// - urgency: Low
-/// - confidence: 1.0
-#[cfg(test)]
-fn create_minimal_low_risk_payload() -> intent_rebase_types::IntentPayload {
-    use intent_rebase_types::{
-        AcceptanceCriteria, IntentAuthority, IntentConstraints, IntentMetadataV1, IntentObjective,
-        IntentPayload, IntentPreferences, IntentReferences, IntentScope, RiskTier, Urgency,
-    };
-    IntentPayload {
-        objective: IntentObjective {
-            summary: "Test".to_string(),
-            success_statement: "Success".to_string(),
-            domain: "test".to_string(),
-        },
-        scope: IntentScope {
-            in_scope: vec![],
-            out_of_scope: vec![],
-        },
-        constraints: IntentConstraints {
-            functional: vec![],
-            non_functional: vec![],
-            policy: vec![],
-            budget: vec![],
-            time: vec![],
-        },
-        acceptance_criteria: AcceptanceCriteria {
-            required: vec![],
-            optional: vec![],
-        },
-        authority: IntentAuthority {
-            allowed_actions: vec![],
-            forbidden_actions: vec![],
-            approval_requirements: vec![],
-        },
-        preferences: IntentPreferences { tradeoffs: vec![] },
-        references: IntentReferences {
-            specs: vec![],
-            tickets: vec![],
-            repos: vec![],
-            policies: vec![],
-        },
-        assumptions: intent_rebase_types::IntentAssumptions { explicit: vec![] },
-        metadata: IntentMetadataV1 {
-            risk_tier: RiskTier::Low,
-            urgency: Urgency::Low,
-            confidence: 1.0,
-        },
-    }
-}
+use crate::test_helpers::{
+    create_minimal_low_risk_payload, create_test_payload, create_test_payload_with_params,
+};
 
 #[tokio::test]
 async fn test_router_builds_successfully() {
