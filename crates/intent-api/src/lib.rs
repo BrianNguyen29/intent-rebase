@@ -291,6 +291,9 @@ pub mod test_helpers;
 mod handler_tests;
 
 #[cfg(test)]
+mod event_publisher_tests;
+
+#[cfg(test)]
 mod orchestration_dashboard_tests;
 
 #[cfg(test)]
