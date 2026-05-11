@@ -13,26 +13,26 @@ async fn test_router_builds_successfully() {
     let state = create_test_service();
     let _router: axum::Router = Router::new()
         .route("/intents", post(intent_mutation_handlers::create_intent))
-        .route("/intents/{intent_id}", get(get_intent_head))
+        .route("/intents/:intent_id", get(get_intent_head))
         .route(
-            "/intents/{intent_id}/versions",
+            "/intents/:intent_id/versions",
             post(intent_mutation_handlers::create_version),
         )
-        .route("/intents/{intent_id}/versions", get(list_versions))
+        .route("/intents/:intent_id/versions", get(list_versions))
         .route(
-            "/intents/{intent_id}/versions/{version_number}",
+            "/intents/:intent_id/versions/:version_number",
             get(get_version),
         )
         .route(
-            "/intents/{intent_id}/diff",
+            "/intents/:intent_id/diff",
             post(diff_handlers::compute_diff),
         )
         .route(
-            "/intents/{intent_id}/rebase-preview",
+            "/intents/:intent_id/rebase-preview",
             post(rebase_preview_handlers::rebase_preview),
         )
         .route(
-            "/intents/{intent_id}/rebase-apply",
+            "/intents/:intent_id/rebase-apply",
             post(rebase_apply_handlers::rebase_apply),
         )
         .with_state(state);

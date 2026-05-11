@@ -93,46 +93,46 @@ pub fn build_router(
             post(crate::intent_mutation_handlers::create_intent),
         )
         .route(
-            "/intents/{intent_id}",
+            "/intents/:intent_id",
             get(crate::intent_read_handlers::get_intent_head),
         )
         .route(
-            "/intents/{intent_id}/versions",
+            "/intents/:intent_id/versions",
             post(crate::intent_mutation_handlers::create_version),
         )
         .route(
-            "/intents/{intent_id}/versions",
+            "/intents/:intent_id/versions",
             get(crate::intent_read_handlers::list_versions),
         )
         .route(
-            "/intents/{intent_id}/versions/{version_number}",
+            "/intents/:intent_id/versions/:version_number",
             get(crate::intent_read_handlers::get_version),
         )
         .route(
-            "/intents/{intent_id}/diff",
+            "/intents/:intent_id/diff",
             post(crate::diff_handlers::compute_diff),
         )
         .route(
-            "/intents/{intent_id}/rebase-preview",
+            "/intents/:intent_id/rebase-preview",
             post(crate::rebase_preview_handlers::rebase_preview),
         )
         .route(
-            "/intents/{intent_id}/rebase-apply",
+            "/intents/:intent_id/rebase-apply",
             post(crate::rebase_apply_handlers::rebase_apply),
         )
         // Replay endpoint (Phase 2b bounded replay slice)
         .route(
-            "/intents/{intent_id}/replay",
+            "/intents/:intent_id/replay",
             post(crate::replay_handlers::replay_intent),
         )
         // Side effect query endpoint (Phase 3 Batch 1 groundwork)
         .route(
-            "/intents/{intent_id}/side-effects",
+            "/intents/:intent_id/side-effects",
             get(crate::query_handlers::list_side_effects),
         )
         // N4-4: Rebase simulation endpoint (Phase 3 Batch 1 bounded simulation slice)
         .route(
-            "/intents/{intent_id}/rebase-simulation",
+            "/intents/:intent_id/rebase-simulation",
             get(crate::simulation_handlers::rebase_simulation),
         )
         // N4-4 POST: Compensation simulation run endpoint (Phase 3 Batch 1 bounded simulation slice)
@@ -142,31 +142,31 @@ pub fn build_router(
         )
         // Orchestration dashboard endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
-            "/intents/{intent_id}/orchestration-dashboard",
+            "/intents/:intent_id/orchestration-dashboard",
             get(crate::query_handlers::get_orchestration_dashboard),
         )
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
-            "/intents/{intent_id}/compensation-actions",
+            "/intents/:intent_id/compensation-actions",
             get(crate::compensation_query_handlers::list_compensation_actions),
         )
         // Compensation action mutation endpoints (Phase 3 Batch 1 bounded execution slice)
         // NOTE: These routes are placed before graph routes to avoid path conflict
         .route(
-            "/compensation-actions/{action_id}/approve",
+            "/compensation-actions/:action_id/approve",
             post(crate::compensation_mutation_handlers::approve_compensation_action),
         )
         .route(
-            "/compensation-actions/{action_id}/waive",
+            "/compensation-actions/:action_id/waive",
             post(crate::compensation_mutation_handlers::waive_compensation_action),
         )
         .route(
-            "/compensation-actions/{action_id}/execute",
+            "/compensation-actions/:action_id/execute",
             post(crate::compensation_mutation_handlers::execute_compensation_action),
         )
         // Compensation action manual retry and DLQ endpoints (Phase 3 Batch 1 bounded manual retry slice)
         .route(
-            "/compensation-actions/{action_id}/reapprove",
+            "/compensation-actions/:action_id/reapprove",
             post(crate::compensation_mutation_handlers::reapprove_compensation_action),
         )
         // Bounded compensation planner endpoint (Phase 3 bounded planner slice)
@@ -190,7 +190,7 @@ pub fn build_router(
             get(crate::compensation_query_handlers::get_compensation_policy_gate),
         )
         .route(
-            "/intents/{intent_id}/compensation-policy-gate",
+            "/intents/:intent_id/compensation-policy-gate",
             get(crate::compensation_query_handlers::get_intent_compensation_policy_gate),
         )
         // Orchestration coordination status endpoints (Phase 3 Batch 1 bounded read-only orchestration view)
@@ -199,7 +199,7 @@ pub fn build_router(
             get(crate::compensation_query_handlers::get_orchestration_coordination),
         )
         .route(
-            "/intents/{intent_id}/orchestration-coordination",
+            "/intents/:intent_id/orchestration-coordination",
             get(crate::compensation_query_handlers::get_intent_orchestration_coordination),
         )
         // Manual orchestration & dry-run planner endpoints (Phase 3 Batch 1 bounded slice)
@@ -226,7 +226,7 @@ pub fn build_router(
             post(crate::orchestration_run_handlers::create_orchestration_run),
         )
         .route(
-            "/compensation-actions/runs/{run_id}",
+            "/compensation-actions/runs/:run_id",
             get(crate::orchestration_run_handlers::get_orchestration_run),
         )
         // Graph endpoints (Phase 1 - internal CRUD only)
@@ -239,7 +239,7 @@ pub fn build_router(
             get(crate::graph_handlers::list_graph_nodes),
         )
         .route(
-            "/v1/graph/nodes/{node_id}",
+            "/v1/graph/nodes/:node_id",
             get(crate::graph_handlers::get_graph_node),
         )
         .route(
@@ -251,7 +251,7 @@ pub fn build_router(
             get(crate::graph_handlers::list_graph_edges),
         )
         .route(
-            "/v1/graph/nodes/{node_id}/edges",
+            "/v1/graph/nodes/:node_id/edges",
             get(crate::graph_handlers::list_edges_from_node),
         )
         // Artifact ingest with optional side effect capture (Phase 3 Batch 1 groundwork)
@@ -265,21 +265,21 @@ pub fn build_router(
             get(crate::approval_handlers_readonly::list_pending_approval_requests),
         )
         .route(
-            "/approval-requests/{approval_request_id}/approve",
+            "/approval-requests/:approval_request_id/approve",
             post(crate::approval_mutation_handlers::approve_approval_request),
         )
         .route(
-            "/approval-requests/{approval_request_id}/reject",
+            "/approval-requests/:approval_request_id/reject",
             post(crate::approval_mutation_handlers::reject_approval_request),
         )
         // POST expire - bounded manual expiry transition (Phase 2b)
         .route(
-            "/approval-requests/{approval_request_id}/expire",
+            "/approval-requests/:approval_request_id/expire",
             post(crate::approval_mutation_handlers::expire_approval_request),
         )
         // GET revalidate - bounded read-only scope comparison (Phase 2b)
         .route(
-            "/approval-requests/{approval_request_id}/revalidate",
+            "/approval-requests/:approval_request_id/revalidate",
             get(crate::approval_handlers_readonly::revalidate_approval_request),
         )
         // ADR-07: POST trigger-reapproval - bounded re-approval trigger (Phase 2b)
@@ -289,19 +289,19 @@ pub fn build_router(
         )
         // Policy snapshot endpoints (Phase 2 bounded read-only slice)
         .route(
-            "/policy-snapshots/{snapshot_id}",
+            "/policy-snapshots/:snapshot_id",
             get(crate::policy_snapshot_handlers::get_policy_snapshot),
         )
         .route(
-            "/policy-snapshots/intent/{intent_id}/latest",
+            "/policy-snapshots/intent/:intent_id/latest",
             get(crate::policy_snapshot_handlers::get_latest_policy_snapshot),
         )
         .route(
-            "/policy-snapshots/intent/{intent_id}/versions/{version}",
+            "/policy-snapshots/intent/:intent_id/versions/:version",
             get(crate::policy_snapshot_handlers::get_policy_snapshot_by_version),
         )
         .route(
-            "/policy-snapshots/intent/{intent_id}",
+            "/policy-snapshots/intent/:intent_id",
             get(crate::policy_snapshot_handlers::list_policy_snapshots),
         )
         // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
@@ -326,7 +326,7 @@ pub fn build_router(
         )
         // Forensic bundle download endpoint (P4 bounded slice)
         .route(
-            "/forensic/bundles/{bundle_id}/download",
+            "/forensic/bundles/:bundle_id/download",
             get(crate::forensic_handlers::download_forensic_bundle),
         )
         .with_state(state)
