@@ -192,13 +192,13 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Review rebase_apply handler for RLS transaction wrapping and tenant isolation correctness |
-| **Current State** | 🟡 PARTIAL — bounded Slice 1/2 delivered: `BlockedManualReview` approval create/cancel RLS slice verified; `SqlxGraphRepository::update_node_state_with_tx` graph RLS seam added; JWT AutoProceeded/AutoProceededWithNotification post-hoc RLS tx check/update applied after successful graph updates; fallback preserved when no RLS pool/claims/SQL repo |
-| **Evidence** | `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; `crates/graph-service/src/sqlx_graph_repository.rs`; bounded slice adds `begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit` for the manual-review approval path; graph slice adds `update_node_state_with_tx` with post-hoc JWT RLS check/update for AutoProceeded paths; RLC-14: tenant mismatch rejection test extracted to `crates/intent-api/src/rebase_apply_handler_tests.rs` |
+| **Current State** | ✅ DESIGN RESOLVED — ADR-09 accepted; bounded Slice 1/2 delivered: `BlockedManualReview` approval create/cancel RLS slice verified; `SqlxGraphRepository::update_node_state_with_tx` graph RLS seam added; JWT AutoProceeded/AutoProceededWithNotification post-hoc RLS tx check/update applied after successful graph updates; fallback preserved when no RLS pool/claims/SQL repo |
+| **Evidence** | `docs/13-adrs/09-rebase-apply-rls-transaction-boundary.md`; `crates/intent-api/src/rebase_apply_handlers.rs`; `crates/intent-service/src/approval_request_repo.rs`; `crates/graph-service/src/sqlx_graph_repository.rs`; bounded slice adds `begin_with_tenant → create_approval_request_with_tx → cancel_*_with_tx → commit` for the manual-review approval path; graph slice adds `update_node_state_with_tx` with post-hoc JWT RLS check/update for AutoProceeded paths; RLC-14: tenant mismatch rejection test extracted to `crates/intent-api/src/rebase_apply_handler_tests.rs` |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 PARTIAL — bounded Slice 1/2 verified; full RLS wrapping NO-GO until checkpoint tx methods and post-commit runtime-adapter boundary design are resolved |
-| **Dependencies** | Full wrapping depends on checkpoint tx methods, runtime signal tx/orchestrator decomposition, and external SRE/security/load/pen gates |
+| **Status** | ✅ DESIGN RESOLVED per ADR-09 — implementation deferred to Phase 4 D1–D7; no longer blocked waiting for design |
+| **Dependencies** | D1–D7 implementation is Phase 4 scope; external SRE/security/load/pen gates remain independent blockers |
 
-**No overclaim:** This is not full `rebase_apply` RLS coverage. The `AutoProceeded` graph update uses a post-hoc RLS check/update after the graph mutation, not a single atomic tx covering checkpoint and runtime signal. Checkpoint alignment and runtime signal remain outside the RLS transaction.
+**No overclaim:** This is not full `rebase_apply` RLS coverage. The `AutoProceeded` graph update uses a post-hoc RLS check/update after the graph mutation, not a single atomic tx covering checkpoint and runtime signal. ADR-09 records the accepted design for Phase 4 D1–D7 implementation. Checkpoint alignment and runtime signal remain outside the RLS transaction until D1–D7 are implemented.
 
 ---
 
@@ -302,7 +302,7 @@ These items cannot proceed until specific external conditions are met.
 | **P1** | Penetration testing | 🔴 BLOCKED | External pen test report |
 | **P2** | SqlxBundleRepository + forensic bundle RLS | ✅ BOUNDED VERIFIED | Local engineering backlog (P2-L1); migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
-| **P2** | rebase_apply handler review | 🟡 PARTIAL | Local engineering backlog (P2-L3); bounded manual-review RLS slice verified; full wrapping blocked by design seams |
+| **P2** | rebase_apply handler review | ✅ DESIGN RESOLVED | Local engineering backlog (P2-L3); ADR-09 accepted; design no longer blocked; implementation deferred to Phase 4 D1–D7 |
 | **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
 | **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; `build_router_with_jwt_auth` deduplicated (delegates to `build_router`); broader router route grouping/split remains Phase 4 |
@@ -335,7 +335,7 @@ The following items are local-executable and do not require external dependencie
 |------|----------|--------|-------|
 | SqlxBundleRepository + forensic bundle RLS | P1 | ✅ BOUNDED VERIFIED | P2-L1 in this doc; migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | OpenAPI batch-execute RLS semantics | P2 | ✅ DOCUMENTED | P2-L2 in this doc; documentation complete |
-| rebase_apply handler review | P2 | 🟡 PARTIAL | P2-L3 in this doc; bounded manual-review RLS slice verified; full wrapping blocked by graph/checkpoint tx seams |
+| rebase_apply handler review | P2 | ✅ DESIGN RESOLVED | P2-L3 in this doc; ADR-09 accepted; design no longer blocked; implementation deferred to Phase 4 D1–D7 |
 | Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
 
@@ -368,3 +368,4 @@ The following must NOT appear in any documentation:
 - [External Review Packet](../09-operations/10-external-review-packet.md) — SRE/security review packet template
 - [Pen/Load Test Packet](../09-operations/11-pen-load-test-packet.md) — Pen/load test execution packet template
 - [ADR-08: Artifact Side-Effect Tx Boundary](../13-adrs/08-artifact-side-effect-tx-boundary.md) — Design note for artifact side-effect transaction boundary
+- [ADR-09: Rebase Apply RLS Transaction Boundary](../13-adrs/09-rebase-apply-rls-transaction-boundary.md) — Accepted design for rebase_apply RLS transaction boundary; implementation deferred to Phase 4 D1–D7

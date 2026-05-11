@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** — Design completed; pending review and implementation
+**Accepted** — Design decision recorded; implementation deferred to Phase 4 D1–D7
 
 ## Context
 
@@ -196,7 +196,8 @@ Rejected. That couples domain orchestration to API/RLS infrastructure and makes 
 | Date | Reviewer | Notes |
 |------|----------|-------|
 | 2026-05-11 | (oracle) | Design-first recommendation — all three seams resolved; implementation deferred to Phase 4 |
+| 2026-05-11 | Backend Lead | Self-acceptance — design approved per oracle recommendation; D1–D7 remain Phase 4 scope |
 
 ---
 
-**Next Step**: Review ADR-09, then implement D1–D7 as a bounded Phase 4 RLS slice.
+**Next Step**: Implement D1–D7 as a bounded Phase 4 RLS slice.
