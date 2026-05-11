@@ -408,7 +408,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | Field | Value |
 |-------|-------|
 | **Task** | Collect L3 staging-like evidence with docker-compose |
-| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; Prometheus actual metric queries still empty; full L3 stack integration and L4 observability evidence still pending |
+| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; L4 bounded observability slice validated (one real metric scraped by Prometheus from running binary); full L4 observability (all metrics, all paths, alerting) remains incomplete |
 | **Owner** | Backend Lead (solo) |
 | **Prerequisites** | `infrastructure/staging/docker-compose.yml` created; docker-compose full stack running |
 | **Tools** | k6 or custom harness |
@@ -422,7 +422,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | L1 | HTTP harness, in-memory | Local binary | ✅ DELIVERED |
 | L2 | SQLx-backed, docker-compose Postgres | Local docker | ✅ DELIVERED |
 | L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🟡 PARTIAL — in-memory harness + SQLx-backed local-live load test passed; NATS fixed and healthy; not production-equivalent |
-| L4 | Full stack with observability | docker-compose + Prometheus | 🔴 PENDING — Prometheus actual metric queries still empty on 2026-05-11 follow-up; observability integration not validated |
+| L4 | Full stack with observability | docker-compose + Prometheus | 🟡 PARTIAL — bounded L4 slice validated: one real metric (`intent_api_intent_version_created_total`) successfully scraped from running intent-api binary; rebase-preview metric empty (no traffic); full L4 observability (all metrics, all paths, alerting) remains incomplete |
 | L5 | Production load | Production infra | 🔴 BLOCKED |
 
 **L3 Staging Evidence Commands:**
@@ -505,13 +505,26 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (staging-like, not production-equivalent
 | Prometheus `intent_api_rebase_apply_requests_total` | 🔴 EMPTY | actual metric name; still empty vector |
 | Prometheus `intent_api_intent_version_created_total` | 🔴 EMPTY | actual metric name; still empty vector |
 
+**2026-05-11 L4 Bounded Observability Follow-Up:**
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| intent-api binary started | ✅ | `cargo run -p intent-api`, bound `0.0.0.0:8080`, in-memory repos |
+| Health endpoint | ✅ | `GET /health` → `{"status":"ok","uptime_seconds":54}` |
+| Prometheus `up{job="intent-api"}` | ✅ | vector with `up=1` for `host.docker.internal:8080` |
+| Traffic generation | ✅ | 10 valid `POST /intents` → HTTP 201 with intent IDs |
+| Local `/metrics` after traffic | ✅ | `intent_api_intent_version_created_total{status="success"} 10` |
+| Prometheus scrape after 15s delay | ✅ | `intent_api_intent_version_created_total` = `10` with correct labels |
+| Prometheus `intent_api_rebase_preview_requests_total` | 🟡 EMPTY | no rebase-preview traffic generated; expected empty |
+
 **Gaps Recorded:**
 - Prometheus returned empty vectors because the queries used non-existent aggregate metric names (`intent_api_requests_total` and `intent_api_request_duration_seconds`). The actual recorded metrics use granular names: `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_intent_version_created_total`, `intent_api_rebase_preview_duration_seconds`, and `intent_api_rebase_apply_duration_seconds`. This is a documentation/query error, not a missing metrics implementation.
 - NATS container was unhealthy during the initial collection window because the NATS server monitoring port (`-m 8222`) was not enabled in the docker-compose command. The compose healthcheck depends on `/healthz` on port 8222. This has been corrected in `infrastructure/local/docker-compose.yml` by adding `-m 8222` to the NATS command. Follow-up verification confirmed NATS healthy.
 - The initial run used the in-memory harness, not the SQLx-backed harness. The follow-up run executed the SQLx-backed harness (`test_load_sqlx`) and passed with healthy NATS and Postgres.
-- Even with correct metric names, Prometheus actual metric queries still returned empty vectors in the follow-up. Likely causes: metrics are recorded by the intent-api binary but the load test harness runs in-process and may not expose the metrics endpoint on the port Prometheus scrapes; Prometheus scrape target may not be configured to scrape the test process; or scrape interval vs test duration mismatch.
+- Even with correct metric names, Prometheus actual metric queries still returned empty vectors in the SQLx follow-up because the in-process test harness does not expose a scrapeable metrics endpoint. The L4 observability follow-up resolved this by running the intent-api binary separately on port 8080 and confirmed Prometheus successfully scraped `intent_api_intent_version_created_total` with value `10` after generating traffic. This validates the Prometheus → intent-api metrics pipeline for one metric and one code path.
+- Rebase-preview metric (`intent_api_rebase_preview_requests_total`) remained empty in the L4 follow-up because no rebase-preview traffic was generated. This is expected behavior, not a failure of the metrics pipeline.
 
-**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. This is stronger local evidence than the initial in-memory-only run, but it remains bounded local docker-compose evidence. It does NOT constitute L3 staging-like or L4 observability-validated evidence. Full L3/L4 evidence remains pending.
+**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from a running intent-api binary. This is stronger local evidence than the initial in-memory-only run, but it remains bounded local docker-compose evidence. It does NOT constitute full L4 observability (all metrics, all paths, alerting validation, production scrape config). Full L3/L4 evidence remains incomplete.
 
 ---
 
@@ -630,3 +643,4 @@ This document is linked from:
 | April 2026 | (fixer) | G2 PASS: JetStream retry/advisory config validated via nats-box (stream/consumer with max_deliver=3); G5 bounded live tests evidence added (7/7 passed); NatsPullConsumerAdapter max_deliver aligned from 1 to 3; subject overlap fix (isolated test.g5live.v1.* namespaces); G5 gate marked PASS for bounded tests only; DLQ publishing remains Phase 4+ future |
 | 2026-05-11 | (fixer) | B-2 PARTIAL: L1-L3 in-memory load harness evidence collected; docker-compose services started; NATS unhealthy; Prometheus empty vectors; full L3/L4 observability evidence still pending; `load-test-results.md` Section 3 added with 2026-05-11 run |
 | 2026-05-11 | (fixer) | B-2 FOLLOW-UP: NATS healthcheck fixed (`-m 8222`) and verified healthy; SQLx-backed local-live load test passed (L1 p95 10ms, L2 p95 15ms); Prometheus actual metric queries still empty; B-2 remains PARTIAL; `load-test-results.md` follow-up subsection added |
+| 2026-05-11 | (fixer) | B-2 L4 BOUNDED: One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from running intent-api binary; L4 status updated from PENDING to PARTIAL; `load-test-results.md` L4 bounded follow-up added; full L4 observability remains incomplete |

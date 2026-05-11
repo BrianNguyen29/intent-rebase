@@ -273,7 +273,31 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 - Prometheus scrape target may not be configured to scrape the test process
 - Scrape interval vs test duration mismatch
 
-**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. Prometheus observability integration is still not validated. This remains local docker-compose evidence, not production/staging-equivalent.
+### L4 Observability Bounded Follow-Up — 2026-05-11
+
+**Goal:** Validate that Prometheus can scrape at least one real metric from a running intent-api binary.
+
+**Setup:**
+- intent-api binary run via `cargo run -p intent-api`, default bind `0.0.0.0:8080`
+- `DATABASE_URL` unset → in-memory repositories
+- Server log: `DATABASE_URL not set — using in-memory repositories`; `Intent API server starting on 0.0.0.0:8080`
+- Health check: `curl -s http://localhost:8080/health` → `{"status":"ok","uptime_seconds":54}`
+- Prometheus `up{job="intent-api"}` query returned vector with `up=1` for `host.docker.internal:8080`
+
+**Traffic generation:**
+- 10 valid `POST /intents` requests with full valid payload → HTTP 201 with intent IDs
+
+**Metrics validation:**
+
+| Step | Result |
+|------|--------|
+| Local `/metrics` after traffic | `intent_api_intent_version_created_total{status="success"} 10` |
+| Prometheus query after 15s scrape delay | `intent_api_intent_version_created_total` returned vector value `10` with labels `instance="host.docker.internal:8080"`, `job="intent-api"`, `status="success"` |
+| Prometheus query `intent_api_rebase_preview_requests_total` | empty vector (no rebase-preview traffic generated — expected, not a failure) |
+
+**Conclusion:** One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from a running intent-api binary. This validates the basic Prometheus → intent-api metrics pipeline. It does NOT validate all metrics, all code paths, alerting rules, or production-equivalent observability.
+
+**No overclaim:** This is a bounded L4 observability slice — one metric, one code path, local docker-compose only. Full L4 observability (all metrics, all paths, alerting validation, production scrape config) remains future scope.
 
 ---
 
@@ -286,7 +310,8 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 - **No cold-start** — server is warm before test begins
 - **Synthetic payloads** — small, fixed-size request bodies
 - **No connection pool exhaustion test** — bounded concurrent clients only
-- **Prometheus metrics empty** — 2026-05-11 run returned empty vectors for both non-existent aggregate names and actual metric names; observability integration not validated
+- **Prometheus metrics empty (initial/SQLx runs)** — 2026-05-11 initial and SQLx runs returned empty vectors for both non-existent aggregate names and actual metric names because the in-process test harness did not expose a scrapeable metrics endpoint
+- **Prometheus one-metric validated (L4 bounded follow-up)** — 2026-05-11 L4 follow-up successfully scraped `intent_api_intent_version_created_total` from a running intent-api binary; full L4 observability (all metrics, all paths, alerting) remains unvalidated
 - **NATS unhealthy (initial run)** — 2026-05-11 initial run showed NATS container as unhealthy; fixed in follow-up by adding `-m 8222` to NATS command
 
 ### SQLx Tests
