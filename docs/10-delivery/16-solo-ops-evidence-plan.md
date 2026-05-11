@@ -408,7 +408,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | Field | Value |
 |-------|-------|
 | **Task** | Collect L3 staging-like evidence with docker-compose |
-| **Status** | 🟡 STAGING SCAFFOLD EXISTS — evidence collection pending |
+| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness evidence collected on 2026-05-11; Prometheus empty vectors; NATS unhealthy; full L3 stack integration and L4 observability evidence still pending |
 | **Owner** | Backend Lead (solo) |
 | **Prerequisites** | `infrastructure/staging/docker-compose.yml` created; docker-compose full stack running |
 | **Tools** | k6 or custom harness |
@@ -421,8 +421,8 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 |-------|-------|-------------|--------|
 | L1 | HTTP harness, in-memory | Local binary | ✅ DELIVERED |
 | L2 | SQLx-backed, docker-compose Postgres | Local docker | ✅ DELIVERED |
-| L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🟡 SCAFFOLD EXISTS — evidence collection pending |
-| L4 | Full stack with observability | docker-compose + Prometheus | 🔴 PENDING |
+| L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🟡 PARTIAL — in-memory harness ran with docker-compose services up; NATS reported unhealthy; Prometheus metrics empty; not full stack integration |
+| L4 | Full stack with observability | docker-compose + Prometheus | 🔴 PENDING — Prometheus empty vectors on 2026-05-11; observability integration not validated |
 | L5 | Production load | Production infra | 🔴 BLOCKED |
 
 **L3 Staging Evidence Commands:**
@@ -468,6 +468,27 @@ SLO Compliance:
 
 Evidence Strength: LOCAL DOCKER-COMPOSE (staging-like, not production-equivalent)
 ```
+
+**2026-05-11 Evidence Collection Attempt:**
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| docker-compose services started | ✅ | postgres, minio, prometheus, grafana up |
+| NATS health | 🔴 UNHEALTHY | compose healthcheck reported unhealthy |
+| Load harness executed | ✅ | `cargo test -p intent-api --features load-test --test load_test -- --nocapture test_load` |
+| L1 SLO pass | ✅ | p95 4ms, error 0.00% |
+| L2 SLO pass | ✅ | p95 23ms, error 0.00% |
+| L3 SLO pass | ✅ | p95 42ms, error 0.00% |
+| Prometheus `intent_api_requests_total` | 🔴 EMPTY | `{"status":"success","data":{"resultType":"vector","result":[]}}` |
+| Prometheus `intent_api_request_duration_seconds` | 🔴 EMPTY | `{"status":"success","data":{"resultType":"vector","result":[]}}` |
+| SQLx-backed run | 🔴 NOT RUN | in-memory harness only |
+
+**Gaps Recorded:**
+- Prometheus returned empty vectors for both counters. Possible causes: scrape interval mismatch, metric name mismatch, or in-memory harness not exposing metrics on the queried endpoint.
+- NATS container was unhealthy during the collection window. Full stack integration (NATS + load test) was not achieved.
+- This run used the in-memory harness, not the SQLx-backed harness. It is equivalent to Section 1 of `load-test-results.md`, not L3 staging-like evidence.
+
+**No overclaim:** This is bounded local in-memory harness evidence. It does NOT constitute L3 staging-like or L4 observability-validated evidence. Full L3/L4 evidence remains pending.
 
 ---
 
@@ -584,3 +605,4 @@ This document is linked from:
 |------|------------|---------|
 | April 2026 | (orchestrator) | Initial creation — solo self-review plan, Phase A/B/C structure, NATS lifecycle blocked gates, extended forbidden claims |
 | April 2026 | (fixer) | G2 PASS: JetStream retry/advisory config validated via nats-box (stream/consumer with max_deliver=3); G5 bounded live tests evidence added (7/7 passed); NatsPullConsumerAdapter max_deliver aligned from 1 to 3; subject overlap fix (isolated test.g5live.v1.* namespaces); G5 gate marked PASS for bounded tests only; DLQ publishing remains Phase 4+ future |
+| 2026-05-11 | (fixer) | B-2 PARTIAL: L1-L3 in-memory load harness evidence collected; docker-compose services started; NATS unhealthy; Prometheus empty vectors; full L3/L4 observability evidence still pending; `load-test-results.md` Section 3 added with 2026-05-11 run |
