@@ -288,7 +288,7 @@ pub use router::{build_router_with_jwt_auth, build_router_with_sql_audit_and_app
 pub mod test_helpers;
 
 #[cfg(test)]
-mod handler_tests;
+mod router_smoke_tests;
 
 #[cfg(test)]
 mod rebase_preview_tests;
