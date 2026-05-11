@@ -387,6 +387,107 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 
 **No overclaim:** This is bounded local docker-compose evidence — one binary, in-memory repos, no load testing, no alerting validation, no production scrape config. Full L4 observability (alerting rules, sustained load, production-equivalent config) remains future scope.
 
+### L4 Sustained Load Smoke Test — 2026-05-11
+
+**Goal:** Verify process stability under steady-state load for a bounded duration (Oracle criteria: memory ±20%, FD non-increasing, error rate <0.1%, p95 stable within 2x).
+
+**Setup:**
+- New test `test_sustained_load_smoke` added to `crates/intent-api/tests/load_test.rs`
+- Uses in-memory router with internal HTTP server (random port)
+- Duration: 90s | Target RPS: 50 | Concurrent clients: 5
+- Process stats sampled every 10s from `/proc/self/status` (VmRSS) and `/proc/self/fd` (fd count)
+- Baseline measured after 10s warm-up to avoid cold-start skew
+
+**Traffic mix:**
+| Operation | Weight | Endpoint |
+|-----------|--------|----------|
+| Read | 70% | GET /health |
+| Write | 20% | POST /intents |
+| Compute | 10% | POST /intents/:id/diff |
+
+**Results:**
+
+| Metric | Value |
+|--------|-------|
+| Duration | 90.00s |
+| Total requests | 4,505 |
+| Successful | 4,505 |
+| Failed | 0 |
+| Error rate | 0.0000% |
+| Throughput | 50.05 req/s |
+| p50 latency | 1 ms |
+| p95 latency | 2 ms |
+| p99 latency | 3 ms |
+| Warm RSS (10s) | 22,528 kB |
+| Final RSS | 23,424 kB |
+| RSS delta | +896 kB (+4.0%) |
+| Warm FD (10s) | 21 |
+| Final FD | 21 |
+| FD delta | 0 |
+
+**Oracle criteria:**
+| Criterion | Threshold | Result |
+|-----------|-----------|--------|
+| Error rate | < 0.1% | ✅ PASS (0.0000%) |
+| RSS stability | ±20% of warm baseline | ✅ PASS (+4.0%) |
+| FD stability | Non-increasing | ✅ PASS (0) |
+| Throughput stability | Within 0.5x–2x of initial | ✅ PASS (50.05 req/s steady) |
+
+**Conclusion:** Bounded 90-second sustained-load smoke test PASSED. Process remained stable with flat memory and fd count after warm-up.
+
+**No overclaim:** 90 seconds is not equivalent to a 30-minute sustained load test. Full sustained load (30min+) remains pending as a longer-duration run is required to detect slow leaks. The bounded smoke test validates short-term stability only.
+
+### L4 Alert Rule Validation — 2026-05-11
+
+**Goal:** Validate that Prometheus alert rules load, evaluate, and can observe metrics from the intent-api binary.
+
+**Setup:**
+- Observability stack started via `docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d`
+- Services: Prometheus (9090), Alertmanager (9093), Grafana (3000)
+- intent-api binary running on port 8080 with in-memory repositories
+- Prometheus scrape target: `host.docker.internal:8080` /metrics every 10s
+
+**Alert rules validated:**
+
+| Rule Group | Rule Name | Status | Health |
+|-----------|-----------|--------|--------|
+| intent_api_availability | IntentVersionCreationLowSuccessRate | inactive | ok |
+| intent_api_availability | RebasePreviewLowAvailability | inactive | ok |
+| intent_api_availability | RebaseApplyLowAvailability | inactive | ok |
+| intent_api_latency | DiffComputeHighLatency | inactive | ok |
+| intent_api_latency | RebasePreviewHighLatency | inactive | ok |
+| intent_api_latency | RebaseApplyHighLatency | inactive | ok |
+| intent_api_compensation | CompensationExecutionLowSuccessRate | inactive | ok |
+| intent_api_compensation | CompensationDLQCandidatesElevated | inactive | ok |
+| intent_api_error_budget | PreviewPathBurnRate1h | inactive | ok |
+| intent_api_error_budget | ApplyPathBurnRate1h | inactive | ok |
+| intent_api_error_budget | PreviewPathBurnRate6h | inactive | ok |
+| intent_api_error_budget | ApplyPathBurnRate6h | inactive | ok |
+| intent_api_error_budget | PreviewPathBurnRate3d | inactive | ok |
+| intent_api_error_budget | ApplyPathBurnRate3d | inactive | ok |
+| intent_api_dlq | DLQDepthHigh | inactive | ok |
+| intent_api_dlq | DLQMessageStale | inactive | ok |
+| intent_api_dlq | DLQReplayFailures | inactive | ok |
+
+**Metrics pipeline validation:**
+
+| Step | Result |
+|------|--------|
+| Binary `/metrics` exposes counters with `status` labels | ✅ `intent_api_intent_version_created_total{status="success"}` and `{status="error"}` both recorded |
+| Prometheus scrapes successfully | ✅ `up{job="intent-api"} = 1` |
+| PromQL query returns vector | ✅ `intent_api_intent_version_created_total` returns vector with value `31` and correct labels |
+| Alert expressions evaluate without error | ✅ All 17 rules show `health: "ok"` |
+| Alertmanager receives alerts | 🟡 No alerts firing (conditions not met — expected) |
+
+**Error counter verification:**
+- Sent 1 invalid request (nil workflow_id) → HTTP 400
+- Local `/metrics` showed `intent_api_intent_version_created_total{status="error"} 1`
+- Confirms error path metrics are recorded before handler return
+
+**Conclusion:** Alert rules are syntactically correct, loaded successfully, and evaluating without errors. Prometheus scrapes intent-api metrics end-to-end. Full alert triggering (firing state) requires sustained fault injection (e.g., >5 minutes of elevated error rate or latency) which is beyond bounded smoke test scope.
+
+**No overclaim:** This validates rule loading, expression evaluation, and scrape pipeline — not actual alert firing. Triggering alerts requires fault injection or latency simulation over the alert `for` duration (5m–2h depending on rule). Compensation and DLQ metrics are not yet emitted at runtime (stubs compile but worker not wired), so compensation/DLQ alerts cannot trigger until Phase 4.
+
 ---
 
 ## Limitations

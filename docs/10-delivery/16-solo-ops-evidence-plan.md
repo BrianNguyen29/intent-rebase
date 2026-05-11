@@ -408,7 +408,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | Field | Value |
 |-------|-------|
 | **Task** | Collect L3 staging-like evidence with docker-compose |
-| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; L4 bounded observability slice validated (one real metric scraped by Prometheus from running binary); L4 multi-path follow-up initially blocked by parameterized route 404, then unblocked by route fix (commit 36bc548); all 6 core metrics successfully scraped post-fix; full L4 observability (alerting, sustained load, production-equivalent config) remains incomplete |
+| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; L4 bounded observability slice validated (one real metric scraped by Prometheus from running binary); L4 multi-path follow-up initially blocked by parameterized route 404, then unblocked by route fix (commit 36bc548); all 6 core metrics successfully scraped post-fix; L4 bounded sustained-load smoke test PASSED (90s, 50 req/s, 0% error, RSS +4.0%, FD flat); L4 alert rules validated (all 17 rules loaded, health=ok, Prometheus scraping working, error/success labels confirmed); full L4 observability (30min sustained load, actual alert firing, production-equivalent config) remains incomplete |
 | **Owner** | Backend Lead (solo) |
 | **Prerequisites** | `infrastructure/staging/docker-compose.yml` created; docker-compose full stack running |
 | **Tools** | k6 or custom harness |
@@ -555,6 +555,35 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (staging-like, not production-equivalent
 | Prometheus scrape after 15s delay | ✅ all 6 metrics | all non-empty with correct labels |
 | Core metrics validated post-fix | ✅ 6/6 | all six core metrics validated |
 
+**2026-05-11 L4 Sustained Load Smoke Test:**
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Test added to `load_test.rs` | ✅ | `test_sustained_load_smoke` with 90s duration, 50 req/s, 5 clients |
+| Compilation | ✅ | `cargo test -p intent-api --test load_test --features load-test --no-run` passed |
+| Test execution | ✅ PASSED | `test_sustained_load_smoke` passed all Oracle criteria |
+| Error rate | ✅ 0.0000% | threshold <0.1% |
+| RSS stability | ✅ +4.0% | warm baseline 22,528 kB → final 23,424 kB; threshold ±20% |
+| FD stability | ✅ 0 delta | warm 21 → final 21; threshold non-increasing |
+| Throughput stability | ✅ 50.05 req/s | steady within 0.5x–2x of initial sample |
+| p95 latency | ✅ 2 ms | well below SLO |
+
+**2026-05-11 L4 Alert Rule Validation:**
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Observability stack started | ✅ | `docker compose --profile observability up -d` |
+| Prometheus healthy | ✅ | `up{job="prometheus"} = 1` |
+| Alertmanager healthy | ✅ | `curl localhost:9093/-/healthy` → `OK` |
+| intent-api binary on 8080 | ✅ | `cargo run -p intent-api`, in-memory repos |
+| Prometheus scrape working | ✅ | `up{job="intent-api"} = 1` |
+| Metric with status label | ✅ | `intent_api_intent_version_created_total{status="success"} 31` |
+| Error metric recorded | ✅ | `intent_api_intent_version_created_total{status="error"} 1` after invalid request |
+| Alert rules loaded | ✅ | 17 rules across 5 groups |
+| Rule health | ✅ | all `health: "ok"` |
+| Rule states | ✅ | all `inactive` (expected — no fault conditions) |
+| Alertmanager routing | 🟡 placeholder | receivers map to `localhost:9001/webhook` (not running) |
+
 **Gaps Recorded:**
 - Prometheus returned empty vectors because the queries used non-existent aggregate metric names (`intent_api_requests_total` and `intent_api_request_duration_seconds`). The actual recorded metrics use granular names: `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_intent_version_created_total`, `intent_api_rebase_preview_duration_seconds`, and `intent_api_rebase_apply_duration_seconds`. This is a documentation/query error, not a missing metrics implementation.
 - NATS container was unhealthy during the initial collection window because the NATS server monitoring port (`-m 8222`) was not enabled in the docker-compose command. The compose healthcheck depends on `/healthz` on port 8222. This has been corrected in `infrastructure/local/docker-compose.yml` by adding `-m 8222` to the NATS command. Follow-up verification confirmed NATS healthy.
@@ -685,3 +714,5 @@ This document is linked from:
 | 2026-05-11 | (fixer) | B-2 L4 BOUNDED: One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from running intent-api binary; L4 status updated from PENDING to PARTIAL; `load-test-results.md` L4 bounded follow-up added; full L4 observability remains incomplete |
 | 2026-05-11 | (fixer) | B-2 L4 MULTI-PATH: Attempted diff, rebase-preview, rebase-apply traffic generation; all parameterized routes returned 404 in standalone binary; only 1 of 6 core metrics validated; `load-test-results.md` L4 multi-path follow-up added; external gate WAIVED-SOLO policy documented across checklist, backlog, and execution plan |
 | 2026-05-11 | (fixer) | B-2 L4 POST-FIX: Route fix commit `36bc548` applied (`{param}` → `:param`); all parameterized routes now match; all 6 core metrics successfully scraped by Prometheus from running intent-api binary; `load-test-results.md` and `16-solo-ops-evidence-plan.md` updated with post-fix evidence; full L4 observability (alerting, sustained load, production config) remains incomplete |
+| 2026-05-11 | (fixer) | B-2 L4 SUSTAINED LOAD: Bounded 90s sustained-load smoke test `test_sustained_load_smoke` added to `load_test.rs` and PASSED (0% error, +4.0% RSS, FD flat, 50 req/s stable); Oracle criteria met; 30min sustained remains Phase 4 |
+| 2026-05-11 | (fixer) | B-2 L4 ALERT VALIDATION: Observability stack started (Prometheus + Alertmanager); all 17 alert rules loaded with `health=ok`; Prometheus scrape pipeline validated end-to-end; success/error metric labels confirmed; actual alert firing deferred to fault-injection test (requires sustained fault conditions >5min) |

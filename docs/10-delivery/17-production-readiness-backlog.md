@@ -2,7 +2,7 @@
 
 > **Status:** Non-production — Phase 3 in progress
 > **Scope:** Production readiness items only; feature delivery tracked separately
-> **Last Updated:** April 2026
+> **Last Updated:** 2026-05-11
 
 ---
 
@@ -124,13 +124,14 @@ P1 items are required for safe production deployment but may be addressed in par
 | Field | Value |
 |-------|-------|
 | **Description** | Staged and production load testing to validate performance under production-like load |
-| **Current State** | L1 (bounded HTTP harness with in-memory repos) and L2 (SQLx local-live with docker-compose Postgres) delivered |
-| **Evidence Required** | L3: Staged environment k6/Artillery results; L4: Alternative tool results; L5: Production load test results |
-| **Owner** | SRE |
-| **Status** | 🔴 BLOCKED — L3-L5 gated on staging/production infra |
-| **Evidence Strength** | L1/L2 are local-docker only; do not represent as staging or production load test results |
+| **Current State** | L1 (bounded HTTP harness with in-memory repos) and L2 (SQLx local-live with docker-compose Postgres) delivered; L4 bounded slices delivered: 6 core metrics scraped by Prometheus, 90s sustained-load smoke test passed (0% error, +4.0% RSS, FD flat), 17 alert rules loaded and healthy |
+| **Evidence Required** | L3: Staged environment k6/Artillery results; L4: 30min sustained load + triggered alert firing; L5: Production load test results |
+| **Owner** | Backend Lead (L1-L4 bounded); SRE (L3-L5 staged/production) |
+| **Status** | 🟡 WAIVED-SOLO (non-production Phase 3 only) — L1-L4 bounded local evidence collected; L4 30min sustained load and alert firing remain pending; L3-L5 staged/production gated on infrastructure |
+| **Target Dates** | L4 30min sustained load: Phase 4 (2026-Q3); L3-L5: gated on production infra provisioning |
+| **Evidence Strength** | L1/L2/L4 bounded are local-docker only; do not represent as staging or production load test results |
 
-**No overclaim:** L1/L2 bounded harness results are not staging or production load test results.
+**No overclaim:** L1/L2/L4 bounded harness results are not staging or production load test results. The 90s smoke test validates short-term stability only; 30min+ sustained load required for leak detection.
 
 ---
 
@@ -298,7 +299,7 @@ These items cannot proceed until specific external conditions are met.
 | **P1** | External SRE sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External SRE name/date/statement required before production claim |
 | **P1** | External security sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External reviewer name/date/statement required before production claim |
 | **P1** | Production infra | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production env verified required before deployment |
-| **P1** | Load testing (L3-L5) | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staged/production results required before production claim |
+| **P1** | Load testing (L3-L5) | 🟡 WAIVED-SOLO (non-production Phase 3 only) | L1-L4 bounded local evidence collected; L4 30min sustained + alert firing pending Phase 4; staged/production results required before production claim |
 | **P1** | Penetration testing | 🟡 WAIVED-SOLO (non-production Phase 3 only) | External pen test report required before production claim |
 | **P2** | SqlxBundleRepository + forensic bundle RLS | ✅ BOUNDED VERIFIED | Local engineering backlog (P2-L1); migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
@@ -321,7 +322,7 @@ The following external evidence/gates remain pending and are not yet available:
 | External SRE sign-off | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
 | External security review | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
 | Penetration test report | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
-| Load test L3-L5 results | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
+| Load test L3-L5 results | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment; L4 30min sustained + alert firing pending Phase 4 |
 | Production infrastructure | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staging/production deployment |
 | DLQ replay worker | 🔴 DEFERRED | Phase 4 (requires G1-G5 gates) |
 | Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |

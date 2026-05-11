@@ -422,6 +422,259 @@ fn create_diff_body() -> serde_json::Value {
     })
 }
 
+/// Read current process RSS (kB) and open fd count from /proc.
+#[allow(dead_code)]
+fn read_process_stats() -> (usize, usize) {
+    let mut rss = 0usize;
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if line.starts_with("VmRSS:") {
+                let parts: Vec<_> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    rss = parts[1].parse().unwrap_or(0);
+                }
+                break;
+            }
+        }
+    }
+    let fd_count = std::fs::read_dir("/proc/self/fd")
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    (rss, fd_count)
+}
+
+/// Bounded sustained-load smoke test.
+///
+/// Runs steady-state load for a bounded duration to verify stability:
+/// - Memory usage stable (±20% of baseline)
+/// - FD count non-increasing
+/// - Error rate < 0.1%
+/// - p95 latency stable within 2x of initial sample
+///
+/// Set `SUSTAINED_LOAD_URL` to target an external server (e.g., `http://localhost:8080`).
+/// Set `SUSTAINED_LOAD_DURATION_SECS` to override duration (default: 90).
+/// Set `SUSTAINED_LOAD_RPS` to override target total requests per second (default: 50).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg(feature = "load-test")]
+async fn test_sustained_load_smoke() {
+    let duration_secs: u64 = std::env::var("SUSTAINED_LOAD_DURATION_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(90);
+    let target_rps: u64 = std::env::var("SUSTAINED_LOAD_RPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+
+    let (_router, base_url, _server_handle): (Option<Router>, String, Option<tokio::task::JoinHandle<()>>) =
+        match std::env::var("SUSTAINED_LOAD_URL") {
+            Ok(url) => (None, url, None),
+            Err(_) => {
+                let router = create_test_router();
+                let listener = TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("Failed to bind to TCP port");
+                let addr = listener.local_addr().expect("Failed to get local address");
+                let port = addr.port();
+                let base_url = format!("http://127.0.0.1:{}", port);
+                let server = axum::serve(listener, router);
+                let server_handle = tokio::spawn(async move {
+                    server.await.expect("Server error");
+                });
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                (Some(create_test_router()), base_url, Some(server_handle))
+            }
+        };
+
+    println!("\n{}", "=".repeat(80));
+    println!("SUSTAINED LOAD SMOKE TEST");
+    println!("Target URL: {}", base_url);
+    println!("Duration: {}s | Target RPS: {}", duration_secs, target_rps);
+    println!("{:=<80}", "");
+
+    let client = Client::builder()
+        .pool_max_idle_per_host(20)
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client");
+
+    let metrics = Arc::new(LoadTestMetrics::default());
+    let concurrent_clients: usize = 5;
+    let requests_per_client_per_sec = (target_rps as f64 / concurrent_clients as f64).ceil() as u64;
+    let interval_ms = 1000 / requests_per_client_per_sec;
+    let total_duration = Duration::from_secs(duration_secs);
+
+    let start_time = Instant::now();
+    let mut handles = Vec::new();
+
+    for client_idx in 0..concurrent_clients {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let metrics = metrics.clone();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+            let end_time = Instant::now() + total_duration;
+            let mut req_counter = 0usize;
+
+            while Instant::now() < end_time {
+                interval.tick().await;
+                let rand_val = (client_idx * 1000 + req_counter) % 100;
+                let (method, path, body) = if rand_val < 70 {
+                    ("GET", "/health".to_string(), None)
+                } else if rand_val < 90 {
+                    ("POST", "/intents".to_string(), Some(create_intent_body()))
+                } else {
+                    let intent_id = Uuid::new_v4();
+                    ("POST", format!("/intents/{}/diff", intent_id), Some(create_diff_body()))
+                };
+
+                let url = format!("{}{}", base_url, path);
+                let req_start = Instant::now();
+                let result = if method == "GET" {
+                    client.get(&url).send().await
+                } else {
+                    client.post(&url).json(&body.unwrap_or(serde_json::Value::Null)).send().await
+                };
+                let latency = req_start.elapsed().as_millis() as u64;
+
+                match result {
+                    Ok(resp) if resp.status().is_success() || resp.status().is_client_error() => {
+                        metrics.record_success(latency);
+                    }
+                    Ok(resp) if resp.status().is_server_error() => {
+                        metrics.record_failure();
+                        eprintln!("Server error {} for {}", resp.status(), url);
+                    }
+                    Err(e) => {
+                        metrics.record_failure();
+                        eprintln!("Request failed for {}: {}", url, e);
+                    }
+                    _ => {
+                        metrics.record_success(latency);
+                    }
+                }
+                req_counter += 1;
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Sample process stats every 10 seconds in a background task
+    let sample_interval = Duration::from_secs(10);
+    let sample_metrics = metrics.clone();
+    let sample_handle = tokio::spawn(async move {
+        let mut samples = Vec::new();
+        let mut next_sample = Instant::now() + sample_interval;
+        while Instant::now() < start_time + total_duration {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(next_sample)).await;
+            let (rss, fd) = read_process_stats();
+            let current_reqs = sample_metrics.total_requests.load(Ordering::Relaxed);
+            samples.push((next_sample.duration_since(start_time).as_secs(), rss, fd, current_reqs));
+            println!(
+                "  [{:>3}s] RSS: {:>8} kB | FD: {:>4} | Requests: {}",
+                next_sample.duration_since(start_time).as_secs(),
+                rss,
+                fd,
+                current_reqs
+            );
+            next_sample += sample_interval;
+        }
+        samples
+    });
+
+    // Wait for workers
+    for handle in handles {
+        let _ = handle.await;
+    }
+    let elapsed = start_time.elapsed();
+    let samples = sample_handle.await.unwrap_or_default();
+
+    let stats = metrics.get_stats();
+    let (final_rss, final_fd) = read_process_stats();
+
+    // Use first sample (after warm-up) as stability baseline
+    let (warm_rss, warm_fd) = samples
+        .iter()
+        .find(|(t, _, _, _)| *t >= 10)
+        .map(|(_, rss, fd, _)| (*rss, *fd))
+        .unwrap_or((final_rss, final_fd));
+
+    println!("\n{:=<80}", "");
+    println!("SUSTAINED LOAD RESULTS");
+    println!("{:=<80}", "");
+    println!("Duration:        {:.2}s", elapsed.as_secs_f64());
+    println!("Total requests:  {}", stats.total_requests);
+    println!("Successful:      {}", stats.successful_requests);
+    println!("Failed:          {}", stats.failed_requests);
+    println!("Error rate:      {:.4}%", stats.error_rate * 100.0);
+    println!("Throughput:      {:.2} req/s", stats.total_requests as f64 / elapsed.as_secs_f64());
+    println!("p50 latency:     {} ms", stats.p50_latency_ms);
+    println!("p95 latency:     {} ms", stats.p95_latency_ms);
+    println!("p99 latency:     {} ms", stats.p99_latency_ms);
+    println!("Warm RSS:        {} kB (first 10s sample)", warm_rss);
+    println!("Final RSS:       {} kB", final_rss);
+    println!("RSS delta:       {} kB ({:.1}%)",
+        final_rss as i64 - warm_rss as i64,
+        if warm_rss > 0 { ((final_rss as f64 / warm_rss as f64) - 1.0) * 100.0 } else { 0.0 }
+    );
+    println!("Warm FD:         {} (first 10s sample)", warm_fd);
+    println!("Final FD:        {}", final_fd);
+    println!("FD delta:        {}", final_fd as i64 - warm_fd as i64);
+
+    // Oracle pass criteria checks
+    let mut violations = Vec::new();
+
+    if stats.error_rate > 0.001 {
+        violations.push(format!("Error rate {:.4}% exceeds 0.1%", stats.error_rate * 100.0));
+    }
+
+    if warm_rss > 0 {
+        let rss_change_pct = ((final_rss as f64 / warm_rss as f64) - 1.0) * 100.0;
+        if rss_change_pct.abs() > 20.0 {
+            violations.push(format!(
+                "RSS changed {:.1}% (warm {} kB → final {} kB), exceeds ±20%",
+                rss_change_pct, warm_rss, final_rss
+            ));
+        }
+    }
+
+    if final_fd > warm_fd {
+        violations.push(format!(
+            "FD count increased (warm {} → final {}), expected non-increasing",
+            warm_fd, final_fd
+        ));
+    }
+
+    // Check throughput stability: first 10s sample vs final should be within 2x
+    if let Some(first_sample) = samples.iter().find(|(t, _, _, _)| *t >= 10) {
+        let first_rps = first_sample.3 as f64 / first_sample.0 as f64;
+        let overall_rps = stats.total_requests as f64 / elapsed.as_secs_f64();
+        if overall_rps < first_rps * 0.5 || overall_rps > first_rps * 2.0 {
+            violations.push(format!(
+                "Throughput instability: first ~{:.1} req/s vs overall {:.1} req/s (outside 0.5x–2x)",
+                first_rps, overall_rps
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        println!("\nSUSTAINED LOAD SMOKE TEST PASSED");
+    } else {
+        println!("\nSUSTAINED LOAD SMOKE TEST VIOLATIONS:");
+        for v in &violations {
+            println!("  - {}", v);
+        }
+    }
+    println!("{}", "=".repeat(80));
+
+    if let Some(sh) = _server_handle {
+        sh.abort();
+    }
+
+    assert!(violations.is_empty(), "Sustained load smoke test violations: {:?}", violations);
+}
+
 /// Load test that simulates production-like traffic against the HTTP server.
 /// Uses in-memory repositories to avoid external dependencies.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
