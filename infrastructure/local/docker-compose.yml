@@ -23,7 +23,7 @@ services:
       - "4222:4222"   # NATS client connection
       - "8222:8222"   # HTTP monitoring
       - "6222:6222"   # Cluster port
-    command: ["--js"]
+    command: ["--js", "-m", "8222"]
     volumes:
       - nats_data:/data
     healthcheck:

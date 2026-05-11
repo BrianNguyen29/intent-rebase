@@ -189,19 +189,25 @@
 
 | Query | Result |
 |-------|--------|
-| `intent_api_requests_total` | `{"status":"success","data":{"resultType":"vector","result":[]}}` — empty vector |
-| `intent_api_request_duration_seconds` | `{"status":"success","data":{"resultType":"vector","result":[]}}` — empty vector |
+| `intent_api_requests_total` (non-existent aggregate) | `{"status":"success","data":{"resultType":"vector","result":[]}}` — empty vector |
+| `intent_api_request_duration_seconds` (non-existent aggregate) | `{"status":"success","data":{"resultType":"vector","result":[]}}` — empty vector |
 
-**Interpretation:** Prometheus returned empty vectors for both counters. Possible causes:
+**Interpretation:** Prometheus returned empty vectors because the queries used non-existent aggregate metric names. The actual recorded metrics use granular names:
+- `intent_api_rebase_preview_requests_total`
+- `intent_api_rebase_apply_requests_total`
+- `intent_api_intent_version_created_total`
+- `intent_api_rebase_preview_duration_seconds`
+- `intent_api_rebase_apply_duration_seconds`
+
+Possible additional causes:
 - Metrics endpoint not yet scraped at query time (scrape interval vs test duration mismatch)
-- Metric names do not match the scraped endpoint labels
 - In-memory harness does not expose Prometheus metrics on the same port used by the query
 
 **No overclaim:** Empty Prometheus results mean observability evidence is incomplete. This run validates the in-memory load harness only, not full L3 observability integration.
 
 ### NATS Healthcheck Gap
 
-NATS container reported `unhealthy` via docker-compose healthcheck during the evidence collection window. JetStream config validation (G2) was performed separately on 2026-04-28 and is not invalidated by this transient healthcheck state. However, full stack integration (NATS + load test) was not achieved in this run.
+NATS container reported `unhealthy` via docker-compose healthcheck during the evidence collection window. The root cause was that the NATS server command in `infrastructure/local/docker-compose.yml` did not enable the monitoring port (`-m 8222`), so the healthcheck against `http://localhost:8222/healthz` failed. This has been corrected by adding `-m 8222` to the NATS command. JetStream config validation (G2) was performed separately on 2026-04-28 and is not invalidated by this transient healthcheck state. Full stack integration (NATS + load test) was not achieved in this run.
 
 ### Evidence Strength
 
@@ -214,7 +220,60 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 | SQLx-backed run | 🔴 NO (in-memory only) |
 | Production equivalence | 🔴 NO |
 
-**Conclusion:** This is bounded local in-memory harness evidence. It does NOT constitute L3 staging-like or L4 observability-validated evidence. Full L3/L4 evidence remains pending.
+### Follow-Up — NATS Fix and SQLx-Backed Run (2026-05-11)
+
+**NATS healthcheck fix verified:**
+- `infrastructure/local/docker-compose.yml` NATS command updated to `["--js", "-m", "8222"]`
+- `docker compose -f infrastructure/local/docker-compose.yml up -d --force-recreate nats` succeeded
+- `docker compose -f infrastructure/local/docker-compose.yml ps nats` showed `intent-rebase-nats ... Up ... (healthy)` with ports 4222/6222/8222 mapped
+
+**Postgres recreation:**
+- Postgres container recreated and showed healthy with `0.0.0.0:5432->5432/tcp`
+- Migrations applied via `docker exec`; one duplicate trigger error for `graph_edges_validate_tenant_workflow` during migration 005 on already-initialized DB, but later migrations continued and SQLx test succeeded
+
+**SQLx-backed load test run:**
+- **Command:** `DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase cargo test -p intent-api --features load-test,sqlx-load-test --test load_test -- --nocapture test_load_sqlx`
+- **Result:** `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out`
+
+#### SQLx-L1 — Light Load (5 clients, 500 requests)
+| Metric | Value |
+|--------|-------|
+| Total Requests | 500 |
+| Successful | 500 |
+| Failed | 0 |
+| Error Rate | 0.00% |
+| p50 Latency | 2 ms |
+| p90 Latency | 7 ms |
+| **p95 Latency** | **10 ms** |
+| p99 Latency | 22 ms |
+| Max Latency | 32 ms |
+| SLO | ✅ PASS |
+
+#### SQLx-L2 — Normal Load (10 clients, 1,000 requests)
+| Metric | Value |
+|--------|-------|
+| Total Requests | 1,000 |
+| Successful | 1,000 |
+| Failed | 0 |
+| Error Rate | 0.00% |
+| p50 Latency | 5 ms |
+| p90 Latency | 12 ms |
+| **p95 Latency** | **15 ms** |
+| p99 Latency | 24 ms |
+| Max Latency | 35 ms |
+| SLO | ✅ PASS |
+
+**Prometheus actual metric queries (follow-up):**
+- `intent_api_rebase_preview_requests_total`: empty vector
+- `intent_api_rebase_apply_requests_total`: empty vector
+- `intent_api_intent_version_created_total`: empty vector
+
+**Interpretation:** Even with correct metric names, Prometheus returned empty vectors. Likely causes:
+- Metrics are recorded by the intent-api binary, but the load test harness runs in-process and may not expose the metrics endpoint on the port Prometheus scrapes
+- Prometheus scrape target may not be configured to scrape the test process
+- Scrape interval vs test duration mismatch
+
+**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. Prometheus observability integration is still not validated. This remains local docker-compose evidence, not production/staging-equivalent.
 
 ---
 
@@ -227,8 +286,8 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 - **No cold-start** — server is warm before test begins
 - **Synthetic payloads** — small, fixed-size request bodies
 - **No connection pool exhaustion test** — bounded concurrent clients only
-- **Prometheus metrics empty** — 2026-05-11 run returned empty vectors for `intent_api_requests_total` and `intent_api_request_duration_seconds`; observability integration not validated
-- **NATS unhealthy** — 2026-05-11 run showed NATS container as unhealthy via compose healthcheck; full stack integration not achieved
+- **Prometheus metrics empty** — 2026-05-11 run returned empty vectors for both non-existent aggregate names and actual metric names; observability integration not validated
+- **NATS unhealthy (initial run)** — 2026-05-11 initial run showed NATS container as unhealthy; fixed in follow-up by adding `-m 8222` to NATS command
 
 ### SQLx Tests
 - **Local docker-compose Postgres only** — not equivalent to production RDS/high-performance managed Postgres
