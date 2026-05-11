@@ -294,6 +294,9 @@ mod handler_tests;
 mod rebase_simulation_tests;
 
 #[cfg(test)]
+mod approval_invalidation_tests;
+
+#[cfg(test)]
 mod event_publisher_tests;
 
 #[cfg(test)]
