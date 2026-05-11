@@ -297,6 +297,9 @@ mod event_publisher_tests;
 mod replay_handler_tests;
 
 #[cfg(test)]
+mod approval_revalidation_tests;
+
+#[cfg(test)]
 mod orchestration_dashboard_tests;
 
 #[cfg(test)]
