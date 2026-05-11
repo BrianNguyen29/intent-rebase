@@ -303,7 +303,7 @@ pub fn create_test_payload() -> IntentPayload {
 
 /// Create a minimal low-risk IntentPayload for tests.
 ///
-/// Matches the 7 identical inline IntentPayload blocks in handler_tests.rs:
+/// Canonical low-risk payload used across handler test modules:
 /// - summary: "Test"
 /// - success_statement: "Success"
 /// - domain: "test"
