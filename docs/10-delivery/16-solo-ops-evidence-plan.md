@@ -408,7 +408,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | Field | Value |
 |-------|-------|
 | **Task** | Collect L3 staging-like evidence with docker-compose |
-| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; L4 bounded observability slice validated (one real metric scraped by Prometheus from running binary); L4 multi-path follow-up blocked by parameterized route 404 in standalone binary; full L4 observability remains incomplete |
+| **Status** | 🟡 PARTIAL — L1-L3 in-memory harness + SQLx-backed local-live evidence collected on 2026-05-11; NATS healthcheck fixed and verified healthy; L4 bounded observability slice validated (one real metric scraped by Prometheus from running binary); L4 multi-path follow-up initially blocked by parameterized route 404, then unblocked by route fix (commit 36bc548); all 6 core metrics successfully scraped post-fix; full L4 observability (alerting, sustained load, production-equivalent config) remains incomplete |
 | **Owner** | Backend Lead (solo) |
 | **Prerequisites** | `infrastructure/staging/docker-compose.yml` created; docker-compose full stack running |
 | **Tools** | k6 or custom harness |
@@ -422,7 +422,7 @@ cargo test -p intent-api --all-features --lib -- nats_jetstream::live_integratio
 | L1 | HTTP harness, in-memory | Local binary | ✅ DELIVERED |
 | L2 | SQLx-backed, docker-compose Postgres | Local docker | ✅ DELIVERED |
 | L3 | Full stack, NATS + Postgres | docker-compose (staging-like) | 🟡 PARTIAL — in-memory harness + SQLx-backed local-live load test passed; NATS fixed and healthy; not production-equivalent |
-| L4 | Full stack with observability | docker-compose + Prometheus | 🟡 PARTIAL — bounded L4 slice validated: one real metric (`intent_api_intent_version_created_total`) successfully scraped from running intent-api binary; multi-path follow-up blocked: parameterized routes (create-version, diff, rebase-preview, rebase-apply) return 404 in standalone binary; only 1 of 6 core metrics validated; full L4 observability remains incomplete |
+| L4 | Full stack with observability | docker-compose + Prometheus | 🟡 PARTIAL — bounded L4 slice validated: one real metric initially scraped; multi-path follow-up blocked by route 404, then unblocked by fix (commit 36bc548); post-fix all 6 core metrics successfully scraped from running intent-api binary; alerting and sustained load remain unvalidated; not production-equivalent |
 | L5 | Production load | Production infra | 🔴 BLOCKED |
 
 **L3 Staging Evidence Commands:**
@@ -534,17 +534,36 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (staging-like, not production-equivalent
 | GET /forensic/verify | ✅ 422 | non-parameterized route matched (missing field) |
 | Core metrics validated | 🟡 1/6 | only `intent_api_intent_version_created_total` validated |
 
-**Root cause:** All non-parameterized routes match correctly. All parameterized routes return 404 in the standalone binary regardless of `jwt-auth` feature state. Likely a route registration or axum route-matching issue specific to the binary startup path, not present in the test harness.
+**2026-05-11 L4 Post-Fix Multi-Path Validation:**
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Fix commit | ✅ | `36bc548` — axum route parameter syntax `{param}` → `:param` in `router.rs` |
+| Route regression test | ✅ | `cargo test -p intent-api --test route_regression` — 5 parameterized routes assert not 404 |
+| Server start (no-default-features) | ✅ | `cargo run -p intent-api --no-default-features`, bound `0.0.0.0:8080` |
+| POST /intents | ✅ HTTP 201 | intent created |
+| POST /intents/:id/versions | ✅ HTTP 201 | version 2 created |
+| POST /intents/:id/diff | ✅ HTTP 200 | diff computed |
+| POST /intents/:id/rebase-preview | ✅ HTTP 200 | preview generated |
+| POST /intents/:id/rebase-apply | ✅ HTTP 200 | apply completed |
+| Local `/metrics` — `intent_api_intent_version_created_total` | ✅ 2 | 1 intent + 1 version |
+| Local `/metrics` — `intent_api_diff_compute_duration_seconds_count` | ✅ 1 | diff endpoint hit once |
+| Local `/metrics` — `intent_api_rebase_preview_requests_total` | ✅ 1 | preview endpoint hit once |
+| Local `/metrics` — `intent_api_rebase_preview_duration_seconds_count` | ✅ 1 | preview endpoint hit once |
+| Local `/metrics` — `intent_api_rebase_apply_requests_total` | ✅ 1 | apply endpoint hit once |
+| Local `/metrics` — `intent_api_rebase_apply_duration_seconds_count` | ✅ 1 | apply endpoint hit once |
+| Prometheus scrape after 15s delay | ✅ all 6 metrics | all non-empty with correct labels |
+| Core metrics validated post-fix | ✅ 6/6 | all six core metrics validated |
 
 **Gaps Recorded:**
 - Prometheus returned empty vectors because the queries used non-existent aggregate metric names (`intent_api_requests_total` and `intent_api_request_duration_seconds`). The actual recorded metrics use granular names: `intent_api_rebase_preview_requests_total`, `intent_api_rebase_apply_requests_total`, `intent_api_intent_version_created_total`, `intent_api_rebase_preview_duration_seconds`, and `intent_api_rebase_apply_duration_seconds`. This is a documentation/query error, not a missing metrics implementation.
 - NATS container was unhealthy during the initial collection window because the NATS server monitoring port (`-m 8222`) was not enabled in the docker-compose command. The compose healthcheck depends on `/healthz` on port 8222. This has been corrected in `infrastructure/local/docker-compose.yml` by adding `-m 8222` to the NATS command. Follow-up verification confirmed NATS healthy.
 - The initial run used the in-memory harness, not the SQLx-backed harness. The follow-up run executed the SQLx-backed harness (`test_load_sqlx`) and passed with healthy NATS and Postgres.
-- Even with correct metric names, Prometheus actual metric queries still returned empty vectors in the SQLx follow-up because the in-process test harness does not expose a scrapeable metrics endpoint. The L4 observability follow-up resolved this by running the intent-api binary separately on port 8080 and confirmed Prometheus successfully scraped `intent_api_intent_version_created_total` with value `10` after generating traffic. This validates the Prometheus → intent-api metrics pipeline for one metric and one code path.
-- Rebase-preview metric (`intent_api_rebase_preview_requests_total`) remained empty in the L4 follow-up because no rebase-preview traffic was generated. This is expected behavior, not a failure of the metrics pipeline.
-- L4 multi-path follow-up attempted to validate diff, rebase-preview, and rebase-apply metrics but all parameterized routes returned 404 in the standalone binary. Only `intent_api_intent_version_created_total` (via `POST /intents`) was successfully validated. The remaining five core metrics are blocked by this route-matching issue.
+- Even with correct metric names, Prometheus actual metric queries still returned empty vectors in the SQLx follow-up because the in-process test harness does not expose a scrapeable metrics endpoint. The L4 observability follow-up resolved this by running the intent-api binary separately on port 8080 and confirmed Prometheus successfully scraped `intent_api_intent_version_created_total` with value `10` after generating traffic.
+- L4 multi-path follow-up initially blocked by parameterized route 404 in the standalone binary. Root cause: axum route parameter syntax mismatch — `{param}` was used but `:param` is required. Commit `36bc548` fixed this in `router.rs`. After the fix, all parameterized routes matched correctly and all 6 core metrics were successfully scraped by Prometheus.
+- Rebase-preview metric (`intent_api_rebase_preview_requests_total`) remained empty in the pre-fix L4 follow-up because no rebase-preview traffic was generated and the route was 404. Post-fix, the metric validated successfully with value `1`.
 
-**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from a running intent-api binary. L4 multi-path validation is blocked by parameterized route 404s in the standalone binary. This remains bounded local docker-compose evidence. It does NOT constitute full L4 observability (all metrics, all paths, alerting validation, production scrape config). Full L3/L4 evidence remains incomplete.
+**No overclaim:** NATS healthcheck is now fixed. SQLx-backed local-live load test passed. All 6 core metrics successfully scraped by Prometheus from a running intent-api binary after route fix. This is stronger local evidence than the initial in-memory-only run, but it remains bounded local docker-compose evidence. It does NOT constitute full L4 observability (alerting rules validation, sustained load testing, production-equivalent scrape config, multi-node/HA setup). Full L3/L4 evidence remains incomplete.
 
 ---
 
@@ -665,3 +684,4 @@ This document is linked from:
 | 2026-05-11 | (fixer) | B-2 FOLLOW-UP: NATS healthcheck fixed (`-m 8222`) and verified healthy; SQLx-backed local-live load test passed (L1 p95 10ms, L2 p95 15ms); Prometheus actual metric queries still empty; B-2 remains PARTIAL; `load-test-results.md` follow-up subsection added |
 | 2026-05-11 | (fixer) | B-2 L4 BOUNDED: One real metric (`intent_api_intent_version_created_total`) successfully scraped by Prometheus from running intent-api binary; L4 status updated from PENDING to PARTIAL; `load-test-results.md` L4 bounded follow-up added; full L4 observability remains incomplete |
 | 2026-05-11 | (fixer) | B-2 L4 MULTI-PATH: Attempted diff, rebase-preview, rebase-apply traffic generation; all parameterized routes returned 404 in standalone binary; only 1 of 6 core metrics validated; `load-test-results.md` L4 multi-path follow-up added; external gate WAIVED-SOLO policy documented across checklist, backlog, and execution plan |
+| 2026-05-11 | (fixer) | B-2 L4 POST-FIX: Route fix commit `36bc548` applied (`{param}` → `:param`); all parameterized routes now match; all 6 core metrics successfully scraped by Prometheus from running intent-api binary; `load-test-results.md` and `16-solo-ops-evidence-plan.md` updated with post-fix evidence; full L4 observability (alerting, sustained load, production config) remains incomplete |

@@ -343,6 +343,50 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 
 **No overclaim:** Only one of six core metrics was validated. The remaining five are blocked by a parameterized route 404 issue in the standalone binary. Full L4 multi-path observability validation remains incomplete.
 
+### L4 Post-Fix Multi-Path Validation — 2026-05-11
+
+**Fix applied:** Commit `36bc548` changed axum route parameter syntax from `{param}` to `:param` in `crates/intent-api/src/router.rs`, restoring parameterized route matching in the standalone binary.
+
+**Setup:**
+- intent-api binary run via `cargo run -p intent-api --no-default-features`
+- Server bound `0.0.0.0:8080`, in-memory repositories
+
+**Traffic generation:**
+
+| Step | Endpoint | Result |
+|------|----------|--------|
+| 1 | `POST /intents` | ✅ HTTP 201 — intent created |
+| 2 | `POST /intents/{id}/versions` | ✅ HTTP 201 — version 2 created |
+| 3 | `POST /intents/{id}/diff` | ✅ HTTP 200 — diff computed |
+| 4 | `POST /intents/{id}/rebase-preview` | ✅ HTTP 200 — preview generated |
+| 5 | `POST /intents/{id}/rebase-apply` | ✅ HTTP 200 — apply completed |
+
+**Local `/metrics` after traffic:**
+
+| Metric | Value |
+|--------|-------|
+| `intent_api_intent_version_created_total{status="success"}` | 2 |
+| `intent_api_diff_compute_duration_seconds_count` | 1 |
+| `intent_api_rebase_preview_requests_total{status="success"}` | 1 |
+| `intent_api_rebase_preview_duration_seconds_count{graph_size="unknown"}` | 1 |
+| `intent_api_rebase_apply_requests_total{status="success"}` | 1 |
+| `intent_api_rebase_apply_duration_seconds_count{risk_class="medium"}` | 1 |
+
+**Prometheus scrape after 15s delay:**
+
+| Metric | Value |
+|--------|-------|
+| `intent_api_intent_version_created_total` | 2 |
+| `intent_api_diff_compute_duration_seconds_count` | 1 |
+| `intent_api_rebase_preview_requests_total` | 1 |
+| `intent_api_rebase_preview_duration_seconds_count` | 1 |
+| `intent_api_rebase_apply_requests_total` | 1 |
+| `intent_api_rebase_apply_duration_seconds_count` | 1 |
+
+**Conclusion:** All six core metrics successfully scraped by Prometheus from the running intent-api binary after the route fix. This validates the Prometheus → intent-api metrics pipeline for multiple code paths.
+
+**No overclaim:** This is bounded local docker-compose evidence — one binary, in-memory repos, no load testing, no alerting validation, no production scrape config. Full L4 observability (alerting rules, sustained load, production-equivalent config) remains future scope.
+
 ---
 
 ## Limitations
@@ -356,7 +400,8 @@ NATS container reported `unhealthy` via docker-compose healthcheck during the ev
 - **No connection pool exhaustion test** — bounded concurrent clients only
 - **Prometheus metrics empty (initial/SQLx runs)** — 2026-05-11 initial and SQLx runs returned empty vectors for both non-existent aggregate names and actual metric names because the in-process test harness did not expose a scrapeable metrics endpoint
 - **Prometheus one-metric validated (L4 bounded follow-up)** — 2026-05-11 L4 follow-up successfully scraped `intent_api_intent_version_created_total` from a running intent-api binary
-- **L4 multi-path blocked** — 2026-05-11 multi-path follow-up attempted diff, rebase-preview, and rebase-apply traffic but all parameterized routes returned 404 in the standalone binary; only 1 of 6 core metrics validated; full L4 observability remains incomplete
+- **L4 multi-path blocked (pre-fix)** — 2026-05-11 multi-path follow-up attempted diff, rebase-preview, and rebase-apply traffic but all parameterized routes returned 404 in the standalone binary; only 1 of 6 core metrics validated
+- **L4 multi-path validated (post-fix)** — 2026-05-11 post-fix validation successfully scraped all 6 core metrics from running intent-api binary after route parameter syntax fix (commit 36bc548); alerting and sustained load remain unvalidated
 - **NATS unhealthy (initial run)** — 2026-05-11 initial run showed NATS container as unhealthy; fixed in follow-up by adding `-m 8222` to NATS command
 
 ### SQLx Tests
