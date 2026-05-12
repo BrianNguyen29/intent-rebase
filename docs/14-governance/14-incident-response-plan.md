@@ -43,7 +43,7 @@ Defines the end-to-end incident response process for Intent Rebase Engine — co
 - Incident response team notified
 
 **Tools:**
-- Alerting rules: `infrastructure/local/prometheus/rules.yml`
+- Alerting rules: `infrastructure/local/prometheus/rules/intent_api_alerts.yml`
 - Audit events: `GET /api/v1/audit/events` with tenant_id filter
 - SLO dashboard: Grafana intent-rebase-slo
 

@@ -468,12 +468,17 @@ sleep 30
 
 # 4. Query Prometheus for metrics
 echo "3. Collecting Prometheus metrics..."
-curl -s "${PROMETHEUS_URL}/api/v1/query?query=intent_api_requests_total" | jq .
-curl -s "${PROMETHEUS_URL}/api/v1/query?query=histogram_quantile(0.95, intent_api_request_duration_seconds_bucket)" | jq .
+# Query granular request counters (no aggregate intent_api_requests_total exists)
+curl -s "${PROMETHEUS_URL}/api/v1/query?query=intent_api_intent_version_created_total" | jq .
+curl -s "${PROMETHEUS_URL}/api/v1/query?query=intent_api_rebase_preview_requests_total" | jq .
+curl -s "${PROMETHEUS_URL}/api/v1/query?query=intent_api_rebase_apply_requests_total" | jq .
+# Query a valid latency histogram
+curl -s "${PROMETHEUS_URL}/api/v1/query?query=histogram_quantile(0.95, intent_api_rebase_preview_duration_seconds_bucket)" | jq .
 
 # 5. Check for errors
 echo "4. Checking error rate..."
-ERROR_RATE=$(curl -s "${PROMETHEUS_URL}/api/v1/query?query=rate(intent_api_requests_total{status!=\"success\"}[5m])" | jq '.data.result | length')
+# Aggregate error rate across granular counters (no intent_api_requests_total exists)
+ERROR_RATE=$(curl -s "${PROMETHEUS_URL}/api/v1/query?query=sum(rate(intent_api_intent_version_created_total{status!=\"success\"}[5m]))+sum(rate(intent_api_rebase_preview_requests_total{status!=\"success\"}[5m]))+sum(rate(intent_api_rebase_apply_requests_total{status!=\"success\"}[5m]))" | jq '.data.result | length')
 echo "Error rate queries: ${ERROR_RATE}"
 
 echo ""
@@ -583,7 +588,7 @@ echo "=== L4 Load Test Complete ==="
 | Check | Command | Expected | Status |
 |-------|---------|----------|--------|
 | Prometheus scraping intent-api | `curl -s ${PROMETHEUS_URL}/api/v1/targets \| jq '.data.targets[].labels.job'` | intent-api present | [ ] |
-| Metrics being recorded | `curl -s ${PROMETHEUS_URL}/api/v1/query?query=intent_api_requests_total'` | > 0 | [ ] |
+| Metrics being recorded | `curl -s ${PROMETHEUS_URL}/api/v1/query?query=sum(intent_api_intent_version_created_total)+sum(intent_api_rebase_preview_requests_total)+sum(intent_api_rebase_apply_requests_total)'` | > 0 | [ ] |
 | Grafana SLO dashboard populated | Grafana UI | Panels showing data | [ ] |
 | No alerts firing during normal load | `curl -s ${ALERTMANAGER_URL}/api/v1/alerts'` | 0 active | [ ] |
 | Alerts fire under stress | k6 stress phase | Critical/Warning alerts | [ ] |

@@ -67,11 +67,12 @@ curl -s http://localhost:8080/metrics | head -100
 
 # Expected: Prometheus-formatted metrics (text/plain; version=0.0.4)
 # Key metrics should include:
-# - intent_rebase_intent_create_total
-# - intent_rebase_version_create_total
-# - intent_rebase_rebase_preview_total
-# - intent_rebase_rebase_apply_total
-# - intent_rebase_compensation_actions_total
+# - intent_api_intent_version_created_total
+# - intent_api_rebase_preview_requests_total
+# - intent_api_rebase_apply_requests_total
+# - intent_api_diff_compute_duration_seconds_bucket
+# - intent_api_rebase_preview_duration_seconds_bucket
+# - intent_api_rebase_apply_duration_seconds_bucket
 ```
 
 **Evidence Template:**
@@ -84,11 +85,12 @@ Date: <YYYY-MM-DD>
 Environment: local docker-compose
 
 Metrics Found:
-- intent_rebase_intent_create_total: <present|absent>
-- intent_rebase_version_create_total: <present|absent>
-- intent_rebase_rebase_preview_total: <present|absent>
-- intent_rebase_rebase_apply_total: <present|absent>
-- intent_rebase_compensation_actions_total: <present|absent>
+- intent_api_intent_version_created_total: <present|absent>
+- intent_api_rebase_preview_requests_total: <present|absent>
+- intent_api_rebase_apply_requests_total: <present|absent>
+- intent_api_diff_compute_duration_seconds_bucket: <present|absent>
+- intent_api_rebase_preview_duration_seconds_bucket: <present|absent>
+- intent_api_rebase_apply_duration_seconds_bucket: <present|absent>
 
 Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 ```
@@ -122,12 +124,13 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 
 ```bash
 # Query key metrics via Prometheus API
-curl -s "http://localhost:9090/api/v1/query?query=intent_rebase_intent_create_total" | jq .
-curl -s "http://localhost:9090/api/v1/query?query=intent_rebase_rebase_preview_total" | jq .
-curl -s "http://localhost:9090/api/v1/query?query=intent_rebase_rebase_apply_total" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=intent_api_intent_version_created_total" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=intent_api_rebase_preview_requests_total" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=intent_api_rebase_apply_requests_total" | jq .
 
 # Query histogram quantiles (if any requests have been made)
-curl -s "http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, intent_rebase_rebase_preview_duration_seconds_bucket)" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, intent_api_rebase_preview_duration_seconds_bucket)" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, intent_api_diff_compute_duration_seconds_bucket)" | jq .
 ```
 
 **Evidence Template:**
@@ -140,11 +143,12 @@ Date: <YYYY-MM-DD>
 Environment: local docker-compose
 
 Metric Samples:
-- intent_rebase_intent_create_total: <value>
-- intent_rebase_rebase_preview_total: <value>
-- intent_rebase_rebase_apply_total: <value>
+- intent_api_intent_version_created_total: <value>
+- intent_api_rebase_preview_requests_total: <value>
+- intent_api_rebase_apply_requests_total: <value>
 
 Histogram Quantiles:
+- p95 diff compute duration: <value or null>
 - p95 rebase preview duration: <value or null>
 - p95 rebase apply duration: <value or null>
 
@@ -168,10 +172,11 @@ curl -s http://localhost:9090/api/v1/rules | jq .
 # - DiffComputeLatency
 # - RebasePreviewLatency
 # - RebaseApplyLatency
-# - DLQDepthHigh
-# - DLQMessageStale
 # - PreviewPathBurnRate1h/6h/3d
 # - ApplyPathBurnRate1h/6h/3d
+#
+# Not yet instrumented (removed from local rules):
+# - DLQDepthHigh, DLQMessageStale, DLQReplayFailures (awaiting DLQ metric wiring)
 ```
 
 **Evidence Template:**
@@ -190,14 +195,15 @@ Alert Rules Found:
 - DiffComputeLatency: <present|absent>
 - RebasePreviewLatency: <present|absent>
 - RebaseApplyLatency: <present|absent>
-- DLQDepthHigh: <present|absent>
-- DLQMessageStale: <present|absent>
 - PreviewPathBurnRate1h: <present|absent>
 - PreviewPathBurnRate6h: <present|absent>
 - PreviewPathBurnRate3d: <present|absent>
 - ApplyPathBurnRate1h: <present|absent>
 - ApplyPathBurnRate6h: <present|absent>
 - ApplyPathBurnRate3d: <present|absent>
+
+Not yet instrumented (stale; removed from local rules):
+- DLQDepthHigh, DLQMessageStale, DLQReplayFailures
 
 Alert Rule File Location: infrastructure/local/prometheus/rules/intent_api_alerts.yml
 Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
@@ -508,7 +514,7 @@ sleep 20
 
 # 4. Check metrics
 echo "4. Check metrics..."
-curl -s "http://localhost:9090/api/v1/query?query=intent_rebase_intent_create_total" | jq .
+curl -s "http://localhost:9090/api/v1/query?query=intent_api_intent_version_created_total" | jq .
 
 # 5. Check traces in logs (if OTLP not configured)
 echo "5. Check application logs for trace context..."
@@ -544,9 +550,9 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 |-----------|-------------------|-------------------|
 | Metrics endpoint | ⚠️ Placeholder nginx, not real intent-api metrics | LOCAL DOCKER-COMPOSE |
 | Prometheus scrape | ✅ Targets intent-api/prometheus up | LOCAL DOCKER-COMPOSE |
-| Prometheus rules | ✅ Rule groups present: intent_api_availability(3), compensation(2), dlq(3), error_budget(6), latency(3) | LOCAL DOCKER-COMPOSE |
-| DLQ rules | ✅ DLQDepthHigh, DLQMessageStale, DLQReplayFailures present | LOCAL DOCKER-COMPOSE |
-| Grafana dashboards | ✅ Health endpoint returns `database: ok`, version `10.2.0` after datasource default fix | LOCAL DOCKER-COMPOSE |
+| Prometheus rules | ✅ Rule groups present: intent_api_availability(3), latency(3), error_budget(6) | LOCAL DOCKER-COMPOSE |
+| Stale rules removed | ✅ Removed dead `rules.yml`; compensation/dlq/error-budget-remaining alerts cleaned from docs | LOCAL DOCKER-COMPOSE |
+| Grafana dashboards | ✅ Valid panels retained; stale panels removed | LOCAL DOCKER-COMPOSE |
 | Alertmanager config | ✅ Healthy after removing invalid Prometheus-only/lifecycle flags | LOCAL DOCKER-COMPOSE |
 | Trace context | ⏳ Not exercised | LOCAL DOCKER-COMPOSE |
 
@@ -559,11 +565,12 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 | Check | Result | Notes |
 |-------|--------|-------|
 | Prometheus targets | ✅ PASS | intent-api and prometheus targets up |
-| Prometheus rule groups | ✅ PASS | 17 rules across 4 groups: intent_api_availability(3), compensation(2), dlq(3), error_budget(6), latency(3) |
-| DLQ rules | ✅ PASS | DLQDepthHigh, DLQMessageStale, DLQReplayFailures confirmed present |
+| Prometheus rule groups | ✅ PASS | 12 rules across 3 groups: intent_api_availability(3), latency(3), error_budget(6). Stale compensation(2) and dlq(3) rules removed from docs. Dead `rules.yml` deleted. |
+| DLQ rules | ❌ REMOVED | DLQDepthHigh, DLQMessageStale, DLQReplayFailures removed — metrics not instrumented |
 | Alertmanager startup | ✅ FIXED | Removed invalid `--web.console.libraries`, `--web.console.templates`, and `--web.enable-lifecycle` flags |
 | Metrics endpoint | ⚠️ GAP | Returns placeholder nginx static page, not intent-api Prometheus metrics |
 | Grafana health | ✅ FIXED | Health endpoint returns `database: ok`, version `10.2.0` after resolving duplicate default datasource provisioning |
+| Stale dashboards | ✅ CLEANED | Removed `error-budget-dashboard.json` (entirely stale); cleaned stale panels from `slo-dashboard.json` and `slo-overview.json` |
 
 ### Issues Found and Resolved
 

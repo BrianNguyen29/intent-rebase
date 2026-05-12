@@ -79,7 +79,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 - p95 approval wait time exceeds 30 minute threshold
 
 **Diagnosis:**
-1. Check `intent_api_approval_wait_duration_seconds` panel if instrumented
+1. `intent_api_approval_wait_duration_seconds` is **not instrumented** — panel removed from dashboard
 2. List pending approval requests: `GET /approval-requests/pending?tenant_id=<id>`
 3. Check if runtime adapter is functioning (blocked applies require approvals)
 
@@ -101,7 +101,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 - DLQ candidate count elevated in Grafana
 
 **Diagnosis:**
-1. Check `intent_api_side_effect_capture_errors_total` panel if instrumented
+1. `intent_api_side_effect_capture_errors_total` is **not instrumented** — panel removed from dashboard
 2. List DLQ candidates: `GET /compensation-actions/dlq`
 3. Check artifact storage connectivity (MinIO/S3)
 
@@ -112,7 +112,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 
 **Recovery:**
 - Artifacts are not lost — they remain in local buffer until quarantine succeeds
-- Monitor `intent_api_side_effect_captured_total` rate to confirm recovery
+- `intent_api_side_effect_captured_total` is **not instrumented** — use application logs to confirm recovery
 
 ---
 
@@ -123,7 +123,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 - `GET /compensation-actions/{id}` shows status = "executed" but side effects not reversed
 
 **Diagnosis:**
-1. Check `intent_api_compensation_execution_total` panel
+1. `intent_api_compensation_execution_total` is **not instrumented** — panel removed from dashboard; use application logs instead
 2. List compensation actions: `GET /compensation-actions/batch-candidates`
 3. Check compensation service logs for executor errors
 
@@ -162,10 +162,9 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 
 ## RB11. DLQ Messages Found
 
-> **⚠️ Deployment Status:** DLQ alert rules (`DLQDepthHigh`, `DLQMessageStale`, `DLQReplayFailures`) are **deployed to local/staging** (`infrastructure/local/prometheus/rules/intent_api_alerts.yml`). **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
+> **⚠️ Deployment Status:** DLQ alert rules (`DLQDepthHigh`, `DLQMessageStale`, `DLQReplayFailures`) were previously defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` but reference metrics that are **not instrumented** (`intent_api_dlq_messages_current`, `intent_api_dlq_message_age_seconds`, `intent_api_dlq_replay_failures_total`). These alerts have been **removed from local rules** as part of stale observability cleanup. **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
 
 **Symptoms:**
-- DLQ depth alert fires (`intent_api_dlq_messages_current > 10`)
 - `nats stream ls` or `nats consumer ls` shows messages in DLQ subjects
 - Application logs show repeated delivery failures for same `Nats-Message-Name`
 
@@ -226,11 +225,10 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
    docker compose -f infrastructure/local/docker-compose.yml exec nats nats consumer ls audit_events
    ```
 3. Verify no new DLQ messages appearing during replay
-4. Check application metrics in Grafana (`intent_api_dlq_messages_current`, `intent_api_dlq_replay_total`, `intent_api_dlq_replay_failures_total`)
+4. Check application logs for `Nats-Message-Name` correlation
 
 **Prevention:**
-- Monitor `intent_api_dlq_messages_current` metric (alert threshold: > 10 messages)
-- Monitor `intent_api_dlq_message_age_seconds` (alert threshold: > 3600s = 1 hour)
+- `intent_api_dlq_messages_current`, `intent_api_dlq_message_age_seconds`, and `intent_api_dlq_replay_failures_total` are **not instrumented** — alerts removed from local rules
 - Review DLQ messages weekly if volume is non-zero
 - Set `max_deliver` appropriately per message type (see `14-dlq-retry-design.md`)
 
@@ -246,8 +244,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 | DiffComputeHighLatency | Warning | Check rebase-engine CPU/memory |
 | RebasePreviewHighLatency | Warning | Check graph size, consider preview-only mode |
 | RebaseApplyHighLatency | Warning | Check runtime adapter health |
-| CompensationDLQCandidatesElevated | Critical | Check DLQ, manual intervention likely needed |
-| DLQDepthHigh | Warning | DLQ depth elevated (> 10 messages) — see RB11 |
-| DLQMessageStale | Critical | DLQ message older than 1h — see RB11 |
 | PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
+
+> **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.

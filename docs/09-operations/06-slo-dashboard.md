@@ -42,12 +42,7 @@
 - **Thresholds:** 99.0% green / 98.5% yellow / 95.0% red
 - **Notes:** Covers apply endpoint + runtime adapter chain. Not yet instrumented.
 
-#### Panel 4: Audit Append Success
-- **Metric:** `intent_api_audit_append_total`
-- **Query:** `sum(rate(intent_api_audit_append_total{status="success"}[5m])) / sum(rate(intent_api_audit_append_total[5m])) * 100`
-- **Type:** Stat / gauge
-- **Thresholds:** 99.9% green / 99.5% yellow / 99.0% red
-- **Notes:** Audit event persistence. Requires audit service instrumentation.
+> **Removed:** Panel 4 (Audit Append Success) previously referenced `intent_api_audit_append_total`, which is not instrumented. Removed from dashboard JSON to avoid stale queries.
 
 ---
 
@@ -76,74 +71,11 @@
 - **Thresholds:** < 60s green / 60–120s yellow / > 120s red
 - **Notes:** Not yet instrumented. Risk classification label required.
 
-#### Panel 8: Approval Wait Time (p95)
-- **Metric:** `intent_api_approval_wait_duration_seconds`
-- **Query:** `histogram_quantile(0.95, sum(rate(intent_api_approval_wait_duration_seconds_bucket[5m])) by (le))`
-- **Type:** Time series
-- **Thresholds:** < 30min green / 30–60min yellow / > 60min red
-- **Notes:** Stale approval detection. Not yet instrumented.
+> **Removed:** Panel 8 (Approval Wait Time) previously referenced `intent_api_approval_wait_duration_seconds`, which is not instrumented. Removed from dashboard JSON to avoid stale queries.
 
 ---
 
-### Row 3 — Compensation Engine Health
-
-#### Panel 9: Compensation Action Status Breakdown
-- **Metric:** `intent_api_compensation_action_total`
-- **Query:** `sum by (status) (rate(intent_api_compensation_action_total[5m]))`
-- **Type:** Pie chart / stacked bar
-- **Statuses:** pending, approved, waived, executed, failed, dlq
-- **Notes:** Requires compensation action service instrumentation.
-
-#### Panel 10: Compensation Execution Success Rate
-- **Metric:** `intent_api_compensation_execution_total`
-- **Query:** `sum(rate(intent_api_compensation_execution_total{status="success"}[5m])) / sum(rate(intent_api_compensation_execution_total[5m])) * 100`
-- **Type:** Stat / gauge
-- **Thresholds:** 99.0% green / 95.0% yellow / 90.0% red
-- **Notes:** Success = acknowledged, not necessarily reversed. Depends on Batch 1 execution.
-
-#### Panel 11: DLQ Candidate Count
-- **Metric:** `intent_api_compensation_dlq_candidate_count`
-- **Query:** `sum(intent_api_compensation_dlq_candidate_count)`
-- **Type:** Stat / alert threshold
-- **Thresholds:** 0 green / 1–5 yellow / > 5 red
-- **Notes:** Derived DLQ condition: Failed + exhausted budget OR non-retryable error. Not yet exposed as metric.
-
----
-
-### Row 4 — Side Effect Ledger Health
-
-#### Panel 12: Side Effect Capture Rate
-- **Metric:** `intent_api_side_effect_captured_total`
-- **Query:** `sum(rate(intent_api_side_effect_captured_total[5m]))`
-- **Type:** Time series
-- **Notes:** Measures how many side effects are being captured per interval.
-
-#### Panel 13: Side Effect Capture Errors
-- **Metric:** `intent_api_side_effect_capture_errors_total`
-- **Query:** `sum(rate(intent_api_side_effect_capture_errors_total[5m]))`
-- **Type:** Time series
-- **Thresholds:** Alert if rate > 0
-- **Notes:** Indicates artifact-ingest failures to record side effects. Depends on Batch 1 capture-on-write.
-
----
-
-### Row 5 — Queue / Adapter Health (Reference — Not Yet Instrumented)
-
-#### Panel 14: Queue Backlog Depth
-- **Metric:** `nats_consumer_backlog_depth` (external)
-- **Query:** TBD — depends on NATS/JetStream topology
-- **Notes:** Not yet instrumented. Queue backlog alerts depend on production NATS topology.
-
-#### Panel 15: Runtime Adapter Failure Rate
-- **Metric:** `intent_api_runtime_adapter_errors_total`
-- **Query:** `sum(rate(intent_api_runtime_adapter_errors_total[5m]))`
-- **Type:** Time series
-- **Notes:** Adapter failures consume error budget at 5x rate per on-call considerations.
-
-#### Panel 16: Artifact Quarantine Failure Rate
-- **Metric:** `intent_api_artifact_quarantine_failures_total`
-- **Query:** TBD
-- **Notes:** Not yet instrumented. Depends on real artifact storage boundary (Batch 2+ scope).
+> **Removed:** Rows 3–5 (Compensation Engine Health, Side Effect Ledger Health, Queue / Adapter Health) previously referenced metrics that are not instrumented (`intent_api_compensation_action_total`, `intent_api_compensation_execution_total`, `intent_api_compensation_dlq_candidate_count`, `intent_api_side_effect_captured_total`, `intent_api_side_effect_capture_errors_total`, `intent_api_runtime_adapter_errors_total`, `intent_api_artifact_quarantine_failures_total`). Removed from dashboard JSON to avoid stale queries.
 
 ---
 
@@ -212,12 +144,20 @@ The following metric names are referenced in panels. Status reflects whether emi
 | `intent_api_diff_compute_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
 | `intent_api_rebase_preview_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
 | `intent_api_rebase_apply_duration_seconds` | rebase engine | ✅ Active (Slice 3) |
-| `intent_api_audit_append_total` | audit service | Not instrumented |
-| `intent_api_approval_wait_duration_seconds` | intent-api | Not instrumented |
-| `intent_api_compensation_action_total` | compensation service | Not instrumented |
-| `intent_api_compensation_execution_total` | compensation service | Not instrumented |
-| `intent_api_side_effect_captured_total` | graph service | Not instrumented |
-| `intent_api_side_effect_capture_errors_total` | graph service | Not instrumented |
+
+Metrics not yet instrumented (references removed from dashboards and docs during cleanup):
+
+| Metric | Source | Status |
+|--------|--------|--------|
+| `intent_api_audit_append_total` | audit service | Not instrumented — removed from dashboard |
+| `intent_api_approval_wait_duration_seconds` | intent-api | Not instrumented — removed from dashboard |
+| `intent_api_compensation_action_total` | compensation service | Not instrumented — removed from dashboard |
+| `intent_api_compensation_execution_total` | compensation service | Not instrumented — removed from dashboard |
+| `intent_api_compensation_dlq_candidate_count` | compensation service | Not instrumented — removed from dashboard |
+| `intent_api_side_effect_captured_total` | graph service | Not instrumented — removed from dashboard |
+| `intent_api_side_effect_capture_errors_total` | graph service | Not instrumented — removed from dashboard |
+| `intent_api_error_budget_remaining` | intent-api | Not instrumented — `error-budget-dashboard.json` deleted |
+| `intent_api_requests_total` | intent-api | Not instrumented — removed from dashboard |
 
 Metrics marked ✅ Active are recorded via metrics-exporter-prometheus 0.18.1 + metrics 0.24. Panels for those metrics will render real data once the intent-api service is running with the instrumented paths.
 

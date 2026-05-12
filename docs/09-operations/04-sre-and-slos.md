@@ -157,14 +157,15 @@ These targets are Batch 0 planning inputs only.
 
 **P2-S3 delivered (bounded distributed tracing slice):** Trace context propagated into audit/event surfaces via existing `trace_id`/`span_id` fields on `AuditEvent`. The `trace_context::current_trace_context()` helper extracts span IDs from the current tracing span for propagation into audit recording calls. Six event types now carry trace context: `RebaseApplied`, `RebaseApplyBlocked`, `ApprovalGranted`, `ApprovalRevoked`, `ApprovalExpired`, `ReplayInitiated`. Full OTLP/cross-service trace propagation remains P2-S4+ scope.
 
-**Instrumented candidate metrics (real code paths, verified by cargo check/test):**
-- `intent_rebase.intent.create.total` / `intent_rebase.intent.create.errors` — create_intent handler
-- `intent_rebase.version.create.total` / `intent_rebase.version.create.errors` — create_version handler
-- `intent_rebase.rebase.preview.total` / `intent_rebase.rebase.preview.errors` / `intent_rebase.rebase.preview.duration_seconds` — rebase_preview handler
-- `intent_rebase.rebase.apply.total` / `intent_rebase.rebase.apply.errors` / `intent_rebase.rebase.apply.duration_seconds` — rebase_apply handler
-- `intent_rebase.compensation.actions.total` / `intent_rebase.compensation.actions.errors` — approve/waive/execute/reapprove handlers
-- `intent_rebase.compensation.execute.total` / `intent_rebase.compensation.execute.duration_seconds` / `intent_rebase.compensation.execute.success` / `intent_rebase.compensation.execute.failure` — execute_compensation_action handler
-- `intent_rebase.compensation.planned.total` / `intent_rebase.compensation.planned.by_feasibility` — plan_compensation_actions in compensation-service
+**Instrumented metrics (real code paths, verified by cargo check/test):**
+- `intent_api_intent_version_created_total{status="success|error"}` — intent version creation handler
+- `intent_api_rebase_preview_requests_total{status="success|error"}` — rebase_preview handler
+- `intent_api_rebase_apply_requests_total{status="success|error"}` — rebase_apply handler
+- `intent_api_diff_compute_duration_seconds_bucket` — diff compute latency histogram
+- `intent_api_rebase_preview_duration_seconds_bucket` — rebase preview latency histogram
+- `intent_api_rebase_apply_duration_seconds_bucket` — rebase apply latency histogram
+
+> **Note:** Earlier `intent_rebase_*` metric names and `intent_api_version_created_total` / `intent_api_rebase_preview_total` / `intent_api_rebase_apply_total` were documented but are not the actual emitted names. Documentation has been updated to match the metrics currently instrumented in intent-api.
 
 **Exposed via:** `GET /metrics` on intent-api (text/plain; version=0.0.4 Prometheus format)
 
@@ -198,41 +199,32 @@ docker compose --profile observability up -d
 
 Intent API exposes Prometheus metrics at `GET /metrics`.
 
-**Key metrics:**
-- `intent_api_version_created_total{status="success|error"}`
-- `intent_api_rebase_preview_total{status="success|error"}`
-- `intent_api_rebase_apply_total{status="success|error"}`
-- `intent_api_audit_append_total{status="success|error"}`
-- `intent_api_diff_duration_seconds_bucket`
+**Key metrics (currently instrumented):**
+- `intent_api_intent_version_created_total{status="success|error"}`
+- `intent_api_rebase_preview_requests_total{status="success|error"}`
+- `intent_api_rebase_apply_requests_total{status="success|error"}`
+- `intent_api_diff_compute_duration_seconds_bucket`
 - `intent_api_rebase_preview_duration_seconds_bucket`
 - `intent_api_rebase_apply_duration_seconds_bucket`
-- `intent_api_approval_wait_duration_seconds_bucket`
-- `intent_api_error_budget_remaining{slo="..."}`
-- `compensation_action_executed_total{status,strategy,feasibility}`
+
+> **Not instrumented:** `intent_api_audit_append_total`, `intent_api_approval_wait_duration_seconds`, `intent_api_error_budget_remaining`, `compensation_action_executed_total`. Dashboards and alerts referencing these metrics are stale and have been removed.
 
 ### Alerting Rules
 
-Prometheus alerting rules defined in `infrastructure/local/prometheus/rules.yml`:
+Prometheus alerting rules defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml`:
 
-**Critical alerts:**
-- `IntentVersionCreationSuccessRateCritical` (< 99.5%)
-- `RebasePreviewAvailabilityCritical` (< 99.0%)
-- `RebaseApplyAvailabilityCritical` (< 98.0%)
-- `AuditAppendSuccessRateCritical` (< 99.5%)
-- `DiffComputeLatencyCritical` (> 4s)
-- `RebasePreviewLatencyCritical` (> 20s)
-- `RebaseApplyLatencyCritical` (> 120s)
-- `ApprovalWaitLatencyCritical` (> 60 min)
-- `ErrorBudgetExhausted` (< 20% remaining)
-- `ErrorBudgetDepleted` (0% remaining)
+**Availability alerts:**
+- `IntentVersionCreationLowSuccessRate` (< 99.0%)
+- `RebasePreviewLowAvailability` (< 99.0%)
+- `RebaseApplyLowAvailability` (< 98.5%)
 
-**Warning alerts:**
-- `IntentVersionCreationSuccessRateWarning` (< 99.9%)
-- `RebasePreviewAvailabilityWarning` (< 99.5%)
-- `RebaseApplyAvailabilityWarning` (< 99.0%)
-- `AuditAppendSuccessRateWarning` (< 99.9%)
-- `DiffComputeLatencyWarning` (> 2s)
-- `RebasePreviewLatencyWarning` (> 10s)
-- `RebaseApplyLatencyWarning` (> 60s)
-- `ApprovalWaitLatencyWarning` (> 30 min)
-- `CompensationExecutionFailureRateWarning` (> 1%)
+**Latency alerts:**
+- `DiffComputeHighLatency` (> 2s)
+- `RebasePreviewHighLatency` (> 10s)
+- `RebaseApplyHighLatency` (> 60s)
+
+**Error budget burn-rate alerts:**
+- `PreviewPathBurnRate1h` / `6h` / `3d`
+- `ApplyPathBurnRate1h` / `6h` / `3d`
+
+> **Not instrumented:** Approval wait, audit append, compensation execution, DLQ, and error-budget-remaining alerts are not yet backed by real metrics and have been removed from local rules.
