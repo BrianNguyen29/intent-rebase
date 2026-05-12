@@ -3373,10 +3373,10 @@ async fn test_rlc13_tenant_isolation_forensic_bundles() {
 
 /// Test: RLC-14 - Rebase apply graph update with RLS transaction seam.
 ///
-/// This test covers the bounded `rls_graph_update` post-hoc path by exercising
+/// This test covers the primary RLS graph update seam by exercising
 /// `RlsAwarePool::begin_with_tenant` + `SqlxGraphRepository::update_node_state_with_tx`
-/// under tenant context. It is not a full handler orchestration test; it focuses
-/// on the exact seam used by the post-hoc RLS graph update.
+/// under tenant context. It validates the bounded D1–D7 primary RLS path for
+/// graph mutations, not a post-hoc helper (removed at commit `d98c7dc`).
 #[tokio::test]
 #[ignore] // Skip by default; run with `cargo test -- --ignored`
 async fn test_rlc14_rebase_apply_graph_update_with_rls_tx() {
