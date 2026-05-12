@@ -109,6 +109,7 @@ Bộ tài liệu cung cấp **procedure templates và plans** cho production-har
 - [10 Completion Proposals Tracker](./10-delivery/09-completion-proposals-tracker.md) — danh sách 10 proposal còn lại để hoàn thành dự án
 - [Intent Rebase Engine vs. Ferrum-Gate Comparison](./10-delivery/12-ferrum-gate-comparison.md) — positioning comparison between intent-rebase (intent lifecycle control plane) and ferrum-gate (tool-call governance/execution gate)
 - [Novelty Roadmap](./10-delivery/13-novelty-roadmap.md) — proposed differentiated feature extensions (N1–N6) for intent-rebase with anti-duplication gates vs ferrum-gate and prioritized phase recommendations
+- [Agent Safety Rebase Roadmap](./10-delivery/18-agent-safety-rebase-roadmap.md) — official concise roadmap from positioning cleanup through production readiness
 
 ### Security & Compliance
 - [Audit & Governance Pack README](./14-governance/README.md) — Toàn bộ specs về audit, provenance, policy snapshots, authorization, tenant isolation, forensic bundles, và incident response
