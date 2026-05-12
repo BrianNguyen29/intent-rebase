@@ -21,11 +21,11 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Clean stale status wording (local/pending commit)
 - Normalize OpenAPI / router forensic paths
 - Add route contract tests for forensic endpoints
-- Introduce ImpactReport design (ADR-10)
+- Introduce ImpactReport design (ADR-10) and implement bounded MVP read-only projection
 
 ### Phase 2 — Agent Safety Core Language & Domain Model
 - Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc.
-- Design ImpactReport as a shared primitive across pillars
+- Design ImpactReport as an on-demand read-only projection across pillars (no persistence for MVP)
 - Define API contracts for impact-report and propagation-status
 
 ### Phase 3 — Policy / Config Rebase Pillar

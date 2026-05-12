@@ -106,6 +106,8 @@ tags:
     description: Rebase planning and application operations
   - name: side-effects
     description: Side effect capture and query operations
+  - name: impact-report
+    description: ImpactReport read-only projection (Phase 2 bounded MVP)
 
 paths:
   /intents:
@@ -804,6 +806,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OrchestrationDashboardResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/impact-report:
+    get:
+      tags:
+        - impact-report
+      summary: ImpactReport (bounded MVP read-only projection)
+      description: |
+        Phase 2 bounded MVP: On-demand read-only projection aggregating existing
+        primitives (intent diff, graph affected items, compensation actions, policy
+        gate evaluation) into a single transient snapshot.
+
+        **This endpoint is READ-ONLY** — it does not create, mutate, or persist
+        any state. No database migration or new table is introduced.
+
+        **Bounded scope:**
+        - Computes rebase preview with graph integration
+        - Lists compensation actions and evaluates policy gates
+        - Returns aggregated counts and summaries only
+        - Unsupported/deferred features are listed in `unsupported_items`
+
+        **No persistence claim:** ImpactReport is not stored; it is regenerated
+        on every request.
+      operationId: getImpactReport
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: from_version
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Source intent version
+        - name: to_version
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Target intent version
+      responses:
+        '200':
+          description: ImpactReport retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImpactReportResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
@@ -5913,6 +5984,115 @@ components:
               details:
                 type: string
                 description: Human-readable details
+
+    ImpactReportResponse:
+      type: object
+      description: |
+        Phase 2 bounded MVP: On-demand read-only projection aggregating existing
+        primitives into a single transient snapshot. Not persisted.
+      required:
+        - intent_id
+        - tenant_id
+        - trigger
+        - scope
+        - invalidation
+        - compensation
+        - safety_gates
+        - provenance
+        - unsupported_items
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        trigger:
+          $ref: '#/components/schemas/ImpactTrigger'
+        scope:
+          $ref: '#/components/schemas/ImpactScope'
+        invalidation:
+          $ref: '#/components/schemas/ImpactInvalidation'
+        compensation:
+          $ref: '#/components/schemas/ImpactCompensation'
+        safety_gates:
+          $ref: '#/components/schemas/SafetyGateSummary'
+        provenance:
+          $ref: '#/components/schemas/ImpactProvenance'
+        unsupported_items:
+          type: array
+          items:
+            type: string
+          description: List of deferred features not yet implemented
+
+    ImpactTrigger:
+      type: object
+      required: [change_summary, risk_tier, decision_class]
+      properties:
+        change_summary:
+          type: string
+        risk_tier:
+          type: string
+        decision_class:
+          type: string
+
+    ImpactScope:
+      type: object
+      required: [affected_artifacts_count, affected_approvals_count, affected_side_effects_count]
+      properties:
+        affected_artifacts_count:
+          type: integer
+        affected_approvals_count:
+          type: integer
+        affected_side_effects_count:
+          type: integer
+
+    ImpactInvalidation:
+      type: object
+      required: [invalidated_artifacts_count, invalidated_approvals_count]
+      properties:
+        invalidated_artifacts_count:
+          type: integer
+        invalidated_approvals_count:
+          type: integer
+
+    ImpactCompensation:
+      type: object
+      required: [total_actions, eligible_count, blocked_count, manual_review_required_count, dlq_candidate_count]
+      properties:
+        total_actions:
+          type: integer
+        eligible_count:
+          type: integer
+        blocked_count:
+          type: integer
+        manual_review_required_count:
+          type: integer
+        dlq_candidate_count:
+          type: integer
+
+    SafetyGateSummary:
+      type: object
+      required: [open_gates, blocked_gates, manual_review_gates]
+      properties:
+        open_gates:
+          type: integer
+        blocked_gates:
+          type: integer
+        manual_review_gates:
+          type: integer
+
+    ImpactProvenance:
+      type: object
+      required: [generated_at, from_version, to_version]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        from_version:
+          type: integer
+        to_version:
+          type: integer
 
     Error:
       type: object

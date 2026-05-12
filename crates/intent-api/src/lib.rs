@@ -316,4 +316,7 @@ mod approval_revalidation_tests;
 mod orchestration_dashboard_tests;
 
 #[cfg(test)]
+mod impact_report_tests;
+
+#[cfg(test)]
 mod rebase_apply_handler_tests;

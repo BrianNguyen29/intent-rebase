@@ -145,6 +145,11 @@ pub fn build_router(
             "/intents/:intent_id/orchestration-dashboard",
             get(crate::query_handlers::get_orchestration_dashboard),
         )
+        // ImpactReport endpoint (Phase 2 bounded MVP — on-demand read-only projection)
+        .route(
+            "/intents/:intent_id/impact-report",
+            get(crate::query_handlers::get_impact_report),
+        )
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/:intent_id/compensation-actions",

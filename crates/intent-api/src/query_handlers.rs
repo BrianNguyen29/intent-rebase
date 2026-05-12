@@ -13,9 +13,10 @@ use uuid::Uuid;
 
 use crate::{
     types::{
-        CompensationActionStatusCounts, CompensationActionSummary, ListSideEffectsQuery,
-        ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-        SideEffectSummary,
+        CompensationActionStatusCounts, CompensationActionSummary, ImpactCompensation,
+        ImpactInvalidation, ImpactProvenance, ImpactReportQuery, ImpactReportResponse, ImpactScope,
+        ImpactTrigger, ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
+        OrchestrationDashboardResponse, SafetyGateSummary, SideEffectSummary,
     },
     ApiErrorResponse, AppState,
 };
@@ -360,5 +361,251 @@ pub async fn get_orchestration_dashboard(
         side_effect_summary,
         compensation_actions,
         compensation_action_summary,
+    }))
+}
+
+// ============================================================================
+// ImpactReport Handler (Phase 2 bounded MVP — on-demand read-only projection)
+// ============================================================================
+
+/// GET /intents/{intent_id}/impact-report - On-demand read-only impact projection
+///
+/// Bounded MVP: Aggregates existing primitives (intent diff, graph affected items,
+/// side effects, compensation actions, policy gate evaluation) into a single
+/// transient snapshot. No persistence, no migration, no mutation.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_impact_report(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ImpactReportQuery>,
+) -> Result<Json<ImpactReportResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_impact_report: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Verify intent exists and fetch head for tenant validation
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if intent_head.intent.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: intent tenant_id ({}) does not match query tenant_id ({})",
+            intent_head.intent.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_impact_report: intent tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    let preview = state
+        .service
+        .compute_rebase_preview_with_graph(intent_id, query.from_version, query.to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let policy_gate = state
+        .compensation_action_service
+        .evaluate_policy_gates_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let affected = &preview.affected_items;
+
+    let trigger = ImpactTrigger {
+        change_summary: preview.rationale.clone(),
+        risk_tier: format!("{:?}", preview.risk_tier),
+        decision_class: format!("{:?}", preview.decision_class),
+    };
+
+    let scope = ImpactScope {
+        affected_artifacts_count: affected.affected_artifacts.len(),
+        affected_approvals_count: affected.affected_approvals.len(),
+        affected_side_effects_count: affected.side_effects.len(),
+    };
+
+    let invalidation = ImpactInvalidation {
+        invalidated_artifacts_count: affected
+            .affected_artifacts
+            .iter()
+            .filter(|a| {
+                a.impact == intent_rebase_types::ClassificationImpact::Direct
+                    || a.impact == intent_rebase_types::ClassificationImpact::Transitive
+            })
+            .count(),
+        invalidated_approvals_count: affected
+            .affected_approvals
+            .iter()
+            .filter(|a| {
+                a.impact == intent_rebase_types::ClassificationImpact::Direct
+                    || a.impact == intent_rebase_types::ClassificationImpact::Transitive
+            })
+            .count(),
+    };
+
+    let compensation = ImpactCompensation {
+        total_actions: compensation_actions.len(),
+        eligible_count: policy_gate.summary.eligible_count,
+        blocked_count: policy_gate.summary.blocked_count,
+        manual_review_required_count: policy_gate.summary.manual_review_required_count,
+        dlq_candidate_count: policy_gate.summary.dlq_candidate_count,
+    };
+
+    let safety_gates = SafetyGateSummary {
+        open_gates: policy_gate.summary.eligible_count,
+        blocked_gates: policy_gate.summary.blocked_count,
+        manual_review_gates: policy_gate.summary.manual_review_required_count,
+    };
+
+    let provenance = ImpactProvenance {
+        generated_at: chrono::Utc::now(),
+        from_version: query.from_version,
+        to_version: query.to_version,
+    };
+
+    let unsupported_items = vec![
+        "propagation-status downstream tracking".to_string(),
+        "cross-workflow lineage impact".to_string(),
+        "checkpoint alignment recommendations".to_string(),
+    ];
+
+    Ok(Json(ImpactReportResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        trigger,
+        scope,
+        invalidation,
+        compensation,
+        safety_gates,
+        provenance,
+        unsupported_items,
+    }))
+}
+
+/// GET /intents/{intent_id}/impact-report - On-demand read-only impact projection (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_impact_report(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ImpactReportQuery>,
+) -> Result<Json<ImpactReportResponse>, ApiErrorResponse> {
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if intent_head.intent.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: intent tenant_id ({}) does not match query tenant_id ({})",
+            intent_head.intent.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_impact_report: intent tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    let preview = state
+        .service
+        .compute_rebase_preview_with_graph(intent_id, query.from_version, query.to_version)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let compensation_actions = state
+        .compensation_action_service
+        .list_by_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let policy_gate = state
+        .compensation_action_service
+        .evaluate_policy_gates_for_intent(intent_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    let affected = &preview.affected_items;
+
+    let trigger = ImpactTrigger {
+        change_summary: preview.rationale.clone(),
+        risk_tier: format!("{:?}", preview.risk_tier),
+        decision_class: format!("{:?}", preview.decision_class),
+    };
+
+    let scope = ImpactScope {
+        affected_artifacts_count: affected.affected_artifacts.len(),
+        affected_approvals_count: affected.affected_approvals.len(),
+        affected_side_effects_count: affected.side_effects.len(),
+    };
+
+    let invalidation = ImpactInvalidation {
+        invalidated_artifacts_count: affected
+            .affected_artifacts
+            .iter()
+            .filter(|a| {
+                a.impact == intent_rebase_types::ClassificationImpact::Direct
+                    || a.impact == intent_rebase_types::ClassificationImpact::Transitive
+            })
+            .count(),
+        invalidated_approvals_count: affected
+            .affected_approvals
+            .iter()
+            .filter(|a| {
+                a.impact == intent_rebase_types::ClassificationImpact::Direct
+                    || a.impact == intent_rebase_types::ClassificationImpact::Transitive
+            })
+            .count(),
+    };
+
+    let compensation = ImpactCompensation {
+        total_actions: compensation_actions.len(),
+        eligible_count: policy_gate.summary.eligible_count,
+        blocked_count: policy_gate.summary.blocked_count,
+        manual_review_required_count: policy_gate.summary.manual_review_required_count,
+        dlq_candidate_count: policy_gate.summary.dlq_candidate_count,
+    };
+
+    let safety_gates = SafetyGateSummary {
+        open_gates: policy_gate.summary.eligible_count,
+        blocked_gates: policy_gate.summary.blocked_count,
+        manual_review_gates: policy_gate.summary.manual_review_required_count,
+    };
+
+    let provenance = ImpactProvenance {
+        generated_at: chrono::Utc::now(),
+        from_version: query.from_version,
+        to_version: query.to_version,
+    };
+
+    let unsupported_items = vec![
+        "propagation-status downstream tracking".to_string(),
+        "cross-workflow lineage impact".to_string(),
+        "checkpoint alignment recommendations".to_string(),
+    ];
+
+    Ok(Json(ImpactReportResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        trigger,
+        scope,
+        invalidation,
+        compensation,
+        safety_gates,
+        provenance,
+        unsupported_items,
     }))
 }

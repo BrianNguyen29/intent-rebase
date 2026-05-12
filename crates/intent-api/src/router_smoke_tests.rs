@@ -142,6 +142,330 @@ async fn test_forensic_endpoints_are_registered() {
 }
 
 // =========================================================================
+// ImpactReport Route Contract Test (Phase 2 bounded MVP)
+// =========================================================================
+
+#[tokio::test]
+async fn test_impact_report_route_is_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.rls_pool,
+    );
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let intent_id = uuid::Uuid::new_v4();
+
+    // GET /intents/{intent_id}/impact-report?tenant_id=...&from_version=1&to_version=2
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/intents/{}/impact-report?tenant_id={}&from_version=1&to_version=2",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+
+    // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
+// Rebase Preview / Apply Route Contract Tests
+//
+// Verifies that the core rebase endpoints are registered and reachable.
+// Does not test full handler logic (covered in rebase_preview_tests.rs
+// and rebase_apply_handler_tests.rs); this is a route wiring contract test.
+// =========================================================================
+
+#[tokio::test]
+async fn test_rebase_preview_apply_routes_are_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.rls_pool,
+    );
+
+    let intent_id = uuid::Uuid::new_v4();
+
+    // POST /intents/{intent_id}/rebase-preview
+    let body = serde_json::to_vec(&serde_json::json!({
+        "from_version": 1,
+        "to_version": 2
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/intents/{}/rebase-preview", intent_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // POST /intents/{intent_id}/rebase-apply
+    let body = serde_json::to_vec(&serde_json::json!({
+        "from_version": 1,
+        "to_version": 2
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/intents/{}/rebase-apply", intent_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
+// Policy Snapshot Route Contract Tests
+//
+// Verifies that policy snapshot endpoints are registered and reachable.
+// Does not test full handler logic (covered in policy_snapshot_handlers.rs);
+// this is a route wiring contract test.
+// =========================================================================
+
+#[tokio::test]
+async fn test_policy_snapshot_routes_are_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.rls_pool,
+    );
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let intent_id = uuid::Uuid::new_v4();
+    let snapshot_id = uuid::Uuid::new_v4();
+
+    // GET /policy-snapshots/{snapshot_id}
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/policy-snapshots/{}?tenant_id={}",
+            snapshot_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Snapshot does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // GET /policy-snapshots/intent/{intent_id}/latest
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/policy-snapshots/intent/{}/latest?tenant_id={}",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // No snapshot for intent → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // GET /policy-snapshots/intent/{intent_id}/versions/{version}
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/policy-snapshots/intent/{}/versions/1?tenant_id={}",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // No snapshot for version → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // GET /policy-snapshots/intent/{intent_id}
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/policy-snapshots/intent/{}?tenant_id={}",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // No snapshots → handler returns 200 with empty list, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
+// Compensation Mutation Route Contract Tests
+//
+// Verifies that compensation action mutation endpoints are registered and
+// reachable. Does not test full handler logic (covered in
+// compensation_mutation_handlers.rs); this is a route wiring contract test.
+// =========================================================================
+
+#[tokio::test]
+async fn test_compensation_mutation_routes_are_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.rls_pool,
+    );
+
+    let action_id = uuid::Uuid::new_v4();
+
+    // POST /compensation-actions/{action_id}/approve
+    let body = serde_json::to_vec(&serde_json::json!({
+        "lock_version": 1
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/compensation-actions/{}/approve", action_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Action does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // POST /compensation-actions/{action_id}/waive
+    let body = serde_json::to_vec(&serde_json::json!({
+        "lock_version": 1
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/compensation-actions/{}/waive", action_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Action does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // POST /compensation-actions/{action_id}/execute
+    let body = serde_json::to_vec(&serde_json::json!({
+        "executed_by": "test-runner"
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/compensation-actions/{}/execute", action_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Action does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
 // Trace Context Propagation Tests (Phase 3 Batch 2 Slice 2 — bounded OTEL)
 //
 // Note: Direct middleware testing requires complex axum infrastructure.

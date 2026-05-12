@@ -21,7 +21,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 | [ADR-07](./07-approval-scope-canonicalization.md) | Approval Scope & Policy Snapshot Canonicalization | **Accepted — Partially implemented** | P1 |
 | [ADR-08](./08-artifact-side-effect-tx-boundary.md) | Artifact Side-Effect Transaction Boundary | **Accepted — Option A bounded implemented for SQL/RLS ingest path; non-RLS fallback preserved** | P2 |
 | [ADR-09](./09-rebase-apply-rls-transaction-boundary.md) | Rebase Apply RLS Transaction Boundary | **Accepted — Bounded D1–D7 implemented at commit `d98c7dc`** | Phase 4 |
-| [ADR-10](./10-impact-report-design.md) | ImpactReport Design | **Proposed — no code/API implementation yet** | Phase 2 |
+| [ADR-10](./10-impact-report-design.md) | ImpactReport Design | **Proposed — bounded MVP implemented, awaiting review before acceptance** | Phase 2 |
 
 ---
 
