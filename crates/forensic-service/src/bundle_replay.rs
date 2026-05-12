@@ -195,21 +195,18 @@ impl BundleReplayService {
 
     /// Verify a forensic bundle against provided content entries.
     ///
-    /// This performs a bounded replay verification:
-    /// 1. Verifies manifest integrity (hash chain)
-    /// 2. Verifies each content section against recorded hashes
-    /// 3. Produces a detailed reconstruction report
+    /// **DEPRECATED — DO NOT USE:** This method uses `manifest_hash` as a proxy for
+    /// all section hashes, which produces misleading results. Use
+    /// [`verify_bundle_from_integrity`](Self::verify_bundle_from_integrity) instead,
+    /// which reads per-section hashes from the bundle manifest and performs accurate
+    /// section-by-section verification.
     ///
-    /// All operations are read-only and isolated — no production data is modified.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Bundle manifest and content entries to verify
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(VerifyBundleReplayResponse)` with verification report if verification completes
-    /// * `Err(BundleReplayError)` if verification fails
+    /// This method is retained only to avoid breaking existing test references.
+    /// It will be removed in a future slice.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use verify_bundle_from_integrity instead. This method incorrectly uses manifest_hash as a proxy for all section hashes."
+    )]
     pub fn verify_bundle(
         &self,
         request: VerifyBundleReplayRequest,

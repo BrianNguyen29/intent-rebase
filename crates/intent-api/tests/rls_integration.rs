@@ -3969,6 +3969,263 @@ async fn test_rlc_forensic_bundle_app_level_rls() {
     println!("test_rlc_forensic_bundle_app_level_rls PASSED");
 }
 
+/// Test: Forensic bundle replay integrity with persisted per-section hashes.
+///
+/// Validates that `SqlxBundleRepository` persists bundles with integrity hashes
+/// and that `BundleReplayService::verify_bundle_from_integrity` can verify
+/// content sections against those stored hashes.
+///
+/// **Bounded slice scope:**
+/// - Creates a bundle with populated per-section integrity hashes
+/// - Persists via `SqlxBundleRepository::create_with_tx`
+/// - Retrieves via `SqlxBundleRepository::get_with_tx`
+/// - Verifies matching content passes and tampered content fails
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc_forensic_bundle_replay_integrity() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&admin_pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    verify_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("RLS not enabled - cannot run forensic bundle replay integrity test");
+    verify_force_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("FORCE RLS not enabled - cannot run forensic bundle replay integrity test");
+
+    let (is_bypass, current_role) = check_current_role_is_bypass(&admin_pool)
+        .await
+        .expect("Failed to check current role bypass status");
+
+    let test_pool: sqlx::PgPool;
+    let _test_role_name: &str;
+
+    if is_bypass {
+        println!(
+            "WARNING: Current role '{}' is superuser/bypass - RLS policies are bypassed!",
+            current_role
+        );
+        let test_url = create_test_role(&admin_pool)
+            .await
+            .expect("Failed to create non-bypass test role");
+        test_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect(&test_url)
+            .await
+            .expect("Failed to connect with non-bypass test role");
+        _test_role_name = TEST_ROLE_NAME;
+    } else {
+        test_pool = admin_pool.clone();
+        _test_role_name = &current_role;
+    }
+
+    let rls_pool = RlsAwarePool::new(test_pool.clone());
+    let sql_repo = forensic_service::SqlxBundleRepository::new(test_pool.clone());
+
+    let bundle_id = Uuid::new_v4();
+
+    // ===========================================================================
+    // Phase 1: Create a forensic bundle with populated integrity hashes
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A");
+
+        let mut bundle = forensic_service::ForensicBundle::new(
+            tenant_a_id,
+            forensic_service::BundleTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            forensic_service::BundlePurpose::IncidentInvestigation,
+            forensic_service::BundleContents::default(),
+            "rls-replay-test",
+            None,
+        );
+        // Override bundle_id for deterministic testing
+        bundle.bundle_id = bundle_id;
+        // Set status to Ready so replay verification can proceed
+        bundle.status = forensic_service::BundleStatus::Ready;
+        // Compute actual SHA-256 hashes of empty content sections so that replay
+        // verification against empty content sections will match the stored hashes.
+        let empty_intent_versions = forensic_service::IntentVersionsForHash::default();
+        let empty_artifacts = forensic_service::ArtifactsForHash::default();
+        let empty_approvals = forensic_service::ApprovalsForHash::default();
+        let empty_audit_events = forensic_service::AuditEventsForHash::default();
+        let empty_policy_snapshots = forensic_service::PolicySnapshotsForHash::default();
+
+        bundle.integrity.intent_versions_hash =
+            forensic_service::bundle_hasher::compute_sha256(&empty_intent_versions)
+                .expect("empty intent versions should serialize");
+        bundle.integrity.artifacts_hash =
+            forensic_service::bundle_hasher::compute_sha256(&empty_artifacts)
+                .expect("empty artifacts should serialize");
+        bundle.integrity.approvals_hash =
+            forensic_service::bundle_hasher::compute_sha256(&empty_approvals)
+                .expect("empty approvals should serialize");
+        bundle.integrity.audit_events_hash =
+            forensic_service::bundle_hasher::compute_sha256(&empty_audit_events)
+                .expect("empty audit events should serialize");
+        bundle.integrity.policy_snapshots_hash =
+            forensic_service::bundle_hasher::compute_sha256(&empty_policy_snapshots)
+                .expect("empty policy snapshots should serialize");
+
+        // Manifest hash is computed over the bundle with manifest_hash cleared
+        bundle.integrity.manifest_hash = String::new();
+        bundle.integrity.manifest_hash = forensic_service::bundle_hasher::compute_sha256(&bundle)
+            .expect("bundle should serialize");
+
+        sql_repo
+            .create_with_tx(&mut tx, bundle)
+            .await
+            .expect("Tenant A should be able to create bundle with integrity hashes via RLS tx");
+
+        tx.commit().await.expect("Failed to commit Tenant A RLS tx");
+        println!(
+            "Created forensic bundle {} with integrity hashes for Tenant A via RLS tx",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 2: Retrieve bundle and verify replay with matching content
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A get");
+
+        let bundle = sql_repo
+            .get_with_tx(&mut tx, bundle_id)
+            .await
+            .expect("Tenant A should be able to get their bundle via RLS tx");
+
+        assert_eq!(bundle.bundle_id, bundle_id);
+        assert_eq!(bundle.tenant_id, tenant_a_id);
+        // Integrity hashes should be persisted
+        assert!(
+            !bundle.integrity.intent_versions_hash.is_empty(),
+            "intent_versions_hash should be persisted"
+        );
+        assert!(
+            !bundle.integrity.artifacts_hash.is_empty(),
+            "artifacts_hash should be persisted"
+        );
+
+        // Replay verification with matching empty content should pass
+        let replay_service = forensic_service::BundleReplayService::new();
+        let content_sections = forensic_service::ContentSectionsForVerification::default();
+        let result = replay_service.verify_bundle_from_integrity(&bundle, &content_sections);
+        assert!(
+            result.is_ok(),
+            "Replay verification should succeed with matching content: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert!(
+            response.report.overall_verified,
+            "Empty content should verify against empty-section hashes"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A replay verification tx");
+        println!(
+            "Tenant A replay verification passed for bundle {} (PASS)",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 3: Retrieve bundle and verify replay with tampered content fails
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A tamper test");
+
+        let bundle = sql_repo
+            .get_with_tx(&mut tx, bundle_id)
+            .await
+            .expect("Tenant A should be able to get their bundle via RLS tx");
+
+        // Replay verification with tampered content should fail
+        let replay_service = forensic_service::BundleReplayService::new();
+        let tampered_sections = forensic_service::ContentSectionsForVerification {
+            intent_versions: forensic_service::IntentVersionsForHash {
+                versions: vec![forensic_service::IntentVersionEntry {
+                    intent_id: Uuid::new_v4(),
+                    version: 1,
+                    content_hash: "tampered_hash_000000000000000000000000".to_string(),
+                }],
+            },
+            ..Default::default()
+        };
+        let result = replay_service.verify_bundle_from_integrity(&bundle, &tampered_sections);
+        assert!(
+            result.is_ok(),
+            "Replay verification should complete even with tampered content: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert!(
+            !response.report.overall_verified,
+            "Tampered content should fail verification"
+        );
+        assert!(
+            response.report.sections_failed > 0,
+            "At least one section should fail with tampered content"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A tamper test tx");
+        println!(
+            "Tenant A tampered replay verification correctly failed for bundle {} (PASS)",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Cleanup
+    // ===========================================================================
+    if is_bypass {
+        drop_test_role(&admin_pool)
+            .await
+            .expect("Failed to drop test role");
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
+    println!("test_rlc_forensic_bundle_replay_integrity PASSED");
+}
+
 /// Test: ADR-08 Option A — transactional side-effect recording inside RLS tx.
 ///
 /// Verifies that `SqlxSideEffectRepository::create_with_tx` and

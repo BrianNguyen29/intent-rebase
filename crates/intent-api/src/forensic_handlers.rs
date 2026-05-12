@@ -1902,4 +1902,69 @@ mod tests {
         // This is consistent with the existing non-JWT fallback behavior.
         assert!(result.is_ok());
     }
+
+    #[cfg(feature = "jwt-auth")]
+    #[tokio::test]
+    async fn test_replay_verify_forensic_bundle_tampered_content() {
+        let state = create_test_service();
+        let tenant_id = Uuid::new_v4();
+
+        // Create a bundle with empty content (empty intent_ids → empty sections)
+        let create_request = ForensicBundleRequest {
+            tenant_id,
+            intent_ids: vec![],
+            time_range: ForensicBundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: forensic_service::BundlePurpose::IncidentInvestigation,
+            created_by: "test-user".to_string(),
+        };
+
+        let (_status, create_response) = super::create_forensic_bundle(
+            State(state.clone()),
+            auth::OptionalRlsTenantClaims(None),
+            Json(create_request),
+        )
+        .await
+        .expect("Should create bundle");
+
+        let bundle_id = create_response.bundle_id;
+
+        // Replay-verify with TAMPERED content: provide non-empty intent_versions
+        // when the bundle was generated with empty content. The stored hash for
+        // empty intent_versions will not match the hash of this tampered entry.
+        let replay_request = ForensicBundleReplayRequest {
+            tenant_id,
+            intent_versions: vec![forensic_service::IntentVersionEntry {
+                intent_id: Uuid::new_v4(),
+                version: 1,
+                content_hash: "tampered_hash_000000000000000000000000".to_string(),
+            }],
+            artifacts: vec![],
+            approvals: vec![],
+            audit_events: vec![],
+            policy_snapshots: vec![],
+        };
+
+        let result = super::replay_verify_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(bundle_id),
+            Json(replay_request),
+        )
+        .await
+        .expect("Should return replay result even for tampered content");
+
+        assert_eq!(result.bundle_id, bundle_id);
+        assert!(
+            !result.overall_verified,
+            "Tampered content should fail verification"
+        );
+        assert!(
+            result.sections_failed > 0,
+            "At least one section should fail with tampered content"
+        );
+        assert!(result.summary.contains("FAILED"));
+    }
 }

@@ -2796,6 +2796,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /forensic-bundles/{bundle_id}/replay-verify:
+    post:
+      tags:
+        - forensic
+      summary: Replay-verify a forensic bundle against provided content
+      description: |
+        Bounded replay evidence slice: Verifies provided content sections against
+        the per-section SHA-256 hashes stored in the bundle manifest.
+
+        **What this IS:** read-only integrity verification using stored evidence.
+        Recomputes hashes from the provided content sections and compares them to
+        the recorded values in `bundle.integrity`.
+
+        **What this IS NOT:** full runtime replay, state reconstruction, or mutation.
+        This endpoint does NOT reconstruct system state or replay events in a live system.
+
+        **Tenant isolation:** Requires `tenant_id` in the request body. The handler
+        verifies the bundle belongs to the requesting tenant before performing
+        verification. Returns 404 if the bundle is not found.
+
+        **Path note:** The canonical router path is `/forensic/bundles/{bundle_id}/replay-verify`.
+        This OpenAPI path uses `/forensic-bundles/` for consistency with other
+        forensic bundle endpoints in this spec.
+      operationId: replayVerifyForensicBundle
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicBundleReplayRequest'
+      responses:
+        '200':
+          description: Verification completed (check `overall_verified` for result)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicBundleReplayResponse'
+        '400':
+          description: Bundle not in Ready status or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bundle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----
@@ -5788,7 +5851,9 @@ components:
 
     BundleIntegrity:
       type: object
-      description: Integrity verification result embedded in the manifest
+      description: |
+        Integrity verification result embedded in the manifest.
+        Per-section hashes are stored for bounded replay verification.
       properties:
         manifest_hash:
           type: string
@@ -5800,6 +5865,21 @@ components:
           type: string
           format: date-time
           description: When verification was performed
+        intent_versions_hash:
+          type: string
+          description: SHA256 hash of the intent versions section (bounded replay evidence)
+        artifacts_hash:
+          type: string
+          description: SHA256 hash of the artifacts section (bounded replay evidence)
+        approvals_hash:
+          type: string
+          description: SHA256 hash of the approvals section (bounded replay evidence)
+        audit_events_hash:
+          type: string
+          description: SHA256 hash of the audit events section (bounded replay evidence)
+        policy_snapshots_hash:
+          type: string
+          description: SHA256 hash of the policy snapshots section (bounded replay evidence)
 
     ForensicBundle:
       type: object
@@ -5926,6 +6006,130 @@ components:
         total:
           type: integer
           description: Total number of bundles
+
+    ForensicBundleReplayRequest:
+      type: object
+      description: |
+        Request body for bounded replay verification. Provides content sections
+        to verify against the per-section hashes stored in the bundle manifest.
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID for access validation
+        intent_versions:
+          type: array
+          items:
+            type: object
+            required: [intent_id, version, content_hash]
+            properties:
+              intent_id:
+                type: string
+                format: uuid
+              version:
+                type: integer
+              content_hash:
+                type: string
+                description: SHA256 hex digest of the intent version content
+        artifacts:
+          type: array
+          items:
+            type: object
+            required: [artifact_id, content_hash, collected_at]
+            properties:
+              artifact_id:
+                type: string
+                format: uuid
+              content_hash:
+                type: string
+              collected_at:
+                type: string
+                format: date-time
+        approvals:
+          type: array
+          items:
+            type: object
+            required: [approval_id, content_hash]
+            properties:
+              approval_id:
+                type: string
+                format: uuid
+              content_hash:
+                type: string
+        audit_events:
+          type: array
+          items:
+            type: object
+            required: [event_id, content_hash, event_index]
+            properties:
+              event_id:
+                type: string
+                format: uuid
+              content_hash:
+                type: string
+              event_index:
+                type: integer
+        policy_snapshots:
+          type: array
+          items:
+            type: object
+            required: [snapshot_id, scope_hash]
+            properties:
+              snapshot_id:
+                type: string
+                format: uuid
+              scope_hash:
+                type: string
+
+    ForensicBundleReplayResponse:
+      type: object
+      description: |
+        Response for bounded replay verification. Returns the result of comparing
+        provided content sections against the stored per-section integrity hashes.
+      required: [bundle_id, overall_verified, sections_passed, sections_failed, summary, sections]
+      properties:
+        bundle_id:
+          type: string
+          format: uuid
+          description: Bundle ID that was verified
+        overall_verified:
+          type: boolean
+          description: Whether all sections passed verification
+        sections_passed:
+          type: integer
+          description: Number of sections that passed
+        sections_failed:
+          type: integer
+          description: Number of sections that failed
+        summary:
+          type: string
+          description: Human-readable verification summary
+        sections:
+          type: array
+          description: Per-section verification results
+          items:
+            type: object
+            required: [section, verified, item_count, recorded_hash, computed_hash, details]
+            properties:
+              section:
+                type: string
+                description: Section name (e.g., "intent_versions")
+              verified:
+                type: boolean
+                description: Whether this section passed verification
+              item_count:
+                type: integer
+                description: Number of items in this section
+              recorded_hash:
+                type: string
+                description: Hash recorded in the bundle manifest
+              computed_hash:
+                type: string
+                description: Hash recomputed from provided content
+              details:
+                type: string
+                description: Human-readable details
 
     Error:
       type: object
