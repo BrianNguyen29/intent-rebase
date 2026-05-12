@@ -73,10 +73,12 @@
 //! leakage. The test verifies `relforcerowsecurity=true` via
 //! `verify_force_rls_enabled_on_tables()` to ensure this protection is active.
 
-use graph_service::{RlsAwarePool, SqlxGraphRepository};
+use graph_service::{GraphRepository, GraphService, RlsAwarePool, SqlxGraphRepository};
 use intent_rebase_types::rls::{rls_set_tenant_context_sql, RlsTenantContext};
 use intent_rebase_types::{IntentRebaseError, NodeState};
+use rebase_orchestrator::GraphUpdater;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
@@ -3549,4 +3551,162 @@ async fn test_rlc14_rebase_apply_graph_update_with_rls_tx() {
     }
 
     println!("test_rlc14_rebase_apply_graph_update_with_rls_tx PASSED");
+}
+
+/// Test: D6 — Primary RLS graph update path isolation via GraphUpdater.
+///
+/// Validates that `GraphUpdater::update_node_state_if_affected_with_tx`
+/// succeeds for same-tenant updates and is rejected for cross-tenant updates
+/// under RLS enforcement. This is the same seam used by the D4 primary path.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_d6_primary_rls_graph_update_isolation() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&admin_pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    verify_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("RLS not enabled - cannot run graph update seam test");
+    verify_force_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("FORCE RLS not enabled - cannot run graph update seam test");
+
+    let (is_bypass, current_role) = check_current_role_is_bypass(&admin_pool)
+        .await
+        .expect("Failed to check current role bypass status");
+
+    let test_pool: sqlx::PgPool;
+    let _test_role_name: &str;
+
+    if is_bypass {
+        let test_url = create_test_role(&admin_pool).await.expect(
+            "Failed to create non-bypass test role - cannot run RLS graph update seam test",
+        );
+
+        test_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect(&test_url)
+            .await
+            .expect("Failed to connect with non-bypass test role");
+        _test_role_name = TEST_ROLE_NAME;
+    } else {
+        test_pool = admin_pool.clone();
+        _test_role_name = &current_role;
+    }
+
+    let node_id = Uuid::new_v4();
+
+    // Create a graph node for Tenant A
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for node creation");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+        create_test_graph_node_for_current_tenant(&mut tx, tenant_a_id, node_id)
+            .await
+            .expect("Failed to create test graph node for Tenant A");
+        tx.commit().await.expect("Failed to commit node creation");
+    }
+
+    let rls_pool = RlsAwarePool::new(test_pool.clone());
+    let graph_repo = Arc::new(SqlxGraphRepository::new(test_pool.clone())) as Arc<dyn GraphRepository>;
+    let graph_service = Arc::new(GraphService::new(graph_repo));
+    let graph_updater = GraphUpdater::new(graph_service);
+
+    // Tenant A: same-tenant update should succeed
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A");
+        let result = graph_updater
+            .update_node_state_if_affected_with_tx(
+                &mut tx,
+                node_id,
+                NodeState::Stale,
+                "Test update".to_string(),
+            )
+            .await;
+        assert!(result.is_ok(), "Tenant A update should succeed: {:?}", result);
+        let update_result = result.unwrap();
+        assert!(update_result.success, "Update should be successful");
+        tx.commit().await.expect("Failed to commit Tenant A RLS tx");
+    }
+
+    // Verify state persisted
+    {
+        let state_str: String =
+            sqlx::query_scalar("SELECT state FROM graph_nodes WHERE node_id = $1")
+                .bind(node_id)
+                .fetch_one(&admin_pool)
+                .await
+                .expect("Failed to query node state");
+        assert_eq!(state_str, "stale", "Node state should be 'stale'");
+    }
+
+    // Tenant B: cross-tenant update should fail
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_b_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant B");
+        let result = graph_updater
+            .update_node_state_if_affected_with_tx(
+                &mut tx,
+                node_id,
+                NodeState::Invalid,
+                "Cross-tenant test".to_string(),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "Cross-tenant update should return a GraphUpdateResult, not an Err"
+        );
+        let update_result = result.unwrap();
+        assert!(!update_result.success, "Cross-tenant update should fail");
+        assert!(
+            update_result.error.unwrap_or_default().contains("not found"),
+            "Expected not-found error for cross-tenant update"
+        );
+        tx.commit().await.expect("Failed to commit Tenant B RLS tx");
+    }
+
+    // Cleanup
+    if is_bypass {
+        drop_test_role(&admin_pool)
+            .await
+            .expect("Failed to drop test role");
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
+    println!("test_d6_primary_rls_graph_update_isolation PASSED");
 }

@@ -8,10 +8,10 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use intent_rebase_types::{get_current_trace_context, AffectedItemsStatus, DiffRequest};
+use intent_rebase_types::{get_current_trace_context, AffectedItemsStatus, DiffRequest, IntentRebaseError};
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{classify_approvals, RiskTier};
-use rebase_orchestrator::apply_pipeline::ApplyOutcome;
+use rebase_orchestrator::apply_pipeline::{ApplyDecision, ApplyOutcome};
 use uuid::Uuid;
 
 use intent_rebase_types::IntentVersion;
@@ -49,81 +49,6 @@ fn risk_class_label(risk_tier: &RiskTier) -> &'static str {
         RiskTier::Medium => "medium",
         RiskTier::High => "high",
         RiskTier::Critical => "critical",
-    }
-}
-
-// ============================================================================
-// Slice 2 bounded post-hoc RLS graph update helper
-// ============================================================================
-
-/// Post-hoc RLS transaction check/update for graph node state updates.
-///
-/// After `apply_rebase()` returns an AutoProceeded outcome, this helper runs a
-/// tenant-scoped RLS tx and re-applies/idempotently verifies graph node state
-/// changes through `SqlxGraphRepository::update_node_state_with_tx`.
-///
-/// Logs warning on RLS tx failure rather than rolling back the non-RLS path.
-#[cfg(feature = "jwt-auth")]
-async fn rls_graph_update(
-    rls_pool: &graph_service::RlsAwarePool,
-    rls_claims: &crate::auth::RlsTenantClaims,
-    graph_service: &graph_service::GraphService,
-    graph_updates: &[rebase_orchestrator::GraphUpdateResult],
-) {
-    let sql_repo = match graph_service.repo().as_sqlx_repo() {
-        Some(repo) => repo,
-        None => {
-            tracing::debug!("rls_graph_update: SQL graph repo not available, skipping");
-            return;
-        }
-    };
-
-    // Only begin tx if there are successful graph updates to verify
-    let has_updates = graph_updates
-        .iter()
-        .any(|u| u.success && u.action.is_some());
-    if !has_updates {
-        tracing::debug!("rls_graph_update: no successful graph updates to verify, skipping");
-        return;
-    }
-
-    let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
-        Ok(tx) => tx,
-        Err(e) => {
-            tracing::warn!("rls_graph_update: RLS tx begin failed: {}", e);
-            return;
-        }
-    };
-
-    for update in graph_updates {
-        if !update.success {
-            continue;
-        }
-        let Some(ref action) = update.action else {
-            continue;
-        };
-
-        if let Err(e) = sql_repo
-            .update_node_state_with_tx(&mut tx, action.node_id, action.new_state.clone())
-            .await
-        {
-            tracing::warn!(
-                "rls_graph_update: failed to verify/update node {} to {:?}: {}",
-                action.node_id,
-                action.new_state,
-                e
-            );
-        } else {
-            tracing::debug!(
-                "rls_graph_update: verified node {} state {:?}",
-                action.node_id,
-                action.new_state
-            );
-        }
-    }
-
-    if let Err(e) = tx.commit().await {
-        tracing::warn!("rls_graph_update: RLS tx commit failed: {}", e);
     }
 }
 
@@ -249,23 +174,155 @@ pub(crate) async fn rebase_apply(
             return Err(ApiErrorResponse(e));
         }
     };
-    let apply_result = match state
-        .orchestrator
-        .apply_rebase(
-            intent_id,
-            intent_head.intent.tenant_id,
-            intent_head.intent.workflow_id,
-            &from_version,
-            &to_version,
-            &plan,
-            &plan.affected_items,
-        )
-        .await
+    // Phase 4 D4: RLS-aware proceed path when JWT/RLS context is available.
+    let apply_result = if let (Some(ref rls_pool), Some(ref rls_claims)) =
+        (&state.rls_pool, &optional_rls_claims)
     {
-        Ok(r) => r,
-        Err(e) => {
-            record_rebase_apply_request("error");
-            return Err(ApiErrorResponse(e));
+        let decision = state
+            .orchestrator
+            .evaluate_apply(&plan.risk_tier, plan.decision_class);
+        match decision {
+            ApplyDecision::Proceed { notification } => {
+                // 1. Read-only tx for checkpoint alignment
+                let mut read_tx = rls_pool
+                    .begin_with_tenant(rls_claims.tenant_id)
+                    .await
+                    .map_err(|e| {
+                        record_rebase_apply_request("error");
+                        ApiErrorResponse(e)
+                    })?;
+                let aligned = state
+                    .orchestrator
+                    .align_checkpoint_with_tx(
+                        &mut read_tx,
+                        intent_id,
+                        intent_head.intent.tenant_id,
+                        intent_head.intent.workflow_id,
+                        &plan,
+                    )
+                    .await
+                    .map_err(|e| {
+                        record_rebase_apply_request("error");
+                        ApiErrorResponse(e)
+                    })?;
+                if let Err(e) = read_tx.commit().await {
+                    record_rebase_apply_request("error");
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "failed to commit read-only tx: {}",
+                        e
+                    ))));
+                }
+
+                // 2. Write tx for graph state updates
+                let mut write_tx = rls_pool
+                    .begin_with_tenant(rls_claims.tenant_id)
+                    .await
+                    .map_err(|e| {
+                        record_rebase_apply_request("error");
+                        ApiErrorResponse(e)
+                    })?;
+                let graph_updates = state
+                    .orchestrator
+                    .update_graph_state_with_tx(
+                        &mut write_tx,
+                        &plan.affected_items,
+                        intent_id,
+                        intent_head.intent.tenant_id,
+                        to_version.version_number,
+                    )
+                    .await
+                    .map_err(|e| {
+                        record_rebase_apply_request("error");
+                        ApiErrorResponse(e)
+                    })?;
+                if let Err(e) = write_tx.commit().await {
+                    record_rebase_apply_request("error");
+                    return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                        "failed to commit write tx: {}",
+                        e
+                    ))));
+                }
+
+                // 3. Post-commit runtime signal
+                let runtime_result = state
+                    .orchestrator
+                    .send_runtime_rebase_signal(
+                        intent_id,
+                        intent_head.intent.tenant_id,
+                        intent_head.intent.workflow_id,
+                        &aligned,
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Runtime signal failed, continuing: {:?}", e);
+                        rebase_orchestrator::RuntimeExecutionResult::degraded(
+                            false,
+                            false,
+                            &format!("Signal failed: {}", e),
+                        )
+                    });
+
+                let aligned_outcome = aligned.outcome.clone();
+                let graph_updates_count = graph_updates.len();
+
+                RebaseApplyResult {
+                    outcome: if notification {
+                        ApplyOutcome::AutoProceededWithNotification
+                    } else {
+                        ApplyOutcome::AutoProceeded
+                    },
+                    aligned_checkpoint: Some(aligned),
+                    graph_updates,
+                    notification_required: notification,
+                    rationale: format!(
+                        "{:?} risk_tier auto-proceeded. Checkpoint aligned: {:?}, {} graph updates applied",
+                        plan.risk_tier, aligned_outcome, graph_updates_count,
+                    ),
+                    runtime_execution_result: runtime_result,
+                }
+            }
+            _ => {
+                // NoOp/Blocked paths: no graph mutations, use existing non-RLS flow
+                match state
+                    .orchestrator
+                    .apply_rebase(
+                        intent_id,
+                        intent_head.intent.tenant_id,
+                        intent_head.intent.workflow_id,
+                        &from_version,
+                        &to_version,
+                        &plan,
+                        &plan.affected_items,
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        record_rebase_apply_request("error");
+                        return Err(ApiErrorResponse(e));
+                    }
+                }
+            }
+        }
+    } else {
+        match state
+            .orchestrator
+            .apply_rebase(
+                intent_id,
+                intent_head.intent.tenant_id,
+                intent_head.intent.workflow_id,
+                &from_version,
+                &to_version,
+                &plan,
+                &plan.affected_items,
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                record_rebase_apply_request("error");
+                return Err(ApiErrorResponse(e));
+            }
         }
     };
 
@@ -333,27 +390,6 @@ pub(crate) async fn rebase_apply(
             &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
         )
         .await;
-    }
-
-    // Slice 2 bounded post-hoc RLS graph update for AutoProceeded paths
-    #[cfg(feature = "jwt-auth")]
-    {
-        if matches!(
-            apply_result.outcome,
-            ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
-        ) {
-            if let (Some(ref rls_pool), Some(ref rls_claims)) =
-                (&state.rls_pool, &optional_rls_claims)
-            {
-                rls_graph_update(
-                    rls_pool,
-                    rls_claims,
-                    &state.graph_service,
-                    &apply_result.graph_updates,
-                )
-                .await;
-            }
-        }
     }
 
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E
@@ -968,27 +1004,6 @@ pub(crate) async fn rebase_apply(
             &serde_json::to_value(audit_payload).unwrap_or_else(|_| serde_json::json!({})),
         )
         .await;
-    }
-
-    // Slice 2 bounded post-hoc RLS graph update for AutoProceeded paths
-    #[cfg(feature = "jwt-auth")]
-    {
-        if matches!(
-            apply_result.outcome,
-            ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
-        ) {
-            if let (Some(ref rls_pool), Some(ref rls_claims)) =
-                (&state.rls_pool, &optional_rls_claims)
-            {
-                rls_graph_update(
-                    rls_pool,
-                    rls_claims,
-                    &state.graph_service,
-                    &apply_result.graph_updates,
-                )
-                .await;
-            }
-        }
     }
 
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E

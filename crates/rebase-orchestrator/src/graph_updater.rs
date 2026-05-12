@@ -204,6 +204,73 @@ impl GraphUpdater {
         }
     }
 
+    /// Update a node's state within an existing transaction if it exists and the transition is valid.
+    ///
+    /// Phase 4 D2: Transaction-aware graph state update for RLS-wrapped mutations.
+    /// Reuses `SqlxGraphRepository::update_node_state_with_tx` for the actual mutation.
+    pub async fn update_node_state_if_affected_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        node_id: Uuid,
+        new_state: NodeState,
+        reason: String,
+    ) -> Result<GraphUpdateResult, IntentRebaseError> {
+        let sql_repo = self.graph_service.repo().as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "update_node_state_if_affected_with_tx requires SQL graph repository".to_string(),
+            )
+        })?;
+
+        let node = match sql_repo.get_node_with_tx(tx, node_id).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("Node {} not found in graph: {}", node_id, e);
+                return Ok(GraphUpdateResult::failure(
+                    node_id,
+                    format!("Node not found: {}", e),
+                ));
+            }
+        };
+
+        let previous_state = node.state.clone();
+
+        if !is_valid_transition(&previous_state, &new_state) {
+            return Ok(GraphUpdateResult::failure(
+                node_id,
+                format!("Invalid transition: {:?} -> {:?}", previous_state, new_state),
+            ));
+        }
+
+        if previous_state == new_state {
+            return Ok(GraphUpdateResult::success(GraphUpdateAction {
+                node_id,
+                node_type: node.node_type.clone(),
+                label: node.label.clone(),
+                previous_state: previous_state.clone(),
+                new_state: new_state.clone(),
+                reason: format!("No change needed: already in {:?}", new_state),
+            }));
+        }
+
+        match sql_repo
+            .update_node_state_with_tx(tx, node_id, new_state.clone())
+            .await
+        {
+            Ok(updated_node) => Ok(GraphUpdateResult::success(GraphUpdateAction {
+                node_id,
+                node_type: updated_node.node_type,
+                label: updated_node.label,
+                previous_state,
+                new_state,
+                reason,
+            })),
+            Err(e) => Ok(GraphUpdateResult::failure(
+                node_id,
+                format!("Update failed: {}", e),
+            )),
+        }
+    }
+
     /// Mark all affected artifacts as stale.
     ///
     /// Convenience method for processing affected artifacts from classification.

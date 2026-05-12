@@ -749,6 +749,32 @@ impl SqlxGraphRepository {
             None => Err(IntentRebaseError::GraphNodeNotFound(id)),
         }
     }
+
+    /// Get a graph node by ID within an existing transaction.
+    ///
+    /// Phase 4 D2: Transaction-aware read for graph updater validation.
+    pub async fn get_node_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<GraphNode, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT node_id, tenant_id, workflow_id, node_type, external_ref_type, external_ref_id, label, state, properties, created_at
+            FROM graph_nodes
+            WHERE node_id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch graph node: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_node(r),
+            None => Err(IntentRebaseError::GraphNodeNotFound(id)),
+        }
+    }
 }
 
 #[async_trait]

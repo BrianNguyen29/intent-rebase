@@ -46,6 +46,16 @@ pub trait CheckpointRepository: Send + Sync {
     /// Mark all expired checkpoints as expired (batch operation)
     /// Returns the number of checkpoints expired
     async fn expire_checkpoints(&self) -> Result<usize, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxCheckpointRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxCheckpointRepository> {
+        None
+    }
 }
 
 /// In-memory implementation for testing and Phase 2
@@ -167,6 +177,10 @@ impl CheckpointRepository for InMemoryCheckpointRepository {
         Ok(checkpoint.clone())
     }
 
+    fn as_sqlx_repo(&self) -> Option<&SqlxCheckpointRepository> {
+        None
+    }
+
     async fn expire_checkpoints(&self) -> Result<usize, IntentRebaseError> {
         let mut checkpoints = self.checkpoints.write().await;
         let now = chrono::Utc::now();
@@ -262,6 +276,68 @@ impl SqlxCheckpointRepository {
         .map_err(|e| IntentRebaseError::StorageError(format!("insert checkpoint: {}", e)))?;
 
         Ok(())
+    }
+
+    /// List checkpoints for a workflow within an existing transaction.
+    ///
+    /// Phase 4 D1: Transaction-aware read for RLS-wrapped checkpoint alignment.
+    pub async fn list_by_workflow_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        workflow_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Checkpoint>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT checkpoint_id, intent_id, intent_version, workflow_id, tenant_id,
+                workflow_state, checkpoint_type, created_at, expires_at, status, metadata
+            FROM checkpoints
+            WHERE workflow_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(tenant_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list checkpoints by workflow: {}", e))
+        })?;
+
+        rows.into_iter()
+            .map(|r| self.row_to_checkpoint(r))
+            .collect()
+    }
+
+    /// List checkpoints for an intent within an existing transaction.
+    ///
+    /// Phase 4 D1: Transaction-aware read for RLS-wrapped checkpoint alignment.
+    pub async fn list_by_intent_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Checkpoint>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT checkpoint_id, intent_id, intent_version, workflow_id, tenant_id,
+                workflow_state, checkpoint_type, created_at, expires_at, status, metadata
+            FROM checkpoints
+            WHERE intent_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(intent_id)
+        .bind(tenant_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list checkpoints by intent: {}", e))
+        })?;
+
+        rows.into_iter()
+            .map(|r| self.row_to_checkpoint(r))
+            .collect()
     }
 }
 
@@ -396,6 +472,10 @@ impl CheckpointRepository for SqlxCheckpointRepository {
         .map_err(|e| IntentRebaseError::StorageError(format!("expire checkpoints: {}", e)))?;
 
         Ok(result.rows_affected() as usize)
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxCheckpointRepository> {
+        Some(self)
     }
 }
 

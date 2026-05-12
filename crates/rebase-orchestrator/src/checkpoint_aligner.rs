@@ -322,6 +322,223 @@ impl CheckpointAligner {
         }
     }
 
+    /// Align a rebase plan's checkpoint selection within an existing transaction.
+    ///
+    /// Phase 4 D1: Transaction-aware checkpoint alignment for RLS-wrapped reads.
+    /// Mirrors the non-transactional `align` behavior but reads through the
+    /// provided transaction for defense-in-depth tenant isolation.
+    pub async fn align_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        plan: &RebasePlan,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+    ) -> Result<AlignedCheckpoint, IntentRebaseError> {
+        let sql_repo = self.checkpoint_service.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "align_with_tx requires SQL checkpoint repository".to_string(),
+            )
+        })?;
+
+        let selection = &plan.deferred.checkpoint_selection;
+
+        // Class A: No checkpoint needed
+        if plan.decision_class == DecisionClass::A {
+            return Ok(AlignedCheckpoint {
+                checkpoint_id: None,
+                checkpoint: None,
+                outcome: CheckpointAlignmentOutcome::NoCheckpointRequired,
+                rationale: "Class A: No semantic changes, no checkpoint needed".to_string(),
+            });
+        }
+
+        // If selection is not ready, fall back to best-effort alignment
+        if !selection.ready {
+            return self
+                .align_best_effort_with_tx(tx, selection, intent_id, tenant_id, workflow_id)
+                .await;
+        }
+
+        // If no candidates, try best-effort alignment
+        if selection.candidates.is_empty() {
+            return self
+                .align_best_effort_with_tx(tx, selection, intent_id, tenant_id, workflow_id)
+                .await;
+        }
+
+        // Use the selected candidate if available
+        if let Some(selected) = &selection.selected {
+            let checkpoints = sql_repo
+                .list_by_workflow_with_tx(tx, workflow_id, tenant_id)
+                .await?;
+
+            let matching: Vec<&Checkpoint> = checkpoints
+                .iter()
+                .filter(|c| {
+                    c.checkpoint_id.to_string().contains(&selected.id)
+                        || selected.id.contains("most-recent")
+                })
+                .filter(|c| {
+                    c.status == CheckpointStatus::Active || c.status == CheckpointStatus::Created
+                })
+                .collect();
+
+            let matching_count = matching.len();
+
+            if matching.is_empty() {
+                return self
+                    .align_most_recent_with_tx(tx, intent_id, tenant_id, workflow_id)
+                    .await;
+            }
+
+            if matching_count == 1 {
+                let checkpoint = matching[0].clone();
+                let checkpoint_id = checkpoint.checkpoint_id;
+                return Ok(AlignedCheckpoint {
+                    checkpoint_id: Some(checkpoint_id),
+                    checkpoint: Some(checkpoint),
+                    outcome: CheckpointAlignmentOutcome::Aligned,
+                    rationale: format!(
+                        "Aligned to checkpoint {} via candidate {}",
+                        checkpoint_id, selected.id
+                    ),
+                });
+            }
+
+            let best = matching.into_iter().max_by_key(|c| c.created_at);
+
+            if let Some(checkpoint) = best {
+                return Ok(AlignedCheckpoint {
+                    checkpoint_id: Some(checkpoint.checkpoint_id),
+                    checkpoint: Some(checkpoint.clone()),
+                    outcome: CheckpointAlignmentOutcome::MultipleCandidates,
+                    rationale: format!(
+                        "Selected most recent from {} candidates for {}",
+                        matching_count, selected.id
+                    ),
+                });
+            }
+
+            return self
+                .align_most_recent_with_tx(tx, intent_id, tenant_id, workflow_id)
+                .await;
+        }
+
+        // Fall back to best-effort
+        self.align_best_effort_with_tx(tx, selection, intent_id, tenant_id, workflow_id)
+            .await
+    }
+
+    async fn align_best_effort_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _selection: &CheckpointSelection,
+        _intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+    ) -> Result<AlignedCheckpoint, IntentRebaseError> {
+        let sql_repo = self.checkpoint_service.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "align_best_effort_with_tx requires SQL checkpoint repository".to_string(),
+            )
+        })?;
+        let checkpoints = sql_repo
+            .list_by_workflow_with_tx(tx, workflow_id, tenant_id)
+            .await?;
+
+        if checkpoints.is_empty() {
+            return Ok(AlignedCheckpoint {
+                checkpoint_id: None,
+                checkpoint: None,
+                outcome: CheckpointAlignmentOutcome::NoCheckpointFound,
+                rationale: "No checkpoints available in storage for this workflow".to_string(),
+            });
+        }
+
+        let most_recent = checkpoints
+            .iter()
+            .filter(|c| c.status == CheckpointStatus::Active)
+            .max_by_key(|c| c.created_at);
+
+        match most_recent {
+            Some(checkpoint) => Ok(AlignedCheckpoint {
+                checkpoint_id: Some(checkpoint.checkpoint_id),
+                checkpoint: Some(checkpoint.clone()),
+                outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                rationale: "Best-effort alignment: selected most recent active checkpoint"
+                    .to_string(),
+            }),
+            None => {
+                let any_checkpoint = checkpoints.first();
+                match any_checkpoint {
+                    Some(checkpoint) => Ok(AlignedCheckpoint {
+                        checkpoint_id: Some(checkpoint.checkpoint_id),
+                        checkpoint: Some(checkpoint.clone()),
+                        outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                        rationale: "Best-effort alignment: selected most recent checkpoint regardless of status"
+                            .to_string(),
+                    }),
+                    None => Ok(AlignedCheckpoint {
+                        checkpoint_id: None,
+                        checkpoint: None,
+                        outcome: CheckpointAlignmentOutcome::NoCheckpointFound,
+                        rationale: "No checkpoints available in storage".to_string(),
+                    }),
+                }
+            }
+        }
+    }
+
+    async fn align_most_recent_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+    ) -> Result<AlignedCheckpoint, IntentRebaseError> {
+        let sql_repo = self.checkpoint_service.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "align_most_recent_with_tx requires SQL checkpoint repository".to_string(),
+            )
+        })?;
+        let checkpoints = sql_repo
+            .list_by_intent_with_tx(tx, intent_id, tenant_id)
+            .await?;
+
+        if checkpoints.is_empty() {
+            return self
+                .align_best_effort_with_tx(
+                    tx,
+                    &CheckpointSelection::deferred(),
+                    intent_id,
+                    tenant_id,
+                    workflow_id,
+                )
+                .await;
+        }
+
+        let most_recent = checkpoints.iter().max_by_key(|c| c.created_at);
+
+        match most_recent {
+            Some(checkpoint) => Ok(AlignedCheckpoint {
+                checkpoint_id: Some(checkpoint.checkpoint_id),
+                checkpoint: Some(checkpoint.clone()),
+                outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                rationale: format!(
+                    "Selected most recent checkpoint for intent {} v{}",
+                    intent_id, checkpoint.intent_version
+                ),
+            }),
+            None => Ok(AlignedCheckpoint {
+                checkpoint_id: None,
+                checkpoint: None,
+                outcome: CheckpointAlignmentOutcome::NoCheckpointFound,
+                rationale: "No checkpoints found for this intent".to_string(),
+            }),
+        }
+    }
+
     /// Get alignment report for debugging/auditing
     #[allow(clippy::too_many_arguments)]
     pub async fn get_alignment_report(

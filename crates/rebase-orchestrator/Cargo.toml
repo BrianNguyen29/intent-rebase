@@ -22,6 +22,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 once_cell = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
 runtime-adapter = { path = "../runtime-adapter" }

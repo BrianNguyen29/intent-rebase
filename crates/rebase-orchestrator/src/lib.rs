@@ -262,6 +262,22 @@ impl RebaseOrchestrator {
             .await
     }
 
+    /// Align a rebase plan's checkpoint selection within an existing transaction.
+    ///
+    /// Phase 4 D4: Transaction-aware checkpoint alignment for RLS-wrapped reads.
+    pub async fn align_checkpoint_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+        workflow_id: Uuid,
+        plan: &RebasePlan,
+    ) -> Result<AlignedCheckpoint, IntentRebaseError> {
+        self.checkpoint_aligner
+            .align_with_tx(tx, plan, intent_id, tenant_id, workflow_id)
+            .await
+    }
+
     /// Send a rebase signal to the runtime adapter for internal execution.
     ///
     /// Gates execution on adapter readiness. If the adapter is not ready,
@@ -269,7 +285,7 @@ impl RebaseOrchestrator {
     /// signal or replay.
     ///
     /// Returns `RuntimeExecutionResult` indicating signal and replay status.
-    async fn send_runtime_rebase_signal(
+    pub async fn send_runtime_rebase_signal(
         &self,
         intent_id: Uuid,
         tenant_id: Uuid,
@@ -373,6 +389,18 @@ impl RebaseOrchestrator {
         }
     }
 
+    /// Evaluate the apply decision for a rebase plan without executing side effects.
+    ///
+    /// Phase 4 D3: Exposes the apply decision so the caller can sequence
+    /// transaction boundaries around the proceed / blocked / no-op paths.
+    pub fn evaluate_apply(
+        &self,
+        risk_tier: &rebase_engine::RiskTier,
+        decision_class: rebase_engine::DecisionClass,
+    ) -> ApplyDecision {
+        self.apply_pipeline.evaluate(risk_tier, decision_class)
+    }
+
     /// Apply bounded graph state updates based on classification results.
     ///
     /// This only updates node states (Active, Stale, Invalid, Archived) based on
@@ -437,6 +465,82 @@ impl RebaseOrchestrator {
                 let result = self
                     .graph_updater
                     .update_node_state_if_affected(
+                        side_effect.node_id,
+                        intent_rebase_types::NodeState::Stale,
+                        format!(
+                            "Directly affected side effect from intent {} v{}",
+                            intent_id, intent_version
+                        ),
+                    )
+                    .await?;
+                results.push(result);
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Apply bounded graph state updates within an existing transaction.
+    ///
+    /// Phase 4 D3: Transaction-aware graph state update for RLS-wrapped mutations.
+    /// Mirrors `update_graph_state` but uses `GraphUpdater::update_node_state_if_affected_with_tx`
+    /// so all mutations happen inside the caller's transaction boundary.
+    pub async fn update_graph_state_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        affected_items: &AffectedItemsPreview,
+        intent_id: Uuid,
+        _tenant_id: Uuid,
+        intent_version: i32,
+    ) -> Result<Vec<GraphUpdateResult>, IntentRebaseError> {
+        if affected_items.status != AffectedItemsStatus::Available {
+            tracing::debug!(
+                "Skipping graph state update: affected items status is {:?}",
+                affected_items.status
+            );
+            return Ok(vec![]);
+        }
+
+        let mut results = Vec::new();
+
+        for artifact in &affected_items.affected_artifacts {
+            let result = self
+                .graph_updater
+                .update_node_state_if_affected_with_tx(
+                    tx,
+                    artifact.node_id,
+                    intent_rebase_types::NodeState::Stale,
+                    format!("Affected by intent {} v{}", intent_id, intent_version),
+                )
+                .await?;
+            results.push(result);
+        }
+
+        for approval in &affected_items.affected_approvals {
+            let result = self
+                .graph_updater
+                .update_node_state_if_affected_with_tx(
+                    tx,
+                    approval.node_id,
+                    intent_rebase_types::NodeState::Stale,
+                    format!(
+                        "Approval revalidation needed for intent {} v{}",
+                        intent_id, intent_version
+                    ),
+                )
+                .await?;
+            results.push(result);
+        }
+
+        for side_effect in &affected_items.side_effects {
+            if matches!(
+                side_effect.impact,
+                intent_rebase_types::ClassificationImpact::Direct
+            ) {
+                let result = self
+                    .graph_updater
+                    .update_node_state_if_affected_with_tx(
+                        tx,
                         side_effect.node_id,
                         intent_rebase_types::NodeState::Stale,
                         format!(
