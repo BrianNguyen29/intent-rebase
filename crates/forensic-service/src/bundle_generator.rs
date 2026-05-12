@@ -138,43 +138,52 @@ impl BundleGeneratorService {
         // Set to Generating since we have content
         bundle.status = BundleStatus::Generating;
 
+        // Write section hashes into bundle.integrity BEFORE computing manifest hash
+        // so that the manifest hash covers the complete integrity evidence.
+        bundle.integrity.intent_versions_hash = intent_versions_hash.clone();
+        bundle.integrity.artifacts_hash = artifacts_hash.clone();
+        bundle.integrity.approvals_hash = approvals_hash.clone();
+        bundle.integrity.audit_events_hash = audit_events_hash.clone();
+        bundle.integrity.policy_snapshots_hash = policy_snapshots_hash.clone();
+        bundle.integrity.verification_timestamp = Utc::now();
+
         // Build section hash records for audit trail
         let section_hashes = vec![
             ContentSectionHash {
                 section: "intent_versions".to_string(),
-                content_hash: intent_versions_hash,
+                content_hash: intent_versions_hash.clone(),
                 item_count: bundle.contents.intent_versions,
             },
             ContentSectionHash {
                 section: "artifacts".to_string(),
-                content_hash: artifacts_hash,
+                content_hash: artifacts_hash.clone(),
                 item_count: bundle.contents.artifacts,
             },
             ContentSectionHash {
                 section: "approvals".to_string(),
-                content_hash: approvals_hash,
+                content_hash: approvals_hash.clone(),
                 item_count: bundle.contents.approvals,
             },
             ContentSectionHash {
                 section: "audit_events".to_string(),
-                content_hash: audit_events_hash,
+                content_hash: audit_events_hash.clone(),
                 item_count: bundle.contents.audit_events,
             },
             ContentSectionHash {
                 section: "policy_snapshots".to_string(),
-                content_hash: policy_snapshots_hash,
+                content_hash: policy_snapshots_hash.clone(),
                 item_count: bundle.contents.policy_snapshots,
             },
         ];
 
-        // Compute manifest hash from the bundle JSON
+        // Compute manifest hash from the bundle JSON (with manifest_hash cleared
+        // because the hash cannot include itself)
+        bundle.integrity.manifest_hash = String::new();
         let manifest_hash = super::bundle_hasher::compute_sha256(&bundle)
             .expect("bundle serialization should not fail");
 
-        // Write the computed manifest hash back into bundle.integrity and update timestamp
-        let verification_timestamp = Utc::now();
+        // Write the computed manifest hash back into bundle.integrity
         bundle.integrity.manifest_hash = manifest_hash.clone();
-        bundle.integrity.verification_timestamp = verification_timestamp;
 
         let mut result_integrity_hash = integrity_hash;
         result_integrity_hash.manifest_hash = manifest_hash;

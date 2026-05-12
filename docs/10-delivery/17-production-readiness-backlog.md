@@ -281,12 +281,12 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Full forensic replay capability plus production-grade immutable bundle storage lifecycle |
-| **Current State** | Bounded forensic bundle generation/export/download delivered; default storage remains in-memory; env-gated S3 bundle storage exists; full replay, Object Lock, retention enforcement, and chain-hash remain deferred |
+| **Current State** | Bounded forensic bundle generation/export/download delivered; bounded replay evidence slice delivered (per-section integrity hashes persisted in manifest, replay verification endpoint); default storage remains in-memory; env-gated S3 bundle storage exists; full runtime replay, Object Lock, retention enforcement, and chain-hash remain deferred |
 | **Owner** | Backend Lead / Security |
-| **Status** | 🔴 DEFERRED — Phase 4+ scope |
-| **External Dependency** | Requires S3 Object Lock infrastructure, chain-hash implementation |
+| **Status** | 🟡 BOUNDED DELIVERED — replay evidence slice (per-section hashes + replay verification API) complete; full runtime replay and Object Lock remain Phase 4+ deferred |
+| **External Dependency** | S3 Object Lock infrastructure, chain-hash implementation for full lifecycle |
 
-**No overclaim:** Forensic bundle generation and integrity checks are not equivalent to full replay or production-grade immutable evidence storage.
+**No overclaim:** Bounded replay evidence (stored per-section hashes + read-only verification) is NOT full runtime replay or production-grade immutable evidence storage.
 
 ---
 
@@ -309,7 +309,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; `build_router_with_jwt_auth` deduplicated (delegates to `build_router`); broader router route grouping/split remains Phase 4 |
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
-| **P2** | Forensic replay + immutable storage lifecycle | 🔴 DEFERRED | Phase 4+ scope |
+| **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
 
 ---
 
@@ -326,7 +326,7 @@ The following external evidence/gates remain pending and are not yet available:
 | Production infrastructure | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staging/production deployment |
 | DLQ replay worker | 🔴 DEFERRED | Phase 4 (requires G1-G5 gates) |
 | Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |
-| Forensic replay + Object Lock | 🔴 DEFERRED | Phase 4+ |
+| Forensic replay + Object Lock | 🟡 BOUNDED DELIVERED — replay evidence slice (per-section hashes + replay verification API) complete; full runtime replay + Object Lock remain Phase 4+ | Phase 4+ |
 
 **WAIVED-SOLO Policy:** External gates marked WAIVED-SOLO are accepted for non-production Phase 3 close-out only. Solo self-review is weaker evidence than external verification. All WAIVED-SOLO items must be revisited and closed with named external evidence before any production deployment or production-readiness claim.
 
@@ -341,7 +341,7 @@ The following items are local-executable and do not require external dependencie
 | rebase_apply handler review | P2 | ✅ BOUNDED IMPLEMENTED | P2-L3 in this doc; ADR-09 accepted; D1–D7 bounded implemented at commit `d98c7dc`; external gates remain open |
 | Artifact side-effect tx boundary | P2 | ✅ BOUNDED IMPLEMENTED | ADR-08 Option A delivered for SQL/RLS path; non-RLS fallback preserved |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
-| Forensic replay real-repo evidence | P2 | 📋 CONSIDERED | Next candidate slice for real-repo validation; not yet implemented |
+| Forensic replay real-repo evidence | P2 | ✅ BOUNDED DELIVERED | Per-section integrity hashes persisted in manifest; replay verification endpoint; tests cover generate→store→retrieve→replay cycle |
 
 ---
 

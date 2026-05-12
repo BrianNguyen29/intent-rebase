@@ -329,6 +329,11 @@ pub fn build_router(
             "/forensic/bundles/:bundle_id/download",
             get(crate::forensic_handlers::download_forensic_bundle),
         )
+        // Forensic bundle replay verification endpoint (bounded replay evidence slice)
+        .route(
+            "/forensic/bundles/:bundle_id/replay-verify",
+            post(crate::forensic_handlers::replay_verify_forensic_bundle),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         // Trace context middleware must run AFTER request_id_middleware so that

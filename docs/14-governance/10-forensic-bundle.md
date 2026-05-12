@@ -31,6 +31,21 @@ Both APIs are bounded. Subsequent slices have since delivered bounded bundle gen
 - Archive contains scaffolded/fictional entries representing what a real bundle would contain
 - Integration in `intent-api` with tests
 
+### Delivered (Bounded Replay Evidence Slice)
+
+#### Per-Section Integrity Persistence
+- `BundleIntegrity` extended with per-section SHA-256 hashes:
+  - `intent_versions_hash`, `artifacts_hash`, `approvals_hash`, `audit_events_hash`, `policy_snapshots_hash`
+- `BundleGeneratorService` populates these hashes during generation
+- Hashes are persisted in the bundle manifest JSON (stored in repository and S3/MinIO)
+
+#### Bounded Replay Verification
+- `BundleReplayService::verify_bundle_from_integrity()` — verifies provided content sections against stored hashes
+- `BundleReplayService::verify_manifest_integrity()` — self-contained manifest hash verification
+- `ForensicBundleServiceTrait::verify_bundle_replay()` — service-layer replay verification
+- API endpoint: `POST /forensic/bundles/{bundle_id}/replay-verify`
+- Integration in `intent-api` with tests covering generate→store→retrieve→replay cycle
+
 ### NOT in This Slice (Phase 3 Batch 3b)
 
 The following were explicitly out of scope for the original Batch 3b bounded slice. Subsequent slices have since delivered bounded generation, in-memory storage, download, and replay verification surface. Remaining deferred items:
@@ -178,7 +193,12 @@ forensic-bundle-{bundle_id}/
   "integrity": {
     "manifest_hash": "sha256:abc123...",
     "chain_verified": true,
-    "verification_timestamp": "2025-04-03T12:00:00Z"
+    "verification_timestamp": "2025-04-03T12:00:00Z",
+    "intent_versions_hash": "sha256:...",
+    "artifacts_hash": "sha256:...",
+    "approvals_hash": "sha256:...",
+    "audit_events_hash": "sha256:...",
+    "policy_snapshots_hash": "sha256:..."
   },
   "retention": {
     "policy": "cold",

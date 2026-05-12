@@ -28,8 +28,8 @@ use super::bundle::{BundlePurpose, BundleStatus, BundleTimeRange, ForensicBundle
 use super::bundle_contents::BundleContents;
 use super::bundle_hasher::{
     compute_sha256, ApprovalEntry, ApprovalsForHash, ArtifactEntry, ArtifactsForHash,
-    AuditEventEntry, AuditEventsForHash, ContentSectionHash, IntentVersionEntry,
-    IntentVersionsForHash, PolicySnapshotEntry, PolicySnapshotsForHash,
+    AuditEventEntry, AuditEventsForHash, ContentSectionHash, ContentSectionsForVerification,
+    IntentVersionEntry, IntentVersionsForHash, PolicySnapshotEntry, PolicySnapshotsForHash,
 };
 
 /// Result of a single section's replay verification.
@@ -504,6 +504,196 @@ impl BundleReplayService {
             bundle,
             section_hashes,
         })
+    }
+
+    /// Verify a forensic bundle using the integrity hashes stored in the bundle manifest.
+    ///
+    /// This is the **bounded replay evidence path**: the per-section hashes are persisted
+    /// in `bundle.integrity` during generation, and this method recomputes hashes from the
+    /// provided content sections to confirm they match the recorded values.
+    ///
+    /// **What this IS:** read-only integrity verification using stored evidence.
+    /// **What this IS NOT:** full runtime replay, state reconstruction, or mutation.
+    ///
+    /// Returns `Ok(VerifyBundleReplayResponse)` with a detailed report if verification completes.
+    /// Returns `Err(BundleReplayError)` if the bundle is not in Ready status.
+    pub fn verify_bundle_from_integrity(
+        &self,
+        bundle: &ForensicBundle,
+        content_sections: &ContentSectionsForVerification,
+    ) -> Result<VerifyBundleReplayResponse, BundleReplayError> {
+        if bundle.status != BundleStatus::Ready {
+            return Err(BundleReplayError::BundleNotReady {
+                bundle_id: bundle.bundle_id,
+                current_status: bundle.status,
+            });
+        }
+
+        // Compute hashes from provided content sections
+        let computed_intent_hash =
+            compute_sha256(&content_sections.intent_versions).unwrap_or_default();
+        let computed_artifacts_hash =
+            compute_sha256(&content_sections.artifacts).unwrap_or_default();
+        let computed_approvals_hash =
+            compute_sha256(&content_sections.approvals).unwrap_or_default();
+        let computed_audit_hash =
+            compute_sha256(&content_sections.audit_events).unwrap_or_default();
+        let computed_policy_hash =
+            compute_sha256(&content_sections.policy_snapshots).unwrap_or_default();
+
+        let intent_count = content_sections.intent_versions.versions.len();
+        let artifacts_count = content_sections.artifacts.artifacts.len();
+        let approvals_count = content_sections.approvals.approvals.len();
+        let audit_count = content_sections.audit_events.events.len();
+        let policy_count = content_sections.policy_snapshots.snapshots.len();
+
+        let section_hashes = vec![
+            ContentSectionHash {
+                section: "intent_versions".to_string(),
+                content_hash: computed_intent_hash.clone(),
+                item_count: intent_count,
+            },
+            ContentSectionHash {
+                section: "artifacts".to_string(),
+                content_hash: computed_artifacts_hash.clone(),
+                item_count: artifacts_count,
+            },
+            ContentSectionHash {
+                section: "approvals".to_string(),
+                content_hash: computed_approvals_hash.clone(),
+                item_count: approvals_count,
+            },
+            ContentSectionHash {
+                section: "audit_events".to_string(),
+                content_hash: computed_audit_hash.clone(),
+                item_count: audit_count,
+            },
+            ContentSectionHash {
+                section: "policy_snapshots".to_string(),
+                content_hash: computed_policy_hash.clone(),
+                item_count: policy_count,
+            },
+        ];
+
+        let section_results = vec![
+            {
+                let recorded = &bundle.integrity.intent_versions_hash;
+                let verified = computed_intent_hash == *recorded;
+                ReplaySectionResult {
+                    section: "intent_versions".to_string(),
+                    verified,
+                    item_count: intent_count,
+                    recorded_hash: recorded.clone(),
+                    computed_hash: computed_intent_hash.clone(),
+                    details: if verified {
+                        format!(
+                            "intent_versions verified: {} items, hash match",
+                            intent_count
+                        )
+                    } else {
+                        format!(
+                            "intent_versions FAILED: {} items, hash mismatch",
+                            intent_count
+                        )
+                    },
+                }
+            },
+            {
+                let recorded = &bundle.integrity.artifacts_hash;
+                let verified = computed_artifacts_hash == *recorded;
+                ReplaySectionResult {
+                    section: "artifacts".to_string(),
+                    verified,
+                    item_count: artifacts_count,
+                    recorded_hash: recorded.clone(),
+                    computed_hash: computed_artifacts_hash.clone(),
+                    details: if verified {
+                        format!("artifacts verified: {} items, hash match", artifacts_count)
+                    } else {
+                        format!("artifacts FAILED: {} items, hash mismatch", artifacts_count)
+                    },
+                }
+            },
+            {
+                let recorded = &bundle.integrity.approvals_hash;
+                let verified = computed_approvals_hash == *recorded;
+                ReplaySectionResult {
+                    section: "approvals".to_string(),
+                    verified,
+                    item_count: approvals_count,
+                    recorded_hash: recorded.clone(),
+                    computed_hash: computed_approvals_hash.clone(),
+                    details: if verified {
+                        format!("approvals verified: {} items, hash match", approvals_count)
+                    } else {
+                        format!("approvals FAILED: {} items, hash mismatch", approvals_count)
+                    },
+                }
+            },
+            {
+                let recorded = &bundle.integrity.audit_events_hash;
+                let verified = computed_audit_hash == *recorded;
+                ReplaySectionResult {
+                    section: "audit_events".to_string(),
+                    verified,
+                    item_count: audit_count,
+                    recorded_hash: recorded.clone(),
+                    computed_hash: computed_audit_hash.clone(),
+                    details: if verified {
+                        format!("audit_events verified: {} items, hash match", audit_count)
+                    } else {
+                        format!("audit_events FAILED: {} items, hash mismatch", audit_count)
+                    },
+                }
+            },
+            {
+                let recorded = &bundle.integrity.policy_snapshots_hash;
+                let verified = computed_policy_hash == *recorded;
+                ReplaySectionResult {
+                    section: "policy_snapshots".to_string(),
+                    verified,
+                    item_count: policy_count,
+                    recorded_hash: recorded.clone(),
+                    computed_hash: computed_policy_hash.clone(),
+                    details: if verified {
+                        format!(
+                            "policy_snapshots verified: {} items, hash match",
+                            policy_count
+                        )
+                    } else {
+                        format!(
+                            "policy_snapshots FAILED: {} items, hash mismatch",
+                            policy_count
+                        )
+                    },
+                }
+            },
+        ];
+
+        let report = ReplayVerificationReport::from_results(bundle, section_results);
+
+        Ok(VerifyBundleReplayResponse {
+            report,
+            bundle: bundle.clone(),
+            section_hashes,
+        })
+    }
+
+    /// Verify the bundle manifest integrity by re-serializing and comparing hashes.
+    ///
+    /// This is a **self-contained verification** that does not require external content
+    /// sections. It proves the bundle manifest bytes have not been tampered with since
+    /// the manifest hash was computed.
+    ///
+    /// The manifest hash is computed over the bundle with `manifest_hash` cleared,
+    /// because the hash is self-referential (it cannot include itself).
+    ///
+    /// Returns `true` if the re-computed manifest hash matches the stored value.
+    pub fn verify_manifest_integrity(&self, bundle: &ForensicBundle) -> bool {
+        let mut bundle_for_hash = bundle.clone();
+        bundle_for_hash.integrity.manifest_hash = String::new();
+        let computed = compute_sha256(&bundle_for_hash).unwrap_or_default();
+        computed == bundle.integrity.manifest_hash
     }
 
     /// Generate a summary report for a bundle without content verification.
@@ -1098,5 +1288,167 @@ mod tests {
             assert!(!section_hash.content_hash.is_empty());
             assert!(!section_hash.section.is_empty());
         }
+    }
+
+    #[test]
+    fn test_verify_bundle_from_integrity_success() {
+        let service = BundleReplayService::new();
+        let tenant_id = Uuid::new_v4();
+
+        let intent_versions = vec![make_intent_entry(1), make_intent_entry(2)];
+        let artifacts = vec![make_artifact_entry(1)];
+        let approvals = vec![make_approval_entry(1)];
+        let audit_events = vec![make_audit_entry(1)];
+        let policy_snapshots = vec![make_policy_entry(1)];
+
+        let gen_request = super::super::bundle_generator::GenerateBundleRequest {
+            tenant_id,
+            time_range: BundleTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: BundlePurpose::ComplianceAudit,
+            created_by: "tester".to_string(),
+            intent_versions: intent_versions.clone(),
+            artifacts: artifacts.clone(),
+            approvals: approvals.clone(),
+            audit_events: audit_events.clone(),
+            policy_snapshots: policy_snapshots.clone(),
+        };
+
+        let gen_result =
+            super::super::bundle_generator::BundleGeneratorService::generate(gen_request);
+        let mut bundle = gen_result.bundle;
+        bundle.status = BundleStatus::Ready;
+
+        let content_sections = super::super::bundle_hasher::ContentSectionsForVerification {
+            intent_versions: super::super::bundle_hasher::IntentVersionsForHash {
+                versions: intent_versions,
+            },
+            artifacts: super::super::bundle_hasher::ArtifactsForHash { artifacts },
+            approvals: super::super::bundle_hasher::ApprovalsForHash { approvals },
+            audit_events: super::super::bundle_hasher::AuditEventsForHash {
+                events: audit_events,
+            },
+            policy_snapshots: super::super::bundle_hasher::PolicySnapshotsForHash {
+                snapshots: policy_snapshots,
+            },
+        };
+
+        let response = service
+            .verify_bundle_from_integrity(&bundle, &content_sections)
+            .expect("verification should succeed");
+
+        assert!(response.report.overall_verified);
+        assert_eq!(response.report.sections_passed, 5);
+        assert_eq!(response.report.sections_failed, 0);
+        assert!(response.report.summary.contains("verified successfully"));
+    }
+
+    #[test]
+    fn test_verify_bundle_from_integrity_tampered_content() {
+        let service = BundleReplayService::new();
+        let tenant_id = Uuid::new_v4();
+
+        let intent_versions = vec![make_intent_entry(1)];
+        let artifacts = vec![];
+        let approvals = vec![];
+        let audit_events = vec![];
+        let policy_snapshots = vec![];
+
+        let gen_request = super::super::bundle_generator::GenerateBundleRequest {
+            tenant_id,
+            time_range: BundleTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: BundlePurpose::IncidentInvestigation,
+            created_by: "tester".to_string(),
+            intent_versions: intent_versions.clone(),
+            artifacts: artifacts.clone(),
+            approvals: approvals.clone(),
+            audit_events: audit_events.clone(),
+            policy_snapshots: policy_snapshots.clone(),
+        };
+
+        let gen_result =
+            super::super::bundle_generator::BundleGeneratorService::generate(gen_request);
+        let mut bundle = gen_result.bundle;
+        bundle.status = BundleStatus::Ready;
+
+        // Tamper with the content
+        let mut tampered_intent_versions = intent_versions.clone();
+        tampered_intent_versions[0].content_hash = "tampered".to_string();
+
+        let content_sections = super::super::bundle_hasher::ContentSectionsForVerification {
+            intent_versions: super::super::bundle_hasher::IntentVersionsForHash {
+                versions: tampered_intent_versions,
+            },
+            artifacts: super::super::bundle_hasher::ArtifactsForHash { artifacts },
+            approvals: super::super::bundle_hasher::ApprovalsForHash { approvals },
+            audit_events: super::super::bundle_hasher::AuditEventsForHash {
+                events: audit_events,
+            },
+            policy_snapshots: super::super::bundle_hasher::PolicySnapshotsForHash {
+                snapshots: policy_snapshots,
+            },
+        };
+
+        let response = service
+            .verify_bundle_from_integrity(&bundle, &content_sections)
+            .expect("verification should complete");
+
+        assert!(!response.report.overall_verified);
+        assert_eq!(response.report.sections_failed, 1);
+        assert!(response.report.summary.contains("FAILED"));
+    }
+
+    #[test]
+    fn test_verify_bundle_from_integrity_not_ready() {
+        let service = BundleReplayService::new();
+        let tenant_id = Uuid::new_v4();
+        let bundle = create_test_bundle(tenant_id, BundlePurpose::Legal);
+        // status is Pending, not Ready
+
+        let content_sections =
+            super::super::bundle_hasher::ContentSectionsForVerification::default();
+
+        let result = service.verify_bundle_from_integrity(&bundle, &content_sections);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("not ready for replay"));
+    }
+
+    #[test]
+    fn test_verify_manifest_integrity() {
+        let service = BundleReplayService::new();
+        let tenant_id = Uuid::new_v4();
+
+        let gen_request = super::super::bundle_generator::GenerateBundleRequest {
+            tenant_id,
+            time_range: BundleTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            purpose: BundlePurpose::Legal,
+            created_by: "tester".to_string(),
+            intent_versions: vec![make_intent_entry(1)],
+            artifacts: vec![],
+            approvals: vec![],
+            audit_events: vec![],
+            policy_snapshots: vec![],
+        };
+
+        let gen_result =
+            super::super::bundle_generator::BundleGeneratorService::generate(gen_request);
+        let bundle = gen_result.bundle;
+
+        // Manifest integrity should pass for a freshly generated bundle
+        assert!(service.verify_manifest_integrity(&bundle));
+
+        // Tamper with the bundle and verify it fails
+        let mut tampered_bundle = bundle.clone();
+        tampered_bundle.created_by = "attacker".to_string();
+        assert!(!service.verify_manifest_integrity(&tampered_bundle));
     }
 }

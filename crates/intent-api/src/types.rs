@@ -995,6 +995,51 @@ pub struct ForensicBundleResponse {
 }
 
 // =============================================================================
+// Forensic Bundle Replay Types
+// =============================================================================
+
+/// Request body for forensic bundle replay verification.
+///
+/// **Bounded replay evidence slice:** Provides content sections to verify against
+/// the per-section hashes stored in the bundle manifest. This is read-only
+/// integrity verification, not full runtime/state reconstruction replay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleReplayRequest {
+    /// Tenant ID for access validation
+    pub tenant_id: Uuid,
+    /// Intent version entries to verify against the bundle
+    pub intent_versions: Vec<forensic_service::IntentVersionEntry>,
+    /// Artifact entries to verify against the bundle
+    pub artifacts: Vec<forensic_service::ArtifactEntry>,
+    /// Approval entries to verify against the bundle
+    pub approvals: Vec<forensic_service::ApprovalEntry>,
+    /// Audit event entries to verify against the bundle
+    pub audit_events: Vec<forensic_service::AuditEventEntry>,
+    /// Policy snapshot entries to verify against the bundle
+    pub policy_snapshots: Vec<forensic_service::PolicySnapshotEntry>,
+}
+
+/// Response for forensic bundle replay verification.
+///
+/// **Bounded replay evidence slice:** Returns the result of verifying provided
+/// content sections against the stored per-section integrity hashes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBundleReplayResponse {
+    /// Bundle ID that was verified
+    pub bundle_id: Uuid,
+    /// Whether all sections passed verification
+    pub overall_verified: bool,
+    /// Number of sections that passed
+    pub sections_passed: usize,
+    /// Number of sections that failed
+    pub sections_failed: usize,
+    /// Human-readable summary
+    pub summary: String,
+    /// Per-section verification results
+    pub sections: Vec<forensic_service::ReplaySectionResult>,
+}
+
+// =============================================================================
 // Forensic Export Types
 // =============================================================================
 

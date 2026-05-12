@@ -75,6 +75,8 @@ pub enum ForensicBundleServiceError {
     Serialization(String),
     /// Invalid time range
     InvalidTimeRange(String),
+    /// Replay verification failed
+    Replay(String),
 }
 
 impl std::fmt::Display for ForensicBundleServiceError {
@@ -87,6 +89,7 @@ impl std::fmt::Display for ForensicBundleServiceError {
             Self::Repository(e) => write!(f, "repository error: {}", e),
             Self::Serialization(e) => write!(f, "serialization failed: {}", e),
             Self::InvalidTimeRange(e) => write!(f, "invalid time range: {}", e),
+            Self::Replay(e) => write!(f, "replay verification failed: {}", e),
         }
     }
 }
@@ -142,6 +145,22 @@ pub trait ForensicBundleServiceTrait: Send + Sync {
         &self,
         bundle_id: Uuid,
     ) -> Result<Vec<u8>, ForensicBundleServiceError>;
+
+    /// Verify a stored bundle's integrity against provided content sections.
+    ///
+    /// **Bounded replay evidence path:** Loads the bundle manifest from the repository
+    /// and verifies the provided content sections against the per-section hashes stored
+    /// in `bundle.integrity`. This is read-only verification — no mutations occur.
+    ///
+    /// Returns `Ok(VerifyBundleReplayResponse)` with the verification report.
+    /// Returns `Err(ForensicBundleServiceError::NotFound)` if the bundle does not exist.
+    /// Returns `Err(ForensicBundleServiceError::Replay)` if verification fails or the bundle
+    /// is not in Ready status.
+    async fn verify_bundle_replay(
+        &self,
+        bundle_id: Uuid,
+        content_sections: super::bundle_hasher::ContentSectionsForVerification,
+    ) -> Result<super::bundle_replay::VerifyBundleReplayResponse, ForensicBundleServiceError>;
 
     /// Returns a reference to the underlying repository for RLS-aware operations.
     ///
@@ -428,6 +447,24 @@ impl<R: BundleRepository + 'static> ForensicBundleServiceTrait for ForensicBundl
                 }
                 _ => ForensicBundleServiceError::Storage(e.to_string()),
             })
+    }
+
+    /// Verify a stored bundle's integrity against provided content sections.
+    ///
+    /// **Bounded replay evidence path:** Loads the bundle manifest and verifies
+    /// the provided content sections against the per-section hashes stored in
+    /// `bundle.integrity`. All operations are read-only.
+    async fn verify_bundle_replay(
+        &self,
+        bundle_id: Uuid,
+        content_sections: super::bundle_hasher::ContentSectionsForVerification,
+    ) -> Result<super::bundle_replay::VerifyBundleReplayResponse, ForensicBundleServiceError> {
+        let bundle = self.get_bundle(bundle_id).await?;
+
+        let replay_service = super::bundle_replay::BundleReplayService::new();
+        replay_service
+            .verify_bundle_from_integrity(&bundle, &content_sections)
+            .map_err(|e| ForensicBundleServiceError::Replay(e.to_string()))
     }
 
     fn repo(&self) -> Option<&dyn super::bundle_repo::BundleRepository> {
@@ -805,5 +842,133 @@ mod tests {
         // Verify it's valid JSON
         let parsed: ForensicBundle = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.bundle_id, created.bundle.bundle_id);
+    }
+
+    #[tokio::test]
+    async fn test_verify_bundle_replay_success() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let intent = create_test_intent(tenant_id, intent_id);
+
+        let repo = Arc::new(InMemoryBundleRepository::new());
+        let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
+        let collector = Arc::new(MockCollector::new().with_intents(vec![intent]));
+
+        let service = ForensicBundleService::new(repo.clone(), storage.clone(), collector);
+
+        let request = CreateForensicBundleRequest {
+            tenant_id,
+            intent_ids: vec![intent_id],
+            time_range: BundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: BundlePurpose::IncidentInvestigation,
+            created_by: "test-user".to_string(),
+        };
+
+        let created = service.create_bundle(request).await.unwrap();
+        let bundle_id = created.bundle.bundle_id;
+
+        // Build content sections from the same mock data
+        let content_sections = crate::bundle_hasher::ContentSectionsForVerification {
+            intent_versions: crate::bundle_hasher::IntentVersionsForHash {
+                versions: vec![crate::bundle_hasher::IntentVersionEntry {
+                    intent_id,
+                    version: 1,
+                    content_hash: format!("{:032x}", 1),
+                }],
+            },
+            artifacts: crate::bundle_hasher::ArtifactsForHash { artifacts: vec![] },
+            approvals: crate::bundle_hasher::ApprovalsForHash { approvals: vec![] },
+            audit_events: crate::bundle_hasher::AuditEventsForHash { events: vec![] },
+            policy_snapshots: crate::bundle_hasher::PolicySnapshotsForHash { snapshots: vec![] },
+        };
+
+        let result = service
+            .verify_bundle_replay(bundle_id, content_sections)
+            .await;
+        assert!(
+            result.is_ok(),
+            "Replay verification should succeed: {:?}",
+            result
+        );
+
+        let response = result.unwrap();
+        assert!(response.report.overall_verified);
+    }
+
+    #[tokio::test]
+    async fn test_verify_bundle_replay_tampered_content() {
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let intent = create_test_intent(tenant_id, intent_id);
+
+        let repo = Arc::new(InMemoryBundleRepository::new());
+        let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
+        let collector = Arc::new(MockCollector::new().with_intents(vec![intent]));
+
+        let service = ForensicBundleService::new(repo.clone(), storage.clone(), collector);
+
+        let request = CreateForensicBundleRequest {
+            tenant_id,
+            intent_ids: vec![intent_id],
+            time_range: BundleTimeRange {
+                start: Utc::now() - chrono::Duration::days(1),
+                end: Utc::now(),
+            },
+            purpose: BundlePurpose::IncidentInvestigation,
+            created_by: "test-user".to_string(),
+        };
+
+        let created = service.create_bundle(request).await.unwrap();
+        let bundle_id = created.bundle.bundle_id;
+
+        // Build tampered content sections
+        let content_sections = crate::bundle_hasher::ContentSectionsForVerification {
+            intent_versions: crate::bundle_hasher::IntentVersionsForHash {
+                versions: vec![crate::bundle_hasher::IntentVersionEntry {
+                    intent_id,
+                    version: 1,
+                    content_hash: "tampered_content_hash_000000000000".to_string(),
+                }],
+            },
+            artifacts: crate::bundle_hasher::ArtifactsForHash { artifacts: vec![] },
+            approvals: crate::bundle_hasher::ApprovalsForHash { approvals: vec![] },
+            audit_events: crate::bundle_hasher::AuditEventsForHash { events: vec![] },
+            policy_snapshots: crate::bundle_hasher::PolicySnapshotsForHash { snapshots: vec![] },
+        };
+
+        let result = service
+            .verify_bundle_replay(bundle_id, content_sections)
+            .await;
+        assert!(
+            result.is_ok(),
+            "Replay verification should complete: {:?}",
+            result
+        );
+
+        let response = result.unwrap();
+        assert!(!response.report.overall_verified);
+        assert!(response.report.sections_failed > 0);
+    }
+
+    #[tokio::test]
+    async fn test_verify_bundle_replay_not_found() {
+        let repo = Arc::new(InMemoryBundleRepository::new());
+        let storage = Arc::new(InMemoryBundleStorage::new("test-bucket"));
+        let collector = Arc::new(MockCollector::new());
+
+        let service = ForensicBundleService::new(repo, storage, collector);
+
+        let content_sections = crate::bundle_hasher::ContentSectionsForVerification::default();
+
+        let result = service
+            .verify_bundle_replay(Uuid::new_v4(), content_sections)
+            .await;
+        assert!(matches!(
+            result,
+            Err(ForensicBundleServiceError::NotFound(_))
+        ));
     }
 }

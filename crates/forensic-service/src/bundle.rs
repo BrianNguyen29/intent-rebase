@@ -117,6 +117,10 @@ impl BundleRetention {
 }
 
 /// Integrity verification result embedded in the manifest
+///
+/// **Bounded replay evidence slice:** Per-section hashes are stored in the manifest
+/// so that later replay verification can confirm bundle contents were not modified.
+/// This is read-only integrity evidence, not full runtime/state reconstruction replay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleIntegrity {
     /// SHA256 hash of the manifest
@@ -125,6 +129,26 @@ pub struct BundleIntegrity {
     pub chain_verified: bool,
     /// When verification was performed
     pub verification_timestamp: DateTime<Utc>,
+    /// SHA256 hash of the intent versions section
+    ///
+    /// **Bounded scope:** Stored for replay verification. Empty until generation completes.
+    pub intent_versions_hash: String,
+    /// SHA256 hash of the artifacts section
+    ///
+    /// **Bounded scope:** Stored for replay verification. Empty until generation completes.
+    pub artifacts_hash: String,
+    /// SHA256 hash of the approvals section
+    ///
+    /// **Bounded scope:** Stored for replay verification. Empty until generation completes.
+    pub approvals_hash: String,
+    /// SHA256 hash of the audit events section
+    ///
+    /// **Bounded scope:** Stored for replay verification. Empty until generation completes.
+    pub audit_events_hash: String,
+    /// SHA256 hash of the policy snapshots section
+    ///
+    /// **Bounded scope:** Stored for replay verification. Empty until generation completes.
+    pub policy_snapshots_hash: String,
 }
 
 /// Time range covered by the bundle
@@ -198,9 +222,14 @@ impl ForensicBundle {
             status: BundleStatus::Pending,
             contents,
             integrity: BundleIntegrity {
-                manifest_hash: String::new(), // Computed during generation (Phase 4)
+                manifest_hash: String::new(), // Computed during generation
                 chain_verified: false,
                 verification_timestamp: Utc::now(),
+                intent_versions_hash: String::new(), // Computed during generation
+                artifacts_hash: String::new(),
+                approvals_hash: String::new(),
+                audit_events_hash: String::new(),
+                policy_snapshots_hash: String::new(),
             },
             retention,
         }
@@ -322,5 +351,37 @@ mod tests {
         assert_eq!(deserialized.tenant_id, tenant_id);
         assert_eq!(deserialized.contents.intent_versions, 5);
         assert_eq!(deserialized.contents.audit_events, 1000);
+    }
+
+    #[test]
+    fn test_bundle_integrity_section_hashes_round_trip() {
+        let tenant_id = Uuid::new_v4();
+        let bundle = ForensicBundle::new(
+            tenant_id,
+            BundleTimeRange {
+                start: Utc::now(),
+                end: Utc::now(),
+            },
+            BundlePurpose::IncidentInvestigation,
+            BundleContents::default(),
+            "test",
+            None,
+        );
+
+        let mut bundle = bundle;
+        bundle.integrity.intent_versions_hash = "hash_intent".to_string();
+        bundle.integrity.artifacts_hash = "hash_artifacts".to_string();
+        bundle.integrity.approvals_hash = "hash_approvals".to_string();
+        bundle.integrity.audit_events_hash = "hash_audit".to_string();
+        bundle.integrity.policy_snapshots_hash = "hash_policy".to_string();
+
+        let json = serde_json::to_string(&bundle).unwrap();
+        let deserialized: ForensicBundle = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.integrity.intent_versions_hash, "hash_intent");
+        assert_eq!(deserialized.integrity.artifacts_hash, "hash_artifacts");
+        assert_eq!(deserialized.integrity.approvals_hash, "hash_approvals");
+        assert_eq!(deserialized.integrity.audit_events_hash, "hash_audit");
+        assert_eq!(deserialized.integrity.policy_snapshots_hash, "hash_policy");
     }
 }
