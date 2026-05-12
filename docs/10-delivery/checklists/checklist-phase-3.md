@@ -731,14 +731,14 @@ Blocking Issues (explicit blockers — must resolve before production claim):
 4. 🟡 Load testing L3-L5 — **WAIVED-SOLO for non-production Phase 3 only** (L1/L2 local evidence collected; L3-L5 staging/production required before production claim)
 5. 🟡 Penetration testing — **WAIVED-SOLO for non-production Phase 3 only** (threat model v2 + pen scope defined; external pen test required before production claim)
 6. 🟡 P1 RLS transaction wrapping — **bounded slices delivered** (P1-S5i orchestration/replay guard + artifact/graph RLS tx delivered; forensic bundle RLS bounded verified; rebase_apply D1–D7 bounded implemented at commit `d98c7dc`; runtime signal dispatch remains intentionally post-commit/out-of-transaction; full production-ready wrapping still blocked by external gates)
-7. 🟡 Artifact side-effect out-of-tx/best-effort — **design note ADR-08 created**; implementation deferred to Phase 4+
+7. 🟢 Artifact side-effect tx boundary (ADR-08) — **Option A bounded implemented for SQL/RLS ingest path**; non-RLS fallback preserved; async reconciliation/Object Lock/DLQ remain Phase 4+
 8. ✅ rebase_apply RLS bounded implemented — ADR-09 accepted; bounded D1–D7 delivered at commit `d98c7dc` (checkpoint read-only RLS tx, graph update primary RLS tx, orchestrator decomposition, post-hoc helper removal, RLS integration test, non-RLS fallback test); runtime signal remains post-commit/out-of-transaction by design; not production-ready — external gates and ADR-08/forensic RLS remain blockers
 
 Local Engineering Backlog (Phase 3 residual — P2 priority):
 - P1-S5i: SqlxBundleRepository + forensic bundle RLS wiring (✅ BOUNDED VERIFIED; full production/external gates still open)
 - OpenAPI: batch-execute RLS semantics documentation (✅ DOCUMENTED — OpenAPI spec updated with per-item RLS tx semantics, partial-success aggregation, and best-effort rollback record semantics)
 - rebase_apply review (✅ BOUNDED IMPLEMENTED — ADR-09 accepted; bounded D1–D7 delivered at commit `d98c7dc`; RLC-14 RLS integration test in `crates/intent-api/tests/rls_integration.rs`; non-RLS fallback preserved; runtime signal post-commit by design)
-- Artifact side-effect tx boundary (ADR-08 created; implementation Phase 4+)
+- Artifact side-effect tx boundary (ADR-08 Option A bounded implemented for SQL/RLS path; non-RLS fallback preserved; async reconciliation/Object Lock/DLQ remain Phase 4+)
 - Phase 4 deferred: forensic S3/DLQ/trace propagation (🔴 DEFERRED)
 
 Notes:
