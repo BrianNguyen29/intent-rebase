@@ -237,7 +237,10 @@ impl GraphUpdater {
         if !is_valid_transition(&previous_state, &new_state) {
             return Ok(GraphUpdateResult::failure(
                 node_id,
-                format!("Invalid transition: {:?} -> {:?}", previous_state, new_state),
+                format!(
+                    "Invalid transition: {:?} -> {:?}",
+                    previous_state, new_state
+                ),
             ));
         }
 

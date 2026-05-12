@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use intent_rebase_types::IntentRebaseError;
 use uuid::Uuid;
 
 use crate::{
@@ -69,7 +70,7 @@ pub async fn create_forensic_bundle(
 ) -> Result<(axum::http::StatusCode, Json<ForensicBundleResponse>), ApiErrorResponse> {
     // Phase 3 P3-S5: Tenant mismatch rejection when JWT present
     // Fail-open when JWT absent (backward compatible)
-    if let Some(rls_claims) = optional_rls_claims {
+    if let Some(ref rls_claims) = optional_rls_claims {
         if request.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match request tenant_id ({})",
@@ -92,6 +93,104 @@ pub async fn create_forensic_bundle(
         purpose: request.purpose,
         created_by: request.created_by.clone(),
     };
+
+    // P4 bounded RLS slice: Try RLS path if pool + SQL service available and JWT present
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, optional_rls_claims) {
+        if let Some(sql_service) = state.forensic_bundle_service.as_bundle_service_sqlx() {
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(crate::IntentRebaseError::Internal(
+                        format!("failed to begin RLS transaction: {}", e),
+                    )));
+                }
+            };
+
+            let response = match sql_service
+                .create_bundle_with_tx(&mut tx, service_request)
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    return Err(match e {
+                        forensic_service::ForensicBundleServiceError::NotFound(_) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(e.to_string()))
+                        }
+                        forensic_service::ForensicBundleServiceError::Collection(e) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(format!(
+                                "collection failed: {}",
+                                e
+                            )))
+                        }
+                        forensic_service::ForensicBundleServiceError::Generation(e) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(format!(
+                                "generation failed: {}",
+                                e
+                            )))
+                        }
+                        forensic_service::ForensicBundleServiceError::Storage(e) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(format!(
+                                "storage failed: {}",
+                                e
+                            )))
+                        }
+                        forensic_service::ForensicBundleServiceError::Repository(e) => {
+                            ApiErrorResponse(e)
+                        }
+                        forensic_service::ForensicBundleServiceError::Serialization(e) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(format!(
+                                "serialization failed: {}",
+                                e
+                            )))
+                        }
+                        forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => {
+                            ApiErrorResponse(crate::IntentRebaseError::Internal(format!(
+                                "invalid time range: {}",
+                                e
+                            )))
+                        }
+                    })
+                }
+            };
+
+            if let Err(e) = tx.commit().await {
+                return Err(ApiErrorResponse(crate::IntentRebaseError::StorageError(
+                    format!("failed to commit RLS transaction: {}", e),
+                )));
+            }
+
+            return Ok((
+                axum::http::StatusCode::CREATED,
+                Json(ForensicBundleResponse {
+                    bundle_id: response.bundle.bundle_id,
+                    created_at: response.bundle.created_at,
+                    created_by: response.bundle.created_by,
+                    tenant_id: response.bundle.tenant_id,
+                    time_range: ForensicBundleTimeRange {
+                        start: response.bundle.time_range.start,
+                        end: response.bundle.time_range.end,
+                    },
+                    status: response.bundle.status,
+                    purpose: response.bundle.purpose,
+                    contents: ForensicBundleContentsSummary {
+                        intent_versions: response.bundle.contents.intent_versions,
+                        artifacts: response.bundle.contents.artifacts,
+                        approvals: response.bundle.contents.approvals,
+                        audit_events: response.bundle.contents.audit_events,
+                        policy_snapshots: response.bundle.contents.policy_snapshots,
+                    },
+                    integrity: ForensicBundleIntegrityInfo {
+                        manifest_hash: response.bundle.integrity.manifest_hash,
+                        chain_verified: response.bundle.integrity.chain_verified,
+                        verification_timestamp: response.bundle.integrity.verification_timestamp,
+                    },
+                    storage_location: response.storage_location,
+                    bundle_size_bytes: response.bundle_size_bytes,
+                    message: response.message,
+                }),
+            ));
+        }
+    }
 
     let response = state
         .forensic_bundle_service
@@ -245,7 +344,7 @@ pub async fn list_forensic_bundles(
     axum::extract::Query(query): axum::extract::Query<ListForensicBundlesQuery>,
 ) -> Result<Json<ListForensicBundlesResponse>, ApiErrorResponse> {
     // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
+    if let Some(ref rls_claims) = optional_rls_claims {
         if query.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
@@ -258,6 +357,52 @@ pub async fn list_forensic_bundles(
         }
     }
 
+    // P4 bounded RLS slice: Try RLS path if pool + SQL repo available and JWT present
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, optional_rls_claims) {
+        if let Some(sql_repo) = state
+            .forensic_bundle_service
+            .repo()
+            .and_then(|r| r.as_sqlx_repo())
+        {
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(crate::IntentRebaseError::Internal(
+                        format!("failed to begin RLS transaction: {}", e),
+                    )));
+                }
+            };
+
+            let bundles = match sql_repo
+                .list_by_tenant_with_tx(&mut tx, query.tenant_id, query.limit)
+                .await
+            {
+                Ok(bundles) => bundles,
+                Err(e) => {
+                    return Err(ApiErrorResponse(e));
+                }
+            };
+
+            if let Err(e) = tx.commit().await {
+                return Err(ApiErrorResponse(crate::IntentRebaseError::StorageError(
+                    format!("failed to commit RLS transaction: {}", e),
+                )));
+            }
+
+            let total = bundles.len();
+            let summaries: Vec<ForensicBundleSummary> = bundles
+                .into_iter()
+                .map(ForensicBundleSummary::from)
+                .collect();
+
+            return Ok(Json(ListForensicBundlesResponse {
+                bundles: summaries,
+                total,
+            }));
+        }
+    }
+
+    // Non-RLS fallback path
     let bundles = state
         .forensic_bundle_service
         .list_bundles(query.tenant_id, query.limit)
@@ -345,11 +490,131 @@ pub async fn list_forensic_bundles(
 /// P4 (bounded slice): Downloads the serialized bytes of a forensic bundle from storage.
 ///
 /// **Bounded synchronous path:**
-/// - Verifies bundle exists in repository
+/// - Verifies bundle exists in repository and belongs to the requesting tenant
 /// - Retrieves bundle bytes from S3/MinIO storage
 /// - Returns bundle JSON as binary download
 ///
+/// **Tenant scoping:** When JWT is present, verifies bundle tenant matches JWT tenant.
+/// When RLS pool + SQL repo are available, uses RLS transaction for tenant verification.
+///
 /// **Response:** Raw JSON bytes with Content-Type: application/json
+#[cfg(feature = "jwt-auth")]
+pub async fn download_forensic_bundle(
+    State(state): State<AppState>,
+    OptionalRlsTenantClaims(optional_rls_claims): OptionalRlsTenantClaims,
+    Path(bundle_id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    // P4 bounded RLS slice: If JWT present, enforce tenant access via RLS tx when available
+    if let Some(ref rls_claims) = optional_rls_claims {
+        if let (Some(rls_pool), Some(sql_repo)) = (
+            &state.rls_pool,
+            state
+                .forensic_bundle_service
+                .repo()
+                .and_then(|r| r.as_sqlx_repo()),
+        ) {
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(crate::IntentRebaseError::Internal(
+                        format!("failed to begin RLS transaction: {}", e),
+                    )));
+                }
+            };
+
+            // RLS-enforced get: will fail with NotFound if bundle does not belong to tenant
+            match sql_repo.get_with_tx(&mut tx, bundle_id).await {
+                Ok(bundle) => {
+                    if bundle.tenant_id != rls_claims.tenant_id {
+                        let msg = format!(
+                            "Tenant mismatch: bundle tenant_id ({}) does not match JWT tenant_id ({})",
+                            bundle.tenant_id, rls_claims.tenant_id
+                        );
+                        tracing::warn!("download_forensic_bundle: tenant mismatch rejection");
+                        return Err(ApiErrorResponse(crate::IntentRebaseError::Unauthorized(
+                            msg,
+                        )));
+                    }
+                    if let Err(e) = tx.commit().await {
+                        return Err(ApiErrorResponse(crate::IntentRebaseError::StorageError(
+                            format!("failed to commit RLS transaction: {}", e),
+                        )));
+                    }
+                }
+                Err(IntentRebaseError::ForensicBundleNotFound(_)) => {
+                    return Err(ApiErrorResponse(
+                        crate::IntentRebaseError::ForensicBundleNotFound(bundle_id),
+                    ));
+                }
+                Err(e) => {
+                    return Err(ApiErrorResponse(e));
+                }
+            }
+        } else {
+            // Non-RLS JWT path: verify bundle tenant via service get_bundle
+            let bundle = state
+                .forensic_bundle_service
+                .get_bundle(bundle_id)
+                .await
+                .map_err(|e| match e {
+                    forensic_service::ForensicBundleServiceError::NotFound(id) => {
+                        ApiErrorResponse(crate::IntentRebaseError::ForensicBundleNotFound(id))
+                    }
+                    other => {
+                        ApiErrorResponse(crate::IntentRebaseError::Internal(other.to_string()))
+                    }
+                })?;
+            if bundle.tenant_id != rls_claims.tenant_id {
+                let msg = format!(
+                    "Tenant mismatch: bundle tenant_id ({}) does not match JWT tenant_id ({})",
+                    bundle.tenant_id, rls_claims.tenant_id
+                );
+                tracing::warn!("download_forensic_bundle: tenant mismatch rejection");
+                return Err(ApiErrorResponse(crate::IntentRebaseError::Unauthorized(
+                    msg,
+                )));
+            }
+        }
+    }
+
+    let bytes = state
+        .forensic_bundle_service
+        .download_bundle_bytes(bundle_id)
+        .await
+        .map_err(|e| match e {
+            forensic_service::ForensicBundleServiceError::NotFound(id) => {
+                ApiErrorResponse(crate::IntentRebaseError::ForensicBundleNotFound(id))
+            }
+            forensic_service::ForensicBundleServiceError::Collection(e) => ApiErrorResponse(
+                crate::IntentRebaseError::Internal(format!("collection failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Generation(e) => ApiErrorResponse(
+                crate::IntentRebaseError::Internal(format!("generation failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Storage(e) => ApiErrorResponse(
+                crate::IntentRebaseError::Internal(format!("storage failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::Repository(e) => ApiErrorResponse(e),
+            forensic_service::ForensicBundleServiceError::Serialization(e) => ApiErrorResponse(
+                crate::IntentRebaseError::Internal(format!("serialization failed: {}", e)),
+            ),
+            forensic_service::ForensicBundleServiceError::InvalidTimeRange(e) => ApiErrorResponse(
+                crate::IntentRebaseError::Internal(format!("invalid time range: {}", e)),
+            ),
+        })?;
+
+    Ok(axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}.json\"", bundle_id),
+        )
+        .body(axum::body::Body::from(bytes))
+        .expect("Failed to build download response"))
+}
+
+/// GET /forensic/bundles/{bundle_id}/download - Download a forensic bundle (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
 pub async fn download_forensic_bundle(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
@@ -1169,12 +1434,18 @@ mod tests {
         assert!(!result.bundles.is_empty());
     }
 
+    #[cfg(feature = "jwt-auth")]
     #[tokio::test]
     async fn test_download_forensic_bundle_not_found() {
         let state = create_test_service();
         let bundle_id = Uuid::new_v4();
 
-        let result = super::download_forensic_bundle(State(state), Path(bundle_id)).await;
+        let result = super::download_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(bundle_id),
+        )
+        .await;
 
         // Should return error for non-existent bundle
         assert!(result.is_err());
@@ -1209,9 +1480,13 @@ mod tests {
         let bundle_id = create_response.bundle_id;
 
         // Download the bundle
-        let response = super::download_forensic_bundle(State(state), Path(bundle_id))
-            .await
-            .expect("Should return download response");
+        let response = super::download_forensic_bundle(
+            State(state),
+            auth::OptionalRlsTenantClaims(None),
+            Path(bundle_id),
+        )
+        .await
+        .expect("Should return download response");
 
         // Verify response has correct content type
         let parts = response.into_response();

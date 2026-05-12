@@ -142,6 +142,23 @@ pub trait ForensicBundleServiceTrait: Send + Sync {
         &self,
         bundle_id: Uuid,
     ) -> Result<Vec<u8>, ForensicBundleServiceError>;
+
+    /// Returns a reference to the underlying repository for RLS-aware operations.
+    ///
+    /// Returns `None` if the repository is not accessible (e.g., for in-memory implementations
+    /// where the repository type is erased). This is used by handlers to detect SQL-backed
+    /// repositories and use transaction-scoped RLS paths.
+    fn repo(&self) -> Option<&dyn super::bundle_repo::BundleRepository>;
+
+    /// Returns a reference to the SQLx-backed service if this is a SQL-backed implementation.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    /// This is used by handlers to access `create_bundle_with_tx` for RLS-wrapped creation.
+    fn as_bundle_service_sqlx(
+        &self,
+    ) -> Option<&super::ForensicBundleService<super::bundle_repo::SqlxBundleRepository>> {
+        None
+    }
 }
 
 /// Forensic bundle service.
@@ -181,35 +198,18 @@ impl<R: BundleRepository> ForensicBundleService<R> {
             collector,
         }
     }
-}
 
-#[async_trait]
-impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R> {
-    /// Create a new forensic bundle.
+    /// Prepare a forensic bundle (collect, generate, serialize) without persisting.
     ///
-    /// Full generation path:
-    /// 1. **Collection** — Collects intent versions, audit events, and policy snapshots
-    ///    from repositories using ForensicDataCollector (tenant-scoped).
-    /// 2. **Generation** — Builds bundle manifest with integrity hashes via
-    ///    BundleGeneratorService.
-    /// 3. **Storage** — Serializes bundle to JSON and persists to S3/MinIO.
-    /// 4. **Record** — Updates bundle status to Ready in repository.
+    /// This helper extracts the non-DB operations from `create_bundle` so that
+    /// both the pool-based and tx-based paths can share the same generation logic.
     ///
-    /// **Truthful scope:**
-    /// - This is a synchronous request-driven operation (no async jobs).
-    /// - Real data is collected from actual repositories.
-    /// - Bundle is persisted to S3/MinIO via the configured BundleStorage.
-    /// - Tenant scoping is enforced via the tenant_id field.
-    ///
-    /// **NOT claimed:**
-    /// - Async job orchestration for large bundles
-    /// - Bundle retrieval/download API (Phase 4 scope)
-    /// - Bundle replay (Phase 4 scope)
-    /// - Hash chain integrity verification (Phase 4 scope)
-    async fn create_bundle(
+    /// **Bounded scope:** Storage is NOT part of this helper; the caller decides
+    /// when and how to persist to S3/MinIO and record in the repository.
+    async fn prepare_bundle(
         &self,
-        request: CreateForensicBundleRequest,
-    ) -> Result<CreateForensicBundleResponse, ForensicBundleServiceError> {
+        request: &CreateForensicBundleRequest,
+    ) -> Result<(ForensicBundle, Vec<u8>), ForensicBundleServiceError> {
         // Step 1: Validate time range
         if request.time_range.start > request.time_range.end {
             return Err(ForensicBundleServiceError::InvalidTimeRange(
@@ -238,8 +238,6 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
             .collect();
 
         // For artifacts: we collect metadata from audit events that reference artifacts.
-        // The RealForensicDataCollector doesn't separately collect artifacts,
-        // so we derive artifact entries from audit events with artifact_id.
         let artifacts: Vec<ArtifactEntry> = collection_result
             .intents
             .iter()
@@ -250,7 +248,6 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
                     .filter(|e| e.artifact_id.is_some())
                     .map(|e| {
                         let artifact_id = e.artifact_id.unwrap();
-                        // Use a deterministic hash based on UUID bytes
                         let content_hash = compute_sha256(&artifact_id)
                             .unwrap_or_else(|_| "00000000000000000000000000000000".to_string());
                         ArtifactEntry {
@@ -294,7 +291,7 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
         // Step 4: Generate bundle manifest and integrity hashes
         let gen_request = GenerateBundleRequest {
             tenant_id: request.tenant_id,
-            time_range: request.time_range,
+            time_range: request.time_range.clone(),
             purpose: request.purpose,
             created_by: request.created_by.clone(),
             intent_versions,
@@ -307,10 +304,42 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
         let gen_result = BundleGeneratorService::generate(gen_request);
         let bundle = gen_result.bundle;
 
-        // Step 5: Serialize bundle to JSON and store to S3/MinIO
+        // Step 5: Serialize bundle to JSON
         let bundle_json = serde_json::to_vec(&bundle)
             .map_err(|e| ForensicBundleServiceError::Serialization(e.to_string()))?;
 
+        Ok((bundle, bundle_json))
+    }
+}
+
+#[async_trait]
+impl<R: BundleRepository + 'static> ForensicBundleServiceTrait for ForensicBundleService<R> {
+    /// Create a new forensic bundle.
+    ///
+    /// Full generation path:
+    /// 1. **Collection** — Collects intent versions, audit events, and policy snapshots
+    ///    from repositories using ForensicDataCollector (tenant-scoped).
+    /// 2. **Generation** — Builds bundle manifest with integrity hashes via
+    ///    BundleGeneratorService.
+    /// 3. **Storage** — Serializes bundle to JSON and persists to S3/MinIO.
+    /// 4. **Record** — Updates bundle status to Ready in repository.
+    ///
+    /// **Truthful scope:**
+    /// - This is a synchronous request-driven operation (no async jobs).
+    /// - Real data is collected from actual repositories.
+    /// - Bundle is persisted to S3/MinIO via the configured BundleStorage.
+    /// - Tenant scoping is enforced via the tenant_id field.
+    ///
+    /// **NOT claimed:**
+    /// - Async job orchestration for large bundles
+    /// - Bundle retrieval/download API (Phase 4 scope)
+    /// - Bundle replay (Phase 4 scope)
+    /// - Hash chain integrity verification (Phase 4 scope)
+    async fn create_bundle(
+        &self,
+        request: CreateForensicBundleRequest,
+    ) -> Result<CreateForensicBundleResponse, ForensicBundleServiceError> {
+        let (bundle, bundle_json) = self.prepare_bundle(&request).await?;
         let bundle_size_bytes = bundle_json.len();
 
         // Persist bundle record to repository first (before storage so we can transition status)
@@ -324,7 +353,7 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
             .await
             .map_err(|e| ForensicBundleServiceError::Storage(e.to_string()))?;
 
-        // Step 6: Transition bundle status to Ready
+        // Transition bundle status to Ready
         let final_bundle = self
             .repo
             .update_status(bundle.bundle_id, BundleStatus::Ready)
@@ -399,6 +428,73 @@ impl<R: BundleRepository> ForensicBundleServiceTrait for ForensicBundleService<R
                 }
                 _ => ForensicBundleServiceError::Storage(e.to_string()),
             })
+    }
+
+    fn repo(&self) -> Option<&dyn super::bundle_repo::BundleRepository> {
+        Some(self.repo.as_ref())
+    }
+
+    fn as_bundle_service_sqlx(
+        &self,
+    ) -> Option<&super::ForensicBundleService<super::bundle_repo::SqlxBundleRepository>> {
+        use std::any::Any;
+        let any_self: &dyn Any = self;
+        any_self
+            .downcast_ref::<super::ForensicBundleService<super::bundle_repo::SqlxBundleRepository>>(
+            )
+    }
+}
+
+// =============================================================================
+// SQLx-specific transaction helper for RLS-aware bundle creation
+// =============================================================================
+
+impl ForensicBundleService<super::bundle_repo::SqlxBundleRepository> {
+    /// Create a forensic bundle with DB operations wrapped in a caller-owned transaction.
+    ///
+    /// This method mirrors `create_bundle` but uses `_with_tx` repository methods
+    /// so that `create` and `update_status` happen inside the same RLS-aware transaction.
+    ///
+    /// **Bounded semantics:**
+    /// - Collection, generation, and serialization happen before the tx.
+    /// - Storage (`storage.put`) happens OUTSIDE the transaction (S3/MinIO is not
+    ///   transactional). If storage fails after the DB tx commits, the bundle record
+    ///   is Ready but storage may be missing. This matches the non-RLS fallback behavior.
+    /// - The caller must begin the transaction via `RlsAwarePool::begin_with_tenant`
+    ///   and commit/rollback after this method returns.
+    pub async fn create_bundle_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        request: CreateForensicBundleRequest,
+    ) -> Result<CreateForensicBundleResponse, ForensicBundleServiceError> {
+        let (bundle, bundle_json) = self.prepare_bundle(&request).await?;
+        let bundle_size_bytes = bundle_json.len();
+
+        // Persist bundle record inside the transaction
+        self.repo
+            .create_with_tx(tx, bundle.clone())
+            .await
+            .map_err(ForensicBundleServiceError::Repository)?;
+
+        // Storage is outside the transaction
+        self.storage
+            .put(bundle.bundle_id, bundle.tenant_id, &bundle_json)
+            .await
+            .map_err(|e| ForensicBundleServiceError::Storage(e.to_string()))?;
+
+        // Transition bundle status to Ready inside the transaction
+        let final_bundle = self
+            .repo
+            .update_status_with_tx(tx, bundle.bundle_id, BundleStatus::Ready)
+            .await
+            .map_err(ForensicBundleServiceError::Repository)?;
+
+        Ok(CreateForensicBundleResponse {
+            bundle: final_bundle,
+            storage_location: format!("{}/{}", self.storage.location(), bundle.bundle_id),
+            bundle_size_bytes,
+            message: "Bundle generated and stored successfully".to_string(),
+        })
     }
 }
 

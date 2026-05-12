@@ -74,6 +74,16 @@ pub trait BundleRepository: Send + Sync {
         tenant_id: Uuid,
         limit: Option<usize>,
     ) -> Result<Vec<ForensicBundle>, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxBundleRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxBundleRepository> {
+        None
+    }
 }
 
 // =============================================================================
@@ -294,6 +304,10 @@ impl BundleRepository for InMemoryBundleRepository {
         }
 
         Ok(result)
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxBundleRepository> {
+        None
     }
 }
 
@@ -638,6 +652,206 @@ impl BundleRepository for SqlxBundleRepository {
         })?;
 
         rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxBundleRepository> {
+        Some(self)
+    }
+}
+
+// =============================================================================
+// Transaction helper methods for RLS-aware operations
+// =============================================================================
+
+impl SqlxBundleRepository {
+    /// Create a new bundle record within an external transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    pub async fn create_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        bundle: ForensicBundle,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        let contents_json = serde_json::to_value(&bundle.contents)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize contents: {}", e)))?;
+        let integrity_json = serde_json::to_value(&bundle.integrity)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize integrity: {}", e)))?;
+        let retention_json = bundle
+            .retention
+            .as_ref()
+            .and_then(|r| serde_json::to_value(r).ok());
+
+        sqlx::query(
+            r#"
+            INSERT INTO forensic_bundles (
+                bundle_id, tenant_id, bundle_version, created_at, created_by,
+                time_range_start, time_range_end, purpose, status,
+                contents, integrity, retention
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+        )
+        .bind(bundle.bundle_id)
+        .bind(bundle.tenant_id)
+        .bind(&bundle.bundle_version)
+        .bind(bundle.created_at)
+        .bind(&bundle.created_by)
+        .bind(bundle.time_range.start)
+        .bind(bundle.time_range.end)
+        .bind(bundle_purpose_to_string(bundle.purpose))
+        .bind(bundle_status_to_string(bundle.status))
+        .bind(contents_json)
+        .bind(integrity_json)
+        .bind(retention_json)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert forensic bundle: {}", e)))?;
+
+        Ok(bundle)
+    }
+
+    /// Get a bundle by its ID within an external transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    pub async fn get_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        bundle_id: Uuid,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE bundle_id = $1
+            "#,
+        )
+        .bind(bundle_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch forensic bundle: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
+    }
+
+    /// List all bundles for a given tenant within an external transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    pub async fn list_by_tenant_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tenant_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<ForensicBundle>, IntentRebaseError> {
+        let limit = limit.unwrap_or(100) as i32;
+        let rows = sqlx::query(
+            r#"
+            SELECT bundle_id, tenant_id, bundle_version, created_at, created_by,
+                   time_range_start, time_range_end, purpose, status,
+                   contents, integrity, retention
+            FROM forensic_bundles
+            WHERE tenant_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list forensic bundles by tenant: {}", e))
+        })?;
+
+        rows.into_iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    /// Update bundle status with validation within an external transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    pub async fn update_status_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        bundle_id: Uuid,
+        new_status: BundleStatus,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        // Fetch current bundle to validate transition
+        let current = self.get_with_tx(tx, bundle_id).await?;
+        if !current.status.can_transition_to(new_status) {
+            return Err(IntentRebaseError::InvalidForensicBundleStatusTransition {
+                from_status: format!("{:?}", current.status),
+                to_status: format!("{:?}", new_status),
+                reason: "invalid status transition".to_string(),
+            });
+        }
+
+        let row = sqlx::query(
+            r#"
+            UPDATE forensic_bundles
+            SET status = $2
+            WHERE bundle_id = $1
+            RETURNING bundle_id, tenant_id, bundle_version, created_at, created_by,
+                      time_range_start, time_range_end, purpose, status,
+                      contents, integrity, retention
+            "#,
+        )
+        .bind(bundle_id)
+        .bind(bundle_status_to_string(new_status))
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update forensic bundle status: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
+    }
+
+    /// Update bundle contents after generation completes within an external transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    pub async fn update_contents_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        bundle_id: Uuid,
+        contents: BundleContents,
+    ) -> Result<ForensicBundle, IntentRebaseError> {
+        let contents_json = serde_json::to_value(&contents)
+            .map_err(|e| IntentRebaseError::Internal(format!("serialize contents: {}", e)))?;
+
+        let row = sqlx::query(
+            r#"
+            UPDATE forensic_bundles
+            SET contents = $2
+            WHERE bundle_id = $1
+            RETURNING bundle_id, tenant_id, bundle_version, created_at, created_by,
+                      time_range_start, time_range_end, purpose, status,
+                      contents, integrity, retention
+            "#,
+        )
+        .bind(bundle_id)
+        .bind(contents_json)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("update forensic bundle contents: {}", e))
+        })?;
+
+        match row {
+            Some(r) => self.row_to_bundle(r),
+            None => Err(IntentRebaseError::ForensicBundleNotFound(bundle_id)),
+        }
     }
 }
 

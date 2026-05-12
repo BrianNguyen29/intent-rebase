@@ -466,25 +466,28 @@ async fn test_sustained_load_smoke() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
 
-    let (_router, base_url, _server_handle): (Option<Router>, String, Option<tokio::task::JoinHandle<()>>) =
-        match std::env::var("SUSTAINED_LOAD_URL") {
-            Ok(url) => (None, url, None),
-            Err(_) => {
-                let router = create_test_router();
-                let listener = TcpListener::bind("127.0.0.1:0")
-                    .await
-                    .expect("Failed to bind to TCP port");
-                let addr = listener.local_addr().expect("Failed to get local address");
-                let port = addr.port();
-                let base_url = format!("http://127.0.0.1:{}", port);
-                let server = axum::serve(listener, router);
-                let server_handle = tokio::spawn(async move {
-                    server.await.expect("Server error");
-                });
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                (Some(create_test_router()), base_url, Some(server_handle))
-            }
-        };
+    let (_router, base_url, _server_handle): (
+        Option<Router>,
+        String,
+        Option<tokio::task::JoinHandle<()>>,
+    ) = match std::env::var("SUSTAINED_LOAD_URL") {
+        Ok(url) => (None, url, None),
+        Err(_) => {
+            let router = create_test_router();
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("Failed to bind to TCP port");
+            let addr = listener.local_addr().expect("Failed to get local address");
+            let port = addr.port();
+            let base_url = format!("http://127.0.0.1:{}", port);
+            let server = axum::serve(listener, router);
+            let server_handle = tokio::spawn(async move {
+                server.await.expect("Server error");
+            });
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            (Some(create_test_router()), base_url, Some(server_handle))
+        }
+    };
 
     println!("\n{}", "=".repeat(80));
     println!("SUSTAINED LOAD SMOKE TEST");
@@ -526,7 +529,11 @@ async fn test_sustained_load_smoke() {
                     ("POST", "/intents".to_string(), Some(create_intent_body()))
                 } else {
                     let intent_id = Uuid::new_v4();
-                    ("POST", format!("/intents/{}/diff", intent_id), Some(create_diff_body()))
+                    (
+                        "POST",
+                        format!("/intents/{}/diff", intent_id),
+                        Some(create_diff_body()),
+                    )
                 };
 
                 let url = format!("{}{}", base_url, path);
@@ -534,7 +541,11 @@ async fn test_sustained_load_smoke() {
                 let result = if method == "GET" {
                     client.get(&url).send().await
                 } else {
-                    client.post(&url).json(&body.unwrap_or(serde_json::Value::Null)).send().await
+                    client
+                        .post(&url)
+                        .json(&body.unwrap_or(serde_json::Value::Null))
+                        .send()
+                        .await
                 };
                 let latency = req_start.elapsed().as_millis() as u64;
 
@@ -570,7 +581,12 @@ async fn test_sustained_load_smoke() {
             tokio::time::sleep_until(tokio::time::Instant::from_std(next_sample)).await;
             let (rss, fd) = read_process_stats();
             let current_reqs = sample_metrics.total_requests.load(Ordering::Relaxed);
-            samples.push((next_sample.duration_since(start_time).as_secs(), rss, fd, current_reqs));
+            samples.push((
+                next_sample.duration_since(start_time).as_secs(),
+                rss,
+                fd,
+                current_reqs,
+            ));
             println!(
                 "  [{:>3}s] RSS: {:>8} kB | FD: {:>4} | Requests: {}",
                 next_sample.duration_since(start_time).as_secs(),
@@ -608,15 +624,23 @@ async fn test_sustained_load_smoke() {
     println!("Successful:      {}", stats.successful_requests);
     println!("Failed:          {}", stats.failed_requests);
     println!("Error rate:      {:.4}%", stats.error_rate * 100.0);
-    println!("Throughput:      {:.2} req/s", stats.total_requests as f64 / elapsed.as_secs_f64());
+    println!(
+        "Throughput:      {:.2} req/s",
+        stats.total_requests as f64 / elapsed.as_secs_f64()
+    );
     println!("p50 latency:     {} ms", stats.p50_latency_ms);
     println!("p95 latency:     {} ms", stats.p95_latency_ms);
     println!("p99 latency:     {} ms", stats.p99_latency_ms);
     println!("Warm RSS:        {} kB (first 10s sample)", warm_rss);
     println!("Final RSS:       {} kB", final_rss);
-    println!("RSS delta:       {} kB ({:.1}%)",
+    println!(
+        "RSS delta:       {} kB ({:.1}%)",
         final_rss as i64 - warm_rss as i64,
-        if warm_rss > 0 { ((final_rss as f64 / warm_rss as f64) - 1.0) * 100.0 } else { 0.0 }
+        if warm_rss > 0 {
+            ((final_rss as f64 / warm_rss as f64) - 1.0) * 100.0
+        } else {
+            0.0
+        }
     );
     println!("Warm FD:         {} (first 10s sample)", warm_fd);
     println!("Final FD:        {}", final_fd);
@@ -626,7 +650,10 @@ async fn test_sustained_load_smoke() {
     let mut violations = Vec::new();
 
     if stats.error_rate > 0.001 {
-        violations.push(format!("Error rate {:.4}% exceeds 0.1%", stats.error_rate * 100.0));
+        violations.push(format!(
+            "Error rate {:.4}% exceeds 0.1%",
+            stats.error_rate * 100.0
+        ));
     }
 
     if warm_rss > 0 {
@@ -672,7 +699,11 @@ async fn test_sustained_load_smoke() {
         sh.abort();
     }
 
-    assert!(violations.is_empty(), "Sustained load smoke test violations: {:?}", violations);
+    assert!(
+        violations.is_empty(),
+        "Sustained load smoke test violations: {:?}",
+        violations
+    );
 }
 
 /// Load test that simulates production-like traffic against the HTTP server.

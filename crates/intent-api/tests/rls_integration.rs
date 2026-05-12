@@ -3634,7 +3634,8 @@ async fn test_d6_primary_rls_graph_update_isolation() {
     }
 
     let rls_pool = RlsAwarePool::new(test_pool.clone());
-    let graph_repo = Arc::new(SqlxGraphRepository::new(test_pool.clone())) as Arc<dyn GraphRepository>;
+    let graph_repo =
+        Arc::new(SqlxGraphRepository::new(test_pool.clone())) as Arc<dyn GraphRepository>;
     let graph_service = Arc::new(GraphService::new(graph_repo));
     let graph_updater = GraphUpdater::new(graph_service);
 
@@ -3652,7 +3653,11 @@ async fn test_d6_primary_rls_graph_update_isolation() {
                 "Test update".to_string(),
             )
             .await;
-        assert!(result.is_ok(), "Tenant A update should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Tenant A update should succeed: {:?}",
+            result
+        );
         let update_result = result.unwrap();
         assert!(update_result.success, "Update should be successful");
         tx.commit().await.expect("Failed to commit Tenant A RLS tx");
@@ -3690,7 +3695,10 @@ async fn test_d6_primary_rls_graph_update_isolation() {
         let update_result = result.unwrap();
         assert!(!update_result.success, "Cross-tenant update should fail");
         assert!(
-            update_result.error.unwrap_or_default().contains("not found"),
+            update_result
+                .error
+                .unwrap_or_default()
+                .contains("not found"),
             "Expected not-found error for cross-tenant update"
         );
         tx.commit().await.expect("Failed to commit Tenant B RLS tx");
@@ -3709,4 +3717,254 @@ async fn test_d6_primary_rls_graph_update_isolation() {
     }
 
     println!("test_d6_primary_rls_graph_update_isolation PASSED");
+}
+
+/// Test: Forensic bundle application-level RLS transaction wrapping.
+///
+/// Validates that `SqlxBundleRepository::_with_tx` methods enforce tenant
+/// isolation when executed inside an RLS-aware transaction.
+///
+/// **Bounded slice scope:**
+/// - `create_with_tx` + `get_with_tx` + `list_by_tenant_with_tx`
+/// - Uses `RlsAwarePool::begin_with_tenant` to set RLS context
+/// - Same-tenant operations succeed; cross-tenant operations are blocked by RLS
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_rlc_forensic_bundle_app_level_rls() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    // ===========================================================================
+    // Step 1: Connect as admin and ensure migrations
+    // ===========================================================================
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&admin_pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    verify_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("RLS not enabled - cannot run forensic bundle RLS test");
+    verify_force_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("FORCE RLS not enabled - cannot run forensic bundle RLS test");
+
+    // ===========================================================================
+    // Step 2: Check if we need a non-bypass role for testing
+    // ===========================================================================
+    let (is_bypass, current_role) = check_current_role_is_bypass(&admin_pool)
+        .await
+        .expect("Failed to check current role bypass status");
+
+    let test_pool: sqlx::PgPool;
+    let _test_role_name: &str;
+
+    if is_bypass {
+        println!(
+            "WARNING: Current role '{}' is superuser/bypass - RLS policies are bypassed!",
+            current_role
+        );
+        println!("Creating dedicated non-bypass test role for forensic bundle RLS test...");
+
+        let test_url = create_test_role(&admin_pool)
+            .await
+            .expect("Failed to create non-bypass test role - cannot run forensic bundle RLS test");
+
+        test_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect(&test_url)
+            .await
+            .expect("Failed to connect with non-bypass test role");
+        _test_role_name = TEST_ROLE_NAME;
+
+        println!(
+            "Using non-bypass role '{}' for forensic bundle RLS test (role '{}' is bypass)",
+            TEST_ROLE_NAME, current_role
+        );
+    } else {
+        println!(
+            "Using current role '{}' for forensic bundle RLS test (not a bypass role)",
+            current_role
+        );
+        test_pool = admin_pool.clone();
+        _test_role_name = &current_role;
+    }
+
+    let rls_pool = RlsAwarePool::new(test_pool.clone());
+    let sql_repo = forensic_service::SqlxBundleRepository::new(test_pool.clone());
+
+    let bundle_id = Uuid::new_v4();
+
+    // ===========================================================================
+    // Phase 1: Create a forensic bundle for Tenant A via RLS tx
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A");
+
+        let bundle = forensic_service::ForensicBundle::new(
+            tenant_a_id,
+            forensic_service::BundleTimeRange {
+                start: chrono::Utc::now(),
+                end: chrono::Utc::now(),
+            },
+            forensic_service::BundlePurpose::IncidentInvestigation,
+            forensic_service::BundleContents::default(),
+            "rls-test",
+            None,
+        );
+        // Override bundle_id for deterministic testing
+        let bundle = forensic_service::ForensicBundle {
+            bundle_id,
+            ..bundle
+        };
+
+        sql_repo
+            .create_with_tx(&mut tx, bundle)
+            .await
+            .expect("Tenant A should be able to create bundle via RLS tx");
+
+        tx.commit().await.expect("Failed to commit Tenant A RLS tx");
+        println!(
+            "Created forensic bundle {} for Tenant A via RLS tx",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 2: Tenant A can see their bundle via RLS list
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A list");
+
+        let bundles = sql_repo
+            .list_by_tenant_with_tx(&mut tx, tenant_a_id, None)
+            .await
+            .expect("Tenant A should be able to list bundles via RLS tx");
+
+        assert!(
+            bundles.iter().any(|b| b.bundle_id == bundle_id),
+            "Tenant A should see their bundle in RLS list"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A list RLS tx");
+        println!("Tenant A can see bundle {} via RLS list", bundle_id);
+    }
+
+    // ===========================================================================
+    // Phase 3: Tenant A can get their bundle via RLS get
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_a_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant A get");
+
+        let bundle = sql_repo
+            .get_with_tx(&mut tx, bundle_id)
+            .await
+            .expect("Tenant A should be able to get their bundle via RLS tx");
+        assert_eq!(bundle.bundle_id, bundle_id);
+        assert_eq!(bundle.tenant_id, tenant_a_id);
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A get RLS tx");
+        println!("Tenant A can get bundle {} via RLS get", bundle_id);
+    }
+
+    // ===========================================================================
+    // Phase 4: Tenant B cannot see Tenant A's bundle via RLS list
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_b_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant B list");
+
+        let bundles = sql_repo
+            .list_by_tenant_with_tx(&mut tx, tenant_b_id, None)
+            .await
+            .expect("Tenant B should be able to list bundles via RLS tx");
+
+        assert!(
+            !bundles.iter().any(|b| b.bundle_id == bundle_id),
+            "Tenant B should NOT see Tenant A's bundle in RLS list"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B list RLS tx");
+        println!(
+            "Tenant B cannot see bundle {} via RLS list (PASS)",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Phase 5: Tenant B cannot get Tenant A's bundle via RLS get
+    // ===========================================================================
+    {
+        let mut tx = rls_pool
+            .begin_with_tenant(tenant_b_id)
+            .await
+            .expect("Failed to begin RLS tx for Tenant B get");
+
+        let result = sql_repo.get_with_tx(&mut tx, bundle_id).await;
+        match result {
+            Err(IntentRebaseError::ForensicBundleNotFound(id)) if id == bundle_id => {
+                // Expected: Tenant B cannot see the bundle, so get returns NotFound
+            }
+            other => panic!(
+                "Expected ForensicBundleNotFound for cross-tenant get, got {:?}",
+                other
+            ),
+        }
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B get RLS tx");
+        println!(
+            "Tenant B cannot get bundle {} via RLS get (PASS)",
+            bundle_id
+        );
+    }
+
+    // ===========================================================================
+    // Cleanup
+    // ===========================================================================
+    if is_bypass {
+        drop_test_role(&admin_pool)
+            .await
+            .expect("Failed to drop test role");
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
+    println!("test_rlc_forensic_bundle_app_level_rls PASSED");
 }

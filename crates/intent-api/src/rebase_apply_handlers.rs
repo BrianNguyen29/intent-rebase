@@ -8,7 +8,9 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use intent_rebase_types::{get_current_trace_context, AffectedItemsStatus, DiffRequest, IntentRebaseError};
+use intent_rebase_types::{
+    get_current_trace_context, AffectedItemsStatus, DiffRequest, IntentRebaseError,
+};
 use rebase_engine::planner::CompensationPlanningSummary;
 use rebase_engine::{classify_approvals, RiskTier};
 use rebase_orchestrator::apply_pipeline::{ApplyDecision, ApplyOutcome};
