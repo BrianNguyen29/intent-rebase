@@ -370,6 +370,24 @@ async fn test_policy_snapshot_routes_are_registered() {
         .get("content-type")
         .and_then(|v| v.to_str().ok());
     assert_eq!(content_type, Some("application/json"));
+
+    // GET /policy-snapshots/{snapshot_id}/impact-report
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/policy-snapshots/{}/impact-report?tenant_id={}&from_version=1&to_version=2",
+            snapshot_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Snapshot does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
 }
 
 // =========================================================================
@@ -494,6 +512,7 @@ fn test_key_routes_are_documented_in_openapi() {
         "/compensation-actions/{action_id}/execute",
         "/policy-snapshots/{snapshot_id}",
         "/policy-snapshots/intent/{intent_id}/latest",
+        "/policy-snapshots/{snapshot_id}/impact-report",
     ];
 
     for path in &required_paths {

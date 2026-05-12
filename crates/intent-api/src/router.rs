@@ -309,6 +309,11 @@ pub fn build_router(
             "/policy-snapshots/intent/:intent_id",
             get(crate::policy_snapshot_handlers::list_policy_snapshots),
         )
+        // Policy snapshot impact report endpoint (ADR-11 bounded MVP)
+        .route(
+            "/policy-snapshots/:snapshot_id/impact-report",
+            get(crate::policy_snapshot_handlers::get_policy_snapshot_impact_report),
+        )
         // Forensic verification endpoint (Phase 3 Batch 3b bounded slice)
         .route(
             "/forensic/verify",

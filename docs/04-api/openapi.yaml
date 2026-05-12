@@ -2850,6 +2850,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/ListPolicySnapshotsResponse'
 
+  /policy-snapshots/{snapshot_id}/impact-report:
+    get:
+      tags:
+        - policy-snapshots
+        - impact-report
+      summary: ImpactReport for a policy snapshot
+      description: |
+        Bounded MVP: Maps a policy snapshot to its intent and delegates to
+        existing ImpactReport semantics. No persistence, no mutation.
+      operationId: getPolicySnapshotImpactReport
+      parameters:
+        - name: snapshot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from_version
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: to_version
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ImpactReport for the snapshot's intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImpactReportResponse'
+        '401':
+          description: Tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Policy snapshot or intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----

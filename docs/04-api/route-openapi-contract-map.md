@@ -66,6 +66,7 @@
 | `/policy-snapshots/intent/:intent_id/latest` | `/policy-snapshots/intent/{intent_id}/latest` | GET | (none) | `policy_snapshot_handlers` | ✅ Implemented |
 | `/policy-snapshots/intent/:intent_id/versions/:version` | `/policy-snapshots/intent/{intent_id}/versions/{version}` | GET | (none) | `policy_snapshot_handlers` | ✅ Implemented |
 | `/policy-snapshots/intent/:intent_id` | `/policy-snapshots/intent/{intent_id}` | GET | (none) | `policy_snapshot_handlers` | ✅ Implemented |
+| `/policy-snapshots/:snapshot_id/impact-report` | `/policy-snapshots/{snapshot_id}/impact-report` | GET | policy-snapshots, impact-report | `policy_snapshot_handlers` | ✅ Implemented |
 | `/forensic/verify` | `/forensic/verify` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/export` | `/forensic/export` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/bundle` | `/forensic/bundle` | POST | forensic | `forensic_handlers` | ✅ Implemented |

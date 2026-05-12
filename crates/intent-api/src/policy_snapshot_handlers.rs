@@ -2,6 +2,7 @@
 //!
 //! Extracted from lib.rs as a bounded handler decomposition slice.
 
+use crate::types::{ImpactReportQuery, ImpactReportResponse};
 use crate::PolicySnapshotResponse;
 use crate::{ApiErrorResponse, AppState};
 use axum::{
@@ -87,4 +88,90 @@ pub async fn list_policy_snapshots(
         total: responses.len(),
         policy_snapshots: responses,
     }))
+}
+
+/// GET /policy-snapshots/{snapshot_id}/impact-report - ImpactReport for a policy snapshot
+///
+/// Bounded MVP: Maps a policy snapshot to its intent and delegates to existing
+/// ImpactReport semantics. No persistence, no mutation, no full PolicyRebaseAdapter.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_policy_snapshot_impact_report(
+    State(state): State<AppState>,
+    crate::auth::OptionalRlsTenantClaims(optional_rls_claims): crate::auth::OptionalRlsTenantClaims,
+    Path(snapshot_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ImpactReportQuery>,
+) -> Result<Json<ImpactReportResponse>, ApiErrorResponse> {
+    // JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_policy_snapshot_impact_report: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Fetch snapshot to resolve intent_id and validate tenant
+    let snapshot = state
+        .policy_snapshot_repo
+        .get_snapshot(snapshot_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if snapshot.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: snapshot tenant_id ({}) does not match query tenant_id ({})",
+            snapshot.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_policy_snapshot_impact_report: snapshot tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    let response = crate::query_handlers::build_impact_report_response(
+        &state,
+        snapshot.intent_id,
+        query.tenant_id,
+        query.from_version,
+        query.to_version,
+    )
+    .await?;
+
+    Ok(Json(response))
+}
+
+/// GET /policy-snapshots/{snapshot_id}/impact-report (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_policy_snapshot_impact_report(
+    State(state): State<AppState>,
+    Path(snapshot_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<ImpactReportQuery>,
+) -> Result<Json<ImpactReportResponse>, ApiErrorResponse> {
+    // Fetch snapshot to resolve intent_id and validate tenant
+    let snapshot = state
+        .policy_snapshot_repo
+        .get_snapshot(snapshot_id, query.tenant_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if snapshot.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: snapshot tenant_id ({}) does not match query tenant_id ({})",
+            snapshot.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_policy_snapshot_impact_report: snapshot tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    let response = crate::query_handlers::build_impact_report_response(
+        &state,
+        snapshot.intent_id,
+        query.tenant_id,
+        query.from_version,
+        query.to_version,
+    )
+    .await?;
+
+    Ok(Json(response))
 }
