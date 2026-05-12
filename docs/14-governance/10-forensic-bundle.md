@@ -1,6 +1,6 @@
 # 10 — Forensic Bundle
 
-**Status:** Proposed
+**Status:** Partially Delivered — Phase 3 Batch 3b (Bounded); Deferred: S3 Object Lock, Chain-Hash, Full Runtime Replay
 **Phase:** Phase 3
 **Owner:** Security Team
 
@@ -12,7 +12,7 @@
 1. Forensic verification API that validates parameters and computes coverage estimates WITHOUT generating actual bundles
 2. Forensic archive export API that generates in-memory archives with scaffolded data for download
 
-Both APIs are bounded: no actual bundle generation, storage, or replay.
+Both APIs are bounded. Subsequent slices have since delivered bounded bundle generation (real data collection + in-memory storage), download, and replay verification surface. S3-backed persistence, Object Lock, chain-hash, and full runtime replay remain Phase 4+ deferred scope.
 
 ### Delivered (Phase 3 Batch 3b)
 
@@ -31,13 +31,14 @@ Both APIs are bounded: no actual bundle generation, storage, or replay.
 - Archive contains scaffolded/fictional entries representing what a real bundle would contain
 - Integration in `intent-api` with tests
 
-### NOT in This Slice
+### NOT in This Slice (Phase 3 Batch 3b)
 
-- Actual bundle generation (data collection from intent service, graph service, audit repository) — future phase
-- Bundle storage (S3 or any persistence) — future phase
-- Bundle retrieval (downloading stored bundles) — future phase
-- Bundle replay (reproducing state from a bundle) — future phase
-- Hash chain integrity verification (requires generated bundle) — future phase
+The following were explicitly out of scope for the original Batch 3b bounded slice. Subsequent slices have since delivered bounded generation, in-memory storage, download, and replay verification surface. Remaining deferred items:
+
+- S3-backed bundle persistence and retrieval lifecycle — future phase
+- S3 Object Lock / WORM protection — future phase
+- Cryptographic chain-hash linking between bundles — future phase
+- Full runtime replay (reconstructing system state in isolated environment) — future phase
 - Async job orchestration for bundle generation — future phase
 
 ### Verification Status Semantics

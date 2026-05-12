@@ -44,13 +44,13 @@ This document provides a detailed P0/P1/P2 execution plan for completing Phase 3
 |-------|-------|
 | **Decision** | **Option B — DEFAULT** |
 | **Status** | ✅ DECIDED (safe default) |
-| **Description** | Keep in-memory runtime bundle storage. S3BundleStorage seam exists but is NOT wired. Full S3 lifecycle, Object Lock, chain-hash, and retrieval integrity deferred to Phase 4. |
+| **Description** | Default in-memory runtime bundle storage; S3BundleStorage is env-gated via FORENSIC_BUNDLE_STORAGE=s3. Full S3 lifecycle, Object Lock, chain-hash, and retrieval integrity deferred to Phase 4. |
 | **Owner** | Backend Lead |
-| **Evidence** | S3BundleStorage seam documented in `crates/forensic-service/`; not instantiated in runtime wiring |
+| **Evidence** | S3BundleStorage seam documented in `crates/forensic-service/`; env-gated instantiation via `FORENSIC_BUNDLE_STORAGE=s3` in intent-api main wiring |
 
 **Option B Characteristics:**
 - Bundle generation (`POST /forensic/bundle`) writes bundle JSON to in-memory `InMemoryBundleStorage` at runtime
-- `S3BundleStorage` trait/seam exists but is not instantiated in the forensic service runtime
+- `S3BundleStorage` is env-gated (FORENSIC_BUNDLE_STORAGE=s3); not instantiated by default
 - List bundles (`GET /forensic/bundles`) operates on in-memory storage
 - Download (`GET /forensic/bundles/{bundle_id}/download`) operates on exportable bundles only
 - S3-backed retrieval, storage lifecycle, Object Lock, chain-hash, and retention enforcement are Phase 4 scope
@@ -578,7 +578,7 @@ The following must NOT appear in any Phase 3 documentation:
 
 - `production-ready` (use: "non-production feature completion")
 - `remote CI passed` (use: "local canonical gates are the required source of truth")
-- `S3BundleStorage wired` (use: "S3BundleStorage seam exists but not wired")
+- `S3BundleStorage unconditionally wired` (use: "S3BundleStorage env-gated; default in-memory")
 - `DLQ worker implemented` (use: "design approved; implementation gated on G1–G5")
 - `NATS consumer lifecycle implemented` (use: "adapter exists; lifecycle blocked on G1-G5")
 - `G1-G5 externally approved` (use: "G1 self-reviewed; G2-G5 pending")
