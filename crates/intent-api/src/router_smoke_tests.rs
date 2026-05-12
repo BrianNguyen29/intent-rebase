@@ -466,6 +466,46 @@ async fn test_compensation_mutation_routes_are_registered() {
 }
 
 // =========================================================================
+// OpenAPI Drift Guard Test
+//
+// Lightweight string-search verification that key implemented routes are
+// documented in the OpenAPI spec. This is a drift guard, not a parser test.
+// If this test fails, the route was likely added to router.rs without updating
+// docs/04-api/openapi.yaml.
+// =========================================================================
+
+#[test]
+fn test_key_routes_are_documented_in_openapi() {
+    let openapi_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/04-api/openapi.yaml"
+    );
+    let spec = std::fs::read_to_string(openapi_path)
+        .expect("openapi.yaml should exist; run from repo root");
+
+    let required_paths = [
+        "/intents/{intent_id}/impact-report",
+        "/intents/{intent_id}/rebase-preview",
+        "/intents/{intent_id}/rebase-apply",
+        "/forensic/bundle",
+        "/forensic/bundles",
+        "/forensic/bundles/{bundle_id}/download",
+        "/compensation-actions/{action_id}/approve",
+        "/compensation-actions/{action_id}/execute",
+        "/policy-snapshots/{snapshot_id}",
+        "/policy-snapshots/intent/{intent_id}/latest",
+    ];
+
+    for path in &required_paths {
+        assert!(
+            spec.contains(path),
+            "OpenAPI spec missing documented path: {}. If this route was intentionally removed, update this test and the route-openapi-contract-map.md.",
+            path
+        );
+    }
+}
+
+// =========================================================================
 // Trace Context Propagation Tests (Phase 3 Batch 2 Slice 2 — bounded OTEL)
 //
 // Note: Direct middleware testing requires complex axum infrastructure.

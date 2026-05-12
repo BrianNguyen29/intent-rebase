@@ -211,6 +211,26 @@ cargo test -p intent-service --test migration_integration -- --ignored
 
 ---
 
+## Agent Safety Rebase Phase 1/2 Checkpoint (2026-05-12)
+
+**Status:** Non-production / Integration-ready — NOT production-ready.
+
+Phase 1 (Documentation & API Contract Stabilization) is complete:
+- Positioning docs, capability support matrix, README updates
+- OpenAPI forensic path normalization, stale wording cleanup
+- Route contract tests for forensic, ImpactReport, rebase preview/apply, policy snapshot, and compensation mutation endpoints
+- ADR-10 accepted (bounded MVP, no persistence, no migration, no production claim)
+- ImpactReport examples documented
+- Route/OpenAPI drift guard strengthened (contract map + automated test)
+
+Phase 2 (Agent Safety Core Language & Domain Model) is in progress:
+- ImpactReport bounded MVP implemented and verified
+- Vocabulary formalization ongoing
+
+**No production claim:** External SRE sign-off, security review, load testing, penetration testing, and production infrastructure remain open. See [Production Readiness Backlog](./17-production-readiness-backlog.md).
+
+---
+
 ## Prioritized Next Steps (Phase 4 Entry + Production Readiness)
 
 Phase 3 is **CLOSED — Non-Production Only (2026-05-11)**. The following are Phase 4 entry criteria and production readiness items.

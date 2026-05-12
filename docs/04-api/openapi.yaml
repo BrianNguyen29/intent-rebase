@@ -108,6 +108,8 @@ tags:
     description: Side effect capture and query operations
   - name: impact-report
     description: ImpactReport read-only projection (Phase 2 bounded MVP)
+  - name: policy-snapshots
+    description: Policy snapshot read-only queries (Phase 2 bounded slice)
 
 paths:
   /intents:
@@ -2712,6 +2714,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /policy-snapshots/{snapshot_id}:
+    get:
+      tags:
+        - policy-snapshots
+      summary: Get a policy snapshot by ID
+      description: Retrieves a single policy snapshot by its unique ID
+      operationId: getPolicySnapshot
+      parameters:
+        - name: snapshot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Policy snapshot found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySnapshotResponse'
+        '404':
+          description: Policy snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /policy-snapshots/intent/{intent_id}/latest:
+    get:
+      tags:
+        - policy-snapshots
+      summary: Get latest policy snapshot for an intent
+      description: Retrieves the most recent policy snapshot associated with an intent
+      operationId: getLatestPolicySnapshot
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Latest policy snapshot found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySnapshotResponse'
+        '404':
+          description: No policy snapshot found for intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /policy-snapshots/intent/{intent_id}/versions/{version}:
+    get:
+      tags:
+        - policy-snapshots
+      summary: Get policy snapshot by intent version
+      description: Retrieves the policy snapshot associated with a specific intent version
+      operationId: getPolicySnapshotByVersion
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Policy snapshot found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySnapshotResponse'
+        '404':
+          description: Policy snapshot not found for version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /policy-snapshots/intent/{intent_id}:
+    get:
+      tags:
+        - policy-snapshots
+      summary: List policy snapshots for an intent
+      description: Lists all policy snapshots associated with an intent
+      operationId: listPolicySnapshots
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of policy snapshots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPolicySnapshotsResponse'
 
 components:
   schemas:
@@ -6092,6 +6229,48 @@ components:
         from_version:
           type: integer
         to_version:
+          type: integer
+
+    PolicySnapshotResponse:
+      type: object
+      required: [id, tenant_id, intent_id, intent_version, rule_pack_version, scope_definition, scope_hash, snapshot_uri, created_at, canonicalized_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        intent_version:
+          type: integer
+        rule_pack_version:
+          type: string
+        scope_definition:
+          type: object
+          description: Canonical scope definition at the time of snapshot
+        scope_hash:
+          type: string
+        snapshot_uri:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        canonicalized_at:
+          type: string
+          format: date-time
+
+    ListPolicySnapshotsResponse:
+      type: object
+      required: [snapshots, total]
+      properties:
+        snapshots:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicySnapshotResponse'
+        total:
           type: integer
 
     Error:

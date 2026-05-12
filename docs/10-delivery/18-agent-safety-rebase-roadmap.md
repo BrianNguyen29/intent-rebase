@@ -17,16 +17,20 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Capability support matrix
 - README / docs index updates
 
-### Phase 1 — Documentation & API Contract Stabilization (Current)
+### Phase 1 — Documentation & API Contract Stabilization (Complete)
 - Clean stale status wording (local/pending commit)
 - Normalize OpenAPI / router forensic paths
 - Add route contract tests for forensic endpoints
 - Introduce ImpactReport design (ADR-10) and implement bounded MVP read-only projection
+- Accept ADR-10 (bounded MVP, no persistence, no migration)
+- Add ImpactReport examples (no-impact, approval invalidation, compensation required, manual review)
+- Strengthen route/OpenAPI drift guard (contract map + automated test)
 
-### Phase 2 — Agent Safety Core Language & Domain Model
+### Phase 2 — Agent Safety Core Language & Domain Model (Current)
 - Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc.
 - Design ImpactReport as an on-demand read-only projection across pillars (no persistence for MVP)
 - Define API contracts for impact-report and propagation-status
+- **Checkpoint:** Phase 1/2 local milestone — non-production, integration-ready only
 
 ### Phase 3 — Policy / Config Rebase Pillar
 - Config object model and schema registry

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed — bounded MVP implemented, awaiting review before acceptance
+Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim
 
 ## Context
 
