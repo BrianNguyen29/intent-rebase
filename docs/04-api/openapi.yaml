@@ -32,7 +32,7 @@ info:
     - Request-driven forensic bundle feasibility verification with real entity counts (commit 7b05c5b)
     - Forensic bundle generation with S3/MinIO persistence seam (POST /forensic/bundle)
     - Forensic archive export (POST /forensic/export)
-    - Forensic bundle list and download (GET /forensic-bundles, GET /forensic-bundles/{id}/download)
+    - Forensic bundle list and download (GET /forensic/bundles, GET /forensic/bundles/{id}/download)
     - Read-only verification and integrity checking (no full runtime replay)
 
     ## Bounded scope note
@@ -2473,7 +2473,7 @@ paths:
   # Bounded scope note: This is a local/exportable bundle download path.
   # Not a full S3/production storage pipeline. S3 integration is Phase 4 scope.
 
-  /forensic-bundles:
+  /forensic/bundle:
     post:
       tags:
         - forensic
@@ -2502,6 +2502,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /forensic/bundles:
     get:
       tags:
         - forensic
@@ -2530,44 +2532,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ListForensicBundlesResponse'
 
-  /forensic-bundles/{bundle_id}:
-    get:
-      tags:
-        - forensic
-      summary: Get a forensic bundle by ID
-      description: |
-        Phase 3 Batch 3b (P4 bounded slice): Returns a single forensic bundle
-        by its ID, scoped to the specified tenant. Returns 404 if bundle not found
-        or if the bundle belongs to a different tenant (fail-not-found pattern).
-      operationId: getForensicBundle
-      parameters:
-        - name: bundle_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Bundle found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForensicBundle'
-        '404':
-          description: Bundle not found or tenant mismatch
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /forensic-bundles/{bundle_id}/download:
+  /forensic/bundles/{bundle_id}/download:
     get:
       tags:
         - forensic
@@ -2618,185 +2583,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /forensic-bundles/{bundle_id}/transition-to-generating:
-    post:
-      tags:
-        - forensic
-      summary: Transition bundle to Generating status
-      description: |
-        Phase 3 Batch 3b (P4 bounded slice): Transitions a Pending bundle to Generating.
-        This is a placeholder for actual content collection (Phase 4 scope).
-
-        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-      operationId: transitionBundleToGenerating
-      parameters:
-        - name: bundle_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-          description: Tenant ID for ownership verification
-      responses:
-        '200':
-          description: Bundle transitioned to Generating
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForensicBundle'
-        '400':
-          description: Invalid status transition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /forensic-bundles/{bundle_id}/transition-to-ready:
-    post:
-      tags:
-        - forensic
-      summary: Transition bundle to Ready status
-      description: |
-        Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Ready.
-        This is a placeholder for actual bundle assembly (Phase 4 scope).
-
-        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-      operationId: transitionBundleToReady
-      parameters:
-        - name: bundle_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-          description: Tenant ID for ownership verification
-      responses:
-        '200':
-          description: Bundle transitioned to Ready
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForensicBundle'
-        '400':
-          description: Invalid status transition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Bundle not found or tenant mismatch
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /forensic-bundles/{bundle_id}/transition-to-failed:
-    post:
-      tags:
-        - forensic
-      summary: Transition bundle to Failed status
-      description: |
-        Phase 3 Batch 3b (P4 bounded slice): Transitions a Generating bundle to Failed.
-
-        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-      operationId: transitionBundleToFailed
-      parameters:
-        - name: bundle_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-          description: Tenant ID for ownership verification
-      responses:
-        '200':
-          description: Bundle transitioned to Failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForensicBundle'
-        '400':
-          description: Invalid status transition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Bundle not found or tenant mismatch
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /forensic-bundles/{bundle_id}/complete:
-    post:
-      tags:
-        - forensic
-      summary: Complete bundle creation
-      description: |
-        Phase 3 Batch 3b (P4 bounded slice): Transitions a bundle through the full
-        Pending -> Generating -> Ready lifecycle. This is a convenience method for
-        testing the complete flow.
-
-        **Tenant isolation:** Requires tenant_id query parameter. Returns 404 if bundle
-        not found or if the bundle belongs to a different tenant (fail-not-found pattern).
-      operationId: completeForensicBundle
-      parameters:
-        - name: bundle_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-          description: Tenant ID for ownership verification
-      responses:
-        '200':
-          description: Bundle creation completed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForensicBundle'
-        '400':
-          description: Invalid status transition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Bundle not found or tenant mismatch
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /forensic-bundles/{bundle_id}/replay-verify:
+  /forensic/bundles/{bundle_id}/replay-verify:
     post:
       tags:
         - forensic
@@ -2815,10 +2602,6 @@ paths:
         **Tenant isolation:** Requires `tenant_id` in the request body. The handler
         verifies the bundle belongs to the requesting tenant before performing
         verification. Returns 404 if the bundle is not found.
-
-        **Path note:** The canonical router path is `/forensic/bundles/{bundle_id}/replay-verify`.
-        This OpenAPI path uses `/forensic-bundles/` for consistency with other
-        forensic bundle endpoints in this spec.
       operationId: replayVerifyForensicBundle
       parameters:
         - name: bundle_id

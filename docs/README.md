@@ -86,14 +86,16 @@ Bộ tài liệu cung cấp **procedure templates và plans** cho production-har
 
 1. `01-product/01-product-thesis.md`
 2. `01-product/02-goals-nongoals.md`
-3. `02-architecture/01-system-overview.md`
-4. `03-spec/01-intent-model.md`
-5. `03-spec/04-rebase-engine.md`
-6. `04-api/01-rest-api.md`
-7. `05-data/01-schema.md`
-8. `08-security/01-threat-model.md`
-9. `10-delivery/01-roadmap.md`
-10. `12-agents/01-agent-implementation-guide.md`
+3. `01-product/03-agent-safety-rebase-positioning.md`
+4. `01-product/04-capability-support-matrix.md`
+5. `02-architecture/01-system-overview.md`
+6. `03-spec/01-intent-model.md`
+7. `03-spec/04-rebase-engine.md`
+8. `04-api/01-rest-api.md`
+9. `05-data/01-schema.md`
+10. `08-security/01-threat-model.md`
+11. `10-delivery/01-roadmap.md`
+12. `12-agents/01-agent-implementation-guide.md`
 
 ## Tài liệu chuyên đề (theo nhu cầu)
 

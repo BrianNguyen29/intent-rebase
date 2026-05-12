@@ -4,6 +4,11 @@ Bootstrap repository for the Intent Rebase Engine documentation set.
 
 See [`docs/README.md`](./docs/README.md) for the v1 documentation index, architecture notes, ADRs, delivery checklists, and governance pack.
 
+## Product Positioning
+
+This repository implements **Agent Safety Rebase** — the control-plane layer for intent change in agent workflows.
+See [`docs/01-product/03-agent-safety-rebase-positioning.md`](./docs/01-product/03-agent-safety-rebase-positioning.md) for the positioning definition and scope boundaries, and [`docs/01-product/04-capability-support-matrix.md`](./docs/01-product/04-capability-support-matrix.md) for current bounded support versus production status.
+
 ## Phase 1 PR Slices
 
 | PR | Feature | Status |
