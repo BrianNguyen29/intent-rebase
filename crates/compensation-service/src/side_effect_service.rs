@@ -36,6 +36,14 @@ impl SideEffectService {
         Self { repo }
     }
 
+    /// Returns a reference to the underlying repository.
+    ///
+    /// This is used by RLS-aware handlers to access the SQL repository directly
+    /// for transaction-wrapped operations.
+    pub fn repo(&self) -> &Arc<dyn SideEffectRepository> {
+        &self.repo
+    }
+
     /// Record a new side effect from an artifact-producing operation.
     ///
     /// Returns the recorded side effect with its generated ID.
@@ -305,5 +313,14 @@ mod tests {
         let service = create_test_service();
         let result = service.get_side_effect(Uuid::new_v4()).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repo_accessor() {
+        let service = create_test_service();
+        let repo_ref = service.repo();
+        // Verify the repo accessor returns the same Arc held by the service
+        let cloned = repo_ref.clone();
+        assert_eq!(Arc::strong_count(&cloned), 2); // service + cloned
     }
 }

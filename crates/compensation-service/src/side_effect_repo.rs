@@ -46,6 +46,16 @@ pub trait SideEffectRepository: Send + Sync {
         &self,
         side_effect: SideEffect,
     ) -> Result<SideEffect, IntentRebaseError>;
+
+    /// Returns a reference to the underlying `SqlxSideEffectRepository` if this is a SQL-backed repository.
+    ///
+    /// Returns `None` for in-memory or other non-SQL implementations.
+    ///
+    /// This method is used for RLS-aware operations that require direct access to the
+    /// SQL repository and its transaction capabilities.
+    fn as_sqlx_repo(&self) -> Option<&SqlxSideEffectRepository> {
+        None
+    }
 }
 
 // =============================================================================
@@ -74,6 +84,13 @@ impl InMemorySideEffectRepository {
 impl Default for InMemorySideEffectRepository {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl InMemorySideEffectRepository {
+    /// Returns `None` since this is an in-memory implementation.
+    pub fn as_sqlx_repo(&self) -> Option<&SqlxSideEffectRepository> {
+        None
     }
 }
 
@@ -234,7 +251,7 @@ impl SqlxSideEffectRepository {
                 id, tenant_id, intent_id, intent_version, effect_class,
                 effect_type, target, occurred_at, idempotency_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5::effect_class, $6, $7, $8, $9)
             "#,
         )
         .bind(side_effect.id)
@@ -279,11 +296,11 @@ impl SideEffectRepository for SqlxSideEffectRepository {
                 id, tenant_id, intent_id, intent_version, effect_class,
                 effect_type, target, occurred_at, idempotency_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5::effect_class, $6, $7, $8, $9)
             ON CONFLICT (tenant_id, idempotency_key)
             WHERE idempotency_key IS NOT NULL DO UPDATE SET
-                id = EXCLUDED.id
-            RETURNING id, tenant_id, intent_id, intent_version, effect_class,
+                id = side_effects.id
+            RETURNING id, tenant_id, intent_id, intent_version, effect_class::text AS effect_class,
                 effect_type, target, occurred_at, idempotency_key
             "#,
         )
@@ -312,7 +329,7 @@ impl SideEffectRepository for SqlxSideEffectRepository {
     async fn get(&self, side_effect_id: Uuid) -> Result<SideEffect, IntentRebaseError> {
         let row = sqlx::query(
             r#"
-            SELECT id, tenant_id, intent_id, intent_version, effect_class,
+            SELECT id, tenant_id, intent_id, intent_version, effect_class::text AS effect_class,
                 effect_type, target, occurred_at, idempotency_key
             FROM side_effects
             WHERE id = $1
@@ -339,7 +356,7 @@ impl SideEffectRepository for SqlxSideEffectRepository {
     ) -> Result<Vec<SideEffect>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, tenant_id, intent_id, intent_version, effect_class,
+            SELECT id, tenant_id, intent_id, intent_version, effect_class::text AS effect_class,
                 effect_type, target, occurred_at, idempotency_key
             FROM side_effects
             WHERE intent_id = $1 AND tenant_id = $2
@@ -366,7 +383,7 @@ impl SideEffectRepository for SqlxSideEffectRepository {
     ) -> Result<Option<SideEffect>, IntentRebaseError> {
         let row = sqlx::query(
             r#"
-            SELECT id, tenant_id, intent_id, intent_version, effect_class,
+            SELECT id, tenant_id, intent_id, intent_version, effect_class::text AS effect_class,
                 effect_type, target, occurred_at, idempotency_key
             FROM side_effects
             WHERE idempotency_key = $1 AND tenant_id = $2
@@ -383,6 +400,92 @@ impl SideEffectRepository for SqlxSideEffectRepository {
         match row {
             Some(r) => self.row_to_side_effect(r).map(Some),
             None => Ok(None),
+        }
+    }
+
+    fn as_sqlx_repo(&self) -> Option<&SqlxSideEffectRepository> {
+        Some(self)
+    }
+}
+
+// =============================================================================
+// Transaction helper methods for RLS-aware operations
+// =============================================================================
+
+impl SqlxSideEffectRepository {
+    /// Create a side effect within an external transaction.
+    /// Used by RLS-aware handlers that manage their own transaction context.
+    pub async fn create_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        side_effect: SideEffect,
+    ) -> Result<SideEffect, IntentRebaseError> {
+        let effect_class_str = effect_class_to_string(side_effect.effect_class);
+
+        sqlx::query(
+            r#"
+            INSERT INTO side_effects (
+                id, tenant_id, intent_id, intent_version, effect_class,
+                effect_type, target, occurred_at, idempotency_key
+            )
+            VALUES ($1, $2, $3, $4, $5::effect_class, $6, $7, $8, $9)
+            "#,
+        )
+        .bind(side_effect.id)
+        .bind(side_effect.tenant_id)
+        .bind(side_effect.intent_id)
+        .bind(side_effect.intent_version)
+        .bind(effect_class_str)
+        .bind(&side_effect.effect_type)
+        .bind(&side_effect.target)
+        .bind(side_effect.occurred_at)
+        .bind(&side_effect.idempotency_key)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("insert side effect: {}", e)))?;
+
+        Ok(side_effect)
+    }
+
+    /// Atomically get or create a side effect with idempotency key within an external transaction.
+    /// Used by RLS-aware handlers that manage their own transaction context.
+    pub async fn get_or_create_idempotent_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        side_effect: SideEffect,
+    ) -> Result<SideEffect, IntentRebaseError> {
+        let effect_class_str = effect_class_to_string(side_effect.effect_class);
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO side_effects (
+                id, tenant_id, intent_id, intent_version, effect_class,
+                effect_type, target, occurred_at, idempotency_key
+            )
+            VALUES ($1, $2, $3, $4, $5::effect_class, $6, $7, $8, $9)
+            ON CONFLICT (tenant_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL DO UPDATE SET
+                id = side_effects.id
+            RETURNING id, tenant_id, intent_id, intent_version, effect_class::text AS effect_class,
+                effect_type, target, occurred_at, idempotency_key
+            "#,
+        )
+        .bind(side_effect.id)
+        .bind(side_effect.tenant_id)
+        .bind(side_effect.intent_id)
+        .bind(side_effect.intent_version)
+        .bind(effect_class_str)
+        .bind(&side_effect.effect_type)
+        .bind(&side_effect.target)
+        .bind(side_effect.occurred_at)
+        .bind(&side_effect.idempotency_key)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("upsert side effect: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_side_effect(r),
+            None => Ok(side_effect),
         }
     }
 }
@@ -750,6 +853,12 @@ mod tests {
 
         // Different tenants should get different records even with same idempotency key
         assert_ne!(result_1.id, result_2.id);
+    }
+
+    #[test]
+    fn test_in_memory_as_sqlx_repo_returns_none() {
+        let repo = InMemorySideEffectRepository::new();
+        assert!(repo.as_sqlx_repo().is_none());
     }
 }
 

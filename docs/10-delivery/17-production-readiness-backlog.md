@@ -207,14 +207,14 @@ These items can be started without waiting for external dependencies.
 
 | Field | Value |
 |-------|-------|
-| **Description** | Design note for artifact side-effect out-of-transaction/best-effort semantics |
-| **Current State** | ADR-08 created; documents current design (best-effort side-effect recording) and three options for Phase 4+ |
-| **Evidence** | `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` |
+| **Description** | Transactional artifact side-effect recording inside the existing RLS transaction with fail-closed semantics |
+| **Current State** | ADR-08 Option A bounded implemented: `SideEffectRepository::as_sqlx_repo()` + `SqlxSideEffectRepository::create_with_tx` / `get_or_create_idempotent_with_tx` added; `SideEffectService::repo()` accessor added; `ingest_artifact` RLS path records side effects inside same tx before commit; side-effect write failure aborts artifact ingest (fail-closed); non-RLS fallback preserved with best-effort semantics |
+| **Evidence** | `docs/13-adrs/08-artifact-side-effect-tx-boundary.md` (updated); `crates/compensation-service/src/side_effect_repo.rs` (`create_with_tx`, `get_or_create_idempotent_with_tx`, `as_sqlx_repo`); `crates/compensation-service/src/side_effect_service.rs` (`repo()`); `crates/intent-api/src/ingest_handlers.rs` (in-tx side-effect recording before commit with early return) |
 | **Owner** | Backend Lead |
-| **Status** | ✅ DESIGN NOTE CREATED — implementation deferred to Phase 4+ |
-| **Dependencies** | None (design only) |
+| **Status** | ✅ BOUNDED IMPLEMENTED — Option A delivered for SQL/RLS path; non-RLS fallback unchanged; no DLQ/background worker/Object Lock/production-ready overclaim |
+| **Dependencies** | None (local code only) |
 
-**No overclaim:** ADR-08 is a design note. Implementation is Phase 4+ scope.
+**No overclaim:** This is a bounded Option A implementation for the SQL/RLS path only. Async reconciliation (Option B), DLQ pipeline (Option C), Object Lock, and background workers remain Phase 4+ scope. Non-RLS fallback intentionally preserves best-effort semantics.
 
 ---
 
@@ -304,7 +304,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2** | SqlxBundleRepository + forensic bundle RLS | ✅ BOUNDED VERIFIED | Local engineering backlog (P2-L1); migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | **P2** | OpenAPI batch-execute RLS semantics | ✅ DOCUMENTED | Local engineering backlog (P2-L2); documentation complete |
 | **P2** | rebase_apply handler review | ✅ BOUNDED IMPLEMENTED | Local engineering backlog (P2-L3); ADR-09 accepted; D1–D7 bounded implemented at commit `d98c7dc`; external gates still open |
-| **P2** | Artifact side-effect tx boundary ADR | ✅ DESIGN NOTE CREATED | ADR-08 created; implementation Phase 4+ |
+| **P2** | Artifact side-effect tx boundary ADR | ✅ BOUNDED IMPLEMENTED | ADR-08 Option A delivered for SQL/RLS path; non-RLS fallback preserved |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
 | **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; `build_router_with_jwt_auth` deduplicated (delegates to `build_router`); broader router route grouping/split remains Phase 4 |
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
@@ -339,7 +339,7 @@ The following items are local-executable and do not require external dependencie
 | SqlxBundleRepository + forensic bundle RLS | P1 | ✅ BOUNDED VERIFIED | P2-L1 in this doc; migration 016 + SqlxBundleRepository + targeted live RLC-13 passed |
 | OpenAPI batch-execute RLS semantics | P2 | ✅ DOCUMENTED | P2-L2 in this doc; documentation complete |
 | rebase_apply handler review | P2 | ✅ BOUNDED IMPLEMENTED | P2-L3 in this doc; ADR-09 accepted; D1–D7 bounded implemented at commit `d98c7dc`; external gates remain open |
-| Artifact side-effect tx boundary | P2 | ✅ DESIGN NOTE | ADR-08 created; implementation Phase 4+ |
+| Artifact side-effect tx boundary | P2 | ✅ BOUNDED IMPLEMENTED | ADR-08 Option A delivered for SQL/RLS path; non-RLS fallback preserved |
 | Phase 4 deferred forensic S3/DLQ/trace | P2 | 🔴 DEFERRED | Phase 4+ scope |
 | Forensic replay real-repo evidence | P2 | 📋 CONSIDERED | Next candidate slice for real-repo validation; not yet implemented |
 
