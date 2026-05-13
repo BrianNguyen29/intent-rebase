@@ -319,7 +319,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R4 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, and RLS/tenant implications decisions only; this is **not** an implementation Go. R5–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R5 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, and retry constants acceptance decisions only; this is **not** an implementation Go. R6–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
@@ -327,7 +327,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | R2 | **Dependency Readiness** — Decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`; verify latest compatible version at implementation time. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. No `Cargo.toml` changes made in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R3 | **Schema & Trait Review** — Decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as future `webhook_subscriptions` table (migration 018). B2 resolved as future trait methods `record_delivery_attempt` and `record_delivery_outcome`. No migration or Rust files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R5 | **Retry Constants Acceptance** — Timeout values (5s connect, 30s request, 120s max total) and retry policy (3 attempts, base 2s, multiplier 2.0, max 30s, full jitter) reviewed and accepted; documented rationale accepted by owner | TBD | ☐ |
+| R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test; delivery observability metrics (attempted, succeeded, failed, retry_exhausted) added to test plan and metrics registry | TBD | ☐ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented including explicit feature-flag/env gate name (e.g., `INTENT_API_WEBHOOK_DELIVERY=true`) to disable dispatch without code change; failed-to-pending reset semantics and delivery task lifecycle (spawn, cancel, timeout, panic) documented; `failure_reason` truncation/redaction policy agreed (max length, PII redaction) | TBD | ☐ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
@@ -431,6 +431,40 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Secrets/HMAC key storage for webhook signing remains deferred (not in Slice 3).
 
 **No migration, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `.sql` migration, `.rs` source, or test file was modified in this docs-only update.
+
+#### R5 Decision Note (Docs-Only — No Cargo, Rust, or Test Changes)
+
+> **Status:** Retry constants and error classification decision recorded. No `Cargo.toml`, Rust, or test files were modified. R8 remains No-Go.
+
+**D5 — Timeout constants (accepted):**
+- `WEBHOOK_CONNECT_TIMEOUT`: 5 seconds — TCP + TLS handshake establishment.
+- `WEBHOOK_REQUEST_TIMEOUT`: 30 seconds — total per-delivery attempt (connect + send + wait-for-response).
+- `WEBHOOK_MAX_TOTAL_DURATION`: 120 seconds — hard ceiling for all attempts including retries; abort remaining retries if exceeded.
+
+**D6 — Retry / backoff policy (accepted):**
+- Exponential backoff with full jitter.
+- Base delay: 2 seconds; multiplier: 2.0; max delay: 30 seconds; max attempts: 3 total (initial + 2 retries).
+- Jitter formula: `rand::random::<f64>() * delay` (full jitter).
+- **Dependency caveat:** full jitter requires a future crate-local regular dependency `rand = "0.8"` in `intent-api`. No `Cargo.toml` change is made now; placement is crate-local unless a second crate needs random generation.
+
+**D7 — Error classification (accepted):**
+- **Retryable:** HTTP 5xx, connect timeout, request timeout, DNS failure, connection refused, connection reset.
+- **Non-retryable:** HTTP 4xx (except 429), malformed URL, TLS certificate failure, unresolvable host.
+- **429 special case:** retry once using `Retry-After` header when present. Parse delta-seconds or HTTP-date if implemented; cap wait at 60 seconds. Fall back to standard backoff slot if header is missing or invalid. Mark `failed` after bounded retry exhaustion.
+- **Failure reason redaction:** per R4 D3, `failure_reason` must never contain full URLs, query parameters, credentials, or response bodies. R7 N5 owns truncation/PII detail.
+
+**D8 — 120s ceiling edge case:**
+- Normal 3-attempt worst-case duration without 429 is ~102 seconds (5s connect + 30s request per attempt, plus backoff delays).
+- A 429 with 60s `Retry-After` can push total duration to the 120s ceiling exactly.
+- If `WEBHOOK_MAX_TOTAL_DURATION` is exceeded, the future dispatcher should record `failure_reason = "timeout: max_total_duration_exceeded"`, mark the record as `failed`, and exit gracefully without attempting further retries.
+
+**Explicit non-goals:**
+- No `rand` Cargo change is made in this docs-only slice.
+- No runtime tuning, adaptive timeouts, or SRE-calibrated production values.
+- No circuit breaker or per-host backoff state.
+- No `failure_reason` truncation/redaction implementation (deferred to R7).
+
+**No Cargo, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml`, `.rs` source, or test file was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
