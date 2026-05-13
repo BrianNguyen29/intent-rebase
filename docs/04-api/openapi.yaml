@@ -2913,27 +2913,31 @@ paths:
       tags:
         - propagation-status
         - intents
-      summary: Propagation status for an intent (bounded stub)
+      summary: Propagation status for an intent (Slice 1 bounded)
       description: |
-        Phase 4+ design-only: Bounded stub endpoint returning contract-shaped
-        response with empty downstream_systems and zeroed summary.
+        Slice 1 bounded implementation: Returns propagation status for an intent.
 
-        **This endpoint is READ-ONLY** — it does not create, mutate, or persist
-        any state. No database migration or new table is introduced.
+        **Record-backed when available:** If `propagation_record_repo` is configured
+        in `AppState`, the handler queries the repository and returns real
+        `downstream_systems` and `propagation_summary` for registered systems.
 
-        **Bounded scope:**
-        - Returns empty downstream_systems (no real propagation tracking)
-        - Returns zeroed propagation_summary
-        - Lists deferred features in unsupported_items
+        **Stub fallback when unavailable:** If `propagation_record_repo` is `None`,
+        the endpoint returns empty `downstream_systems` and zeroed
+        `propagation_summary`, with `unsupported_items` listing deferred features.
 
-        **No persistence claim:** Propagation status is not stored; this is a
-        stub response only.
+        **This endpoint is READ-ONLY** — it does not mutate state.
+
+        **Implemented (Slice 1):**
+        - Migration `017_create_propagation_records.sql` with `tenant_id` RLS policy
+        - `PropagationRecord` domain type and `InMemoryPropagationRecordRepository`
+        - Query handler with repo-aware fallback
 
         **Deferred to Phase 4+:**
         - Webhook subscription management
         - Event streaming acknowledgment (NATS/Kafka)
         - Cross-workflow lineage propagation (N2)
         - Real-time propagation monitoring UI
+        - SQL-backed repository (currently in-memory only)
       operationId: getPropagationStatus
       parameters:
         - name: intent_id
@@ -2952,7 +2956,7 @@ paths:
           description: Tenant ID to scope the query
       responses:
         '200':
-          description: Propagation status stub response
+          description: Propagation status response (record-backed when repo available; stub fallback when unavailable)
           content:
             application/json:
               schema:
@@ -6354,8 +6358,10 @@ components:
     PropagationStatusResponse:
       type: object
       description: |
-        Phase 4+ design-only: Bounded stub response for propagation status.
-        downstream_systems is always empty and propagation_summary is zeroed.
+        Slice 1 bounded implementation: Response shape for propagation status.
+        When `propagation_record_repo` is available, returns real records from
+        the repository. When unavailable, returns empty downstream_systems and
+        zeroed propagation_summary as a stub fallback.
       required:
         - intent_id
         - tenant_id
@@ -6373,7 +6379,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DownstreamSystemStatus'
-          description: Always empty in the bounded stub
+          description: Downstream system statuses (populated when propagation_record_repo is available; empty when stub fallback)
         propagation_summary:
           $ref: '#/components/schemas/PropagationSummary'
         unsupported_items:

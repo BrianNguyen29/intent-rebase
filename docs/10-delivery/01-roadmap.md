@@ -41,7 +41,7 @@
 
 ## Phase 4 — Enterprise Expansion (ongoing)
 - Workflow migration / rebase pillar (ADR-12 design-only; see [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md))
-- Propagation status real implementation (staged plan; see [Propagation Status Implementation Plan](./19-propagation-status-implementation-plan.md))
+- Propagation status Slice 1 bounded implemented locally (migration 017, record type, in-memory repo, stub fallback; full downstream tracking, webhook delivery, and event streaming deferred to Phase 4+; see [Propagation Status Implementation Plan](./19-propagation-status-implementation-plan.md))
 - Policy simulation
 - Advanced adapters
 - Cross-workflow intent families

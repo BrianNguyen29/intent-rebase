@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use crate::{
     types::{
-        CompensationActionStatusCounts, CompensationActionSummary, ImpactCompensation,
-        ImpactInvalidation, ImpactProvenance, ImpactReportQuery, ImpactReportResponse, ImpactScope,
-        ImpactTrigger, ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
-        OrchestrationDashboardResponse, PropagationStatusQuery, PropagationStatusResponse,
-        PropagationSummary, SafetyGateSummary, SideEffectSummary,
+        CompensationActionStatusCounts, CompensationActionSummary, DownstreamSystemStatus,
+        ImpactCompensation, ImpactInvalidation, ImpactProvenance, ImpactReportQuery,
+        ImpactReportResponse, ImpactScope, ImpactTrigger, ListSideEffectsQuery,
+        ListSideEffectsResponse, OrchestrationDashboardQuery, OrchestrationDashboardResponse,
+        PropagationStatusQuery, PropagationStatusResponse, PropagationSummary, SafetyGateSummary,
+        SideEffectSummary,
     },
     ApiErrorResponse, AppState,
 };
@@ -600,23 +601,77 @@ pub async fn get_propagation_status(
         return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
     }
 
-    Ok(Json(PropagationStatusResponse {
-        intent_id,
-        tenant_id: query.tenant_id,
-        downstream_systems: vec![],
-        propagation_summary: PropagationSummary {
-            total: 0,
-            acknowledged: 0,
-            pending: 0,
-            failed: 0,
-        },
-        unsupported_items: vec![
-            "webhook subscription management".to_string(),
-            "event streaming acknowledgment".to_string(),
-            "cross-workflow lineage propagation".to_string(),
-            "real-time propagation monitoring".to_string(),
-        ],
-    }))
+    // Slice 1: If propagation record repo is available, query real records;
+    // otherwise fall back to empty stub (preserves backward compatibility)
+    let response = if let Some(ref repo) = state.propagation_record_repo {
+        let records = repo
+            .list_by_intent(intent_id, query.tenant_id)
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let downstream_systems: Vec<DownstreamSystemStatus> = records
+            .iter()
+            .map(|r| DownstreamSystemStatus {
+                system_id: r.downstream_system_id.clone(),
+                acknowledged_at: r.acknowledged_at,
+                status: format!("{:?}", r.status).to_lowercase(),
+                last_seen_version: r.last_seen_version,
+            })
+            .collect();
+
+        let total = downstream_systems.len();
+        let acknowledged = downstream_systems
+            .iter()
+            .filter(|s| s.status == "acknowledged")
+            .count();
+        let pending = downstream_systems
+            .iter()
+            .filter(|s| s.status == "pending")
+            .count();
+        let failed = downstream_systems
+            .iter()
+            .filter(|s| s.status == "failed")
+            .count();
+
+        PropagationStatusResponse {
+            intent_id,
+            tenant_id: query.tenant_id,
+            downstream_systems,
+            propagation_summary: PropagationSummary {
+                total,
+                acknowledged,
+                pending,
+                failed,
+            },
+            unsupported_items: vec![
+                "webhook subscription management".to_string(),
+                "event streaming acknowledgment".to_string(),
+                "cross-workflow lineage propagation".to_string(),
+                "real-time propagation monitoring".to_string(),
+            ],
+        }
+    } else {
+        // Bounded stub fallback when repository is not configured
+        PropagationStatusResponse {
+            intent_id,
+            tenant_id: query.tenant_id,
+            downstream_systems: vec![],
+            propagation_summary: PropagationSummary {
+                total: 0,
+                acknowledged: 0,
+                pending: 0,
+                failed: 0,
+            },
+            unsupported_items: vec![
+                "webhook subscription management".to_string(),
+                "event streaming acknowledgment".to_string(),
+                "cross-workflow lineage propagation".to_string(),
+                "real-time propagation monitoring".to_string(),
+            ],
+        }
+    };
+
+    Ok(Json(response))
 }
 
 /// GET /intents/{intent_id}/propagation-status — Bounded stub endpoint (non-JWT fallback)
@@ -642,21 +697,75 @@ pub async fn get_propagation_status(
         return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
     }
 
-    Ok(Json(PropagationStatusResponse {
-        intent_id,
-        tenant_id: query.tenant_id,
-        downstream_systems: vec![],
-        propagation_summary: PropagationSummary {
-            total: 0,
-            acknowledged: 0,
-            pending: 0,
-            failed: 0,
-        },
-        unsupported_items: vec![
-            "webhook subscription management".to_string(),
-            "event streaming acknowledgment".to_string(),
-            "cross-workflow lineage propagation".to_string(),
-            "real-time propagation monitoring".to_string(),
-        ],
-    }))
+    // Slice 1: If propagation record repo is available, query real records;
+    // otherwise fall back to empty stub (preserves backward compatibility)
+    let response = if let Some(ref repo) = state.propagation_record_repo {
+        let records = repo
+            .list_by_intent(intent_id, query.tenant_id)
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let downstream_systems: Vec<DownstreamSystemStatus> = records
+            .iter()
+            .map(|r| DownstreamSystemStatus {
+                system_id: r.downstream_system_id.clone(),
+                acknowledged_at: r.acknowledged_at,
+                status: format!("{:?}", r.status).to_lowercase(),
+                last_seen_version: r.last_seen_version,
+            })
+            .collect();
+
+        let total = downstream_systems.len();
+        let acknowledged = downstream_systems
+            .iter()
+            .filter(|s| s.status == "acknowledged")
+            .count();
+        let pending = downstream_systems
+            .iter()
+            .filter(|s| s.status == "pending")
+            .count();
+        let failed = downstream_systems
+            .iter()
+            .filter(|s| s.status == "failed")
+            .count();
+
+        PropagationStatusResponse {
+            intent_id,
+            tenant_id: query.tenant_id,
+            downstream_systems,
+            propagation_summary: PropagationSummary {
+                total,
+                acknowledged,
+                pending,
+                failed,
+            },
+            unsupported_items: vec![
+                "webhook subscription management".to_string(),
+                "event streaming acknowledgment".to_string(),
+                "cross-workflow lineage propagation".to_string(),
+                "real-time propagation monitoring".to_string(),
+            ],
+        }
+    } else {
+        // Bounded stub fallback when repository is not configured
+        PropagationStatusResponse {
+            intent_id,
+            tenant_id: query.tenant_id,
+            downstream_systems: vec![],
+            propagation_summary: PropagationSummary {
+                total: 0,
+                acknowledged: 0,
+                pending: 0,
+                failed: 0,
+            },
+            unsupported_items: vec![
+                "webhook subscription management".to_string(),
+                "event streaming acknowledgment".to_string(),
+                "cross-workflow lineage propagation".to_string(),
+                "real-time propagation monitoring".to_string(),
+            ],
+        }
+    };
+
+    Ok(Json(response))
 }

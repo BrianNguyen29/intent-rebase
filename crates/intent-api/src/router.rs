@@ -60,6 +60,7 @@ pub fn build_router(
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     let state = crate::AppState {
@@ -76,6 +77,7 @@ pub fn build_router(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        propagation_record_repo,
         start_time: Instant::now(),
         rls_pool,
     };
@@ -457,6 +459,7 @@ pub fn build_router_with_jwt_auth(
         forensic_archive_generator,
         forensic_bundle_service,
         None,
+        None,
     );
 
     // Apply JWT middleware
@@ -488,6 +491,7 @@ pub fn build_router_with_sql_audit_and_approval(
     forensic_service: Arc<dyn forensic_service::ForensicVerificationService>,
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
@@ -514,6 +518,7 @@ pub fn build_router_with_sql_audit_and_approval(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        propagation_record_repo,
         rls_pool,
     )
 }
@@ -539,6 +544,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     auth_config: crate::auth::AuthConfig,
+    propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
 ) -> Router {
     // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
@@ -565,6 +571,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        propagation_record_repo,
         rls_pool,
     );
 

@@ -303,6 +303,7 @@ fn build_inmemory_router() -> Router {
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        None, // propagation_record_repo: None for in-memory mode (Slice 1 bounded)
         None, // rls_pool: None for in-memory mode
     )
 }
@@ -460,6 +461,7 @@ async fn build_sql_router_with_consumer_jwt(
         forensic_archive_generator,
         forensic_bundle_service,
         auth_config,
+        None,
         Some(rls_pool),
     );
 
@@ -607,6 +609,7 @@ async fn build_sql_router_with_consumer_impl(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
+        None, // propagation_record_repo: None for SQL mode (Slice 1 bounded)
         Some(rls_pool),
     );
 

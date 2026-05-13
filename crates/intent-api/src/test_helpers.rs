@@ -125,6 +125,9 @@ pub fn create_test_service() -> AppState {
         Arc::new(InMemoryBundleStorage::new("test-bucket")),
         Arc::new(InMemoryForensicDataCollector::new()),
     ));
+    let propagation_record_repo =
+        Arc::new(intent_service::InMemoryPropagationRecordRepository::new())
+            as Arc<dyn intent_service::PropagationRecordRepository>;
     AppState {
         service,
         graph_service: graph_svc,
@@ -139,6 +142,7 @@ pub fn create_test_service() -> AppState {
         forensic_service: forensic_svc,
         forensic_archive_generator: forensic_archive_gen,
         forensic_bundle_service: forensic_bundle_svc,
+        propagation_record_repo: Some(propagation_record_repo),
         start_time: Instant::now(),
         rls_pool: None,
     }
@@ -203,6 +207,9 @@ pub fn create_test_service_with_forensic_config() -> AppState {
         Arc::new(InMemoryBundleStorage::new("test-bucket")),
         Arc::new(InMemoryForensicDataCollector::new()),
     ));
+    let propagation_record_repo =
+        Arc::new(intent_service::InMemoryPropagationRecordRepository::new())
+            as Arc<dyn intent_service::PropagationRecordRepository>;
     AppState {
         service,
         graph_service: graph_svc,
@@ -217,6 +224,7 @@ pub fn create_test_service_with_forensic_config() -> AppState {
         forensic_service: forensic_svc,
         forensic_archive_generator: forensic_archive_gen,
         forensic_bundle_service: forensic_bundle_svc,
+        propagation_record_repo: Some(propagation_record_repo),
         start_time: Instant::now(),
         rls_pool: None,
     }

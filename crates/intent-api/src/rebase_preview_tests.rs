@@ -199,6 +199,7 @@ async fn test_rebase_preview_with_graph_classifies_affected_items() {
             Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
         )),
         start_time: Instant::now(),
+        propagation_record_repo: None,
         rls_pool: None,
     };
 
@@ -368,6 +369,7 @@ async fn test_rebase_preview_fallback_when_graph_node_not_found() {
             Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
         )),
         start_time: Instant::now(),
+        propagation_record_repo: None,
         rls_pool: None,
     };
 

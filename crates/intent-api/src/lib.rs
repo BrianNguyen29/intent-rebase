@@ -263,6 +263,10 @@ pub struct AppState {
     /// bundle generation, and S3/MinIO persistence. Orchestrates the full
     /// generate→store→record cycle.
     pub forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
+    /// Phase 4+ Slice 1 (bounded): Propagation record repository for downstream
+    /// system tracking. When available, query_handlers reads real records.
+    /// When None, falls back to empty stub response.
+    pub propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     /// Phase 3 P3-S5 (bounded slice): RLS-aware PostgreSQL pool for tenant-scoped
     /// transaction wrapping. When Some, create_graph_node uses this to wrap node
     /// creation in RLS-set transactions. When None, falls back to non-RLS path.

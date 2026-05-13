@@ -1471,6 +1471,7 @@ mod tests {
                 Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
             )),
             start_time: Instant::now(),
+            propagation_record_repo: None,
             rls_pool: None,
         };
 

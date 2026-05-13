@@ -123,11 +123,16 @@ Returns 404 if event doesn't exist or belongs to a different tenant (enforces te
 ### POST /replays/{workflow_id}/export
 
 ### GET /intents/{intent_id}/propagation-status
-**Design-only / Phase 4+ deferred.** Returns the downstream propagation status for an intent change — which downstream systems have acknowledged or reacted to the change.
+**Slice 1 bounded implemented locally.** Returns the downstream propagation status for an intent change — which downstream systems have acknowledged or reacted to the change.
 
-**Scope:** Contract-only documentation; no implementation, no production-ready claim.
+**Scope:**
+- Migration `017_create_propagation_records.sql` exists with `tenant_id` RLS policy
+- `PropagationRecord` domain type and `InMemoryPropagationRecordRepository` wired
+- Query handler reads from repository when `propagation_record_repo` is configured in `AppState`
+- Falls back to bounded stub (empty `downstream_systems`, zeroed `propagation_summary`) when repo is `None`
+- **No production-ready claim:** webhook delivery, event streaming, and cross-workflow lineage remain deferred to Phase 4+
 
-**Proposed response shape:**
+**Response shape (record-backed when repo available; stub fallback when unavailable):**
 ```json
 {
   "intent_id": "uuid",

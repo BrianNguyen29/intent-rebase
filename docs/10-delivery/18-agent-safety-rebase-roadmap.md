@@ -30,7 +30,7 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc.
 - Design ImpactReport as an on-demand read-only projection across pillars (no persistence for MVP)
 - Define API contract for impact-report (ADR-10 bounded MVP implemented)
-- Define API contract for propagation-status (contract designed only; implementation deferred to Phase 4+)
+- Define API contract for propagation-status (Slice 1 bounded implemented locally — migration 017, record type, in-memory repo, stub fallback; full downstream tracking deferred to Phase 4+)
 - **Checkpoint:** Phase 1/2 local milestone — non-production, integration-ready only
 
 ### Phase 3 — Policy / Config Rebase Pillar
@@ -48,7 +48,7 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 
 **Design-only (ADR-12 Proposed):**
 - `WorkflowRebaseAdapter` interface design for workflow-to-intent diff propagation
-- `GET /intents/{intent_id}/propagation-status` — bounded stub implemented; full downstream tracking deferred to Phase 4+ implementation
+- `GET /intents/{intent_id}/propagation-status` — Slice 1 bounded implemented locally (migration 017, `PropagationRecord` domain type, in-memory repository, record-backed response when repo available, stub fallback when `None`); webhook delivery, event streaming, and cross-workflow lineage deferred to Phase 4+
 - API contract design for workflow migration preview / apply / status endpoints
 
 **Deferred implementation (Phase 4+):**

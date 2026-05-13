@@ -66,6 +66,7 @@ async fn test_forensic_endpoints_are_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 
@@ -164,6 +165,7 @@ async fn test_impact_report_route_is_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 
@@ -217,6 +219,7 @@ async fn test_rebase_preview_apply_routes_are_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 
@@ -292,6 +295,7 @@ async fn test_policy_snapshot_routes_are_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 
@@ -417,6 +421,7 @@ async fn test_compensation_mutation_routes_are_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 
@@ -506,6 +511,7 @@ async fn test_propagation_status_route_is_registered() {
         state.forensic_service,
         state.forensic_archive_generator,
         state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
         state.rls_pool,
     );
 

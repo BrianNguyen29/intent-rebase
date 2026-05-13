@@ -1,6 +1,6 @@
 # Propagation Status Implementation Plan
 
-> **Status:** Planned — design-only; no implementation, no persistence, no production-ready claim  
+> **Status:** Slice 1 bounded implemented locally — migration 017 applied, `PropagationRecord` domain type and in-memory repository wired, query handler reads from repo when available and falls back to stub when `None`. No production-ready claim.
 > **Scope:** Concrete bounded plan for evolving `GET /intents/{intent_id}/propagation-status` from stub to real downstream tracking  
 > **Related:** [ADR-12](../13-adrs/12-workflow-migration-rebase.md), [Agent Safety Roadmap](./18-agent-safety-rebase-roadmap.md), [REST API Design](../04-api/01-rest-api.md)
 
@@ -8,12 +8,17 @@
 
 ## Current State
 
-**Shipped (bounded stub):** `GET /intents/{intent_id}/propagation-status` is wired and reachable. It returns:
-- Empty `downstream_systems` list
-- Zeroed `propagation_summary` (`total: 0`, `acknowledged: 0`, `pending: 0`, `failed: 0`)
-- `unsupported_items` listing deferred integrations
+**Slice 1 bounded implemented locally:**
+- Migration `017_create_propagation_records.sql` created with RLS policy on `tenant_id`
+- `PropagationRecord` domain type (`intent-rebase-types`) with `PropagationStatus` enum (`pending`, `acknowledged`, `failed`)
+- `PropagationRecordRepository` trait + `InMemoryPropagationRecordRepository` (`intent-service`)
+- `AppState` carries `propagation_record_repo: Option<Arc<dyn PropagationRecordRepository>>`
+- Query handler reads from repository when `Some`, falls back to stub (empty `downstream_systems`, zeroed summary) when `None`
+- Router signatures updated across all variants (`build_router`, SQL, JWT)
 
-**No persistence, no event streaming, no webhook delivery.** The endpoint validates tenant ownership and intent existence, then returns the stub shape. See commit `4a6744d`.
+**Stub fallback preserved:** When `propagation_record_repo` is `None`, the endpoint returns the same bounded stub shape as before — empty `downstream_systems`, zeroed `propagation_summary`, and `unsupported_items` listing deferred integrations.
+
+**Deferred:** Webhook delivery, event streaming acknowledgment, cross-workflow lineage, and real-time monitoring remain Phase 4+ scope.
 
 ---
 
@@ -131,19 +136,28 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 
 ## Staged Implementation Slices
 
-### Slice 1 — Downstream System Registry (Bounded)
+### Slice 1 — Downstream System Registry (Bounded — Locally Implemented)
 
-**Scope:**
-- Migration: create `propagation_records` table with RLS using the next available migration number (check existing migrations to avoid numbering conflicts)
+**Implemented:**
+- Migration `017_create_propagation_records.sql` with `tenant_id` RLS policy
+- `PropagationRecord` domain type and `PropagationStatus` enum
+- `PropagationRecordRepository` trait + `InMemoryPropagationRecordRepository`
+- `AppState` integration with optional repo (backward-compatible stub fallback when `None`)
+- Query handler reads from repo when available; returns stub when unavailable
+- Router signatures updated across all build variants (in-memory, SQL, SQL+JWT)
+
+**Deferred (remains unimplemented):**
 - `POST /webhooks/subscriptions` — register a downstream system for an intent pattern
 - `DELETE /webhooks/subscriptions/{subscription_id}` — deregister
-- In-memory subscription repository (bounded MVP; SQL repository deferred to Slice 2)
+- SQL-backed repository (deferred to Slice 2)
 
 **Acceptance criteria:**
-- [ ] Subscription CRUD endpoints wired and reachable
-- [ ] Route contract tests pass
-- [ ] OpenAPI updated with subscription schemas
-- [ ] No delivery logic — registration only
+- [x] Migration 017 created with RLS policy
+- [x] Domain type, repository trait, and in-memory impl exist
+- [x] Query handler uses repo when `Some`, stub fallback when `None`
+- [x] Router signatures updated and all tests pass
+- [ ] OpenAPI descriptive text updated (this doc update)
+- [ ] Subscription CRUD endpoints remain deferred
 
 ### Slice 2 — Propagation Status Persistence (Bounded)
 

@@ -81,6 +81,7 @@ fn create_test_router() -> axum::Router {
         forensic_archive_gen,
         forensic_bundle_svc,
         None,
+        None,
     )
 }
 

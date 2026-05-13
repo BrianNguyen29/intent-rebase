@@ -159,6 +159,7 @@ async fn test_build_router_accepts_event_publisher() {
             Arc::new(forensic_service::InMemoryForensicDataCollector::new()),
         )),
         None,
+        None,
     );
     // Router builds successfully - this verifies the signature change works
 }
