@@ -156,8 +156,8 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Domain type, repository trait, and in-memory impl exist
 - [x] Query handler uses repo when `Some`, stub fallback when `None`
 - [x] Router signatures updated and all tests pass
-- [ ] OpenAPI descriptive text updated (this doc update)
-- [ ] Subscription CRUD endpoints remain deferred
+- [x] OpenAPI descriptive text updated
+- [x] Subscription CRUD endpoints remain deferred
 
 ### Slice 2 — Propagation Status Persistence (Bounded — Locally Implemented)
 

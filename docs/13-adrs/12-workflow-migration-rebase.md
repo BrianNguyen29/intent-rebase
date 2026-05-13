@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed — design-only; no implementation, no persistence, no production-ready claim
+Proposed — design-only for full `WorkflowRebaseAdapter` and workflow migration pillar.
+Propagation-status endpoint (`GET /intents/{intent_id}/propagation-status`) has bounded Slices 1-2 MVP implemented locally (migration 017, record-backed response when repo available, stub fallback, signal ingestion endpoint, apply trigger, observability metrics, RB12 runbook, local Prometheus rule). Full downstream tracking, webhook delivery, event streaming, and cross-workflow lineage remain Phase 4+ deferred.
+No production-ready claim for ADR-12 as a whole.
 
 ## Context
 
@@ -33,7 +35,8 @@ Currently, the system supports **intent-level rebase** (version diff, preview, a
 - `GET /workflows/{workflow_id}/rebase-status` — track batch rebase progress
 
 **Propagation Status Endpoints:**
-- `GET /intents/{intent_id}/propagation-status` — bounded stub implemented; full downstream tracking deferred
+- `GET /intents/{intent_id}/propagation-status` — Slices 1-2 bounded MVP implemented (record-backed response when repo available, stub fallback when unavailable; full downstream tracking deferred to Phase 4+)
+- `POST /intents/{intent_id}/propagation-signals` — Slice 2 bounded signal ingestion implemented (manual/internal API; no webhook delivery, no event streaming)
 
 ### WorkflowRebaseAdapter Design
 
@@ -66,10 +69,18 @@ Currently, the system supports **intent-level rebase** (version diff, preview, a
 
 ### Impact on Propagation Status
 
-The `GET /intents/{intent_id}/propagation-status` endpoint (bounded stub delivered) would be extended in Phase 4+ to track:
-- Which downstream systems have acknowledged a workflow change
-- Per-system last-seen intent version
-- Acknowledgment timestamps and failure states
+The `GET /intents/{intent_id}/propagation-status` endpoint has bounded Slices 1-2 MVP delivered locally:
+- Migration 017 `propagation_records` table with tenant RLS exists
+- `PropagationRecord` domain type and repository trait exist (in-memory + SQL implementations)
+- Query handler returns real records when `propagation_record_repo` is configured; falls back to stub when `None`
+- Automatic signal creation triggered by rebase apply post-commit (Proceed outcomes only)
+- Observability metrics, RB12 runbook, and local Prometheus rule scaffolded
+
+Phase 4+ extensions remain deferred:
+- Real downstream system registry with webhook subscription management
+- Event streaming acknowledgment (NATS/Kafka)
+- Cross-workflow lineage-derived downstream systems (N2)
+- Per-system acknowledgment timestamps and failure states from actual delivery
 
 ### Boundaries
 
