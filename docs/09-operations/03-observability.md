@@ -7,6 +7,7 @@
 - rebase apply success rate
 - approval stale detection latency
 - compensation success rate
+- propagation signal creation success rate (Slice 2 bounded — see RB12)
 
 ## Domain metrics
 - intent changes per workflow
@@ -17,6 +18,8 @@
 - operator override rate
 - false positive invalidations
 - incident count tied to stale intent
+- propagation signal creation rate (attempted / succeeded / failed / no-downstream)
+- downstream system acknowledgment rate (pending → acknowledged / failed)
 
 ## Logs
 Structured logs với:

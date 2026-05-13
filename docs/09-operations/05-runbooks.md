@@ -234,6 +234,76 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 
 ---
 
+---
+
+## RB12. Propagation Signal Creation Failures
+
+> **Status:** Bounded observability slice — metrics instrumented, no production alerting claim. Webhook delivery and event streaming remain Phase 4+ deferred.
+
+**Symptoms:**
+- `intent_api_propagation_signals_failed_total` counter is increasing
+- Warning logs: `Failed to update propagation signal for system {id}` or `Failed to list propagation records for signal creation`
+- Downstream systems not receiving updated propagation status after rebase apply
+
+**Diagnosis:**
+1. Check propagation signal metrics on `/metrics`:
+   ```
+   intent_api_propagation_signals_attempted_total
+   intent_api_propagation_signals_succeeded_total
+   intent_api_propagation_signals_failed_total
+   intent_api_propagation_signals_no_downstream_total
+   ```
+2. If `failed_total` is increasing while `attempted_total` is also increasing:
+   - Check application logs for `Failed to update propagation signal` warnings
+   - Verify `propagation_records` table is accessible (DB connection healthy)
+   - Check for RLS context issues: `SET LOCAL app.current_tenant_id` must be set correctly in transactions
+3. If `no_downstream_total` is increasing:
+   - This is expected behavior when no downstream systems are registered for an intent
+   - Use `POST /intents/{intent_id}/propagation-signals` to register downstream systems manually
+
+**Mitigation:**
+1. If transient DB error (connection timeout, pool exhaustion):
+   - Monitor `intent_api_propagation_signals_succeeded_total` recovery
+   - Signal creation is best-effort — apply response is NOT affected
+2. If persistent `propagation_records` table access failure:
+   - Check migration 017 was applied: `SELECT COUNT(*) FROM propagation_records`
+   - Verify RLS policies are active on `propagation_records`
+   - Check table owner is not bypassing RLS: `SELECT relforcerowsecurity FROM pg_class WHERE relname = 'propagation_records'`
+3. If downstream system should be registered but is not:
+   - Manually register via signal ingestion endpoint (see **Manual Re-Signal Workflow** below)
+
+**Manual Re-Signal Workflow:**
+
+Use the bounded signal ingestion endpoint to register or re-register a downstream system:
+
+```bash
+POST /intents/{intent_id}/propagation-signals
+Content-Type: application/json
+
+{
+  "tenant_id": "<tenant-uuid>",
+  "downstream_system_id": "workflow-runner-a",
+  "last_seen_version": 3
+}
+```
+
+This creates a new `pending` propagation record. Subsequent rebase apply operations will automatically update this record to `pending` with the new version.
+
+**Recovery:**
+1. After fixing root cause, verify `succeeded_total` increases on next rebase apply
+2. Query propagation status to confirm downstream systems are visible:
+   ```bash
+   GET /intents/{intent_id}/propagation-status?tenant_id=<tenant-uuid>
+   ```
+3. If records are stale (wrong version), manually update via the ingestion endpoint
+
+**Prevention:**
+- Register downstream systems proactively via `POST /intents/{intent_id}/propagation-signals`
+- Monitor `intent_api_propagation_signals_failed_total / attempted_total` ratio; alert if > 10% sustained
+- `intent_api_propagation_signals_no_downstream_total` is informational only — no action required
+
+---
+
 ## On-Call Quick Reference
 
 | Alert | Severity | Immediate Action |
@@ -246,5 +316,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 | RebaseApplyHighLatency | Warning | Check runtime adapter health |
 | PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
+| PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
+> **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 but not yet added to Prometheus rules — metrics are instrumented and can be queried manually via `/metrics`.

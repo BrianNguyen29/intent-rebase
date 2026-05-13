@@ -174,6 +174,8 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
   - `intent_api_propagation_signals_succeeded_total` — counter incremented per successful record update
   - `intent_api_propagation_signals_failed_total` — counter incremented per failed record update or list error
   - `intent_api_propagation_signals_no_downstream_total` — counter incremented when no downstream records exist for the intent
+- Runbook RB12 for propagation signal failures: alerting guidance, diagnosis, manual re-signal workflow
+  - See [docs/09-operations/05-runbooks.md](../09-operations/05-runbooks.md#RB12-Propagation-Signal-Creation-Failures)
 - Query handler reads from SQL repo when `propagation_record_repo` is `Some`; falls back to stub when `None`
 - Ignored live RLS tests for `propagation_records`: tenant-isolated insert/list/update and tenant mismatch fail-closed
 - OpenAPI updated with `/intents/{intent_id}/propagation-signals` endpoint and schemas
@@ -192,6 +194,8 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Rebase apply triggers propagation signal update for Proceed outcomes
 - [x] Blocked/NoOp apply paths do not create signals
 - [x] Missing repo does not fail apply response
+- [x] Observability metrics instrumented (attempted, succeeded, failed, no-downstream)
+- [x] Runbook RB12 documents alerting guidance and manual re-signal workflow
 
 ### Slice 3 — Webhook Delivery (Bounded)
 

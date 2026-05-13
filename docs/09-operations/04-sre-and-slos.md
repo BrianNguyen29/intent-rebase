@@ -164,8 +164,13 @@ These targets are Batch 0 planning inputs only.
 - `intent_api_diff_compute_duration_seconds_bucket` — diff compute latency histogram
 - `intent_api_rebase_preview_duration_seconds_bucket` — rebase preview latency histogram
 - `intent_api_rebase_apply_duration_seconds_bucket` — rebase apply latency histogram
+- `intent_api_propagation_signals_attempted_total` — propagation signal creation attempts (Slice 2 bounded)
+- `intent_api_propagation_signals_succeeded_total` — successful propagation record updates
+- `intent_api_propagation_signals_failed_total` — failed propagation record updates or list errors
+- `intent_api_propagation_signals_no_downstream_total` — apply trigger ran but no downstream records found
 
 > **Note:** Earlier `intent_rebase_*` metric names and `intent_api_version_created_total` / `intent_api_rebase_preview_total` / `intent_api_rebase_apply_total` were documented but are not the actual emitted names. Documentation has been updated to match the metrics currently instrumented in intent-api.
+> **Propagation metrics:** Instrumented in `rebase_apply_handlers.rs` post-commit, Proceed-only, best-effort. See RB12 for runbook guidance.
 
 **Exposed via:** `GET /metrics` on intent-api (text/plain; version=0.0.4 Prometheus format)
 
