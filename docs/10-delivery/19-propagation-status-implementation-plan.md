@@ -319,7 +319,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R5 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, and retry constants acceptance decisions only; this is **not** an implementation Go. R6–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R6 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, and test plan mapping decisions only; this is **not** an implementation Go. R7–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
@@ -328,7 +328,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | R3 | **Schema & Trait Review** — Decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as future `webhook_subscriptions` table (migration 018). B2 resolved as future trait methods `record_delivery_attempt` and `record_delivery_outcome`. No migration or Rust files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test; delivery observability metrics (attempted, succeeded, failed, retry_exhausted) added to test plan and metrics registry | TBD | ☐ |
+| R6 | **Test Plan Mapping to G1–G8** — Decision recorded (see R6 Decision Note below). G1–G8 mapped to existing or future checks with concrete commands or file locations. G7 future unit test module and G8 future wiremock integration test proposed with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. No Rust, test, Cargo, or config files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented including explicit feature-flag/env gate name (e.g., `INTENT_API_WEBHOOK_DELIVERY=true`) to disable dispatch without code change; failed-to-pending reset semantics and delivery task lifecycle (spawn, cancel, timeout, panic) documented; `failure_reason` truncation/redaction policy agreed (max length, PII redaction) | TBD | ☐ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
 
@@ -465,6 +465,75 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No `failure_reason` truncation/redaction implementation (deferred to R7).
 
 **No Cargo, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml`, `.rs` source, or test file was modified in this docs-only update.
+
+#### R6 Decision Note (Docs-Only — No Rust, Test, Cargo, or Config Changes)
+
+> **Status:** Test plan mapping decision recorded. No Rust, test, Cargo, or config files were modified. R8 remains No-Go.
+
+**G1–G8 mapping (accepted):**
+
+| Gate | Check | Command / Location |
+|------|-------|-------------------|
+| G1 — Compile | No warnings | `cargo check --workspace` (existing CI) |
+| G2 — Format | No diff | `cargo fmt --all -- --check` (existing CI) |
+| G3 — Lint | No clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` (existing CI) |
+| G4 — Route wiring | All routes reachable | `cargo test -p intent-api --lib router_smoke_tests` (existing) |
+| G5 — OpenAPI drift | Spec matches routes | `npx spectral lint docs/04-api/openapi.yaml --ruleset .spectral.yml` (existing CI) |
+| G6 — Tenant isolation | RLS policies active | Ignored/manual live Postgres: `cargo test -p intent-api --test rls_integration -- --ignored` (existing pattern) |
+| G7 — Handler unit test | Payload shape + headers | Future module: `crates/intent-api/src/webhook_delivery_tests.rs` |
+| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | Future integration test: `crates/intent-api/tests/webhook_delivery_simulation.rs` |
+
+**D9 — G7 future unit test module (proposed):**
+- File: `crates/intent-api/src/webhook_delivery_tests.rs`
+- Registration: `#[cfg(test)] mod webhook_delivery_tests;` in `crates/intent-api/src/lib.rs`
+- Proposed test cases:
+  - Payload shape matches proposed JSON schema (event_type, intent_id, tenant_id, version, version_hash, previous_version, timestamp, delivery_id, attempt_number, subscription_id).
+  - `Content-Type: application/json` header present.
+  - `X-Idempotency-Key` header contains `delivery_id`.
+  - `attempt_number` increments correctly across retries.
+  - `attempt_number` is 1 on initial attempt and frozen on exhausted retries.
+  - `X-Webhook-Signature` header is **absent** because HMAC signing is deferred.
+  - `failure_reason` does not leak full URLs (R4 D3 cross-reference).
+
+**D10 — G8 future wiremock integration test (proposed):**
+- File: `crates/intent-api/tests/webhook_delivery_simulation.rs`
+- Auto-discovered; no manual registration needed.
+- Uses in-memory repository and `wiremock`; does **not** require `DATABASE_URL` or live Postgres.
+- Proposed test cases:
+  - Retry on HTTP 5xx then eventual success.
+  - No retry on non-429 4xx; mark `failed` immediately.
+  - Malformed URL fails without retry.
+  - HTTP 429 with `Retry-After` header: wait, then success.
+  - HTTP 429 without `Retry-After`: fallback to standard backoff, then success or failure.
+  - Double 429 (retry also 429) marks `failed`.
+  - Retry exhaustion after 3 attempts marks `failed`.
+  - `WEBHOOK_MAX_TOTAL_DURATION` exceeded: record `timeout: max_total_duration_exceeded`, mark `failed`, exit gracefully (R5 D8 cross-reference).
+  - Async fire-and-notify: caller response is not blocked by delivery.
+  - Tenant isolation lookup prevents cross-tenant delivery (R4 D2 cross-reference).
+
+**D11 — Future delivery observability metrics (proposed):**
+- Counter names follow existing `intent_api_propagation_signals_*` convention:
+  - `intent_api_webhook_delivery_attempted_total`
+  - `intent_api_webhook_delivery_succeeded_total`
+  - `intent_api_webhook_delivery_failed_total`
+  - `intent_api_webhook_delivery_retry_exhausted_total`
+- Histogram (e.g., delivery duration) is deferred to future observability work.
+- Prometheus alerting rule authoring is not in R6 scope.
+
+**D12 — Live Postgres RLS test note:**
+- Existing `rls_integration` tests remain ignored/manual by default (`-- --ignored`).
+- Future `webhook_subscriptions` RLS tenant-isolation tests are a post-migration test-plan item, not R6 implementation.
+- Wiremock integration tests (G8) are normal `cargo test` tests and do not require live Postgres.
+
+**Explicit non-goals:**
+- No test files are written in this docs-only slice.
+- No live Postgres run is required for R6.
+- No Prometheus rule authoring.
+- No per-attempt delivery log testing (deferred).
+- No load/stress testing.
+- No cross-workflow lineage testing.
+
+**No Rust, test, Cargo, or config changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, `Cargo.toml`, or config file was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
