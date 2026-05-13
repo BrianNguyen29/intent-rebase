@@ -10,7 +10,7 @@ Usage:
     python3 infrastructure/local/alertmanager/webhook_receiver.py
     # Then trigger an alert in local Prometheus and watch stdout.
 
-The Alertmanager config in alertmanager.yml routes to http://localhost:9001/webhook.
+The Alertmanager config in alertmanager.yml routes to http://localhost:9094/webhook.
 """
 
 import json
@@ -42,7 +42,7 @@ class AlertHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = 9001
+    port = 9094
     server = HTTPServer(("", port), AlertHandler)
     print(f"Local Alertmanager webhook receiver listening on http://localhost:{port}/webhook")
     print("Press Ctrl+C to stop.\n")

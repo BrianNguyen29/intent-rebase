@@ -211,6 +211,10 @@ Intent API exposes Prometheus metrics at `GET /metrics`.
 - `intent_api_diff_compute_duration_seconds_bucket`
 - `intent_api_rebase_preview_duration_seconds_bucket`
 - `intent_api_rebase_apply_duration_seconds_bucket`
+- `intent_api_propagation_signals_attempted_total` — propagation signal creation attempts (Slice 2 bounded)
+- `intent_api_propagation_signals_succeeded_total` — successful propagation record updates
+- `intent_api_propagation_signals_failed_total` — failed propagation record updates or list errors
+- `intent_api_propagation_signals_no_downstream_total` — apply trigger ran but no downstream records found
 
 > **Not instrumented:** `intent_api_audit_append_total`, `intent_api_approval_wait_duration_seconds`, `intent_api_error_budget_remaining`, `compensation_action_executed_total`. Dashboards and alerts referencing these metrics are stale and have been removed.
 

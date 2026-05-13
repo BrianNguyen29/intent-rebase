@@ -318,6 +318,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 | PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
 | PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
+| LocalAlertReceiver | Info | Run `python3 infrastructure/local/alertmanager/webhook_receiver.py` to inspect alert payloads on http://localhost:9094/webhook; local/manual-only — not a production receiver |
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
 > **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 and defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` as local dev scaffolding only; production alerting still requires SRE sign-off and receiver configuration.
