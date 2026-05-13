@@ -196,6 +196,7 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Missing repo does not fail apply response
 - [x] Observability metrics instrumented (attempted, succeeded, failed, no-downstream)
 - [x] Runbook RB12 documents alerting guidance and manual re-signal workflow
+- [x] Local Prometheus rule `PropagationSignalFailureRate` defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding; production requires SRE sign-off)
 
 ### Slice 3 — Webhook Delivery (Bounded)
 

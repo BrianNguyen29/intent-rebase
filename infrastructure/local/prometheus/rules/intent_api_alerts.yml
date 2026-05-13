@@ -206,3 +206,34 @@ groups:
         annotations:
           summary: "Apply path 3d burn rate elevated — chronic degradation"
           description: "Apply 3d error rate is {{ $value | printf \"%.3f\" }}% (threshold: 1.6%). Chronic elevation indicates sustained quality degradation."
+
+  # ============================================================
+  # Propagation Signal Alerts — Slice 2 bounded observability (local dev only)
+  # Truthful scope: metrics instrumented, rule is local dev scaffolding.
+  # Production deployment requires SRE confirmation and receiver config.
+  # Webhook delivery and event streaming remain Phase 4+ deferred.
+  # ============================================================
+  - name: intent_api_propagation_signals
+    interval: 30s
+    rules:
+      # Propagation signal failure ratio above 10% with meaningful traffic.
+      # The "attempted > 0.001" guard prevents division-by-zero and noise
+      # when no apply operations are occurring.
+      - alert: PropagationSignalFailureRate
+        expr: |
+          (
+            sum(rate(intent_api_propagation_signals_failed_total[5m]))
+            /
+            sum(rate(intent_api_propagation_signals_attempted_total[5m]))
+          ) > 0.10
+          and
+          sum(rate(intent_api_propagation_signals_attempted_total[5m])) > 0.001
+        for: 5m
+        labels:
+          severity: warning
+          slo: propagation
+        annotations:
+          summary: "Propagation signal failure rate elevated (local dev rule)"
+          description: "Propagation signal failure rate is {{ $value | printf \"%.2f\" }}% (threshold: 10%). See RB12 for diagnosis and manual re-signal workflow."
+          runbook_url: "docs/09-operations/05-runbooks.md#RB12-Propagation-Signal-Creation-Failures"
+          scope: "local-dev-only — production alerting requires SRE sign-off and receiver configuration"

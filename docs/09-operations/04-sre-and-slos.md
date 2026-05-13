@@ -78,7 +78,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
 
 ### ✅ Delivered (Slice 3 — alerting rules + runbook foundation)
 
-- **Alerting rules** — Prometheus alerting rules in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` targeting availability and latency SLOs
+- **Alerting rules** — Prometheus alerting rules in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` targeting availability, latency, and propagation signal SLOs
 - **Alertmanager config** — `infrastructure/local/alertmanager/alertmanager.yml` with placeholder receivers (local dev only)
 - **Grafana provisioning** — `infrastructure/local/grafana/provisioning/` with datasource and dashboard provisioning
 - **Metrics instrumentation** — metric definitions scaffolded in intent-api:
@@ -232,4 +232,8 @@ Prometheus alerting rules defined in `infrastructure/local/prometheus/rules/inte
 - `PreviewPathBurnRate1h` / `6h` / `3d`
 - `ApplyPathBurnRate1h` / `6h` / `3d`
 
+**Propagation signal alerts (Slice 2 bounded — local dev only):**
+- `PropagationSignalFailureRate` (> 10% failed/attempted ratio with meaningful traffic) — see RB12
+
 > **Not instrumented:** Approval wait, audit append, compensation execution, DLQ, and error-budget-remaining alerts are not yet backed by real metrics and have been removed from local rules.
+> **Propagation alerts:** `PropagationSignalFailureRate` is instrumented and defined in local rules but is **local dev scaffolding only**. Production deployment requires SRE sign-off and receiver configuration.

@@ -301,6 +301,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 - Register downstream systems proactively via `POST /intents/{intent_id}/propagation-signals`
 - Monitor `intent_api_propagation_signals_failed_total / attempted_total` ratio; alert if > 10% sustained
 - `intent_api_propagation_signals_no_downstream_total` is informational only — no action required
+- Local Prometheus rule `PropagationSignalFailureRate` is defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding only — production alerting requires SRE sign-off and receiver configuration)
 
 ---
 
@@ -319,4 +320,4 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 | PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
-> **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 but not yet added to Prometheus rules — metrics are instrumented and can be queried manually via `/metrics`.
+> **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 and defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` as local dev scaffolding only; production alerting still requires SRE sign-off and receiver configuration.
