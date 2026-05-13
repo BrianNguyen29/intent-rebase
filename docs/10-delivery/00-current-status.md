@@ -220,7 +220,9 @@ Phase 1 (Documentation & API Contract Stabilization) is complete:
 - OpenAPI forensic path normalization, stale wording cleanup
 - Route contract tests for forensic, ImpactReport, rebase preview/apply, policy snapshot, and compensation mutation endpoints
 - ADR-10 accepted (bounded MVP, no persistence, no migration, no production claim)
+- ADR-11 accepted (bounded MVP, no persistence, no migration, no production claim)
 - ImpactReport examples documented
+- Policy snapshot ImpactReport endpoint (`GET /policy-snapshots/{snapshot_id}/impact-report`) implemented and documented
 - Route/OpenAPI drift guard strengthened (contract map + automated test)
 
 Phase 2 (Agent Safety Core Language & Domain Model) is in progress:

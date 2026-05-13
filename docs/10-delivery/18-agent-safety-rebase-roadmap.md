@@ -33,9 +33,10 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - **Checkpoint:** Phase 1/2 local milestone — non-production, integration-ready only
 
 ### Phase 3 — Policy / Config Rebase Pillar
-- Config object model and schema registry
-- Policy/config rebase preview and apply examples
-- Environment promotion semantics (dev/staging/prod)
+- **Bounded MVP implemented (non-production):** `GET /policy-snapshots/{snapshot_id}/impact-report` — read-only ImpactReport for a policy snapshot's intent, reusing ADR-10 semantics. Full `PolicyRebaseAdapter` deferred to Phase 4+.
+- Config object model and schema registry (deferred)
+- Policy/config rebase preview and apply examples (deferred)
+- Environment promotion semantics (dev/staging/prod) (deferred)
 
 ### Phase 4 — Workflow Migration / Rebase Pillar
 - Runtime adapter contract and capability registry

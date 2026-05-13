@@ -1,7 +1,9 @@
 # ImpactReport Examples
 
-> **Scope:** Bounded MVP read-only projection examples. These illustrate the four canonical ImpactReport shapes returned by `GET /intents/{intent_id}/impact-report`.
+> **Scope:** Bounded MVP read-only projection examples. These illustrate the four canonical ImpactReport shapes returned by `GET /intents/{intent_id}/impact-report` and `GET /policy-snapshots/{snapshot_id}/impact-report`.
 > **Non-production:** Examples are illustrative; actual field values depend on live service state.
+>
+> **Note:** The policy snapshot endpoint (`GET /policy-snapshots/{snapshot_id}/impact-report`) delegates to the same `build_impact_report_response` helper and returns the identical `ImpactReportResponse` shape shown below. See ADR-11 for design rationale.
 
 ---
 

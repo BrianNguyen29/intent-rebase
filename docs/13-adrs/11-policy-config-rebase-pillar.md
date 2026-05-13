@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed — bounded MVP implemented (`GET /policy-snapshots/{snapshot_id}/impact-report`); full PolicyRebaseAdapter deferred to Phase 4+
+Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim (`GET /policy-snapshots/{snapshot_id}/impact-report`). Full PolicyRebaseAdapter deferred to Phase 4+
 
 ## Context
 

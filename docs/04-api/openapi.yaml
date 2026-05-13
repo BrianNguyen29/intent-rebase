@@ -35,6 +35,9 @@ info:
     - Forensic bundle list and download (GET /forensic/bundles, GET /forensic/bundles/{id}/download)
     - Read-only verification and integrity checking (no full runtime replay)
 
+    ### Policy Snapshot ImpactReport (bounded MVP — ADR-11)
+    - `GET /policy-snapshots/{snapshot_id}/impact-report` — read-only ImpactReport for a policy snapshot's intent (reuses ADR-10 semantics; no persistence, no mutation, no production-ready claim)
+
     ## Bounded scope note
     Phase 3 Batch 1 delivers bounded slices of the compensation engine.
     Full planner/executor/retry/rollback record are Batch 1 scope (Phase 2b exit is closed).
