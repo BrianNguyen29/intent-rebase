@@ -60,3 +60,40 @@ docker compose -f infrastructure/local/docker-compose.yml --profile observabilit
 When running via docker-compose, Alertmanager routes internally to the `alert-receiver` service at `http://alert-receiver:9094/webhook`, and host port 9094 is exposed by the `alert-receiver` container.
 
 In both cases the helper is local/manual-only, does not persist alerts, and does not route to external systems. Press `Ctrl+C` to stop the standalone script.
+
+### Smoke test (Alertmanager → alert-receiver)
+
+> **Local/manual-only.** This validates the alert delivery path on a developer workstation; it is not a production readiness check.
+
+1. **Start alert-receiver and alertmanager** (preserves existing Postgres/NATS/MinIO):
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d alert-receiver alertmanager
+   ```
+
+2. **Post a test alert** using the helper:
+   ```bash
+   python3 infrastructure/local/alertmanager/smoke_test_alert_receiver.py
+   ```
+
+   Or manually with `curl`:
+   ```bash
+   curl -X POST http://localhost:9093/api/v1/alerts \
+     -H "Content-Type: application/json" \
+     -d '[{"labels":{"alertname":"TestAlert","severity":"warning","slo":"propagation","instance":"smoke-test","source":"local-smoke-helper"},"annotations":{"summary":"Smoke test alert"}}]'
+   ```
+
+3. **Inspect alert-receiver logs** for the `TestAlert` payload:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability logs alert-receiver
+   ```
+   You should see the alert JSON printed by `webhook_receiver.py`.
+
+4. **Clean up only alert-receiver and Alertmanager** while preserving any pre-existing Grafana/Prometheus/core services:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability stop alert-receiver alertmanager
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability rm -f alert-receiver alertmanager
+   ```
+   To stop the whole observability profile, including Grafana/Prometheus if running:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability down
+   ```
