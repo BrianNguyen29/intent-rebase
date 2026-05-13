@@ -107,7 +107,6 @@ services:
     container_name: intent-rebase-alertmanager
     ports:
       - "9093:9093"
-      - "9094:9094"
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
@@ -117,11 +116,26 @@ services:
     restart: unless-stopped
     profiles:
       - observability
+    depends_on:
+      - alert-receiver
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # Lightweight local alert receiver for manual inspection (not production-ready)
+  alert-receiver:
+    image: python:3.12-alpine
+    container_name: intent-rebase-alert-receiver
+    ports:
+      - "9094:9094"
+    volumes:
+      - ./alertmanager/webhook_receiver.py:/receiver.py:ro
+    command: ["python3", "/receiver.py"]
+    restart: unless-stopped
+    profiles:
+      - observability
 
   # Grafana for visualization
   grafana:

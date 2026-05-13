@@ -10,7 +10,8 @@ Usage:
     python3 infrastructure/local/alertmanager/webhook_receiver.py
     # Then trigger an alert in local Prometheus and watch stdout.
 
-The Alertmanager config in alertmanager.yml routes to http://localhost:9094/webhook.
+Standalone use listens at http://localhost:9094/webhook. Docker Compose
+Alertmanager routes to the receiver service at http://alert-receiver:9094/webhook.
 """
 
 import json

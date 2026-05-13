@@ -49,17 +49,17 @@ receivers:
     # DLQ alerts receiver — local/staging placeholder
     # In production: replace with PagerDuty/OpsGenie routing to SRE on-call
     webhook_configs:
-      - url: 'http://localhost:9094/webhook'
+      - url: 'http://alert-receiver:9094/webhook'
         send_resolved: true
 
   - name: 'critical-alerts'
     # In production: configure PagerDuty, Slack, email, etc.
     webhook_configs:
-      - url: 'http://localhost:9094/webhook'
+      - url: 'http://alert-receiver:9094/webhook'
         send_resolved: true
 
   - name: 'warning-alerts'
     # In production: configure Slack, email, etc.
     webhook_configs:
-      - url: 'http://localhost:9094/webhook'
+      - url: 'http://alert-receiver:9094/webhook'
         send_resolved: true

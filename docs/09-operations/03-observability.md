@@ -45,10 +45,18 @@ Structured logs với:
 
 > **Not production-ready.** Real receivers (Slack, PagerDuty, email) remain blocked/deferred.
 
-Local Alertmanager is configured in `infrastructure/local/alertmanager/alertmanager.yml` with placeholder webhook routes to `http://localhost:9094/webhook`. To inspect alert payloads manually during local development, run the lightweight helper:
+Local Alertmanager is configured in `infrastructure/local/alertmanager/alertmanager.yml` with placeholder webhook routes.
 
+**Standalone (host):**
 ```bash
 python3 infrastructure/local/alertmanager/webhook_receiver.py
 ```
+The standalone script listens on `http://localhost:9094/webhook` and prints received alert JSON to stdout.
 
-This starts a local HTTP server on port 9094 that prints received alert JSON to stdout. It does not persist alerts or route to external systems. Press `Ctrl+C` to stop.
+**Docker Compose (observability profile):**
+```bash
+docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d
+```
+When running via docker-compose, Alertmanager routes internally to the `alert-receiver` service at `http://alert-receiver:9094/webhook`, and host port 9094 is exposed by the `alert-receiver` container.
+
+In both cases the helper is local/manual-only, does not persist alerts, and does not route to external systems. Press `Ctrl+C` to stop the standalone script.
