@@ -319,14 +319,14 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R3 are checked to record owner assignment / design review completion, dependency placement, and schema/trait review decisions only; this is **not** an implementation Go. R4–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R4 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, and RLS/tenant implications decisions only; this is **not** an implementation Go. R5–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
 | R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | Brian Nguyen (owner) / AI-oracle (reviewer) | ☑ |
 | R2 | **Dependency Readiness** — Decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`; verify latest compatible version at implementation time. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. No `Cargo.toml` changes made in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R3 | **Schema & Trait Review** — Decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as future `webhook_subscriptions` table (migration 018). B2 resolved as future trait methods `record_delivery_attempt` and `record_delivery_outcome`. No migration or Rust files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R4 | **RLS / Tenant Implications** — Confirm that webhook delivery logic will respect tenant isolation (subscription records scoped by `tenant_id`); verify no cross-tenant URL leakage in logs or error messages; confirm `subscription_id` maps to a tenant-scoped webhook URL | TBD | ☐ |
+| R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R5 | **Retry Constants Acceptance** — Timeout values (5s connect, 30s request, 120s max total) and retry policy (3 attempts, base 2s, multiplier 2.0, max 30s, full jitter) reviewed and accepted; documented rationale accepted by owner | TBD | ☐ |
 | R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test; delivery observability metrics (attempted, succeeded, failed, retry_exhausted) added to test plan and metrics registry | TBD | ☐ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented including explicit feature-flag/env gate name (e.g., `INTENT_API_WEBHOOK_DELIVERY=true`) to disable dispatch without code change; failed-to-pending reset semantics and delivery task lifecycle (spawn, cancel, timeout, panic) documented; `failure_reason` truncation/redaction policy agreed (max length, PII redaction) | TBD | ☐ |
@@ -387,6 +387,50 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - SQL implementation should use optimistic locking (`lock_version`) consistently with existing repository patterns.
 
 **No migration or Rust changes:** These decisions are recorded for the future implementation phase. No `.sql` migration file and no `.rs` source file was modified in this docs-only update.
+
+#### R4 Decision Note (Docs-Only — No Migration, Rust, or Test Changes)
+
+> **Status:** RLS and tenant implications decision recorded. No migration, Rust, or test files were modified. R8 remains No-Go.
+
+**D1 — RLS policy for future `webhook_subscriptions` table:**
+- Decision: apply the existing P1 RLS pattern exactly.
+- Proposed future migration DDL:
+  - `ALTER TABLE webhook_subscriptions ENABLE ROW LEVEL SECURITY;`
+  - `ALTER TABLE webhook_subscriptions FORCE ROW LEVEL SECURITY;`
+  - `CREATE POLICY tenant_isolation ON webhook_subscriptions FOR ALL USING (current_tenant_id() IS NULL OR tenant_id = current_tenant_id());`
+- Rationale: follows migration 017 RLS pattern; no new policy semantics.
+
+**D2 — Dispatcher lookup scope:**
+- Decision: every dispatcher query and repository update must include an application-layer `tenant_id` filter.
+- Proposed future SQL patterns:
+  - `SELECT * FROM webhook_subscriptions WHERE tenant_id = $1 AND intent_id = $2;`
+  - `record_delivery_attempt(id, tenant_id)` and `record_delivery_outcome(id, tenant_id, status, failure_reason)` both require `tenant_id` as an explicit parameter.
+- `tenant_id` is sourced from persisted intent context at dispatcher spawn time, not from the HTTP request/JWT.
+- RLS is defense-in-depth only; it must not substitute for application-layer `tenant_id` scoping.
+- **Caution:** PostgreSQL `current_tenant_id()` session context may not automatically propagate into spawned async delivery tasks, so application-layer scoping is the primary control.
+
+**D3 — URL logging and redaction policy:**
+- Decision: never log full webhook URLs at `warn` or `error` levels.
+- Allowed: log `downstream_system_id` and, if needed, a sanitized URL in the form `scheme://host[:port]` only.
+- Must strip: path, query parameters, fragments, and any embedded credentials.
+- Response bodies from downstream systems must not be logged.
+- `failure_reason` truncation and redaction are covered in R7 (deferred to R7 decision).
+
+**D4 — Future G6 RLS test extension:**
+- Decision: when `webhook_subscriptions` is created, extend the existing ignored/live-Postgres RLS test suite with tenant-isolation cases for the new table.
+- Pattern: tenant-scoped insert/list should succeed for matching tenant, fail-closed for mismatched tenant, following the same test structure as existing `rls_integration` tests.
+- **Scope:** this is a future test-plan item (R6/G6), not implemented in R4.
+
+**Missing-JWT / backward-compatible note:**
+- The bounded non-production paths (in-memory, no JWT) remain fail-open and backward-compatible.
+- Tenant-scoped DB queries use `tenant_id` from the persisted intent context, not from JWT claims.
+- This design does **not** claim production safety for missing-JWT paths.
+
+**Explicit cautions / deferred scope:**
+- Log aggregator tenancy is unknown; centralized logging may see cross-tenant webhook delivery traces if not filtered by deployment.
+- Secrets/HMAC key storage for webhook signing remains deferred (not in Slice 3).
+
+**No migration, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `.sql` migration, `.rs` source, or test file was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
