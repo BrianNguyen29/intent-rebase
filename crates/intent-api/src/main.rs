@@ -52,7 +52,7 @@ use intent_service::{
     ApprovalRequestRepository, CheckpointService, InMemoryApprovalRequestRepository,
     InMemoryCheckpointRepository, InMemoryIntentRepository, InMemoryPolicySnapshotRepository,
     IntentService, PolicySnapshotRepository, SqlxCheckpointRepository, SqlxIntentRepository,
-    SqlxPolicySnapshotRepository,
+    SqlxPolicySnapshotRepository, SqlxPropagationRecordRepository,
 };
 use rebase_orchestrator::RebaseOrchestrator;
 use runtime_adapter::{MockAdapter, RuntimeAdapter};
@@ -448,6 +448,10 @@ async fn build_sql_router_with_consumer_jwt(
         maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
     };
 
+    // Slice 2: SQL-backed propagation record repository
+    let propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>> =
+        Some(Arc::new(SqlxPropagationRecordRepository::new(pool.clone())));
+
     let router = build_router_with_sql_audit_and_approval_jwt(
         pool,
         intent_service,
@@ -461,7 +465,7 @@ async fn build_sql_router_with_consumer_jwt(
         forensic_archive_generator,
         forensic_bundle_service,
         auth_config,
-        None,
+        propagation_record_repo,
         Some(rls_pool),
     );
 
@@ -597,6 +601,10 @@ async fn build_sql_router_with_consumer_impl(
         maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
     };
 
+    // Slice 2: SQL-backed propagation record repository
+    let propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>> =
+        Some(Arc::new(SqlxPropagationRecordRepository::new(pool.clone())));
+
     let router = build_router_with_sql_audit_and_approval(
         pool,
         intent_service,
@@ -609,7 +617,7 @@ async fn build_sql_router_with_consumer_impl(
         forensic_service,
         forensic_archive_generator,
         forensic_bundle_service,
-        None, // propagation_record_repo: None for SQL mode (Slice 1 bounded)
+        propagation_record_repo,
         Some(rls_pool),
     );
 

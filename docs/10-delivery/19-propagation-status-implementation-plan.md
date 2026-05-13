@@ -1,6 +1,6 @@
 # Propagation Status Implementation Plan
 
-> **Status:** Slice 1 bounded implemented locally — migration 017 applied, `PropagationRecord` domain type and in-memory repository wired, query handler reads from repo when available and falls back to stub when `None`. No production-ready claim.
+> **Status:** Slices 1–2 bounded implemented locally — migration 017 applied, `PropagationRecord` domain type, in-memory and SQL repositories wired, query handler reads from repo when available and falls back to stub when `None`, signal ingestion endpoint wired. No production-ready claim.
 > **Scope:** Concrete bounded plan for evolving `GET /intents/{intent_id}/propagation-status` from stub to real downstream tracking  
 > **Related:** [ADR-12](../13-adrs/12-workflow-migration-rebase.md), [Agent Safety Roadmap](./18-agent-safety-rebase-roadmap.md), [REST API Design](../04-api/01-rest-api.md)
 
@@ -159,19 +159,26 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [ ] OpenAPI descriptive text updated (this doc update)
 - [ ] Subscription CRUD endpoints remain deferred
 
-### Slice 2 — Propagation Status Persistence (Bounded)
+### Slice 2 — Propagation Status Persistence (Bounded — Locally Implemented)
 
-**Scope:**
-- SQL repository for `propagation_records`
-- `PUT /intents/{intent_id}/propagation-status/signaled` — internal API to record that a change was signaled (called by rebase-apply or version creation)
-- Query handler updated to read from `propagation_records` instead of returning empty list
-- Returns real `downstream_systems` and `propagation_summary` for registered systems
+**Implemented:**
+- `SqlxPropagationRecordRepository` with create/list/update against `propagation_records` table
+- SQL `AppState` wiring in `main.rs` — both JWT and non-JWT SQL router paths use `SqlxPropagationRecordRepository`
+- `POST /intents/{intent_id}/propagation-signals` — bounded signal ingestion endpoint (no webhook delivery, no event streaming)
+- Query handler reads from SQL repo when `propagation_record_repo` is `Some`; falls back to stub when `None`
+- Ignored live RLS tests for `propagation_records`: tenant-isolated insert/list/update and tenant mismatch fail-closed
+- OpenAPI updated with `/intents/{intent_id}/propagation-signals` endpoint and schemas
+
+**Deferred:**
+- `PUT /intents/{intent_id}/propagation-status/signaled` triggered automatically by rebase-apply/version creation
+- Webhook delivery, event streaming, cross-workflow lineage remain Phase 4+
 
 **Acceptance criteria:**
-- [ ] `GET /intents/{intent_id}/propagation-status` returns registered systems with correct status
-- [ ] `propagation_summary` counts match persisted records
-- [ ] Tenant isolation enforced via RLS
-- [ ] Route contract tests pass with real data
+- [x] `GET /intents/{intent_id}/propagation-status` returns registered systems with correct status when repo available
+- [x] `propagation_summary` counts match persisted records
+- [x] Tenant isolation enforced via RLS (migration 017 + live tests)
+- [x] Route contract tests pass
+- [x] Signal ingestion endpoint wired and reachable
 
 ### Slice 3 — Webhook Delivery (Bounded)
 

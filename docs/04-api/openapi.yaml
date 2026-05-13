@@ -2974,6 +2974,54 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /intents/{intent_id}/propagation-signals:
+    post:
+      tags:
+        - propagation-status
+        - intents
+      summary: Ingest a propagation signal (Slice 2 bounded)
+      description: |
+        Bounded signal ingestion endpoint. Records that a downstream system
+        has been signaled for an intent change. No actual webhook delivery or
+        event streaming occurs — this is a manual/internal API for testing
+        and seeding propagation records.
+
+        The record is created with status `pending`.
+      operationId: ingestPropagationSignal
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestPropagationSignalRequest'
+      responses:
+        '200':
+          description: Signal ingested successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestPropagationSignalResponse'
+        '401':
+          description: Tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found or propagation repository not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     # ----- Core Types -----
@@ -6433,6 +6481,54 @@ components:
         failed:
           type: integer
           description: Number of downstream systems that failed to process
+
+    IngestPropagationSignalRequest:
+      type: object
+      description: Request body for signal ingestion endpoint (Slice 2 bounded)
+      required:
+        - tenant_id
+        - downstream_system_id
+        - last_seen_version
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID to scope the record
+        downstream_system_id:
+          type: string
+          description: Identifier of the downstream system being signaled
+        last_seen_version:
+          type: integer
+          description: Last intent version the downstream system has processed
+
+    IngestPropagationSignalResponse:
+      type: object
+      description: Response for signal ingestion endpoint (Slice 2 bounded)
+      required:
+        - record_id
+        - intent_id
+        - tenant_id
+        - downstream_system_id
+        - status
+      properties:
+        record_id:
+          type: string
+          format: uuid
+          description: ID of the created propagation record
+        intent_id:
+          type: string
+          format: uuid
+          description: Intent ID
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        downstream_system_id:
+          type: string
+          description: Downstream system identifier
+        status:
+          type: string
+          description: Status of the created record (always `pending` for ingestion)
 
     PolicySnapshotResponse:
       type: object

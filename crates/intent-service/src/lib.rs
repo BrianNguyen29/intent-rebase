@@ -37,6 +37,7 @@ pub use policy_snapshot_repo::{
 };
 pub use propagation_record_repo::{
     InMemoryPropagationRecordRepository, PropagationRecordRepository,
+    SqlxPropagationRecordRepository,
 };
 pub use s3_snapshot_storage::{
     InMemorySnapshotStorage, S3SnapshotStorage, SnapshotStorage, SnapshotStorageError,

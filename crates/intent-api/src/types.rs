@@ -782,6 +782,28 @@ pub struct PropagationStatusResponse {
     pub unsupported_items: Vec<String>,
 }
 
+/// Request body for signal ingestion endpoint (Slice 2 bounded).
+///
+/// Records that a downstream system has been signaled for an intent change.
+/// No actual webhook delivery or event streaming — this is a bounded
+/// manual/internal ingestion API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IngestPropagationSignalRequest {
+    pub tenant_id: Uuid,
+    pub downstream_system_id: String,
+    pub last_seen_version: i32,
+}
+
+/// Response for signal ingestion endpoint (Slice 2 bounded).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestPropagationSignalResponse {
+    pub record_id: Uuid,
+    pub intent_id: Uuid,
+    pub tenant_id: Uuid,
+    pub downstream_system_id: String,
+    pub status: String,
+}
+
 // =============================================================================
 // DLQ Types
 // =============================================================================

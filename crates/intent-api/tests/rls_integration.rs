@@ -121,6 +121,7 @@ const RLS_SCOPED_TABLES: &[&str] = &[
     "policy_snapshot",
     "orchestration_runs",
     "forensic_bundles",
+    "propagation_records",
 ];
 
 /// Test result type for clearer error handling
@@ -835,6 +836,60 @@ async fn count_test_forensic_bundles_for_current_tenant(
         .fetch_one(&mut **tx)
         .await
         .map_err(|e| format!("Failed to count test forensic_bundles: {}", e))?;
+    Ok(count)
+}
+
+/// Create a test propagation_record for the given tenant within an RLS-scoped transaction.
+async fn create_test_propagation_record_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    record_id: Uuid,
+    intent_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO propagation_records (
+            id, tenant_id, intent_id, downstream_system_id, status,
+            last_seen_version, signaled_at, lock_version, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, 'test-system', 'pending', 1, NOW(), 1, NOW(), NOW())
+        "#,
+    )
+    .bind(record_id)
+    .bind(tenant_id)
+    .bind(intent_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test propagation_record: {}", e))?;
+
+    Ok(())
+}
+
+/// Count propagation_records visible to the current tenant context.
+async fn count_test_propagation_records_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    record_ids: &[Uuid],
+) -> TestResult<i64> {
+    if record_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = record_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM propagation_records WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in record_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test propagation_records: {}", e))?;
     Ok(count)
 }
 
@@ -4442,4 +4497,220 @@ async fn test_rlc_artifact_side_effect_tx_boundary() {
 
     pool.close().await;
     println!("test_rlc_artifact_side_effect_tx_boundary PASSED");
+}
+
+// ============================================================================
+// Propagation Records RLS Tests (Slice 2 bounded)
+// ============================================================================
+
+/// Test: propagation_records tenant isolation under RLS.
+///
+/// Verifies that propagation_records table (migration 017) correctly enforces
+/// tenant isolation via RLS policies.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_propagation_records_tenant_isolation() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    let intent_id = Uuid::new_v4();
+    let record_a_id = Uuid::new_v4();
+    let record_b_id = Uuid::new_v4();
+
+    // Create intent row first (required by FK, but propagation_records has no FK)
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
+            .await
+            .expect("Failed to create test intent");
+        tx.commit().await.unwrap();
+    }
+
+    // Create propagation record for Tenant A
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_propagation_record_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            record_a_id,
+            intent_id,
+        )
+        .await
+        .expect("Failed to create propagation record for Tenant A");
+        tx.commit().await.unwrap();
+    }
+
+    // Create propagation record for Tenant B (same intent_id, different tenant)
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_propagation_record_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            record_b_id,
+            intent_id,
+        )
+        .await
+        .expect("Failed to create propagation record for Tenant B");
+        tx.commit().await.unwrap();
+    }
+
+    // Verify Tenant A can only see their own record
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+
+        let count_own = count_test_propagation_records_for_current_tenant(&mut tx, &[record_a_id])
+            .await
+            .expect("Failed to count Tenant A records");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see exactly 1 propagation record"
+        );
+
+        let count_other =
+            count_test_propagation_records_for_current_tenant(&mut tx, &[record_b_id])
+                .await
+                .expect("Failed to count Tenant B records from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's propagation record"
+        );
+
+        tx.commit().await.unwrap();
+    }
+
+    // Verify Tenant B can only see their own record
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+
+        let count_own = count_test_propagation_records_for_current_tenant(&mut tx, &[record_b_id])
+            .await
+            .expect("Failed to count Tenant B records");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see exactly 1 propagation record"
+        );
+
+        let count_other =
+            count_test_propagation_records_for_current_tenant(&mut tx, &[record_a_id])
+                .await
+                .expect("Failed to count Tenant A records from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's propagation record"
+        );
+
+        tx.commit().await.unwrap();
+    }
+
+    pool.close().await;
+    println!("test_propagation_records_tenant_isolation PASSED");
+}
+
+/// Test: propagation_records tenant mismatch fail-closed.
+///
+/// Verifies that attempting to update a propagation record with wrong tenant
+/// fails (record not found) due to RLS enforcement.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_propagation_records_tenant_mismatch_fail_closed() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    let intent_id = Uuid::new_v4();
+    let record_id = Uuid::new_v4();
+
+    // Create intent row first
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
+            .await
+            .expect("Failed to create test intent");
+        tx.commit().await.unwrap();
+    }
+
+    // Create propagation record for Tenant A
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_propagation_record_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            record_id,
+            intent_id,
+        )
+        .await
+        .expect("Failed to create propagation record");
+        tx.commit().await.unwrap();
+    }
+
+    // Attempt to access/update record as Tenant B (should fail - record not found)
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+
+        let count = count_test_propagation_records_for_current_tenant(&mut tx, &[record_id])
+            .await
+            .expect("Failed to count records");
+        assert_eq!(
+            count, 0,
+            "Tenant B should NOT see Tenant A's record (RLS fail-closed)"
+        );
+
+        tx.commit().await.unwrap();
+    }
+
+    pool.close().await;
+    println!("test_propagation_records_tenant_mismatch_fail_closed PASSED");
 }

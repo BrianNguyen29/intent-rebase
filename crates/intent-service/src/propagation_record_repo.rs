@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use intent_rebase_types::{IntentRebaseError, PropagationRecord};
+use sqlx::Row;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -162,6 +163,201 @@ impl PropagationRecordRepository for InMemoryPropagationRecordRepository {
         }
 
         Ok(record.clone())
+    }
+}
+
+/// SQL-backed propagation record repository for Slice 2 bounded implementation
+pub struct SqlxPropagationRecordRepository {
+    pool: sqlx::PgPool,
+}
+
+impl SqlxPropagationRecordRepository {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PropagationRecordRepository for SqlxPropagationRecordRepository {
+    async fn create_record(
+        &self,
+        record: PropagationRecord,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO propagation_records (
+                id, tenant_id, intent_id, downstream_system_id, status,
+                last_seen_version, signaled_at, acknowledged_at, failed_at,
+                failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                lock_version, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING id, tenant_id, intent_id, downstream_system_id, status,
+                      last_seen_version, signaled_at, acknowledged_at, failed_at,
+                      failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                      lock_version, created_at, updated_at
+            "#,
+        )
+        .bind(record.id)
+        .bind(record.tenant_id)
+        .bind(record.intent_id)
+        .bind(&record.downstream_system_id)
+        .bind(format!("{:?}", record.status).to_lowercase())
+        .bind(record.last_seen_version)
+        .bind(record.signaled_at)
+        .bind(record.acknowledged_at)
+        .bind(record.failed_at)
+        .bind(record.failure_reason.as_deref().unwrap_or(""))
+        .bind(record.delivery_attempt_count)
+        .bind(record.last_delivery_attempt_at)
+        .bind(record.lock_version)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to create propagation record: {}", e))
+        })?;
+
+        Ok(map_row_to_record(row))
+    }
+
+    async fn get_record(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, tenant_id, intent_id, downstream_system_id, status,
+                   last_seen_version, signaled_at, acknowledged_at, failed_at,
+                   failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                   lock_version, created_at, updated_at
+            FROM propagation_records
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to get propagation record: {}", e))
+        })?;
+
+        match row {
+            Some(row) => Ok(map_row_to_record(row)),
+            None => Err(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            ))),
+        }
+    }
+
+    async fn list_by_intent(
+        &self,
+        intent_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<PropagationRecord>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, tenant_id, intent_id, downstream_system_id, status,
+                   last_seen_version, signaled_at, acknowledged_at, failed_at,
+                   failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                   lock_version, created_at, updated_at
+            FROM propagation_records
+            WHERE intent_id = $1 AND tenant_id = $2
+            ORDER BY updated_at DESC
+            "#,
+        )
+        .bind(intent_id)
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to list propagation records: {}", e))
+        })?;
+
+        Ok(rows.into_iter().map(map_row_to_record).collect())
+    }
+
+    async fn update_status(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        status: intent_rebase_types::PropagationStatus,
+        last_seen_version: i32,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let now = chrono::Utc::now();
+        let (acknowledged_at, failed_at) = match status {
+            intent_rebase_types::PropagationStatus::Acknowledged => (Some(now), None),
+            intent_rebase_types::PropagationStatus::Failed => (None, Some(now)),
+            intent_rebase_types::PropagationStatus::Pending => (None, None),
+        };
+
+        let row = sqlx::query(
+            r#"
+            UPDATE propagation_records
+            SET status = $1,
+                last_seen_version = $2,
+                acknowledged_at = $3,
+                failed_at = $4,
+                updated_at = $5,
+                lock_version = lock_version + 1
+            WHERE id = $6 AND tenant_id = $7
+            RETURNING id, tenant_id, intent_id, downstream_system_id, status,
+                      last_seen_version, signaled_at, acknowledged_at, failed_at,
+                      failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                      lock_version, created_at, updated_at
+            "#,
+        )
+        .bind(format!("{:?}", status).to_lowercase())
+        .bind(last_seen_version)
+        .bind(acknowledged_at)
+        .bind(failed_at)
+        .bind(now)
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to update propagation record: {}", e))
+        })?;
+
+        match row {
+            Some(row) => Ok(map_row_to_record(row)),
+            None => Err(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            ))),
+        }
+    }
+}
+
+fn map_row_to_record(row: sqlx::postgres::PgRow) -> PropagationRecord {
+    let status_str: String = row.get("status");
+    let status = match status_str.as_str() {
+        "acknowledged" => intent_rebase_types::PropagationStatus::Acknowledged,
+        "failed" => intent_rebase_types::PropagationStatus::Failed,
+        _ => intent_rebase_types::PropagationStatus::Pending,
+    };
+
+    PropagationRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        intent_id: row.get("intent_id"),
+        downstream_system_id: row.get("downstream_system_id"),
+        status,
+        last_seen_version: row.get("last_seen_version"),
+        signaled_at: row.get("signaled_at"),
+        acknowledged_at: row.get("acknowledged_at"),
+        failed_at: row.get("failed_at"),
+        failure_reason: row.get::<Option<String>, _>("failure_reason"),
+        delivery_attempt_count: row.get("delivery_attempt_count"),
+        last_delivery_attempt_at: row.get("last_delivery_attempt_at"),
+        lock_version: row.get("lock_version"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     }
 }
 

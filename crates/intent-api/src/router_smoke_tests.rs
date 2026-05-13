@@ -539,6 +539,57 @@ async fn test_propagation_status_route_is_registered() {
 }
 
 // =========================================================================
+// Propagation Signal Ingestion Route Contract Test (Slice 2 bounded)
+// =========================================================================
+
+#[tokio::test]
+async fn test_propagation_signal_route_is_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
+        state.rls_pool,
+    );
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let intent_id = uuid::Uuid::new_v4();
+
+    // POST /intents/{intent_id}/propagation-signals
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/intents/{}/propagation-signals", intent_id))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(format!(
+            "{{\"tenant_id\":\"{}\",\"downstream_system_id\":\"test-system\",\"last_seen_version\":1}}",
+            tenant_id
+        )))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+
+    // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
 // OpenAPI Drift Guard Test
 //
 // Lightweight string-search verification that key implemented routes are
@@ -561,6 +612,7 @@ fn test_key_routes_are_documented_in_openapi() {
         "/intents/{intent_id}/rebase-preview",
         "/intents/{intent_id}/rebase-apply",
         "/intents/{intent_id}/propagation-status",
+        "/intents/{intent_id}/propagation-signals",
         "/forensic/bundle",
         "/forensic/bundles",
         "/forensic/bundles/{bundle_id}/download",
