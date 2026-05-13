@@ -34,7 +34,7 @@ This project distinguishes between **non-production feature completion** and **p
 | Phase 0 — Foundations | ✓ Complete | Repo scaffold, ADRs, architecture baseline, local dev, CI |
 | Phase 1 — Core Control Plane MVP | ✓ Complete | Intent schema + versioning (PR #21), Graph HTTP API (PR #22), Observability v1 (PR #23), Security v1 (PR #24) |
 | Phase 2 — Runtime-Integrated Rebase | ✅ Complete | Phase 2a runtime adapter delivered; Phase 2b complete and signed off — exit gate CLOSED |
-| Phase 3 — Compensation + Hardening | ✅ CLOSED — Non-Production Only (2026-05-11) | Batch 0 scaffold + planning ✅; Batch 1 largely delivered ✅; Batch 2 (observability/SRE) bounded slices delivered ✅; Batch 3 (P3: tenant isolation) bounded slices delivered ✅; Batch 4 (P5: performance, P6: security) bounded slices delivered ✅; external gates WAIVED-SOLO for non-production close-out |
+| Phase 3 — Compensation + Hardening | ✅ CLOSED — Non-Production Only (2026-05-11) | Batch 0 scaffold + planning ✅; Batch 1 largely delivered ✅; Batch 2 (observability/SRE) bounded slices delivered ✅; Batch 3 (P3: tenant isolation) bounded slices delivered ✅; Batch 4 (P5: performance, P6: security) bounded slices delivered ✅; ADR-11 bounded MVP delivered (`GET /policy-snapshots/{snapshot_id}/impact-report`) ✅; external gates WAIVED-SOLO for non-production close-out |
 
 ---
 

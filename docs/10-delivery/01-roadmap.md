@@ -31,6 +31,7 @@
 - tenant isolation hardening
 - forensic replay bundle
 - performance work
+- **ADR-11 bounded MVP delivered (non-production):** `GET /policy-snapshots/{snapshot_id}/impact-report` — read-only ImpactReport for a policy snapshot's intent, reusing ADR-10 semantics. Full `PolicyRebaseAdapter` deferred to Phase 4+.
 
 > **Phase 3 Batch 1 delivered:** side effect ledger (model/query/idempotency/capture-on-write), compensation actions CRUD + approve/waive/execute APIs, DLQ, batch orchestration (approve/reapprove/execute), policy gate evaluation, orchestration dashboard, orchestration coordination view, orchestration dry-run, single-shot orchestration runtime (HTTP + CLI). Phase 2b exit is closed; full planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1 bounded slices.
 

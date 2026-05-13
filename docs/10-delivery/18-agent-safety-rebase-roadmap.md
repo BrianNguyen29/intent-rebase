@@ -29,14 +29,20 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 ### Phase 2 — Agent Safety Core Language & Domain Model (Current)
 - Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc.
 - Design ImpactReport as an on-demand read-only projection across pillars (no persistence for MVP)
-- Define API contracts for impact-report and propagation-status
+- Define API contract for impact-report (ADR-10 bounded MVP implemented)
+- Define API contract for propagation-status (contract designed only; implementation deferred to Phase 4+)
 - **Checkpoint:** Phase 1/2 local milestone — non-production, integration-ready only
 
 ### Phase 3 — Policy / Config Rebase Pillar
-- **Bounded MVP implemented (non-production):** `GET /policy-snapshots/{snapshot_id}/impact-report` — read-only ImpactReport for a policy snapshot's intent, reusing ADR-10 semantics. Full `PolicyRebaseAdapter` deferred to Phase 4+.
-- Config object model and schema registry (deferred)
-- Policy/config rebase preview and apply examples (deferred)
-- Environment promotion semantics (dev/staging/prod) (deferred)
+
+**Implemented (bounded MVP — non-production):**
+- `GET /policy-snapshots/{snapshot_id}/impact-report` — read-only ImpactReport for a policy snapshot's intent, reusing ADR-10 semantics (ADR-11 accepted)
+
+**Deferred to Phase 4+:**
+- Full `PolicyRebaseAdapter` interface and implementation
+- Config object model and schema registry
+- Policy/config rebase preview and apply examples
+- Environment promotion semantics (dev/staging/prod)
 
 ### Phase 4 — Workflow Migration / Rebase Pillar
 - Runtime adapter contract and capability registry

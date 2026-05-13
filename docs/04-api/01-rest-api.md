@@ -119,11 +119,6 @@ Query params: `tenant_id` (required)
 
 Returns 404 if event doesn't exist or belongs to a different tenant (enforces tenant isolation).
 
-## Planned / target-state resources
-
-The following resources are part of the broader design direction and may not exist yet in the current implementation. Check [`openapi.yaml`](./openapi.yaml) before integrating against them.
-
-### POST /side-effects/{side_effect_id}/compensate
 ### GET /replays/{workflow_id}
 ### POST /replays/{workflow_id}/export
 
