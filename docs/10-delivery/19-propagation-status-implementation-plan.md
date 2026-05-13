@@ -317,6 +317,25 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 > **Note:** G7–G8 are proposed gates for when implementation begins. They are not runnable today because Slice 3 is design-only.
 
+#### Implementation Readiness Checklist (Pre-Implementation — Not Started)
+
+> **Status:** Pre-flight checklist. Implementation has **not** started. All items remain unchecked and require explicit approval before any code is written.
+
+| # | Item | Owner | Status |
+|---|------|-------|--------|
+| R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | TBD | ☐ |
+| R2 | **Dependency Readiness** — `reqwest` version and feature set (`rustls-tls`) confirmed compatible with workspace lockfile; test mock library (`wiremock` or `mockito`) chosen and added to `dev-dependencies` if not already present | TBD | ☐ |
+| R3 | **Schema Review** — `propagation_records` table schema (migration 017) reviewed for Slice 3 needs; confirm `delivery_attempt_count`, `last_delivery_attempt_at`, `failed_at`, and `failure_reason` columns are sufficient or identify additive migration if needed | TBD | ☐ |
+| R4 | **RLS / Tenant Implications** — Confirm that webhook delivery logic will respect tenant isolation (e.g., subscription records scoped by `tenant_id`); verify no cross-tenant URL leakage in logs or error messages | TBD | ☐ |
+| R5 | **Retry Constants Acceptance** — Timeout values (5s connect, 30s request, 120s max total) and retry policy (3 attempts, base 2s, multiplier 2.0, max 30s, full jitter) reviewed and accepted; documented rationale accepted by owner | TBD | ☐ |
+| R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test | TBD | ☐ |
+| R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented (disable webhook dispatch via feature flag or env gate if needed) | TBD | ☐ |
+| R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
+
+> **Go criteria:** R1–R7 are checked and accepted; owner signs off on bounded scope and non-goals.
+> **No-Go criteria:** Any R1–R7 item is unresolved, or scope creep is introduced (e.g., outbox pattern, background worker, delivery guarantees).
+> **Re-review:** If No-Go, re-review no sooner than one week after blockers are addressed.
+
 ### Slice 4 — Event Stream Integration (Deferred)
 
 **Scope:**
