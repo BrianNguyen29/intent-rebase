@@ -17,25 +17,42 @@
                   v
          [Trace Graph / Impact Engine]
                   |
-         +--------+---------+
-         |                  |
-         v                  v
- [Repair / Rebase Planner] [Policy / Approval Evaluator]
-         |                  |
-         +--------+---------+
-                  |
-                  v
+          +--------+---------+
+          |                  |
+          v                  v
+  [Repair / Rebase Planner] [Policy / Approval Evaluator]
+          |                  |
+          +--------+---------+
+                   |
+                   v
     [Runtime Adapter / Workflow Integrations]
-                  |
-                  v
+                   |
+                   v
        [Agent Runtime / Planner / Workers]
-                  |
-                  v
+                   |
+                   v
     [Artifacts, Side Effects, Memory, Checkpoints]
-                  |
-                  v
+                   |
+                   v
      [Audit, Replay, Console, Webhooks, Analytics]
 ```
+
+### Policy Snapshot → Impact Report Delegation Path
+
+**Bounded MVP (ADR-11, implemented):**
+```text
+GET /policy-snapshots/{snapshot_id}/impact-report
+  ├── Fetch policy snapshot by ID
+  ├── Validate tenant_id matches snapshot.tenant_id
+  ├── Extract snapshot.intent_id
+  └── Delegate to build_impact_report_response(intent_id, tenant_id, from_version, to_version)
+      └── Returns ImpactReportResponse (identical to GET /intents/{intent_id}/impact-report)
+```
+
+- **No new persistence** — reuses `policy_snapshots` table and existing intent repositories
+- **No new executor** — delegates to existing ImpactReport builder (ADR-10)
+- **No mutation** — endpoint is read-only
+- **Full PolicyRebaseAdapter deferred to Phase 4+** — cross-intent policy lookup, synthetic `IntentVersionDiff` generation, and policy-specific preview/apply pipelines remain future design
 
 ## Các lớp chính
 

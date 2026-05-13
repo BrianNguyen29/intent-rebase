@@ -105,3 +105,4 @@ No migration, no new repository, no new DB table.
 
 - [ADR-07](./07-approval-scope-canonicalization.md): Approval Scope & Policy Snapshot Canonicalization
 - [ADR-09](./09-rebase-apply-rls-transaction-boundary.md): Rebase Apply RLS Transaction Boundary
+- [ADR-11](./11-policy-config-rebase-pillar.md): Policy / Config Rebase Pillar — reuses ImpactReport semantics for policy snapshot read-only projection

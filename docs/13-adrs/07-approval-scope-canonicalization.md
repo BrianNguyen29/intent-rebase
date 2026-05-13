@@ -201,6 +201,7 @@ CREATE INDEX idx_policy_snapshot_hash ON policy_snapshot(tenant_id, scope_hash);
 
 - [ADR-02](./02-data-plane.md) — Storage architecture
 - [ADR-06](./06-rule-pack-versioning.md) — Rule pack versioning
+- [ADR-11](./11-policy-config-rebase-pillar.md) — Policy / Config Rebase Pillar — bounded MVP reuses policy snapshot read-only queries; full adapter deferred to Phase 4+
 - [Governance Pack](../14-governance/04-approval-revalidation.md) — Full approval revalidation specification
 
 ---

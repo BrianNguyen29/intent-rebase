@@ -127,6 +127,56 @@ The following resources are part of the broader design direction and may not exi
 ### GET /replays/{workflow_id}
 ### POST /replays/{workflow_id}/export
 
+### GET /intents/{intent_id}/propagation-status
+**Design-only / Phase 4+ deferred.** Returns the downstream propagation status for an intent change — which downstream systems have acknowledged or reacted to the change.
+
+**Scope:** Contract-only documentation; no implementation, no production-ready claim.
+
+**Proposed response shape:**
+```json
+{
+  "intent_id": "uuid",
+  "tenant_id": "uuid",
+  "downstream_systems": [
+    {
+      "system_id": "workflow-runner-a",
+      "acknowledged_at": "2026-05-12T10:00:00Z",
+      "status": "acknowledged",
+      "last_seen_version": 3
+    },
+    {
+      "system_id": "agent-runtime-b",
+      "acknowledged_at": null,
+      "status": "pending",
+      "last_seen_version": 2
+    }
+  ],
+  "propagation_summary": {
+    "total": 2,
+    "acknowledged": 1,
+    "pending": 1,
+    "failed": 0
+  },
+  "unsupported_items": [
+    " webhook subscription management",
+    " event streaming acknowledgment",
+    " cross-tenant propagation tracking"
+  ]
+}
+```
+
+**Status values (proposed):**
+- `acknowledged` — downstream system has confirmed receipt of the intent change
+- `pending` — change has been signaled but not yet acknowledged
+- `failed` — downstream system explicitly rejected or failed to process the change
+- `stale` — downstream system's last seen version is behind the current intent version
+
+**Deferred to Phase 4+:**
+- Webhook registration and delivery
+- Event streaming integration (NATS/Kafka)
+- Cross-workflow lineage propagation (N2)
+- Real-time propagation monitoring UI
+
 ## Error model
 ```json
 {
