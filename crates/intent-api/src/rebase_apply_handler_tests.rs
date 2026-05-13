@@ -165,3 +165,186 @@ async fn test_rebase_apply_non_rls_fallback_proceeds() {
         response.outcome
     );
 }
+
+#[cfg(feature = "jwt-auth")]
+#[tokio::test]
+async fn test_rebase_apply_creates_propagation_signals_for_proceed() {
+    use intent_rebase_types::{
+        ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, DiffRequest, SourceRef,
+    };
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Create version 2 with a scope change to trigger a non-NoOp diff
+    let mut v2_payload = create_test_payload();
+    v2_payload.scope.in_scope.push("item2".to_string());
+
+    let version_request = CreateVersionRequest {
+        payload: v2_payload,
+        change_reason: "v2".to_string(),
+        change_channel: ChangeChannel::UserEdit,
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+    };
+    state
+        .service
+        .create_version(intent_id, version_request, None, None)
+        .await
+        .unwrap();
+
+    // Pre-seed a propagation record to simulate a registered downstream system
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-a".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Call rebase_apply (Proceed outcome)
+    let diff_request = DiffRequest {
+        from_version: 1,
+        to_version: 2,
+    };
+
+    let result = rebase_apply_handlers::rebase_apply(
+        State(state.clone()),
+        crate::test_helpers::create_test_optional_rls_claims(tenant_id),
+        Path(intent_id),
+        Json(diff_request),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Expected success for proceed path: {:?}",
+        result
+    );
+    let (status, response) = result.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        response.outcome == "auto_proceeded"
+            || response.outcome == "auto_proceeded_with_notification",
+        "Expected auto-proceeded outcome, got: {}",
+        response.outcome
+    );
+
+    // Verify the propagation record was updated to pending with last_seen_version = 2
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Pending,
+        "Propagation record should be updated to pending after apply"
+    );
+    assert_eq!(
+        updated.last_seen_version, 2,
+        "Propagation record last_seen_version should be updated to to_version"
+    );
+}
+
+#[cfg(feature = "jwt-auth")]
+#[tokio::test]
+async fn test_rebase_apply_no_signals_when_repo_none() {
+    use intent_rebase_types::{
+        ActorRef, ChangeChannel, CreateIntentRequest, CreateVersionRequest, DiffRequest, SourceRef,
+    };
+
+    let mut state = create_test_service();
+    // Simulate in-memory mode without propagation repo
+    state.propagation_record_repo = None;
+
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Create version 2 with a scope change to trigger a non-NoOp diff
+    let mut v2_payload = create_test_payload();
+    v2_payload.scope.in_scope.push("item2".to_string());
+
+    let version_request = CreateVersionRequest {
+        payload: v2_payload,
+        change_reason: "v2".to_string(),
+        change_channel: ChangeChannel::UserEdit,
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+    };
+    state
+        .service
+        .create_version(intent_id, version_request, None, None)
+        .await
+        .unwrap();
+
+    // Call rebase_apply with no propagation repo — should still succeed
+    let diff_request = DiffRequest {
+        from_version: 1,
+        to_version: 2,
+    };
+
+    let result = rebase_apply_handlers::rebase_apply(
+        State(state.clone()),
+        crate::test_helpers::create_test_optional_rls_claims(tenant_id),
+        Path(intent_id),
+        Json(diff_request),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Expected success when propagation repo is None: {:?}",
+        result
+    );
+    let (status, response) = result.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        response.outcome == "auto_proceeded"
+            || response.outcome == "auto_proceeded_with_notification",
+        "Expected auto-proceeded outcome, got: {}",
+        response.outcome
+    );
+}

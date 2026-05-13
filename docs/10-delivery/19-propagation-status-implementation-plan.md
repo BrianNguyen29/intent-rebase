@@ -165,12 +165,17 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - `SqlxPropagationRecordRepository` with create/list/update against `propagation_records` table
 - SQL `AppState` wiring in `main.rs` — both JWT and non-JWT SQL router paths use `SqlxPropagationRecordRepository`
 - `POST /intents/{intent_id}/propagation-signals` — bounded signal ingestion endpoint (no webhook delivery, no event streaming)
+- Automatic propagation signal creation triggered by rebase apply (post-commit, only for `Proceed` outcomes)
+  - Uses existing propagation records as de facto downstream registry
+  - Best-effort: `tracing::warn!` on failure, never fails apply response
+  - In-memory/no-repo paths remain unaffected (backward compatible)
 - Query handler reads from SQL repo when `propagation_record_repo` is `Some`; falls back to stub when `None`
 - Ignored live RLS tests for `propagation_records`: tenant-isolated insert/list/update and tenant mismatch fail-closed
 - OpenAPI updated with `/intents/{intent_id}/propagation-signals` endpoint and schemas
 
 **Deferred:**
-- `PUT /intents/{intent_id}/propagation-status/signaled` triggered automatically by rebase-apply/version creation
+- Automatic trigger on intent version creation (rejected per oracle recommendation)
+- Automatic trigger on policy snapshot impact report (rejected per oracle recommendation)
 - Webhook delivery, event streaming, cross-workflow lineage remain Phase 4+
 
 **Acceptance criteria:**
@@ -179,6 +184,9 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Tenant isolation enforced via RLS (migration 017 + live tests)
 - [x] Route contract tests pass
 - [x] Signal ingestion endpoint wired and reachable
+- [x] Rebase apply triggers propagation signal update for Proceed outcomes
+- [x] Blocked/NoOp apply paths do not create signals
+- [x] Missing repo does not fail apply response
 
 ### Slice 3 — Webhook Delivery (Bounded)
 

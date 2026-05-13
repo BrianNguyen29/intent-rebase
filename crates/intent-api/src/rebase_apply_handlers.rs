@@ -54,6 +54,52 @@ fn risk_class_label(risk_tier: &RiskTier) -> &'static str {
     }
 }
 
+/// Best-effort propagation signal creation after successful rebase apply.
+///
+/// Queries existing propagation records for the intent (de facto downstream
+/// registry) and updates each to status `pending` with the new version.
+/// Failures are logged as warnings and never fail the apply response.
+async fn create_propagation_signals_after_apply(
+    state: &AppState,
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    to_version: i32,
+) {
+    let repo = match &state.propagation_record_repo {
+        Some(repo) => repo,
+        None => return,
+    };
+
+    let records = match repo.list_by_intent(intent_id, tenant_id).await {
+        Ok(recs) => recs,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to list propagation records for signal creation: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    for record in records {
+        if let Err(e) = repo
+            .update_status(
+                record.id,
+                tenant_id,
+                intent_rebase_types::PropagationStatus::Pending,
+                to_version,
+            )
+            .await
+        {
+            tracing::warn!(
+                "Failed to update propagation signal for system {}: {}",
+                record.downstream_system_id,
+                e
+            );
+        }
+    }
+}
+
 /// Build the RebaseApplyResponse from plan and apply result.
 fn build_rebase_apply_response(
     intent_id: Uuid,
@@ -394,6 +440,21 @@ pub(crate) async fn rebase_apply(
         .await;
     }
 
+    // Slice 2 bounded: Create propagation signals for Proceed outcomes.
+    // Uses existing propagation records as de facto downstream registry.
+    // Best-effort: warn on failure, never fails apply response.
+    if matches!(
+        apply_result.outcome,
+        ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
+    ) {
+        create_propagation_signals_after_apply(
+            &state,
+            intent_id,
+            intent_head.intent.tenant_id,
+            to_version.version_number,
+        )
+        .await;
+    }
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E
     if matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview) {
         let blocked_payload = intent_rebase_types::RebaseApplyBlockedAuditPayload {
@@ -1008,6 +1069,21 @@ pub(crate) async fn rebase_apply(
         .await;
     }
 
+    // Slice 2 bounded: Create propagation signals for Proceed outcomes.
+    // Uses existing propagation records as de facto downstream registry.
+    // Best-effort: warn on failure, never fails apply response.
+    if matches!(
+        apply_result.outcome,
+        ApplyOutcome::AutoProceeded | ApplyOutcome::AutoProceededWithNotification
+    ) {
+        create_propagation_signals_after_apply(
+            &state,
+            intent_id,
+            intent_head.intent.tenant_id,
+            to_version.version_number,
+        )
+        .await;
+    }
     // Phase 2b bounded slice: Create pending approval_request when blocked D/E
     if matches!(apply_result.outcome, ApplyOutcome::BlockedManualReview) {
         let blocked_payload = intent_rebase_types::RebaseApplyBlockedAuditPayload {
