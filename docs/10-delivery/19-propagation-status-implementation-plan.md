@@ -319,7 +319,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R6 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, and test plan mapping decisions only; this is **not** an implementation Go. R7–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R7 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, test plan mapping, and rollback/non-goals acknowledgment decisions only; this is **not** an implementation Go. R8 remains unchecked and requires explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
@@ -329,7 +329,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R6 | **Test Plan Mapping to G1–G8** — Decision recorded (see R6 Decision Note below). G1–G8 mapped to existing or future checks with concrete commands or file locations. G7 future unit test module and G8 future wiremock integration test proposed with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. No Rust, test, Cargo, or config files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented including explicit feature-flag/env gate name (e.g., `INTENT_API_WEBHOOK_DELIVERY=true`) to disable dispatch without code change; failed-to-pending reset semantics and delivery task lifecycle (spawn, cancel, timeout, panic) documented; `failure_reason` truncation/redaction policy agreed (max length, PII redaction) | TBD | ☐ |
+| R7 | **Rollback / Non-Goals Acknowledgment** — Decision recorded (see R7 Decision Note below). Env gate `INTENT_API_WEBHOOK_DELIVERY` documented with default/conservative behavior and rollback/roll-forward procedure. `failure_reason` truncation/redaction policy accepted (max 500 chars, URL stripping, PII redaction). Failed-to-pending reset semantics: manual operator action only for Slice 3. Delivery task lifecycle: tokio::spawn fire-and-forget, no graceful shutdown. Non-goals restated. RB13 and Prometheus placeholders proposed only. No code, test, config, runbook, or alert files modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
 
 #### R2 Decision Note (Docs-Only — No Cargo Changes)
@@ -534,6 +534,77 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No cross-workflow lineage testing.
 
 **No Rust, test, Cargo, or config changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, `Cargo.toml`, or config file was modified in this docs-only update.
+
+#### R7 Decision Note (Docs-Only — No Code, Test, Config, Runbook, or Alert Changes)
+
+> **Status:** Rollback, non-goals, and operational policy decision recorded. No code, test, config, runbook, or alert files were modified. R8 remains No-Go.
+
+**D13 — Env gate rollback / roll-forward:**
+- Gate name: `INTENT_API_WEBHOOK_DELIVERY` (boolean).
+- Checked at dispatcher spawn time only.
+- **Default behavior:**
+  - Local dev: `true` (enable dispatch for testing).
+  - Production: `false` (disable dispatch until SRE sign-off).
+  - Unset or invalid: conservative `false`.
+- **Rollback (disable dispatch):** set `INTENT_API_WEBHOOK_DELIVERY=false`, restart. Propagation signal creation (`POST /intents/{intent_id}/propagation-signals`) and query (`GET /intents/{intent_id}/propagation-status`) remain enabled; only webhook POST dispatch is disabled. `attempted_total` counter stops increasing. No migration rollback, code revert, or data loss.
+- **Roll-forward (re-enable dispatch):** set `INTENT_API_WEBHOOK_DELIVERY=true`, restart. Next rebase apply resumes delivery for new signals.
+
+**D14 — `failure_reason` truncation / redaction policy (accepted):**
+- Max length: 500 characters; append truncation marker (`... [truncated]`) if exceeded.
+- URL stripping: remove path, query parameters, fragments, and embedded credentials.
+- Body snippet: max 100 characters from downstream response body; do not log full bodies.
+- PII redaction: detect and mask common patterns (email addresses, IP addresses, JWT tokens).
+- **Ownership:** R7 consolidates R4 D3 (URL logging redaction) and R5 D7 (error classification redaction).
+- **Future helper suggestion:** a small sanitize helper function for consistent redaction across logging and `failure_reason`.
+- No implementation is written now.
+
+**D15 — Failed-to-pending reset semantics (accepted):**
+- Slice 3: `failed` records reset to `pending` only via explicit operator action (manual re-signal or direct SQL update).
+- Future dispatcher skips `failed` records; it does not automatically retry them.
+- Automatic reset on intent version bump is **Phase 4+** scope, not Slice 3.
+- This is a future design requirement documented now; no implementation is written.
+
+**D16 — Delivery task lifecycle (accepted):**
+- Spawn: `tokio::spawn` fire-and-forget.
+- Caller: returns immediately; delivery is not awaited.
+- Process restart: in-flight deliveries are lost; no in-flight recovery.
+- Shutdown: no `CancellationToken` or graceful shutdown for Slice 3.
+- Timeout enforcement: 120s max total duration per R5 D8.
+- Outcome recording: best-effort via repository methods.
+- Concurrency: sequential per intent; separate intents are independent with no shared backoff state.
+
+**D17 — Non-goals restatement (accepted):**
+- No outbox or transactional boundary spanning DB write + HTTP delivery.
+- No distributed transactions.
+- No delivery guarantees (best-effort only).
+- No background retry worker (in-process sequential retries only).
+- No production-readiness claim.
+- No HMAC signing or key rotation (deferred).
+- No subscription CRUD API endpoints (deferred).
+- No event streaming / NATS integration (Slice 4).
+- No cross-workflow lineage (Slice 5).
+- No per-attempt delivery log table (deferred).
+- No dead-letter topic or queue (deferred).
+- No consumer-managed subscriptions (deferred).
+- No multi-region replication (deferred).
+- No SLA or latency guarantee (deferred).
+
+**D18 — Runbook and observability placeholders (proposed only):**
+- Proposed future runbook: **RB13 — Webhook Delivery Failures** (placeholder; do not edit runbook files now).
+- Proposed future local-dev Prometheus rule: `WebhookDeliveryFailureRate` (placeholder; do not edit alert rules now).
+- Observability docs update is future implementation-phase scope, not R7.
+
+**N1–N6 resolution summary:**
+| # | Refinement | Resolved In | Decision |
+|---|------------|-------------|----------|
+| N1 | Workspace dependency placement | R2 | `reqwest` and `wiremock` crate-local in `intent-api` |
+| N2 | Delivery observability metrics | R6 D11 | Four counters defined; histogram deferred |
+| N3 | Failed-to-pending reset semantics | R7 D15 | Manual operator action only for Slice 3; automatic reset is Phase 4+ |
+| N4 | Delivery task lifecycle | R7 D16 | `tokio::spawn` fire-and-forget; no graceful shutdown |
+| N5 | `failure_reason` truncation / redaction | R7 D14 | Max 500 chars, URL stripping, body snippet 100 chars, PII redaction |
+| N6 | Feature flag / env rollback gate | R7 D13 | `INTENT_API_WEBHOOK_DELIVERY` boolean; conservative default |
+
+**No code, test, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, config, runbook, or alert file was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
