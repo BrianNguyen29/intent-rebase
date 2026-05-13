@@ -169,6 +169,11 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
   - Uses existing propagation records as de facto downstream registry
   - Best-effort: `tracing::warn!` on failure, never fails apply response
   - In-memory/no-repo paths remain unaffected (backward compatible)
+- Observability metrics for propagation signal creation:
+  - `intent_api_propagation_signals_attempted_total` — counter incremented when apply trigger runs
+  - `intent_api_propagation_signals_succeeded_total` — counter incremented per successful record update
+  - `intent_api_propagation_signals_failed_total` — counter incremented per failed record update or list error
+  - `intent_api_propagation_signals_no_downstream_total` — counter incremented when no downstream records exist for the intent
 - Query handler reads from SQL repo when `propagation_record_repo` is `Some`; falls back to stub when `None`
 - Ignored live RLS tests for `propagation_records`: tenant-isolated insert/list/update and tenant mismatch fail-closed
 - OpenAPI updated with `/intents/{intent_id}/propagation-signals` endpoint and schemas

@@ -229,6 +229,10 @@ pub use dlq_metrics::{
 // - intent_api_diff_compute_duration_seconds
 // - intent_api_rebase_preview_duration_seconds
 // - intent_api_rebase_apply_duration_seconds
+// - intent_api_propagation_signals_attempted_total
+// - intent_api_propagation_signals_succeeded_total
+// - intent_api_propagation_signals_failed_total
+// - intent_api_propagation_signals_no_downstream_total
 
 /// Application state shared across handlers
 #[derive(Clone)]

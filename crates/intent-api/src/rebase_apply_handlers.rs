@@ -54,6 +54,26 @@ fn risk_class_label(risk_tier: &RiskTier) -> &'static str {
     }
 }
 
+/// Record propagation signal creation attempt.
+pub(crate) fn record_propagation_signal_attempted() {
+    metrics::counter!("intent_api_propagation_signals_attempted_total").increment(1);
+}
+
+/// Record propagation signal creation success.
+pub(crate) fn record_propagation_signal_succeeded() {
+    metrics::counter!("intent_api_propagation_signals_succeeded_total").increment(1);
+}
+
+/// Record propagation signal creation failure.
+pub(crate) fn record_propagation_signal_failed() {
+    metrics::counter!("intent_api_propagation_signals_failed_total").increment(1);
+}
+
+/// Record propagation signal creation with no downstream records found.
+pub(crate) fn record_propagation_signal_no_downstream() {
+    metrics::counter!("intent_api_propagation_signals_no_downstream_total").increment(1);
+}
+
 /// Best-effort propagation signal creation after successful rebase apply.
 ///
 /// Queries existing propagation records for the intent (de facto downstream
@@ -70,9 +90,12 @@ async fn create_propagation_signals_after_apply(
         None => return,
     };
 
+    record_propagation_signal_attempted();
+
     let records = match repo.list_by_intent(intent_id, tenant_id).await {
         Ok(recs) => recs,
         Err(e) => {
+            record_propagation_signal_failed();
             tracing::warn!(
                 "Failed to list propagation records for signal creation: {}",
                 e
@@ -80,6 +103,18 @@ async fn create_propagation_signals_after_apply(
             return;
         }
     };
+
+    if records.is_empty() {
+        record_propagation_signal_no_downstream();
+        tracing::info!(
+            "No downstream propagation records found for intent {}, skipping signal creation",
+            intent_id
+        );
+        return;
+    }
+
+    let mut success_count = 0;
+    let mut fail_count = 0;
 
     for record in records {
         if let Err(e) = repo
@@ -91,12 +126,32 @@ async fn create_propagation_signals_after_apply(
             )
             .await
         {
+            record_propagation_signal_failed();
+            fail_count += 1;
             tracing::warn!(
                 "Failed to update propagation signal for system {}: {}",
                 record.downstream_system_id,
                 e
             );
+        } else {
+            record_propagation_signal_succeeded();
+            success_count += 1;
+            tracing::info!(
+                "Propagation signal updated for intent {} system {} to version {}",
+                intent_id,
+                record.downstream_system_id,
+                to_version
+            );
         }
+    }
+
+    if fail_count > 0 {
+        tracing::warn!(
+            "Propagation signal creation partial failure: {} succeeded, {} failed for intent {}",
+            success_count,
+            fail_count,
+            intent_id
+        );
     }
 }
 
