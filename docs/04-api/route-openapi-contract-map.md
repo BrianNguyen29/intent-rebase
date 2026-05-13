@@ -91,5 +91,6 @@ Route contract tests exist in `crates/intent-api/src/router_smoke_tests.rs` for:
 - Rebase preview/apply endpoints
 - Policy snapshot endpoints
 - Compensation mutation endpoints
+- Propagation status and propagation signals endpoints
 
 These tests prove routes are wired and reachable. They do not test full handler logic.
