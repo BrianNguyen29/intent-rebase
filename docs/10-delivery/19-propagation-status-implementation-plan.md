@@ -319,11 +319,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. All items remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1 is checked to record owner assignment and design review completion only; this is **not** an implementation Go. R2–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
-| R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | TBD | ☐ |
+| R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | Brian Nguyen (owner) / AI-oracle (reviewer) | ☑ |
 | R2 | **Dependency Readiness** — `reqwest` version and feature set (`rustls-tls`) confirmed compatible with workspace lockfile; decide which crate owns the dependency (e.g., `intent-api` or `intent-service`); test mock library (`wiremock` or `mockito`) chosen and placement (workspace `dev-dependencies` or crate-local) agreed | TBD | ☐ |
 | R3 | **Schema & Trait Review** — `propagation_records` table schema (migration 017) reviewed for Slice 3 needs; confirm `delivery_attempt_count`, `last_delivery_attempt_at`, `failed_at`, and `failure_reason` columns are sufficient or identify additive migration; confirm `PropagationRecordRepository` trait defines methods to atomically update delivery outcome (`delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, status); identify if a subscription entity/table is needed to store webhook URLs and `subscription_id` mapping | TBD | ☐ |
 | R4 | **RLS / Tenant Implications** — Confirm that webhook delivery logic will respect tenant isolation (subscription records scoped by `tenant_id`); verify no cross-tenant URL leakage in logs or error messages; confirm `subscription_id` maps to a tenant-scoped webhook URL | TBD | ☐ |
@@ -342,6 +342,20 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 |---|---------|---------------------|
 | B1 | **No webhook URL / subscription storage exists** — There is no table, entity, or repository for storing downstream webhook URLs and their mapping to `subscription_id`. The design assumes a subscription registry but does not specify where URLs live or how they are queried at delivery time. | Delivery cannot target any URL; Slice 3 is unimplementable without a subscription source. |
 | B2 | **`PropagationRecordRepository` lacks delivery-outcome update methods** — The trait does not define methods to atomically update `delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, and status based on delivery outcome. | Delivery attempt recording and state transitions cannot be implemented against the existing repository contract. |
+
+**Proposed Resolution Paths (Docs-Only — Not Implemented):**
+
+> **Note:** These are proposed directions for resolving B1–B2. They do not constitute implementation or blocker closure. R8 remains No-Go until these paths are reviewed and accepted.
+
+**B1 — Webhook URL / Subscription Storage**
+Preferred path: introduce a minimal `webhook_subscriptions` table (or equivalent entity) in a future migration with proposed columns `id`, `tenant_id`, `intent_id`, `subscription_id`, `webhook_url`, `created_at`, `updated_at`, plus a `tenant_id` RLS policy following existing P1 patterns. The dispatcher queries this table by `(tenant_id, intent_id)` to obtain target URLs at delivery time. No migration is created now; this is a design note for future implementation.
+
+**B2 — Repository Trait Extension**
+Preferred path: extend `PropagationRecordRepository` with two proposed async methods:
+- `record_delivery_attempt(tenant_id, intent_id, downstream_system_id)` — atomically increments `delivery_attempt_count` and sets `last_delivery_attempt_at`.
+- `record_delivery_outcome(tenant_id, intent_id, downstream_system_id, status, failure_reason)` — atomically sets `status`, `acknowledged_at`/`failed_at`, and `failure_reason`.
+
+No trait code is written now; these are proposed signatures for future implementation.
 
 **Non-blocking Readiness Refinements (should document before Go, do not block design approval):**
 
