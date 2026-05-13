@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class AlertHandler(BaseHTTPRequestHandler):
-    def do_post(self):
+    def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         try:
@@ -28,9 +28,9 @@ class AlertHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             payload = {"raw": body.decode("utf-8", errors="replace")}
 
-        print("--- Alertmanager Webhook ---")
-        print(json.dumps(payload, indent=2))
-        print("----------------------------\n")
+        print("--- Alertmanager Webhook ---", flush=True)
+        print(json.dumps(payload, indent=2), flush=True)
+        print("----------------------------\n", flush=True)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -45,12 +45,12 @@ class AlertHandler(BaseHTTPRequestHandler):
 def main():
     port = 9094
     server = HTTPServer(("", port), AlertHandler)
-    print(f"Local Alertmanager webhook receiver listening on http://localhost:{port}/webhook")
-    print("Press Ctrl+C to stop.\n")
+    print(f"Local Alertmanager webhook receiver listening on http://localhost:{port}/webhook", flush=True)
+    print("Press Ctrl+C to stop.\n", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down.")
+        print("\nShutting down.", flush=True)
         server.shutdown()
         sys.exit(0)
 

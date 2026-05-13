@@ -132,7 +132,7 @@ services:
       - "9094:9094"
     volumes:
       - ./alertmanager/webhook_receiver.py:/receiver.py:ro
-    command: ["python3", "/receiver.py"]
+    command: ["python3", "-u", "/receiver.py"]
     restart: unless-stopped
     profiles:
       - observability
