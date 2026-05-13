@@ -319,18 +319,36 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1 is checked to record owner assignment and design review completion only; this is **not** an implementation Go. R2–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1 and R2 are checked to record owner assignment / design review completion and dependency placement decisions only; this is **not** an implementation Go. R3–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
 | R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | Brian Nguyen (owner) / AI-oracle (reviewer) | ☑ |
-| R2 | **Dependency Readiness** — `reqwest` version and feature set (`rustls-tls`) confirmed compatible with workspace lockfile; decide which crate owns the dependency (e.g., `intent-api` or `intent-service`); test mock library (`wiremock` or `mockito`) chosen and placement (workspace `dev-dependencies` or crate-local) agreed | TBD | ☐ |
+| R2 | **Dependency Readiness** — Decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`; verify latest compatible version at implementation time. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. No `Cargo.toml` changes made in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R3 | **Schema & Trait Review** — `propagation_records` table schema (migration 017) reviewed for Slice 3 needs; confirm `delivery_attempt_count`, `last_delivery_attempt_at`, `failed_at`, and `failure_reason` columns are sufficient or identify additive migration; confirm `PropagationRecordRepository` trait defines methods to atomically update delivery outcome (`delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, status); identify if a subscription entity/table is needed to store webhook URLs and `subscription_id` mapping | TBD | ☐ |
 | R4 | **RLS / Tenant Implications** — Confirm that webhook delivery logic will respect tenant isolation (subscription records scoped by `tenant_id`); verify no cross-tenant URL leakage in logs or error messages; confirm `subscription_id` maps to a tenant-scoped webhook URL | TBD | ☐ |
 | R5 | **Retry Constants Acceptance** — Timeout values (5s connect, 30s request, 120s max total) and retry policy (3 attempts, base 2s, multiplier 2.0, max 30s, full jitter) reviewed and accepted; documented rationale accepted by owner | TBD | ☐ |
 | R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test; delivery observability metrics (attempted, succeeded, failed, retry_exhausted) added to test plan and metrics registry | TBD | ☐ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Team acknowledges Slice 3 non-goals: no outbox, no distributed transactions, no delivery guarantees, no background retry worker, no production-readiness claim; rollback plan documented including explicit feature-flag/env gate name (e.g., `INTENT_API_WEBHOOK_DELIVERY=true`) to disable dispatch without code change; failed-to-pending reset semantics and delivery task lifecycle (spawn, cancel, timeout, panic) documented; `failure_reason` truncation/redaction policy agreed (max length, PII redaction) | TBD | ☐ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
+
+#### R2 Decision Note (Docs-Only — No Cargo Changes)
+
+> **Status:** Dependency placement decision recorded. No `Cargo.toml` edits were made. R8 remains No-Go.
+
+**`reqwest` placement:**
+- Crate: `intent-api` (regular dependency, not workspace-level).
+- Version: `0.12` (verify latest compatible patch at implementation time).
+- Features: `json`, `rustls-tls` only. Do **not** enable `blocking`.
+- Rationale: `reqwest` is already present in `intent-api` dev-dependencies; `intent-service` has no HTTP client need today. Keeping it crate-local avoids unnecessary workspace promotion. Promote to workspace only if a second crate needs HTTP client capabilities.
+- Caveat: if the delivery dispatcher moves out of `intent-api` (e.g., into `intent-service` or a new crate), dependency placement must be revisited.
+
+**Mock HTTP library placement:**
+- Crate: `intent-api` (crate-local `dev-dependency`).
+- Choice: `wiremock` (verify latest compatible version at implementation time).
+- Rationale: `wiremock` provides declarative HTTP mocking suitable for async Rust integration tests; `mockito` was considered but `wiremock` is preferred for tokio-based test suites in this repo.
+
+**No Cargo changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml` was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
