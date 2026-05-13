@@ -198,19 +198,124 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Runbook RB12 documents alerting guidance and manual re-signal workflow
 - [x] Local Prometheus rule `PropagationSignalFailureRate` defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding; production requires SRE sign-off)
 
-### Slice 3 — Webhook Delivery (Bounded)
+### Slice 3 — Webhook Delivery (Design Refinement — Not Implemented)
 
-**Scope:**
-- Async webhook dispatcher (bounded: sequential delivery, no queue)
-- On `signaled`, POST to each subscription URL with intent change payload
-- Update `propagation_records` status based on delivery outcome
-- Delivery attempt count and failure reason recorded
+> **Status:** Design-only. No code implementation started. Webhook delivery remains deferred to future Phase 4+ work. The following are concrete design decisions proposed for when implementation begins; they are not live code or production commitments.
 
-**Acceptance criteria:**
-- [ ] Webhook delivery triggers on intent version change
-- [ ] Status transitions from `pending` → `acknowledged` or `failed`
-- [ ] Retry policy applied per failure semantics table
-- [ ] Delivery audit trail exists (attempt_count, last_delivery_attempt_at)
+#### HTTP Client Choice
+
+- **Proposed:** `reqwest` (async) with the `rustls-tls` feature enabled.
+- **Rationale:** Already idiomatic in the Rust ecosystem; supports connection pooling, configurable timeouts, and middleware (e.g., `reqwest-middleware` for retry/logging). The project already uses `reqwest` indirectly via dependencies, so adding it directly is low-friction.
+- **Bounded:** No custom TLS stack, no HTTP/3, no connection pinning, no client certificate auth. mTLS and custom CA bundles are future scope.
+
+#### Timeout Constants
+
+| Constant | Proposed Value | Rationale |
+|----------|---------------|-----------|
+| `WEBHOOK_CONNECT_TIMEOUT` | 5 seconds | Time to establish TCP + TLS handshake |
+| `WEBHOOK_REQUEST_TIMEOUT` | 30 seconds | Total time per delivery attempt (includes connect + send + wait-for-response) |
+| `WEBHOOK_MAX_TOTAL_DURATION` | 120 seconds | Hard ceiling for all attempts including retries; abort remaining retries if exceeded |
+
+> These values are proposed defaults for local/non-production use. Production tuning (e.g., lower request timeout for fast receivers) is future SRE work.
+
+#### Retry / Backoff Policy
+
+- **Proposed:** Exponential backoff with full jitter.
+- **Base delay:** 2 seconds.
+- **Multiplier:** 2.0.
+- **Max delay:** 30 seconds.
+- **Max attempts:** 3 total (initial attempt + 2 retries).
+- **Retryable conditions:** HTTP 5xx, connect timeout, request timeout, DNS failure, connection refused, connection reset.
+- **Non-retryable conditions:** HTTP 4xx (except 429), malformed URL, TLS certificate failure, unresolvable host.
+- **429 Too Many Requests:** Retry once after `Retry-After` header value (capped at 60 seconds). If no `Retry-After` header, fall back to standard backoff slot. If the retry also returns 429, mark `failed`.
+- **Jitter:** Full jitter (`rand::random::<f64>() * delay`) to prevent thundering herd across downstream systems.
+
+> **Bounded scope:** Retries are in-process sequential against a local async task. No external retry queue, no background worker, no distributed scheduling, no dead-letter topic for exhausted attempts.
+
+#### Payload Schema
+
+Proposed JSON payload posted to each subscription URL with `Content-Type: application/json`:
+
+```json
+{
+  "event_type": "intent_changed",
+  "intent_id": "uuid",
+  "tenant_id": "uuid",
+  "version": 42,
+  "version_hash": "sha256:abc123...",
+  "previous_version": 41,
+  "timestamp": "2026-05-13T12:00:00Z",
+  "delivery_id": "uuid",
+  "attempt_number": 1,
+  "subscription_id": "uuid"
+}
+```
+
+- **Signature header (design-only, not implemented):** `X-Webhook-Signature: sha256=<hmac>` using a per-subscription secret. Key management and rotation are deferred.
+- **Idempotency key:** `delivery_id` (UUID v4) passed in the `X-Idempotency-Key` header so downstream systems can deduplicate.
+- **Bounded:** No payload compression, no chunked transfer encoding, no custom media types, no partial/delta payloads. Payload size is expected to be small (< 10 KB).
+
+#### Sync vs Async Delivery Model
+
+- **Proposed model:** Async fire-and-notify.
+- **Behavior:** When a propagation signal is created (e.g., by rebase apply post-commit), spawn a local async task to deliver webhooks.
+- **Sequential per intent:** All subscriptions for a given intent are delivered one-at-a-time to bound resource usage and avoid overwhelming a single downstream system.
+- **Not awaited by caller:** The apply/signal handler returns immediately; delivery outcomes are recorded asynchronously. A `tracing::warn!` is emitted on spawn failure, but the caller response is never blocked.
+- **Bounded:** No delivery guarantees (at-least-once is best-effort). No outbox pattern, no transactional boundary spanning DB write + HTTP delivery, no saga compensation for delivery failures.
+- **Error recording:** On task completion (success or failure), update `propagation_records.status`, `delivery_attempt_count`, and `last_delivery_attempt_at`.
+
+#### Audit / Delivery-Attempt Semantics
+
+- **Before each HTTP request:** Increment `delivery_attempt_count` and set `last_delivery_attempt_at = NOW()`.
+- **On 2xx response:** Set `status = 'acknowledged'` and `acknowledged_at = NOW()`.
+- **On retryable failure (5xx, timeout, network error):**
+  - If attempts remain: keep `status = 'pending'`.
+  - If max attempts exhausted: set `status = 'failed'`, `failed_at = NOW()`, `failure_reason = "<category>: <detail>"`.
+- **On non-retryable failure (4xx except 429, malformed URL, TLS failure):** Set `status = 'failed'`, `failed_at = NOW()`, `failure_reason = "<status>: <body_snippet>"`.
+- **Per-attempt log (deferred):** A separate `propagation_delivery_attempts` table may be introduced in a future slice to capture per-attempt detail (HTTP method, URL, status code, response body snippet, duration_ms). For Slice 3, audit is inline on `propagation_records` only.
+
+#### Error Behavior
+
+| Scenario | Behavior | Recorded State |
+|----------|----------|----------------|
+| DNS resolution fails | Retry per policy | `pending` (if retries remain) → `failed` |
+| TCP/TLS timeout | Retry per policy | `pending` (if retries remain) → `failed` |
+| HTTP 2xx | Success | `acknowledged` |
+| HTTP 4xx (non-429) | No retry, mark failed immediately | `failed` |
+| HTTP 429 | Retry once with backoff | `pending` (if retry remains) → `failed` |
+| HTTP 5xx | Retry per policy | `pending` (if retries remain) → `failed` |
+| Subscription URL missing or invalid | No retry, mark failed | `failed` |
+| DB unavailable during outcome recording | Best-effort `tracing::warn!`; delivery outcome may be lost | Inconsistent (known bounded limitation) |
+
+> **Known bounded limitation:** Because there is no outbox/transactional boundary, a crash between HTTP delivery and DB update can leave the delivery state inconsistent (delivered but not recorded, or recorded but not delivered). This is accepted for Slice 3 and can be addressed later with an outbox or idempotent re-delivery log.
+
+#### Acceptance Criteria (Design-Level — Not Implemented)
+
+- [ ] HTTP client (`reqwest`) configured with connect/request timeouts matching proposed constants.
+- [ ] Retry policy implements exponential backoff with full jitter (3 attempts max).
+- [ ] Payload schema matches proposed JSON structure and includes `delivery_id` + `attempt_number`.
+- [ ] Delivery is async (does not block the signal creation handler).
+- [ ] `propagation_records.status` transitions correctly per outcome table.
+- [ ] `delivery_attempt_count` and `last_delivery_attempt_at` are updated before every attempt.
+- [ ] Non-retryable errors (4xx) mark record as `failed` immediately without retries.
+- [ ] Retryable errors (5xx, timeout, network) retry up to max attempts.
+- [ ] Handler-level unit test verifies payload shape and header presence (proposed gate G7).
+- [ ] Route contract test verifies `POST /intents/{intent_id}/propagation-signals` remains reachable with no regression.
+
+#### Validation Gates (Slice 3 — Proposed for Future Implementation)
+
+| Gate | Check | Command |
+|------|-------|---------|
+| G1 — Compile | No warnings | `cargo check --workspace` |
+| G2 — Format | No diff | `cargo fmt --all -- --check` |
+| G3 — Lint | No clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
+| G4 — Route wiring | All routes reachable | `cargo test -p intent-api --lib router_smoke_tests` |
+| G5 — OpenAPI drift | Spec matches routes | `npx spectral lint docs/04-api/openapi.yaml` + drift guard test |
+| G6 — Tenant isolation | RLS policies active | `cargo test --test rls_integration -- --ignored` |
+| G7 — Handler unit test | Payload shape + headers | New unit test in `intent-api` handler module |
+| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | Integration test with `wiremock` or `mockito` (proposed) |
+
+> **Note:** G7–G8 are proposed gates for when implementation begins. They are not runnable today because Slice 3 is design-only.
 
 ### Slice 4 — Event Stream Integration (Deferred)
 
