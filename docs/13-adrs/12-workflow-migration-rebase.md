@@ -100,6 +100,7 @@ The `GET /intents/{intent_id}/propagation-status` endpoint (bounded stub deliver
 - [ADR-09](./09-rebase-apply-rls-transaction-boundary.md): Rebase Apply RLS boundary (reused)
 - [ADR-10](./10-impact-report-design.md): ImpactReport output format (reused)
 - [ADR-11](./11-policy-config-rebase-pillar.md): Policy / Config Rebase Pillar — bounded MVP pattern to mirror
+- [Propagation Status Implementation Plan](../10-delivery/19-propagation-status-implementation-plan.md): Concrete staged plan for evolving the bounded stub to real downstream tracking
 
 ## Implementation Plan
 

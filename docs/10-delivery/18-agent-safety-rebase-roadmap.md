@@ -56,7 +56,9 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Workflow migration preview / apply / status APIs
 - Cross-workflow lineage and DLQ replay hardening
 
-> See also [Main Roadmap](./01-roadmap.md) for high-level Phase 4 enterprise expansion items.
+> See also:
+> - [Main Roadmap](./01-roadmap.md) for high-level Phase 4 enterprise expansion items
+> - [Propagation Status Implementation Plan](./19-propagation-status-implementation-plan.md) for concrete staged slices
 
 ### Phase 5 — Multi-Tenant Compliance Automation Foundation
 - Full RLS audit with non-bypass role

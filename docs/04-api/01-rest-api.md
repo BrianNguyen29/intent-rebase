@@ -172,6 +172,8 @@ Returns 404 if event doesn't exist or belongs to a different tenant (enforces te
 - Cross-workflow lineage propagation (N2)
 - Real-time propagation monitoring UI
 
+> See [Propagation Status Implementation Plan](../10-delivery/19-propagation-status-implementation-plan.md) for the concrete staged plan to evolve this endpoint from stub to real tracking.
+
 ## Error model
 ```json
 {
