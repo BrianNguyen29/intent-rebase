@@ -113,6 +113,8 @@ tags:
     description: ImpactReport read-only projection (Phase 2 bounded MVP)
   - name: policy-snapshots
     description: Policy snapshot read-only queries (Phase 2 bounded slice)
+  - name: propagation-status
+    description: Propagation status read-only stub (Phase 4+ design-only; bounded stub endpoint)
 
 paths:
   /intents:
@@ -2901,6 +2903,68 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Policy snapshot or intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /intents/{intent_id}/propagation-status:
+    get:
+      tags:
+        - propagation-status
+        - intents
+      summary: Propagation status for an intent (bounded stub)
+      description: |
+        Phase 4+ design-only: Bounded stub endpoint returning contract-shaped
+        response with empty downstream_systems and zeroed summary.
+
+        **This endpoint is READ-ONLY** — it does not create, mutate, or persist
+        any state. No database migration or new table is introduced.
+
+        **Bounded scope:**
+        - Returns empty downstream_systems (no real propagation tracking)
+        - Returns zeroed propagation_summary
+        - Lists deferred features in unsupported_items
+
+        **No persistence claim:** Propagation status is not stored; this is a
+        stub response only.
+
+        **Deferred to Phase 4+:**
+        - Webhook subscription management
+        - Event streaming acknowledgment (NATS/Kafka)
+        - Cross-workflow lineage propagation (N2)
+        - Real-time propagation monitoring UI
+      operationId: getPropagationStatus
+      parameters:
+        - name: intent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Propagation status stub response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PropagationStatusResponse'
+        '401':
+          description: Tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Intent not found
           content:
             application/json:
               schema:
@@ -6286,6 +6350,83 @@ components:
           type: integer
         to_version:
           type: integer
+
+    PropagationStatusResponse:
+      type: object
+      description: |
+        Phase 4+ design-only: Bounded stub response for propagation status.
+        downstream_systems is always empty and propagation_summary is zeroed.
+      required:
+        - intent_id
+        - tenant_id
+        - downstream_systems
+        - propagation_summary
+        - unsupported_items
+      properties:
+        intent_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        downstream_systems:
+          type: array
+          items:
+            $ref: '#/components/schemas/DownstreamSystemStatus'
+          description: Always empty in the bounded stub
+        propagation_summary:
+          $ref: '#/components/schemas/PropagationSummary'
+        unsupported_items:
+          type: array
+          items:
+            type: string
+          description: List of deferred features not yet implemented
+
+    DownstreamSystemStatus:
+      type: object
+      description: Status of a single downstream system for an intent change
+      required:
+        - system_id
+        - status
+        - last_seen_version
+      properties:
+        system_id:
+          type: string
+          description: Identifier of the downstream system
+        acknowledged_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the downstream system acknowledged the change
+        status:
+          type: string
+          enum: [acknowledged, pending, failed, stale]
+          description: Propagation status of the downstream system
+        last_seen_version:
+          type: integer
+          description: Last intent version the downstream system has processed
+
+    PropagationSummary:
+      type: object
+      description: Summary counts for propagation status
+      required:
+        - total
+        - acknowledged
+        - pending
+        - failed
+      properties:
+        total:
+          type: integer
+          description: Total number of downstream systems
+        acknowledged:
+          type: integer
+          description: Number of downstream systems that have acknowledged
+        pending:
+          type: integer
+          description: Number of downstream systems with pending acknowledgment
+        failed:
+          type: integer
+          description: Number of downstream systems that failed to process
 
     PolicySnapshotResponse:
       type: object

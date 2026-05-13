@@ -16,7 +16,8 @@ use crate::{
         CompensationActionStatusCounts, CompensationActionSummary, ImpactCompensation,
         ImpactInvalidation, ImpactProvenance, ImpactReportQuery, ImpactReportResponse, ImpactScope,
         ImpactTrigger, ListSideEffectsQuery, ListSideEffectsResponse, OrchestrationDashboardQuery,
-        OrchestrationDashboardResponse, SafetyGateSummary, SideEffectSummary,
+        OrchestrationDashboardResponse, PropagationStatusQuery, PropagationStatusResponse,
+        PropagationSummary, SafetyGateSummary, SideEffectSummary,
     },
     ApiErrorResponse, AppState,
 };
@@ -553,4 +554,109 @@ pub async fn get_impact_report(
     .await?;
 
     Ok(Json(response))
+}
+
+// ============================================================================
+// Propagation Status Handler (Phase 4+ design-only; bounded stub endpoint)
+// ============================================================================
+
+/// GET /intents/{intent_id}/propagation-status — Bounded stub endpoint.
+///
+/// Returns a contract-shaped response with empty downstream_systems and zeroed
+/// summary. Full implementation (webhook delivery, event streaming, cross-workflow
+/// lineage) is Phase 4+ deferred scope.
+#[cfg(feature = "jwt-auth")]
+pub async fn get_propagation_status(
+    State(state): State<AppState>,
+    auth::OptionalRlsTenantClaims(optional_rls_claims): auth::OptionalRlsTenantClaims,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<PropagationStatusQuery>,
+) -> Result<Json<PropagationStatusResponse>, ApiErrorResponse> {
+    // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
+    if let Some(rls_claims) = optional_rls_claims {
+        if query.tenant_id != rls_claims.tenant_id {
+            let msg = format!(
+                "Tenant mismatch: JWT tenant_id ({}) does not match query tenant_id ({})",
+                rls_claims.tenant_id, query.tenant_id
+            );
+            tracing::warn!("get_propagation_status: tenant mismatch rejection");
+            return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+        }
+    }
+
+    // Verify intent exists for tenant validation
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if intent_head.intent.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: intent tenant_id ({}) does not match query tenant_id ({})",
+            intent_head.intent.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_propagation_status: intent tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    Ok(Json(PropagationStatusResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        downstream_systems: vec![],
+        propagation_summary: PropagationSummary {
+            total: 0,
+            acknowledged: 0,
+            pending: 0,
+            failed: 0,
+        },
+        unsupported_items: vec![
+            "webhook subscription management".to_string(),
+            "event streaming acknowledgment".to_string(),
+            "cross-workflow lineage propagation".to_string(),
+            "real-time propagation monitoring".to_string(),
+        ],
+    }))
+}
+
+/// GET /intents/{intent_id}/propagation-status — Bounded stub endpoint (non-JWT fallback)
+#[cfg(not(feature = "jwt-auth"))]
+pub async fn get_propagation_status(
+    State(state): State<AppState>,
+    Path(intent_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<PropagationStatusQuery>,
+) -> Result<Json<PropagationStatusResponse>, ApiErrorResponse> {
+    // Verify intent exists for tenant validation
+    let intent_head = state
+        .service
+        .get_intent_head(intent_id)
+        .await
+        .map_err(ApiErrorResponse)?;
+
+    if intent_head.intent.tenant_id != query.tenant_id {
+        let msg = format!(
+            "Tenant mismatch: intent tenant_id ({}) does not match query tenant_id ({})",
+            intent_head.intent.tenant_id, query.tenant_id
+        );
+        tracing::warn!("get_propagation_status: intent tenant mismatch rejection");
+        return Err(ApiErrorResponse(IntentRebaseError::Unauthorized(msg)));
+    }
+
+    Ok(Json(PropagationStatusResponse {
+        intent_id,
+        tenant_id: query.tenant_id,
+        downstream_systems: vec![],
+        propagation_summary: PropagationSummary {
+            total: 0,
+            acknowledged: 0,
+            pending: 0,
+            failed: 0,
+        },
+        unsupported_items: vec![
+            "webhook subscription management".to_string(),
+            "event streaming acknowledgment".to_string(),
+            "cross-workflow lineage propagation".to_string(),
+            "real-time propagation monitoring".to_string(),
+        ],
+    }))
 }

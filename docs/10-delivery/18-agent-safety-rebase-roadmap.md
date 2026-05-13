@@ -45,9 +45,18 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Environment promotion semantics (dev/staging/prod)
 
 ### Phase 4 — Workflow Migration / Rebase Pillar
+
+**Design-only (ADR-12 Proposed):**
+- `WorkflowRebaseAdapter` interface design for workflow-to-intent diff propagation
+- `GET /intents/{intent_id}/propagation-status` — bounded stub implemented; full downstream tracking deferred to Phase 4+ implementation
+- API contract design for workflow migration preview / apply / status endpoints
+
+**Deferred implementation (Phase 4+):**
 - Runtime adapter contract and capability registry
 - Workflow migration preview / apply / status APIs
 - Cross-workflow lineage and DLQ replay hardening
+
+> See also [Main Roadmap](./01-roadmap.md) for high-level Phase 4 enterprise expansion items.
 
 ### Phase 5 — Multi-Tenant Compliance Automation Foundation
 - Full RLS audit with non-bypass role

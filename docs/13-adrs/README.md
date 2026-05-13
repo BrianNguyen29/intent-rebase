@@ -23,6 +23,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 | [ADR-09](./09-rebase-apply-rls-transaction-boundary.md) | Rebase Apply RLS Transaction Boundary | **Accepted — Bounded D1–D7 implemented at commit `d98c7dc`** | Phase 4 |
 | [ADR-10](./10-impact-report-design.md) | ImpactReport Design | **Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim** | Phase 2 |
 | [ADR-11](./11-policy-config-rebase-pillar.md) | Policy / Config Rebase Pillar — MVP Design | **Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim** | Phase 3 |
+| [ADR-12](./12-workflow-migration-rebase.md) | Workflow Migration / Rebase Pillar — Phase 4 Design | **Proposed — design-only; no implementation, no persistence, no production-ready claim** | Phase 4 |
 
 ---
 

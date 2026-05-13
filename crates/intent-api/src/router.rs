@@ -150,6 +150,11 @@ pub fn build_router(
             "/intents/:intent_id/impact-report",
             get(crate::query_handlers::get_impact_report),
         )
+        // Propagation status endpoint (Phase 4+ design-only; bounded stub)
+        .route(
+            "/intents/:intent_id/propagation-status",
+            get(crate::query_handlers::get_propagation_status),
+        )
         // Compensation actions query endpoint (Phase 3 Batch 1 bounded read-only slice)
         .route(
             "/intents/:intent_id/compensation-actions",

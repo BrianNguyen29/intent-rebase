@@ -40,8 +40,9 @@
 **10 completion proposals:** See [Completion Proposals Tracker](./09-completion-proposals-tracker.md) for a structured view of all remaining major work items.
 
 ## Phase 4 — Enterprise Expansion (ongoing)
-- policy simulation
-- advanced adapters
-- cross-workflow intent families
-- trust scoring by source
-- enterprise integrations
+- Workflow migration / rebase pillar (ADR-12 design-only; see [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md))
+- Policy simulation
+- Advanced adapters
+- Cross-workflow intent families
+- Trust scoring by source
+- Enterprise integrations

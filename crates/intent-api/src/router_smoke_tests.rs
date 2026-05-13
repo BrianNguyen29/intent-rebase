@@ -484,6 +484,55 @@ async fn test_compensation_mutation_routes_are_registered() {
 }
 
 // =========================================================================
+// Propagation Status Route Contract Test (Phase 4+ design-only; bounded stub)
+// =========================================================================
+
+#[tokio::test]
+async fn test_propagation_status_route_is_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.rls_pool,
+    );
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let intent_id = uuid::Uuid::new_v4();
+
+    // GET /intents/{intent_id}/propagation-status?tenant_id=...
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/intents/{}/propagation-status?tenant_id={}",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+
+    // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
 // OpenAPI Drift Guard Test
 //
 // Lightweight string-search verification that key implemented routes are
@@ -505,6 +554,7 @@ fn test_key_routes_are_documented_in_openapi() {
         "/intents/{intent_id}/impact-report",
         "/intents/{intent_id}/rebase-preview",
         "/intents/{intent_id}/rebase-apply",
+        "/intents/{intent_id}/propagation-status",
         "/forensic/bundle",
         "/forensic/bundles",
         "/forensic/bundles/{bundle_id}/download",
