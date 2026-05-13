@@ -319,13 +319,13 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1 and R2 are checked to record owner assignment / design review completion and dependency placement decisions only; this is **not** an implementation Go. R3–R8 remain unchecked and require explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R3 are checked to record owner assignment / design review completion, dependency placement, and schema/trait review decisions only; this is **not** an implementation Go. R4–R8 remain unchecked and require explicit approval before any code is written.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
 | R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | Brian Nguyen (owner) / AI-oracle (reviewer) | ☑ |
 | R2 | **Dependency Readiness** — Decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`; verify latest compatible version at implementation time. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. No `Cargo.toml` changes made in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R3 | **Schema & Trait Review** — `propagation_records` table schema (migration 017) reviewed for Slice 3 needs; confirm `delivery_attempt_count`, `last_delivery_attempt_at`, `failed_at`, and `failure_reason` columns are sufficient or identify additive migration; confirm `PropagationRecordRepository` trait defines methods to atomically update delivery outcome (`delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, status); identify if a subscription entity/table is needed to store webhook URLs and `subscription_id` mapping | TBD | ☐ |
+| R3 | **Schema & Trait Review** — Decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as future `webhook_subscriptions` table (migration 018). B2 resolved as future trait methods `record_delivery_attempt` and `record_delivery_outcome`. No migration or Rust files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R4 | **RLS / Tenant Implications** — Confirm that webhook delivery logic will respect tenant isolation (subscription records scoped by `tenant_id`); verify no cross-tenant URL leakage in logs or error messages; confirm `subscription_id` maps to a tenant-scoped webhook URL | TBD | ☐ |
 | R5 | **Retry Constants Acceptance** — Timeout values (5s connect, 30s request, 120s max total) and retry policy (3 attempts, base 2s, multiplier 2.0, max 30s, full jitter) reviewed and accepted; documented rationale accepted by owner | TBD | ☐ |
 | R6 | **Test Plan Mapping to G1–G8** — Each validation gate has a corresponding test or verification step assigned: G1-G3 via CI, G4 via route smoke tests, G5 via Spectral + drift guard, G6 via ignored RLS tests, G7 via handler unit test, G8 via mock-server integration test; delivery observability metrics (attempted, succeeded, failed, retry_exhausted) added to test plan and metrics registry | TBD | ☐ |
@@ -349,6 +349,44 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Rationale: `wiremock` provides declarative HTTP mocking suitable for async Rust integration tests; `mockito` was considered but `wiremock` is preferred for tokio-based test suites in this repo.
 
 **No Cargo changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml` was modified in this docs-only update.
+
+#### R3 Decision Note (Docs-Only — No Migration or Rust Changes)
+
+> **Status:** Schema and trait review decision recorded. No migration DDL or Rust files were modified. R8 remains No-Go.
+
+**Existing schema findings (migration 017):**
+- `propagation_records` already includes the delivery columns needed for Slice 3: `delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, and `failed_at`.
+- The `PropagationRecord` domain type already carries these fields.
+- **Conclusion:** No additive migration is required for `propagation_records` in Slice 3.
+
+**Trait gap:**
+- `PropagationRecordRepository` currently lacks methods to atomically record delivery attempts and outcomes.
+- The existing `update_status` method does not cover incrementing `delivery_attempt_count`, setting `last_delivery_attempt_at`, or recording `failure_reason`.
+- **Conclusion:** Future implementation must add delivery-specific methods to the trait (see B2 resolution below).
+
+**B1 resolution — `webhook_subscriptions` table:**
+- Decision: introduce a separate `webhook_subscriptions` table in a future migration (proposed name: `018_create_webhook_subscriptions.sql`). Do **not** inline the webhook URL onto `propagation_records`.
+- Proposed minimal columns:
+  - `id UUID PRIMARY KEY`
+  - `tenant_id UUID NOT NULL`
+  - `intent_id UUID NOT NULL`
+  - `subscription_id UUID NOT NULL`
+  - `webhook_url TEXT NOT NULL`
+  - `downstream_system_id TEXT`
+  - `created_at TIMESTAMPTZ`
+  - `updated_at TIMESTAMPTZ`
+- RLS policy on `tenant_id` following the migration 017 pattern.
+- The dispatcher queries by `(tenant_id, intent_id)` to obtain target URLs.
+- **Deferred to future scope:** secret/HMAC keys, custom headers, enabled/disabled flag, subscription CRUD API endpoints, per-attempt delivery log table.
+
+**B2 resolution — repository trait methods:**
+- Decision: extend the existing `PropagationRecordRepository` trait (do not create a new trait).
+- Proposed future async methods:
+  - `record_delivery_attempt(id, tenant_id) -> Result<PropagationRecord, IntentRebaseError>` — atomically increments `delivery_attempt_count`, sets `last_delivery_attempt_at = NOW()`, and increments `lock_version`.
+  - `record_delivery_outcome(id, tenant_id, status: PropagationStatus, failure_reason: Option<String>) -> Result<PropagationRecord, IntentRebaseError>` — atomically updates `status`, `acknowledged_at`/`failed_at`, and `failure_reason`, and increments `lock_version`.
+- SQL implementation should use optimistic locking (`lock_version`) consistently with existing repository patterns.
+
+**No migration or Rust changes:** These decisions are recorded for the future implementation phase. No `.sql` migration file and no `.rs` source file was modified in this docs-only update.
 
 #### Pre-R8 Blockers / Open Decisions
 
