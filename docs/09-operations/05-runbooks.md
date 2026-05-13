@@ -322,3 +322,35 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
 > **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 and defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` as local dev scaffolding only; production alerting still requires SRE sign-off and receiver configuration.
+
+---
+
+## Local Observability Smoke Checklist
+
+> **Local dev only.** Use this checklist to verify the Alertmanager → alert-receiver delivery path on a developer workstation. Not a production readiness check.
+
+- [ ] **Validate compose config**
+  ```bash
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability config
+  ```
+- [ ] **Start alert-receiver and alertmanager** (preserves existing Postgres/NATS/MinIO)
+  ```bash
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d alert-receiver alertmanager
+  ```
+- [ ] **Run smoke helper**
+  ```bash
+  python3 infrastructure/local/alertmanager/smoke_test_alert_receiver.py
+  ```
+- [ ] **Inspect alert-receiver logs** for `TestAlert` payload
+  ```bash
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability logs alert-receiver
+  ```
+- [ ] **Clean up** while preserving pre-existing core services
+  ```bash
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability stop alert-receiver alertmanager
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability rm -f alert-receiver alertmanager
+  ```
+  Or stop the entire observability profile:
+  ```bash
+  docker compose -f infrastructure/local/docker-compose.yml --profile observability down
+  ```

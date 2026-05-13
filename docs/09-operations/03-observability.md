@@ -65,12 +65,17 @@ In both cases the helper is local/manual-only, does not persist alerts, and does
 
 > **Local/manual-only.** This validates the alert delivery path on a developer workstation; it is not a production readiness check.
 
-1. **Start alert-receiver and alertmanager** (preserves existing Postgres/NATS/MinIO):
+1. **Validate compose config** before starting services:
+   ```bash
+   docker compose -f infrastructure/local/docker-compose.yml --profile observability config
+   ```
+
+2. **Start alert-receiver and alertmanager** (preserves existing Postgres/NATS/MinIO):
    ```bash
    docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d alert-receiver alertmanager
    ```
 
-2. **Post a test alert** using the helper:
+3. **Post a test alert** using the helper:
    ```bash
    python3 infrastructure/local/alertmanager/smoke_test_alert_receiver.py
    ```
@@ -82,13 +87,13 @@ In both cases the helper is local/manual-only, does not persist alerts, and does
      -d '[{"labels":{"alertname":"TestAlert","severity":"warning","slo":"propagation","instance":"smoke-test","source":"local-smoke-helper"},"annotations":{"summary":"Smoke test alert"}}]'
    ```
 
-3. **Inspect alert-receiver logs** for the `TestAlert` payload:
+4. **Inspect alert-receiver logs** for the `TestAlert` payload:
    ```bash
    docker compose -f infrastructure/local/docker-compose.yml --profile observability logs alert-receiver
    ```
    You should see the alert JSON printed by `webhook_receiver.py`.
 
-4. **Clean up only alert-receiver and Alertmanager** while preserving any pre-existing Grafana/Prometheus/core services:
+5. **Clean up only alert-receiver and Alertmanager** while preserving any pre-existing Grafana/Prometheus/core services:
    ```bash
    docker compose -f infrastructure/local/docker-compose.yml --profile observability stop alert-receiver alertmanager
    docker compose -f infrastructure/local/docker-compose.yml --profile observability rm -f alert-receiver alertmanager
