@@ -582,3 +582,329 @@ async fn test_dispatch_wrong_tenant_no_attempt() {
     assert_eq!(stored.delivery_attempt_count, 0);
     assert_eq!(stored.status, PropagationStatus::Pending);
 }
+
+// =============================================================================
+// B7 G8-Style Wiremock Delivery Simulation Tests (non-DB, no live Postgres)
+// =============================================================================
+
+use wiremock::{
+    matchers::{body_json, header, method, path},
+    Mock, MockServer, ResponseTemplate,
+};
+
+#[tokio::test]
+async fn test_send_webhook_200_success() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
+}
+
+#[tokio::test]
+async fn test_send_webhook_404_non_retryable() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::NonRetryableFailure {
+            reason: "HTTP 404".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_send_webhook_500_retryable() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_send_webhook_429_rate_limited() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "42"))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(42)),
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_send_webhook_headers_present() {
+    let mock_server = MockServer::start().await;
+    let delivery_id = Uuid::new_v4();
+
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .and(header("Content-Type", "application/json"))
+        .and(header("X-Idempotency-Key", delivery_id.to_string()))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id,
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_webhook_body_shape() {
+    let mock_server = MockServer::start().await;
+    let delivery_id = Uuid::new_v4();
+    let subscription_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+    let tenant_id = Uuid::new_v4();
+
+    let expected_body = serde_json::json!({
+        "event_type": "intent_changed",
+        "intent_id": intent_id,
+        "tenant_id": tenant_id,
+        "version": 2,
+        "delivery_id": delivery_id,
+        "attempt_number": 1,
+        "subscription_id": subscription_id,
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .and(body_json(&expected_body))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id,
+        tenant_id,
+        version: 2,
+        version_hash: None,
+        previous_version: None,
+        delivery_id,
+        attempt_number: 1,
+        subscription_id,
+    });
+    let headers = WebhookHeaders::new(delivery_id);
+
+    let result = send_webhook(
+        &client,
+        &format!("{}/webhook", mock_server.uri()),
+        &payload,
+        &headers,
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+// =============================================================================
+// B7 Dispatcher Coverage Gaps
+// =============================================================================
+
+#[tokio::test]
+async fn test_dispatch_rate_limited_outcome() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::RateLimited {
+        retry_after: Some(std::time::Duration::from_secs(30)),
+    }));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Failed);
+    assert!(stored
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains("rate limited"));
+}
+
+#[tokio::test]
+async fn test_dispatch_multiple_subscriptions() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record_a = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_b = PropagationRecord::new(tenant_id, intent_id, "system-b".to_string());
+    let record_id_a = record_a.id;
+    let record_id_b = record_b.id;
+    repo.create_record(record_a).await.unwrap();
+    repo.create_record(record_b).await.unwrap();
+
+    let sub_a = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/a".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let sub_b = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/b".to_string(),
+        downstream_system_id: Some("system-b".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub_a);
+    resolver.add(sub_b);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    let stored_a = repo.get_record(record_id_a, tenant_id).await.unwrap();
+    let stored_b = repo.get_record(record_id_b, tenant_id).await.unwrap();
+    assert_eq!(stored_a.delivery_attempt_count, 1);
+    assert_eq!(stored_a.status, PropagationStatus::Acknowledged);
+    assert_eq!(stored_b.delivery_attempt_count, 1);
+    assert_eq!(stored_b.status, PropagationStatus::Acknowledged);
+}
