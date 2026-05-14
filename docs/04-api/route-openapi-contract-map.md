@@ -69,6 +69,7 @@
 | `/policy-snapshots/:snapshot_id/impact-report` | `/policy-snapshots/{snapshot_id}/impact-report` | GET | policy-snapshots, impact-report | `policy_snapshot_handlers` | ✅ Implemented |
 | `/intents/:intent_id/propagation-status` | `/intents/{intent_id}/propagation-status` | GET | propagation-status, intents | `query_handlers` | ✅ Implemented (Slices 1-2 bounded MVP) |
 | `/intents/:intent_id/propagation-signals` | `/intents/{intent_id}/propagation-signals` | POST | propagation-status, intents | `query_handlers` | ✅ Implemented (Slice 2 bounded signal ingestion) |
+| *(internal)* | *(none)* | — | — | `rebase_apply_handlers` → `webhook_delivery` | 🟡 Internal dispatch only (env-gated, default disabled). No public webhook subscription CRUD route exists yet. |
 | `/forensic/verify` | `/forensic/verify` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/export` | `/forensic/export` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/bundle` | `/forensic/bundle` | POST | forensic | `forensic_handlers` | ✅ Implemented |

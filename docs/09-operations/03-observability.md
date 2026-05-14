@@ -8,6 +8,7 @@
 - approval stale detection latency
 - compensation success rate
 - propagation signal creation success rate (Slice 2 bounded — see RB12)
+- webhook delivery success rate (Slice 3 bounded — see RB13; local dev only, default disabled)
 
 ## Domain metrics
 - intent changes per workflow
@@ -19,6 +20,7 @@
 - false positive invalidations
 - incident count tied to stale intent
 - propagation signal creation rate (attempted / succeeded / failed / no-downstream)
+- webhook delivery rate (attempted / succeeded / failed / retry-exhausted) — Slice 3 bounded; metrics instrumented in `send_webhook_with_retries`; local dev only, default disabled via `INTENT_API_WEBHOOK_DELIVERY`
 - downstream system acknowledgment rate (pending → acknowledged / failed) — **not instrumented; deferred to Phase 4+**
 
 ## Logs

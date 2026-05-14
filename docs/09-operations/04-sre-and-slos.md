@@ -89,7 +89,7 @@ These are the candidate targets from Batch 0 planning. They are concrete enough 
   - `intent_api_rebase_preview_duration_seconds` (histogram with graph_size label)
   - `intent_api_rebase_apply_duration_seconds` (histogram with risk_class label)
   - ✅ **Metric emission is now enabled** — metrics-exporter-prometheus upgraded to 0.18.1 (from 0.12.2) which is compatible with workspace metrics 0.24; metrics are actively recorded for core intent operations.
-- **Runbook scenarios** — see `05-runbooks.md` for RB6-RB10 covering: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn
+- **Runbook scenarios** — see `05-runbooks.md` for RB6-RB13 covering: rebase-stuck, approval-backlog, artifact-quarantine-fail, compensation-timeout, error-budget-burn, propagation-signal-failures (RB12), webhook-delivery-failures (RB13)
 
 ### ⬜ Not Yet Implemented
 
@@ -168,9 +168,14 @@ These targets are Batch 0 planning inputs only.
 - `intent_api_propagation_signals_succeeded_total` — successful propagation record updates
 - `intent_api_propagation_signals_failed_total` — failed propagation record updates or list errors
 - `intent_api_propagation_signals_no_downstream_total` — apply trigger ran but no downstream records found
+- `intent_api_webhook_deliveries_attempted_total` — webhook delivery attempts (Slice 3 bounded; env-gated, default disabled)
+- `intent_api_webhook_deliveries_succeeded_total` — successful webhook deliveries
+- `intent_api_webhook_deliveries_failed_total` — failed webhook deliveries (non-retryable or exhausted)
+- `intent_api_webhook_deliveries_retry_exhausted_total` — deliveries where all retries were exhausted
 
 > **Note:** Earlier `intent_rebase_*` metric names and `intent_api_version_created_total` / `intent_api_rebase_preview_total` / `intent_api_rebase_apply_total` were documented but are not the actual emitted names. Documentation has been updated to match the metrics currently instrumented in intent-api.
 > **Propagation metrics:** Instrumented in `rebase_apply_handlers.rs` post-commit, Proceed-only, best-effort. See RB12 for runbook guidance.
+> **Webhook delivery metrics:** Instrumented in `webhook_delivery.rs` within `send_webhook_with_retries`, incremented per send attempt. See RB13 for runbook guidance. Delivery is env-gated (`INTENT_API_WEBHOOK_DELIVERY`, default disabled) and best-effort — does not affect apply outcomes.
 
 **Exposed via:** `GET /metrics` on intent-api (text/plain; version=0.0.4 Prometheus format)
 
@@ -239,5 +244,9 @@ Prometheus alerting rules defined in `infrastructure/local/prometheus/rules/inte
 **Propagation signal alerts (Slice 2 bounded — local dev only):**
 - `PropagationSignalFailureRate` (> 10% failed/attempted ratio with meaningful traffic) — see RB12
 
+**Webhook delivery alerts (Slice 3 bounded — local dev only):**
+- `WebhookDeliveryFailureRate` (> 10% failed/attempted ratio with meaningful traffic) — see RB13
+
 > **Not instrumented:** Approval wait, audit append, compensation execution, DLQ, and error-budget-remaining alerts are not yet backed by real metrics and have been removed from local rules.
 > **Propagation alerts:** `PropagationSignalFailureRate` is instrumented and defined in local rules but is **local dev scaffolding only**. Production deployment requires SRE sign-off and receiver configuration.
+> **Webhook delivery alerts:** `WebhookDeliveryFailureRate` is instrumented and defined in local rules but is **local dev scaffolding only**. No production delivery guarantees, outbox, HMAC, or subscription CRUD are in scope.
