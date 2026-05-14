@@ -323,6 +323,30 @@ pub async fn send_webhook(
 }
 
 // =============================================================================
+// Metrics (B11)
+// =============================================================================
+
+/// Record a webhook delivery attempt.
+pub(crate) fn record_webhook_delivery_attempted() {
+    metrics::counter!("intent_api_webhook_deliveries_attempted_total").increment(1);
+}
+
+/// Record a successful webhook delivery.
+pub(crate) fn record_webhook_delivery_succeeded() {
+    metrics::counter!("intent_api_webhook_deliveries_succeeded_total").increment(1);
+}
+
+/// Record a failed webhook delivery (non-retryable or exhaustion).
+pub(crate) fn record_webhook_delivery_failed() {
+    metrics::counter!("intent_api_webhook_deliveries_failed_total").increment(1);
+}
+
+/// Record a webhook delivery where all retries were exhausted.
+pub(crate) fn record_webhook_delivery_retry_exhausted() {
+    metrics::counter!("intent_api_webhook_deliveries_retry_exhausted_total").increment(1);
+}
+
+// =============================================================================
 // Retry Loop (B8)
 // =============================================================================
 
@@ -366,19 +390,26 @@ pub async fn send_webhook_with_retries(
 ) -> Result<WebhookDeliveryResult, WebhookSendError> {
     let start = Instant::now();
     let mut attempt: u32 = 1;
+    let mut current_payload = payload.clone();
 
     loop {
-        let result = sender.send(url, payload, headers).await;
+        current_payload.attempt_number = i32::try_from(attempt).unwrap_or(1);
+        record_webhook_delivery_attempted();
+        let result = sender.send(url, &current_payload, headers).await;
 
         match result {
             Ok(WebhookDeliveryResult::Success) => {
+                record_webhook_delivery_succeeded();
                 return Ok(WebhookDeliveryResult::Success);
             }
             Ok(WebhookDeliveryResult::NonRetryableFailure { reason }) => {
+                record_webhook_delivery_failed();
                 return Ok(WebhookDeliveryResult::NonRetryableFailure { reason });
             }
             Ok(WebhookDeliveryResult::RateLimited { retry_after }) => {
                 if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: format!(
                             "rate limited after {} attempts, retry_after={:?}",
@@ -390,6 +421,8 @@ pub async fn send_webhook_with_retries(
                     .unwrap_or_else(|| compute_backoff_delay(attempt))
                     .min(WEBHOOK_RETRY_AFTER_CAP);
                 if would_exceed_max_duration(start.elapsed(), delay) {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: "timeout: max_total_duration_exceeded".to_string(),
                     });
@@ -399,12 +432,16 @@ pub async fn send_webhook_with_retries(
             }
             Ok(WebhookDeliveryResult::RetryableFailure { reason }) => {
                 if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: format!("retry exhausted: {}", reason),
                     });
                 }
                 let delay = compute_backoff_delay(attempt);
                 if would_exceed_max_duration(start.elapsed(), delay) {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: "timeout: max_total_duration_exceeded".to_string(),
                     });
@@ -414,12 +451,16 @@ pub async fn send_webhook_with_retries(
             }
             Err(WebhookSendError::Network(reason)) => {
                 if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: format!("network error after {} attempts: {}", attempt, reason),
                     });
                 }
                 let delay = compute_backoff_delay(attempt);
                 if would_exceed_max_duration(start.elapsed(), delay) {
+                    record_webhook_delivery_retry_exhausted();
+                    record_webhook_delivery_failed();
                     return Ok(WebhookDeliveryResult::NonRetryableFailure {
                         reason: "timeout: max_total_duration_exceeded".to_string(),
                     });

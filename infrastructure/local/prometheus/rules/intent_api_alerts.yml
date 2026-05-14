@@ -237,3 +237,34 @@ groups:
           description: "Propagation signal failure rate is {{ $value | printf \"%.2f\" }}% (threshold: 10%). See RB12 for diagnosis and manual re-signal workflow."
           runbook_url: "docs/09-operations/05-runbooks.md#RB12-Propagation-Signal-Creation-Failures"
           scope: "local-dev-only — production alerting requires SRE sign-off and receiver configuration"
+
+  # ============================================================
+  # Webhook Delivery Alerts — Slice 3 bounded observability (local dev only)
+  # Truthful scope: metrics instrumented, rule is local dev scaffolding.
+  # Production deployment requires SRE confirmation and receiver config.
+  # No production delivery guarantees, outbox, event streaming, HMAC, or CRUD.
+  # ============================================================
+  - name: intent_api_webhook_delivery
+    interval: 30s
+    rules:
+      # Webhook delivery failure ratio above 10% with meaningful traffic.
+      # The "attempted > 0.001" guard prevents division-by-zero and noise
+      # when no webhook deliveries are occurring.
+      - alert: WebhookDeliveryFailureRate
+        expr: |
+          (
+            sum(rate(intent_api_webhook_deliveries_failed_total[5m]))
+            /
+            sum(rate(intent_api_webhook_deliveries_attempted_total[5m]))
+          ) > 0.10
+          and
+          sum(rate(intent_api_webhook_deliveries_attempted_total[5m])) > 0.001
+        for: 5m
+        labels:
+          severity: warning
+          slo: webhook_delivery
+        annotations:
+          summary: "Webhook delivery failure rate elevated (local dev rule)"
+          description: "Webhook delivery failure rate is {{ $value | printf \"%.2f\" }}% (threshold: 10%). See RB13 for diagnosis and rollback boundaries."
+          runbook_url: "docs/09-operations/05-runbooks.md#RB13-Webhook-Delivery-Failures"
+          scope: "local-dev-only — production alerting requires SRE sign-off and receiver configuration"

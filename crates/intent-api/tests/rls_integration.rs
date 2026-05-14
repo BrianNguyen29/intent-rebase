@@ -894,6 +894,61 @@ async fn count_test_propagation_records_for_current_tenant(
     Ok(count)
 }
 
+/// Create a test webhook_subscription for the given tenant within an RLS-scoped transaction.
+async fn create_test_webhook_subscription_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    subscription_record_id: Uuid,
+    intent_id: Uuid,
+    subscription_id: Uuid,
+) -> TestResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_subscriptions (
+            id, tenant_id, intent_id, subscription_id, webhook_url, downstream_system_id
+        )
+        VALUES ($1, $2, $3, $4, 'http://localhost:59999/webhook', 'test-system')
+        "#,
+    )
+    .bind(subscription_record_id)
+    .bind(tenant_id)
+    .bind(intent_id)
+    .bind(subscription_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Failed to insert test webhook_subscription: {}", e))?;
+
+    Ok(())
+}
+
+/// Count webhook_subscriptions visible to the current tenant context.
+async fn count_test_webhook_subscriptions_for_current_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    subscription_record_ids: &[Uuid],
+) -> TestResult<i64> {
+    if subscription_record_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<String> = subscription_record_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+    let query = format!(
+        "SELECT COUNT(*) FROM webhook_subscriptions WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+    for id in subscription_record_ids {
+        query_builder = query_builder.bind(id);
+    }
+    let count = query_builder
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to count test webhook_subscriptions: {}", e))?;
+    Ok(count)
+}
+
 /// Verify RLS is enforced by checking pg_tables relrowsecurity flag.
 async fn verify_rls_enabled_on_tables(pool: &sqlx::PgPool) -> TestResult<()> {
     for table_name in RLS_SCOPED_TABLES {
@@ -1008,6 +1063,7 @@ async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
         "GRANT INSERT, SELECT ON side_effect_rollback_records TO",
         "GRANT INSERT, SELECT ON policy_snapshot TO",
         "GRANT INSERT, SELECT ON forensic_bundles TO",
+        "GRANT INSERT, SELECT ON webhook_subscriptions TO",
     ];
 
     for grant in &grants {
@@ -4714,4 +4770,142 @@ async fn test_propagation_records_tenant_mismatch_fail_closed() {
 
     pool.close().await;
     println!("test_propagation_records_tenant_mismatch_fail_closed PASSED");
+}
+
+// ============================================================================
+// Webhook Subscriptions RLS Tests (Slice 3 bounded)
+// ============================================================================
+
+/// Test: webhook_subscriptions tenant isolation under RLS.
+///
+/// Verifies that webhook_subscriptions table (migration 018) correctly enforces
+/// tenant isolation via RLS policies.
+#[tokio::test]
+#[ignore] // Skip by default; run with `cargo test -- --ignored`
+async fn test_webhook_subscriptions_tenant_isolation() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    ensure_migrations(&pool)
+        .await
+        .expect("Failed to ensure migrations");
+
+    let intent_id = Uuid::new_v4();
+    let sub_a_id = Uuid::new_v4();
+    let sub_b_id = Uuid::new_v4();
+    let subscription_a_id = Uuid::new_v4();
+    let subscription_b_id = Uuid::new_v4();
+
+    // Create intent row first (required by FK)
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
+            .await
+            .expect("Failed to create test intent");
+        tx.commit().await.unwrap();
+    }
+
+    // Create webhook subscription for Tenant A
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant A");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_webhook_subscription_for_current_tenant(
+            &mut tx,
+            tenant_a_id,
+            sub_a_id,
+            intent_id,
+            subscription_a_id,
+        )
+        .await
+        .expect("Failed to create webhook subscription for Tenant A");
+        tx.commit().await.unwrap();
+    }
+
+    // Create webhook subscription for Tenant B (same intent_id, different tenant)
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant B");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+        create_test_webhook_subscription_for_current_tenant(
+            &mut tx,
+            tenant_b_id,
+            sub_b_id,
+            intent_id,
+            subscription_b_id,
+        )
+        .await
+        .expect("Failed to create webhook subscription for Tenant B");
+        tx.commit().await.unwrap();
+    }
+
+    // Verify Tenant A can only see their own subscription
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+
+        let count_own = count_test_webhook_subscriptions_for_current_tenant(&mut tx, &[sub_a_id])
+            .await
+            .expect("Failed to count Tenant A subscriptions");
+        assert_eq!(
+            count_own, 1,
+            "Tenant A should see exactly 1 webhook subscription"
+        );
+
+        let count_other = count_test_webhook_subscriptions_for_current_tenant(&mut tx, &[sub_b_id])
+            .await
+            .expect("Failed to count Tenant B subscriptions from Tenant A context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant A should NOT see Tenant B's webhook subscription"
+        );
+
+        tx.commit().await.unwrap();
+    }
+
+    // Verify Tenant B can only see their own subscription
+    {
+        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
+
+        let count_own = count_test_webhook_subscriptions_for_current_tenant(&mut tx, &[sub_b_id])
+            .await
+            .expect("Failed to count Tenant B subscriptions");
+        assert_eq!(
+            count_own, 1,
+            "Tenant B should see exactly 1 webhook subscription"
+        );
+
+        let count_other = count_test_webhook_subscriptions_for_current_tenant(&mut tx, &[sub_a_id])
+            .await
+            .expect("Failed to count Tenant A subscriptions from Tenant B context");
+        assert_eq!(
+            count_other, 0,
+            "Tenant B should NOT see Tenant A's webhook subscription"
+        );
+
+        tx.commit().await.unwrap();
+    }
+
+    pool.close().await;
+    println!("test_webhook_subscriptions_tenant_isolation PASSED");
 }

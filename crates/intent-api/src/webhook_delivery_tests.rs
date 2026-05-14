@@ -1396,6 +1396,173 @@ async fn test_retry_network_error_then_success() {
     assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
 }
 
+// =============================================================================
+// B10 Retry Payload attempt_number Regression Tests
+// =============================================================================
+
+/// Mock sender that captures the attempt_number from each payload sent.
+struct CapturingMockWebhookSender {
+    captured_attempt_numbers: std::sync::Mutex<Vec<i32>>,
+    results: std::sync::Mutex<Vec<Result<WebhookDeliveryResult, WebhookSendError>>>,
+}
+
+impl CapturingMockWebhookSender {
+    fn new(results: Vec<Result<WebhookDeliveryResult, WebhookSendError>>) -> Self {
+        Self {
+            captured_attempt_numbers: std::sync::Mutex::new(Vec::new()),
+            results: std::sync::Mutex::new(results),
+        }
+    }
+
+    fn captured(&self) -> Vec<i32> {
+        self.captured_attempt_numbers.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl WebhookSender for CapturingMockWebhookSender {
+    async fn send(
+        &self,
+        _url: &str,
+        payload: &crate::webhook_delivery::WebhookPayload,
+        _headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
+        self.captured_attempt_numbers
+            .lock()
+            .unwrap()
+            .push(payload.attempt_number);
+        let mut results = self.results.lock().unwrap();
+        if results.is_empty() {
+            panic!("CapturingMockWebhookSender exhausted: no more results");
+        }
+        results.remove(0)
+    }
+}
+
+#[tokio::test]
+async fn test_retry_payload_attempt_number_increments_1_2_3() {
+    let sender = CapturingMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::Success),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
+    assert_eq!(
+        sender.captured(),
+        vec![1, 2, 3],
+        "attempt_number should be 1, 2, 3 across retries"
+    );
+}
+
+#[tokio::test]
+async fn test_retry_exhaustion_attempt_number_1_2_3() {
+    let sender = CapturingMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::NonRetryableFailure {
+            reason: "retry exhausted: HTTP 503".to_string(),
+        }
+    );
+    assert_eq!(
+        sender.captured(),
+        vec![1, 2, 3],
+        "attempt_number should be 1, 2, 3 even on exhaustion"
+    );
+}
+
+#[tokio::test]
+async fn test_no_retry_attempt_number_is_1() {
+    let sender =
+        CapturingMockWebhookSender::new(vec![Ok(WebhookDeliveryResult::NonRetryableFailure {
+            reason: "HTTP 400".to_string(),
+        })]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(
+        sender.captured(),
+        vec![1],
+        "attempt_number should be 1 on immediate non-retryable failure"
+    );
+}
+
 #[test]
 fn test_would_exceed_max_duration() {
     use crate::webhook_delivery::would_exceed_max_duration;

@@ -305,6 +305,72 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 ---
 
+## RB13. Webhook Delivery Failures
+
+> **Status:** Bounded observability slice — metrics instrumented, no production alerting claim. Webhook delivery remains Phase 4+ deferred; no production delivery guarantees, outbox, event streaming, HMAC, key rotation, or subscription CRUD.
+
+**Symptoms:**
+- `intent_api_webhook_deliveries_failed_total` counter is increasing
+- `intent_api_webhook_deliveries_retry_exhausted_total` counter is increasing
+- Warning logs: `Failed to record delivery outcome for record {id}` or `Failed to record delivery attempt for record {id}`
+- Downstream systems not receiving webhook callbacks after rebase apply
+
+**Diagnosis:**
+1. Check webhook delivery metrics on `/metrics`:
+   ```
+   intent_api_webhook_deliveries_attempted_total
+   intent_api_webhook_deliveries_succeeded_total
+   intent_api_webhook_deliveries_failed_total
+   intent_api_webhook_deliveries_retry_exhausted_total
+   ```
+2. If `failed_total` is increasing while `attempted_total` is also increasing:
+   - Check application logs for `Unexpected delivery error after retries` or `Failed to record delivery outcome`
+   - Verify downstream webhook URLs are reachable from the intent-api network
+   - Check for HTTP 4xx responses (non-retryable) vs HTTP 5xx / network errors (retryable)
+3. If `retry_exhausted_total` is increasing:
+   - Downstream system may be consistently returning 5xx or unreachable
+   - Check if `WEBHOOK_MAX_ATTEMPTS` (3) and backoff delays are appropriate for the downstream SLA
+4. If delivery attempts are not occurring at all:
+   - Verify `INTENT_API_WEBHOOK_DELIVERY` env var is set to `true` (default is disabled)
+   - Verify `webhook_subscriptions` table has rows for the affected intent
+   - Check propagation records exist for the downstream system
+
+**Mitigation:**
+1. If transient downstream error (5xx, timeout):
+   - Retry-exhausted records remain in `Failed` status; no automatic retry queue exists in this slice
+   - Manual re-trigger requires updating the propagation record status to `Pending` and running a new rebase apply (if webhook delivery is enabled)
+2. If non-retryable error (4xx except 429):
+   - Fix the downstream webhook URL or payload contract
+   - Update the subscription URL in `webhook_subscriptions` if incorrect (manual DB update — no CRUD API in this slice)
+3. If webhook delivery is disabled (default):
+   - Set `INTENT_API_WEBHOOK_DELIVERY=true` in the environment
+   - Restart intent-api pods to pick up the change
+   - This is an opt-in gate — do not enable in production without SRE review
+4. If RLS context issues:
+   - Verify `SET LOCAL app.current_tenant_id` is set correctly in transactions
+   - Check `webhook_subscriptions` rows are visible under the tenant's RLS context
+
+**Rollback Boundaries:**
+- Webhook delivery is best-effort and does NOT affect rebase apply outcomes
+- Disabling `INTENT_API_WEBHOOK_DELIVERY` immediately stops all delivery attempts without affecting apply path
+- Propagation records remain in their current state (Acknowledged/Failed/Pending) and can be inspected directly
+
+**Recovery:**
+1. After fixing root cause, verify `succeeded_total` increases on the next rebase apply with delivery enabled
+2. Query propagation status to confirm downstream systems are visible:
+   ```bash
+   GET /intents/{intent_id}/propagation-status?tenant_id=<tenant-uuid>
+   ```
+3. For failed records, manually update `propagation_records` status to `Pending` to allow re-signal on next apply
+
+**Prevention:**
+- Register downstream systems proactively via `POST /intents/{intent_id}/propagation-signals` (creates both propagation record and webhook subscription)
+- Monitor `intent_api_webhook_deliveries_failed_total / attempted_total` ratio; alert if > 10% sustained
+- `intent_api_webhook_deliveries_retry_exhausted_total` is informational — indicates persistent downstream issues
+- Local Prometheus rule `WebhookDeliveryFailureRate` is defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding only — production alerting requires SRE sign-off and receiver configuration)
+
+---
+
 ## On-Call Quick Reference
 
 | Alert | Severity | Immediate Action |
@@ -318,6 +384,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 | PreviewPathBurnRate1h/6h/3d | Warning | Monitor burn rate windows; prepare incident if 1h persists |
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
 | PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
+| WebhookDeliveryFailureRate | Warning | Check downstream URL health and webhook delivery metrics; see RB13 |
 | LocalAlertReceiver | Info | Standalone: `python3 infrastructure/local/alertmanager/webhook_receiver.py` → http://localhost:9094/webhook; Docker Compose: `docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d` → Alertmanager routes to `alert-receiver:9094` internally; local/manual-only — not a production receiver |
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
