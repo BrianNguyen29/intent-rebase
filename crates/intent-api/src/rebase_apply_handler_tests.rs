@@ -437,3 +437,141 @@ async fn test_rebase_apply_no_signals_when_no_downstream_records() {
         "No propagation records should exist for empty registry"
     );
 }
+
+// B16: Apply → env gate → webhook dispatch integration tests.
+// Uses a pub(crate) test seam on `create_propagation_signals_after_apply`
+// to verify env-gated dispatch without full HTTP handler overhead.
+use std::sync::Mutex;
+
+static WEBHOOK_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[tokio::test]
+async fn test_create_propagation_signals_webhook_disabled_by_default() {
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+
+    {
+        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        // Ensure env var is unset (disabled by default)
+        std::env::remove_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR);
+    }
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-a".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Call create_propagation_signals_after_apply directly
+    rebase_apply_handlers::create_propagation_signals_after_apply(&state, intent_id, tenant_id, 2)
+        .await;
+
+    // Verify signal was updated
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Pending,
+        "Propagation record should be updated to pending when webhook disabled"
+    );
+    assert_eq!(
+        updated.last_seen_version, 2,
+        "last_seen_version should be updated to to_version"
+    );
+
+    // No panic should occur; webhook dispatch is skipped when disabled.
+}
+
+#[tokio::test]
+async fn test_create_propagation_signals_webhook_enabled_no_panic_with_empty_resolver() {
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+
+    {
+        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        // Enable webhook delivery
+        std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
+    }
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-b".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Call create_propagation_signals_after_apply directly.
+    // rls_pool is None → EmptyWebhookSubscriptionResolver → no HTTP calls.
+    rebase_apply_handlers::create_propagation_signals_after_apply(&state, intent_id, tenant_id, 3)
+        .await;
+
+    // Verify signal was updated
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Pending,
+        "Propagation record should be updated to pending even with webhook enabled"
+    );
+    assert_eq!(
+        updated.last_seen_version, 3,
+        "last_seen_version should be updated to to_version"
+    );
+
+    // Clean up env var
+    {
+        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR);
+    }
+}

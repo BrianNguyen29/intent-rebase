@@ -79,7 +79,7 @@ pub(crate) fn record_propagation_signal_no_downstream() {
 /// Queries existing propagation records for the intent (de facto downstream
 /// registry) and updates each to status `pending` with the new version.
 /// Failures are logged as warnings and never fail the apply response.
-async fn create_propagation_signals_after_apply(
+pub(crate) async fn create_propagation_signals_after_apply(
     state: &AppState,
     intent_id: Uuid,
     tenant_id: Uuid,
