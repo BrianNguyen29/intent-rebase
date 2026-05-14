@@ -908,3 +908,300 @@ async fn test_dispatch_multiple_subscriptions() {
     assert_eq!(stored_b.delivery_attempt_count, 1);
     assert_eq!(stored_b.status, PropagationStatus::Acknowledged);
 }
+
+// =============================================================================
+// B8 Retry Loop Tests (deterministic, no wall-clock sleeps)
+// =============================================================================
+
+use crate::webhook_delivery::{send_webhook_with_retries, Sleeper};
+
+/// No-op sleeper for fast deterministic tests.
+struct NoOpSleeper;
+
+#[async_trait::async_trait]
+impl Sleeper for NoOpSleeper {
+    async fn sleep(&self, _duration: std::time::Duration) {
+        // no sleep in tests
+    }
+}
+
+/// Mock sender that returns a predetermined sequence of results.
+struct SequenceMockWebhookSender {
+    results: std::sync::Mutex<Vec<Result<WebhookDeliveryResult, WebhookSendError>>>,
+}
+
+impl SequenceMockWebhookSender {
+    fn new(results: Vec<Result<WebhookDeliveryResult, WebhookSendError>>) -> Self {
+        Self {
+            results: std::sync::Mutex::new(results),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WebhookSender for SequenceMockWebhookSender {
+    async fn send(
+        &self,
+        _url: &str,
+        _payload: &crate::webhook_delivery::WebhookPayload,
+        _headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
+        let mut results = self.results.lock().unwrap();
+        if results.is_empty() {
+            panic!("SequenceMockWebhookSender exhausted: no more results");
+        }
+        results.remove(0)
+    }
+}
+
+#[tokio::test]
+async fn test_retry_503_then_503_then_200() {
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::Success),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
+}
+
+#[tokio::test]
+async fn test_retry_503_exhaustion() {
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::NonRetryableFailure {
+            reason: "retry exhausted: HTTP 503".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_no_retry_400() {
+    let sender =
+        SequenceMockWebhookSender::new(vec![Ok(WebhookDeliveryResult::NonRetryableFailure {
+            reason: "HTTP 400".to_string(),
+        })]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        WebhookDeliveryResult::NonRetryableFailure {
+            reason: "HTTP 400".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_retry_429_then_200() {
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(5)),
+        }),
+        Ok(WebhookDeliveryResult::Success),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
+}
+
+#[tokio::test]
+async fn test_retry_429_exhaustion() {
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(5)),
+        }),
+        Ok(WebhookDeliveryResult::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(10)),
+        }),
+        Ok(WebhookDeliveryResult::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(15)),
+        }),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let actual = result.unwrap();
+    assert!(
+        matches!(actual, WebhookDeliveryResult::NonRetryableFailure { ref reason } if reason.contains("rate limited")),
+        "Expected rate-limited exhaustion, got: {:?}",
+        actual
+    );
+}
+
+#[tokio::test]
+async fn test_retry_network_error_then_success() {
+    let sender = SequenceMockWebhookSender::new(vec![
+        Err(WebhookSendError::Network("dns failure".to_string())),
+        Ok(WebhookDeliveryResult::Success),
+    ]);
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    let result = send_webhook_with_retries(
+        &sender,
+        "http://example.com/webhook",
+        &payload,
+        &headers,
+        &NoOpSleeper,
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), WebhookDeliveryResult::Success);
+}
+
+#[test]
+fn test_would_exceed_max_duration() {
+    use crate::webhook_delivery::would_exceed_max_duration;
+    use std::time::Duration;
+
+    // Not exceeded: 10s elapsed + 20s delay = 30s < 120s max
+    assert!(!would_exceed_max_duration(
+        Duration::from_secs(10),
+        Duration::from_secs(20)
+    ));
+
+    // Exactly at boundary: 100s + 20s = 120s, not exceeded
+    assert!(!would_exceed_max_duration(
+        Duration::from_secs(100),
+        Duration::from_secs(20)
+    ));
+
+    // Exceeded: 110s + 20s = 130s > 120s max
+    assert!(would_exceed_max_duration(
+        Duration::from_secs(110),
+        Duration::from_secs(20)
+    ));
+
+    // Saturating add prevents overflow panic
+    assert!(would_exceed_max_duration(
+        Duration::from_secs(u64::MAX),
+        Duration::from_secs(1)
+    ));
+}

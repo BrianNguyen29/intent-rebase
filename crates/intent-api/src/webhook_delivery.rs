@@ -13,7 +13,7 @@ use intent_service::PropagationRecordRepository;
 use serde::Serialize;
 use sqlx::Row;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 // =============================================================================
@@ -319,6 +319,115 @@ pub async fn send_webhook(
         WebhookErrorCategory::NonRetryable => Ok(WebhookDeliveryResult::NonRetryableFailure {
             reason: format!("HTTP {}", status),
         }),
+    }
+}
+
+// =============================================================================
+// Retry Loop (B8)
+// =============================================================================
+
+/// Abstraction over sleep for testability.
+#[async_trait]
+pub trait Sleeper: Send + Sync {
+    async fn sleep(&self, duration: Duration);
+}
+
+/// Production sleeper using tokio::time::sleep.
+pub struct TokioSleeper;
+
+#[async_trait]
+impl Sleeper for TokioSleeper {
+    async fn sleep(&self, duration: Duration) {
+        tokio::time::sleep(duration).await;
+    }
+}
+
+/// Check whether sleeping for `delay` would exceed the max total duration.
+pub(crate) fn would_exceed_max_duration(elapsed: Duration, delay: Duration) -> bool {
+    elapsed.saturating_add(delay) > WEBHOOK_MAX_TOTAL_DURATION
+}
+
+/// Send a webhook with bounded retries.
+///
+/// - Max attempts: `WEBHOOK_MAX_ATTEMPTS` (3 total: initial + 2 retries)
+/// - Retryable failures (5xx, network errors): exponential backoff with full jitter
+/// - 429 RateLimited: uses Retry-After header when present, capped at 60s
+/// - Non-retryable failures (4xx except 429): no retry, immediate failure
+/// - Max total duration: `WEBHOOK_MAX_TOTAL_DURATION` (120s hard ceiling)
+///
+/// Bounded B8: retries are in-process sequential; no external queue or worker.
+#[allow(dead_code)]
+pub async fn send_webhook_with_retries(
+    sender: &dyn WebhookSender,
+    url: &str,
+    payload: &WebhookPayload,
+    headers: &WebhookHeaders,
+    sleeper: &dyn Sleeper,
+) -> Result<WebhookDeliveryResult, WebhookSendError> {
+    let start = Instant::now();
+    let mut attempt: u32 = 1;
+
+    loop {
+        let result = sender.send(url, payload, headers).await;
+
+        match result {
+            Ok(WebhookDeliveryResult::Success) => {
+                return Ok(WebhookDeliveryResult::Success);
+            }
+            Ok(WebhookDeliveryResult::NonRetryableFailure { reason }) => {
+                return Ok(WebhookDeliveryResult::NonRetryableFailure { reason });
+            }
+            Ok(WebhookDeliveryResult::RateLimited { retry_after }) => {
+                if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: format!(
+                            "rate limited after {} attempts, retry_after={:?}",
+                            attempt, retry_after
+                        ),
+                    });
+                }
+                let delay = retry_after
+                    .unwrap_or_else(|| compute_backoff_delay(attempt))
+                    .min(WEBHOOK_RETRY_AFTER_CAP);
+                if would_exceed_max_duration(start.elapsed(), delay) {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: "timeout: max_total_duration_exceeded".to_string(),
+                    });
+                }
+                sleeper.sleep(delay).await;
+                attempt += 1;
+            }
+            Ok(WebhookDeliveryResult::RetryableFailure { reason }) => {
+                if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: format!("retry exhausted: {}", reason),
+                    });
+                }
+                let delay = compute_backoff_delay(attempt);
+                if would_exceed_max_duration(start.elapsed(), delay) {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: "timeout: max_total_duration_exceeded".to_string(),
+                    });
+                }
+                sleeper.sleep(delay).await;
+                attempt += 1;
+            }
+            Err(WebhookSendError::Network(reason)) => {
+                if attempt >= WEBHOOK_MAX_ATTEMPTS {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: format!("network error after {} attempts: {}", attempt, reason),
+                    });
+                }
+                let delay = compute_backoff_delay(attempt);
+                if would_exceed_max_duration(start.elapsed(), delay) {
+                    return Ok(WebhookDeliveryResult::NonRetryableFailure {
+                        reason: "timeout: max_total_duration_exceeded".to_string(),
+                    });
+                }
+                sleeper.sleep(delay).await;
+                attempt += 1;
+            }
+        }
     }
 }
 
