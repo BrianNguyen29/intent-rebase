@@ -312,7 +312,7 @@
     - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (6 new multi-window burn-rate alerting rules: PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d)
     - Note: Bounded to 1h/6h/3d burn-rate stat panels and multi-window alerting for preview and apply paths; budget depletion forecasting, 30-day budget tracking, and production Alertmanager deployment remain future scope
 
-[x] Webhook delivery bounded slice (B3-B16) — post-Batch 2 bounded non-production delivery
+[x] Webhook delivery bounded slice (B3-B18) — post-Batch 2 bounded non-production delivery
     Evidence:
     - Code: crates/intent-api/src/webhook_delivery.rs (payload builders, env gate, retry loop, metrics, dispatcher)
     - Code: crates/intent-api/src/webhook_delivery_tests.rs (G7 payload/header tests, B10 attempt_number regression tests, wiremock delivery simulation tests)

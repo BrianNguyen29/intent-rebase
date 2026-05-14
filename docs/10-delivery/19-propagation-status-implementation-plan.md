@@ -198,9 +198,11 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Runbook RB12 documents alerting guidance and manual re-signal workflow
 - [x] Local Prometheus rule `PropagationSignalFailureRate` defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding; production requires SRE sign-off)
 
-### Slice 3 — Webhook Delivery (Bounded Implemented — B3-B16)
+### Slice 3 — Webhook Delivery (Bounded Implemented — B3-B18)
 
-> **Status:** Bounded non-production implementation delivered (B3-B16). Payload/header builders, async skeleton, env-gated dispatcher, retry loop, metrics, runbook, alert rule, and RLS tests are implemented. The following design decisions were originally proposed in the docs-only slice and have since been implemented as bounded code; remaining deferred items are explicitly called out.
+> **Status:** Bounded non-production implementation delivered (B3-B18). Payload/header builders, async skeleton, env-gated dispatcher, retry loop, metrics, runbook, alert rule, RLS tests, docs sync, and dead_code cleanup are implemented. The following design decisions were originally proposed in the docs-only slice and have since been implemented as bounded code; remaining deferred items are explicitly called out.
+>
+> **Current bounded behavior:** Dispatch is `.await`ed synchronously within the apply handler post-commit. `tokio::spawn` fire-and-forget conversion remains deferred.
 >
 > **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table.
 
@@ -262,7 +264,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - **Proposed model:** Async fire-and-notify.
 - **Behavior:** When a propagation signal is created (e.g., by rebase apply post-commit), spawn a local async task to deliver webhooks.
 - **Sequential per intent:** All subscriptions for a given intent are delivered one-at-a-time to bound resource usage and avoid overwhelming a single downstream system.
-- **Not awaited by caller:** The apply/signal handler returns immediately; delivery outcomes are recorded asynchronously. A `tracing::warn!` is emitted on spawn failure, but the caller response is never blocked.
+- **Synchronous within handler:** The apply/signal handler `.await`s dispatch completion post-commit. Delivery outcomes are recorded before the handler returns. A `tracing::warn!` is emitted on dispatch failure. `tokio::spawn` fire-and-forget conversion remains deferred.
 - **Bounded:** No delivery guarantees (at-least-once is best-effort). No outbox pattern, no transactional boundary spanning DB write + HTTP delivery, no saga compensation for delivery failures.
 - **Error recording:** On task completion (success or failure), update `propagation_records.status`, `delivery_attempt_count`, and `last_delivery_attempt_at`.
 
@@ -291,7 +293,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 > **Known bounded limitation:** Because there is no outbox/transactional boundary, a crash between HTTP delivery and DB update can leave the delivery state inconsistent (delivered but not recorded, or recorded but not delivered). This is accepted for Slice 3 and can be addressed later with an outbox or idempotent re-delivery log.
 
-#### Acceptance Criteria (Bounded Implementation — B3-B16)
+#### Acceptance Criteria (Bounded Implementation — B3-B18)
 
 - [x] HTTP client (`reqwest`) configured with connect/request timeouts matching proposed constants.
 - [x] Retry policy implements exponential backoff with full jitter (3 attempts max).
@@ -311,7 +313,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - [x] Env-gated dispatch integration tested via dispatcher-level tests — B16.
 - [ ] Full end-to-end apply integration test with `INTENT_API_WEBHOOK_DELIVERY=true` triggering live dispatch against wiremock — **deferred** (current coverage is unit/dispatcher-level).
 
-#### Validation Gates (Slice 3 — Proposed for Future Implementation)
+#### Validation Gates (Slice 3 — Bounded Implemented)
 
 | Gate | Check | Command |
 |------|-------|---------|
@@ -321,14 +323,14 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | G4 — Route wiring | All routes reachable | `cargo test -p intent-api --lib router_smoke_tests` |
 | G5 — OpenAPI drift | Spec matches routes | `npx spectral lint docs/04-api/openapi.yaml` + drift guard test |
 | G6 — Tenant isolation | RLS policies active | `cargo test --test rls_integration -- --ignored` |
-| G7 — Handler unit test | Payload shape + headers | New unit test in `intent-api` handler module |
-| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | Integration test with `wiremock` or `mockito` (proposed) |
+| G7 — Handler unit test | Payload shape + headers | `cargo test --lib webhook_delivery_tests` (57 tests, including payload/header assertions) |
+| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | `cargo test --lib webhook_delivery_tests` (wiremock-based delivery simulation tests) |
 
-> **Note:** G7–G8 are proposed gates for when implementation begins. They are not runnable today because Slice 3 is design-only.
+> **Note:** G1–G8 reflect bounded implementation status. G7–G8 are implemented in `webhook_delivery_tests.rs`. Full end-to-end apply integration test with live wiremock dispatch remains deferred.
 
-#### Implementation Readiness Checklist (Pre-Implementation — Not Started)
+#### Implementation Readiness Checklist (Bounded Implementation Complete — B3-B18)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R7 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, test plan mapping, and rollback/non-goals acknowledgment decisions only; this is **not** an implementation Go. R8 is checked as **BOUNDED GO** for the first non-production Slice 3 implementation slice only; see R8 Decision Note below.
+> **Status:** Bounded implementation is complete. R1–R7 were originally checked as pre-flight design decisions and have since been implemented as bounded code. R8 was a **BOUNDED GO** for the first non-production Slice 3 implementation slice; implementation is now delivered. See R8 Decision Note below for scope boundaries and deferred items.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
@@ -338,7 +340,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R6 | **Test Plan Mapping to G1–G8** — Decision recorded (see R6 Decision Note below). G1–G8 mapped to existing or future checks with concrete commands or file locations. G7 future unit test module and G8 future wiremock integration test proposed with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. No Rust, test, Cargo, or config files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R7 | **Rollback / Non-Goals Acknowledgment** — Decision recorded (see R7 Decision Note below). Env gate `INTENT_API_WEBHOOK_DELIVERY` documented with default/conservative behavior and rollback/roll-forward procedure. `failure_reason` truncation/redaction policy accepted (max 500 chars, URL stripping, PII redaction). Failed-to-pending reset semantics: manual operator action only for Slice 3. Delivery task lifecycle: tokio::spawn fire-and-forget, no graceful shutdown. Non-goals restated. RB13 and Prometheus placeholders proposed only. No code, test, config, runbook, or alert files modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
+| R7 | **Rollback / Non-Goals Acknowledgment** — Decision recorded (see R7 Decision Note below). Env gate `INTENT_API_WEBHOOK_DELIVERY` documented with default/conservative behavior and rollback/roll-forward procedure. `failure_reason` truncation/redaction policy accepted (max 500 chars, URL stripping, PII redaction). Failed-to-pending reset semantics: manual operator action only for Slice 3. Delivery task lifecycle: `.await`ed synchronously within the apply handler post-commit; `tokio::spawn` fire-and-forget remains a deferred aspiration. Non-goals restated. RB13 runbook and `WebhookDeliveryFailureRate` local alert rule delivered in B12-B13. No production readiness claim. | Brian Nguyen / AI-oracle | ☑ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date. **BOUNDED GO** authorizes starting the first non-production Slice 3 implementation slice only; production readiness, production deployment, and external signoff are explicitly excluded. | Brian Nguyen | ☑ |
 
 #### R2 Decision Note (Docs-Only — No Cargo Changes)
@@ -489,8 +491,8 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | G4 — Route wiring | All routes reachable | `cargo test -p intent-api --lib router_smoke_tests` (existing) |
 | G5 — OpenAPI drift | Spec matches routes | `npx spectral lint docs/04-api/openapi.yaml --ruleset .spectral.yml` (existing CI) |
 | G6 — Tenant isolation | RLS policies active | Ignored/manual live Postgres: `cargo test -p intent-api --test rls_integration -- --ignored` (existing pattern) |
-| G7 — Handler unit test | Payload shape + headers | Future module: `crates/intent-api/src/webhook_delivery_tests.rs` |
-| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | Future integration test: `crates/intent-api/tests/webhook_delivery_simulation.rs` |
+| G7 — Handler unit test | Payload shape + headers | `crates/intent-api/src/webhook_delivery_tests.rs` (57 tests covering payload shape, headers, retry behavior, metrics counters, env gate, and RLS isolation) |
+| G8 — Delivery simulation | Mock HTTP server verifies retry behavior | `crates/intent-api/src/webhook_delivery_tests.rs` (wiremock-based delivery simulation tests) |
 
 **D9 — G7 future unit test module (proposed):**
 - File: `crates/intent-api/src/webhook_delivery_tests.rs`
@@ -574,8 +576,8 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - This is a future design requirement documented now; no implementation is written.
 
 **D16 — Delivery task lifecycle (accepted):**
-- Spawn: `tokio::spawn` fire-and-forget.
-- Caller: returns immediately; delivery is not awaited.
+- Current bounded behavior: `.await`ed synchronously within the apply handler post-commit. Delivery completes before the handler returns.
+- Deferred aspiration: `tokio::spawn` fire-and-forget conversion (not implemented; remains Phase 4+ scope).
 - Process restart: in-flight deliveries are lost; no in-flight recovery.
 - Shutdown: no `CancellationToken` or graceful shutdown for Slice 3.
 - Timeout enforcement: 120s max total duration per R5 D8.
@@ -609,19 +611,19 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | N1 | Workspace dependency placement | R2 | `reqwest` and `wiremock` crate-local in `intent-api` |
 | N2 | Delivery observability metrics | R6 D11 | Four counters defined; histogram deferred |
 | N3 | Failed-to-pending reset semantics | R7 D15 | Manual operator action only for Slice 3; automatic reset is Phase 4+ |
-| N4 | Delivery task lifecycle | R7 D16 | `tokio::spawn` fire-and-forget; no graceful shutdown |
+| N4 | Delivery task lifecycle | R7 D16 | `.await`ed synchronously within handler post-commit; `tokio::spawn` fire-and-forget remains deferred |
 | N5 | `failure_reason` truncation / redaction | R7 D14 | Max 500 chars, URL stripping, body snippet 100 chars, PII redaction |
 | N6 | Feature flag / env rollback gate | R7 D13 | `INTENT_API_WEBHOOK_DELIVERY` boolean; conservative default |
 
 **No code, test, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, config, runbook, or alert file was modified in this docs-only update.
 
-#### R8 Decision Note (Bounded Implementation Complete — B3-B16)
+#### R8 Decision Note (Bounded Implementation Complete — B3-B18)
 
-> **Status:** Bounded Go decision was recorded in the docs-only slice. Subsequent commits B3-B16 implemented the bounded non-production Slice 3 code. The R8 scope boundaries and non-goals listed in D22 remain in force — no production readiness claim is made.
+> **Status:** Bounded Go decision was recorded in the docs-only slice. Subsequent commits B3-B18 implemented the bounded non-production Slice 3 code. The R8 scope boundaries and non-goals listed in D22 remain in force — no production readiness claim is made.
 
 **D19 — Bounded Go verdict:**
 - Decision: **BOUNDED GO** for the first non-production Slice 3 implementation slice only.
-- Implementation completed in commits B3-B16 (payload builders, async skeleton, env-gated dispatcher, retry loop with incrementing `attempt_number`, metrics counters, RB13 runbook, `WebhookDeliveryFailureRate` local alert rule, webhook_subscriptions RLS test/helpers).
+- Implementation completed in commits B3-B18 (payload builders, async skeleton, env-gated dispatcher, retry loop with incrementing `attempt_number`, metrics counters, RB13 runbook, `WebhookDeliveryFailureRate` local alert rule, webhook_subscriptions RLS test/helpers, docs sync, dead_code cleanup).
 - This does **not** authorize production deployment, production readiness claims, or external signoff.
 - Production readiness, production deployment, and external signoff are explicitly excluded.
 
@@ -641,9 +643,9 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Pre-R8 Blockers / Open Decisions
 
-> **Status:** B1–B2 were blockers for the first implementation slice and are now **resolved** in commits B3-B16. Implementation has been delivered as bounded non-production code.
+> **Status:** B1–B2 were blockers for the first implementation slice and are now **resolved** in commits B3-B18. Implementation has been delivered as bounded non-production code.
 
-**Blockers (resolved in B3-B16):**
+**Blockers (resolved in B3-B18):**
 
 | # | Blocker | Resolution |
 |---|---|---------|

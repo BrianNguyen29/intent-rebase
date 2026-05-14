@@ -100,7 +100,7 @@ Current execution tracking: see [06-phase-3-batch-0-execution.md](./06-phase-3-b
 - Local dev alerting infrastructure (Prometheus, Alertmanager, Grafana) ✅
 - Bounded metrics instrumentation (definitions scaffolded, emission active with metrics-exporter-prometheus 0.18.1 + metrics 0.24) ✅
 - Runbook scenarios for common failure modes ✅
-- Webhook delivery bounded slice (B3-B16) delivered post-Batch 2: env-gated dispatcher, retry loop, metrics, RB13 runbook, `WebhookDeliveryFailureRate` alert, RLS tests ✅
+- Webhook delivery bounded slice (B3-B18) delivered post-Batch 2: env-gated dispatcher, retry loop, metrics, RB13 runbook, `WebhookDeliveryFailureRate` alert, RLS tests ✅
 - **NOT in scope for Slice 3:** Full metrics coverage across all flows, production alerting deployment, error budget tracking dashboard, performance benchmarks, outbox pattern, HMAC signing, subscription CRUD API
 
 ### Batch 2 Slice 4 (delivered — rebase-engine sync benchmark)

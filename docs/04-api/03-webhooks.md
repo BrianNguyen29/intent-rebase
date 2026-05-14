@@ -1,6 +1,6 @@
 # Webhooks
 
-> **Status:** Design-only / future contract. This document describes the intended webhook event envelope and payload schemas for future integration. The current implementation (B3-B16 bounded slice) delivers only an env-gated, best-effort webhook dispatcher for `intent_changed` events with no production delivery guarantees, no outbox, no HMAC signing, no key rotation, no subscription CRUD API, and no event streaming. See `docs/10-delivery/19-propagation-status-implementation-plan.md` for the bounded Slice 3 scope.
+> **Status:** Design-only / future contract. This document describes the intended webhook event envelope and payload schemas for future integration. The current implementation (B3-B18 bounded slice) delivers only an env-gated, best-effort webhook dispatcher for `intent_changed` events with no production delivery guarantees, no outbox, no HMAC signing, no key rotation, no subscription CRUD API, and no event streaming. See `docs/10-delivery/19-propagation-status-implementation-plan.md` for the bounded Slice 3 scope.
 
 ## Mục tiêu
 Cho phép tích hợp IRE với:
@@ -181,7 +181,7 @@ Fired when a Phase 2 audit export is available for download.
 }
 ```
 
-## Current Bounded Implementation Payload (B3-B16)
+## Current Bounded Implementation Payload (B3-B18)
 
 The currently implemented webhook delivery (env-gated, default disabled) sends an `intent_changed` event with this JSON payload:
 
