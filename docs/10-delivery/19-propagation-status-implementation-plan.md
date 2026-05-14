@@ -1,6 +1,6 @@
 # Propagation Status Implementation Plan
 
-> **Status:** Slices 1–2 bounded implemented locally — migration 017 applied, `PropagationRecord` domain type, in-memory and SQL repositories wired, query handler reads from repo when available and falls back to stub when `None`, signal ingestion endpoint wired. No production-ready claim.
+> **Status:** Slices 1–2 bounded implemented locally — migration 017 applied, `PropagationRecord` domain type, in-memory and SQL repositories wired, query handler reads from repo when available and falls back to stub when `None`, signal ingestion endpoint wired. No production-ready claim. Webhook delivery Phase 4 design baseline (P2-6a..P2-6f) is complete as design-only documentation; no implementation, outbox, worker, HMAC, subscription CRUD, DLQ, or rollback automation exists.
 > **Scope:** Concrete bounded plan for evolving `GET /intents/{intent_id}/propagation-status` from stub to real downstream tracking  
 > **Related:** [ADR-12](../13-adrs/12-workflow-migration-rebase.md), [Agent Safety Roadmap](./18-agent-safety-rebase-roadmap.md), [REST API Design](../04-api/01-rest-api.md)
 

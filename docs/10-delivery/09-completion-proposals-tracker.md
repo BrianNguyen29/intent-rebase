@@ -284,6 +284,7 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| May 2026 | (fixer) | P2-6a..P2-6f Phase 4 design baseline complete — outbox schema (P2-6a), background worker lifecycle (P2-6b), HMAC signing + key rotation (P2-6c), subscription CRUD API (P2-6d), retry / dead-letter semantics (P2-6e), rollback plan (P2-6f). All design-only; no implementation, no production readiness claim. |
 | May 2026 | (fixer) | P2 updated: Webhook delivery bounded slice B3-B18 delivered — env-gated dispatcher, retry loop, metrics, RB13 runbook, `WebhookDeliveryFailureRate` alert, RLS tests, docs sync, dead_code cleanup; runbook references updated RB6-RB13 |
 | May 2026 | (fixer) | Commit 5dcdd36: apply-level wiremock success/failure outcome coverage delivered (200-success and 500-failure paths via `create_propagation_signals_after_apply_with_resolver` test seam in `rebase_apply_handler_tests.rs`) |
 | April 2026 | (orchestrator) | P2 updated: Slice B marked delivered for bounded NATS publisher + bounded JetStream seam; consumer lifecycle and DLQ/retry worker remain open; Slice C (S3/MinIO snapshot blob spec) documented; Slice D (trace propagation blocker matrix) documented; cross-process trace propagation item updated with blocker matrix reference |

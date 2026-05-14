@@ -1006,7 +1006,7 @@ Two independent env gates control webhook delivery:
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
-| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 + 5dcdd36 + 2ab1c4b form the locally verified non-production baseline; planning slices P2-6a..P2-6f documented |
+| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 + 5dcdd36 + 2ab1c4b form the locally verified non-production baseline; P2-6a..P2-6f design baseline complete (design-only, no implementation) |
 
 ---
 
