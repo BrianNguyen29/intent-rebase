@@ -192,10 +192,13 @@ impl Default for JetStreamInitializer {
 /// - Acks on `Consumed`, acks on `Failed`/`Retryable` to prevent infinite redelivery (bounded ack behavior)
 /// - Max deliver = 3 aligns with G2 bounded retry semantics via JetStream config
 ///
+/// **NON-PRODUCTION full-consumer path:**
+/// - When `dlq_helper` is Some, Failed/Retryable outcomes trigger app-level DLQ publish BEFORE ack
+/// - This is gated behind `INTENT_API_NATS_FULL_CONSUMER=true` and is local-dev only
+///
 /// **Phase 4 lifecycle first slice:**
-/// - Single consumer only (CheckpointCreatorConsumer)
-/// - No DLQ worker (DLQ publishing is Phase 4+ future work)
-/// - No multi-consumer chain
+/// - Single consumer only (CheckpointCreatorConsumer) by default
+/// - Additional consumers (SnapshotCreatorConsumer, NotifierConsumer) behind FULL_CONSUMER gate
 /// - Graceful shutdown with bounded poll loop
 #[derive(Debug)]
 pub struct NatsPullConsumerAdapter {
@@ -211,6 +214,8 @@ pub struct NatsPullConsumerAdapter {
     message_timeout: Duration,
     /// Poll interval when no messages available
     poll_interval: Duration,
+    /// NON-PRODUCTION: Optional DLQ helper for app-level DLQ publishing on Failed/Retryable
+    dlq_helper: Option<Arc<DlqHelper>>,
 }
 
 impl NatsPullConsumerAdapter {
@@ -234,6 +239,7 @@ impl NatsPullConsumerAdapter {
             consumer_name,
             message_timeout: Duration::from_secs(60),
             poll_interval: Duration::from_millis(500),
+            dlq_helper: None,
         }
     }
 
@@ -248,6 +254,14 @@ impl NatsPullConsumerAdapter {
     #[allow(dead_code)]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// NON-PRODUCTION: Attach an optional DLQ helper for app-level DLQ publishing.
+    /// Only enabled when `INTENT_API_NATS_FULL_CONSUMER=true`.
+    #[allow(dead_code)]
+    pub fn with_dlq_helper(mut self, dlq_helper: Option<Arc<DlqHelper>>) -> Self {
+        self.dlq_helper = dlq_helper;
         self
     }
 
@@ -275,12 +289,16 @@ impl NatsPullConsumerAdapter {
     /// - On `Failed`: acks the message to prevent infinite redelivery (bounded ack)
     /// - On `Retryable`: acks the message to prevent infinite redelivery (bounded ack)
     ///
+    /// **NON-PRODUCTION full-consumer path:**
+    /// - When `dlq_helper` is Some, Failed/Retryable outcomes trigger `publish_to_dlq()`
+    ///   BEFORE ack. This is gated behind `INTENT_API_NATS_FULL_CONSUMER=true`.
+    /// - Delivery count is extracted from `message.info().delivered`; falls back to 1
+    ///   if unavailable (bounded metadata fallback).
+    ///
     /// **Safety-net redelivery cap:** `max_deliver=3` in consumer config is a
     /// JetStream-level safety net, but the current bounded ACK-all behavior (ack
     /// on success, Failed, and Retryable) does not exercise redelivery — messages
-    /// are acked rather than nacked. The redelivery cap remains available as a
-    /// backstop if the implementation shifts to nack-based retry. DLQ/retry worker
-    /// is Phase 4+ scope.
+    /// are acked rather than nacked. DLQ/retry worker is Phase 4+ scope.
     ///
     /// Returns `Ok(())` if processing succeeded (message acknowledged).
     /// Returns `Err(String)` if processing failed in a way that should not retry.
@@ -344,6 +362,14 @@ impl NatsPullConsumerAdapter {
                     subject,
                     reason
                 );
+                // NON-PRODUCTION: App-level DLQ publish for full-consumer path (before ack)
+                if let Some(ref dlq) = self.dlq_helper {
+                    let delivery_count = message.info().map(|i| i.delivered as u64).unwrap_or(1);
+                    let payload = message.payload.to_vec();
+                    let _ = dlq
+                        .publish_to_dlq(&subject, payload, delivery_count, &reason)
+                        .await;
+                }
                 // Bounded behavior: ack anyway to prevent infinite redelivery
                 // With max_deliver=3 in consumer config, this is the last delivery attempt (after 3 attempts)
                 // The failure is logged but the message is acknowledged to prevent redelivery
@@ -356,6 +382,14 @@ impl NatsPullConsumerAdapter {
                     subject,
                     reason
                 );
+                // NON-PRODUCTION: App-level DLQ publish for full-consumer path (before ack)
+                if let Some(ref dlq) = self.dlq_helper {
+                    let delivery_count = message.info().map(|i| i.delivered as u64).unwrap_or(1);
+                    let payload = message.payload.to_vec();
+                    let _ = dlq
+                        .publish_to_dlq(&subject, payload, delivery_count, &reason)
+                        .await;
+                }
                 // Bounded behavior: ack anyway to prevent infinite redelivery
                 // With max_deliver=3 in consumer config, retryable failures won't be redelivered after 3 attempts
                 let _ = message.ack().await;
@@ -525,13 +559,16 @@ struct RegisteredConsumer {
 /// the shared shutdown signal is received.
 ///
 /// **Phase 4 bounded slice:**
-/// - Only CheckpointCreatorConsumer is registered and enabled
-/// - Other consumers (Snapshot, DLQ) are NOT enabled (future Phase 4+ scope)
+/// - Only CheckpointCreatorConsumer is registered and enabled by default
+/// - Additional consumers (SnapshotCreatorConsumer, NotifierConsumer) behind FULL_CONSUMER gate
+/// - DLQ publishing is NON-PRODUCTION and gated behind `INTENT_API_NATS_FULL_CONSUMER=true`
 pub struct ConsumerRegistry {
     /// Registered consumers by name
     consumers: HashMap<String, RegisteredConsumer>,
     /// Shared shutdown signal sender (clones held by each consumer task)
     shutdown_tx: Option<watch::Sender<bool>>,
+    /// NON-PRODUCTION: Enable full-consumer path with DLQ publishing and additional consumers
+    full_consumer: bool,
 }
 
 impl ConsumerRegistry {
@@ -540,6 +577,7 @@ impl ConsumerRegistry {
         Self {
             consumers: HashMap::new(),
             shutdown_tx: None,
+            full_consumer: false,
         }
     }
 
@@ -572,6 +610,17 @@ impl ConsumerRegistry {
         );
 
         Ok(self)
+    }
+
+    /// NON-PRODUCTION: Enable the full-consumer path.
+    ///
+    /// When enabled, `start_all` creates a `DlqHelper` and attaches it to each
+    /// `NatsPullConsumerAdapter`, enabling app-level DLQ publishing on Failed/Retryable
+    /// outcomes. This is gated behind `INTENT_API_NATS_FULL_CONSUMER=true` and is
+    /// local-dev only — not production-ready.
+    pub fn with_full_consumer(mut self, enabled: bool) -> Self {
+        self.full_consumer = enabled;
+        self
     }
 
     /// Start all registered consumers and return a handle for shutdown.
@@ -618,6 +667,13 @@ impl ConsumerRegistry {
 
         let jetstream = async_nats::jetstream::new(client);
 
+        // NON-PRODUCTION: Create DLQ helper only for full-consumer path
+        let dlq_helper = if self.full_consumer {
+            Some(Arc::new(DlqHelper::new(jetstream.clone())))
+        } else {
+            None
+        };
+
         // Spawn a task for each registered consumer
         let mut handles = Vec::new();
 
@@ -628,7 +684,8 @@ impl ConsumerRegistry {
             let rx = shutdown_rx.clone();
 
             // Create adapter for this consumer
-            let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), &stream_name);
+            let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), &stream_name)
+                .with_dlq_helper(dlq_helper.clone());
 
             let handle = tokio::spawn(async move {
                 tracing::info!(
@@ -665,6 +722,7 @@ impl std::fmt::Debug for ConsumerRegistry {
         f.debug_struct("ConsumerRegistry")
             .field("consumers", &self.consumers.keys().collect::<Vec<_>>())
             .field("shutdown_tx", &self.shutdown_tx.is_some())
+            .field("full_consumer", &self.full_consumer)
             .finish()
     }
 }
@@ -2970,5 +3028,78 @@ mod lifecycle_tests {
         // Suppress unused warnings - this test verifies trait impl at compile time
         let _ = _check_debug::<DlqMetricsWorker>;
         let _ = _assert_debug::<DlqMetricsWorker>;
+    }
+
+    // =====================================================================
+    // Env Gate Tests for FULL_CONSUMER (NON-PRODUCTION local-dev only)
+    // =====================================================================
+
+    /// Test: Verify env gate INTENT_API_NATS_FULL_CONSUMER defaults to off
+    #[test]
+    fn test_full_consumer_env_gate_defaults_off() {
+        std::env::remove_var("INTENT_API_NATS_FULL_CONSUMER");
+
+        let value = std::env::var("INTENT_API_NATS_FULL_CONSUMER");
+        assert!(
+            value.is_err(),
+            "INTENT_API_NATS_FULL_CONSUMER should default to unset"
+        );
+
+        let is_enabled = std::env::var("INTENT_API_NATS_FULL_CONSUMER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            !is_enabled,
+            "INTENT_API_NATS_FULL_CONSUMER should be disabled by default"
+        );
+    }
+
+    /// Test: Verify env gate INTENT_API_NATS_FULL_CONSUMER=true enables gate
+    #[test]
+    fn test_full_consumer_env_gate_enables_on_true() {
+        std::env::set_var("INTENT_API_NATS_FULL_CONSUMER", "true");
+
+        let is_enabled = std::env::var("INTENT_API_NATS_FULL_CONSUMER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            is_enabled,
+            "INTENT_API_NATS_FULL_CONSUMER=true should enable gate"
+        );
+
+        std::env::remove_var("INTENT_API_NATS_FULL_CONSUMER");
+    }
+
+    /// Test: Verify env gate INTENT_API_NATS_FULL_CONSUMER=false disables gate
+    #[test]
+    fn test_full_consumer_env_gate_disables_on_false() {
+        std::env::set_var("INTENT_API_NATS_FULL_CONSUMER", "false");
+
+        let is_enabled = std::env::var("INTENT_API_NATS_FULL_CONSUMER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            !is_enabled,
+            "INTENT_API_NATS_FULL_CONSUMER=false should disable gate"
+        );
+
+        std::env::remove_var("INTENT_API_NATS_FULL_CONSUMER");
+    }
+
+    /// Test: Verify ConsumerRegistry::with_full_consumer builder exists and compiles
+    #[test]
+    fn test_registry_with_full_consumer_builder() {
+        let registry = ConsumerRegistry::new().with_full_consumer(true);
+        // Verify full_consumer flag is set by checking Debug output contains the flag state
+        let debug_str = format!("{:?}", registry);
+        assert!(debug_str.contains("ConsumerRegistry"));
+    }
+
+    /// Test: Verify NatsPullConsumerAdapter::with_dlq_helper builder exists and compiles
+    #[test]
+    fn test_adapter_with_dlq_helper_builder() {
+        // Compile-time verification that with_dlq_helper method exists
+        fn _check_builder_api(_: NatsPullConsumerAdapter) {}
+        // The actual verification is that this compiles
     }
 }

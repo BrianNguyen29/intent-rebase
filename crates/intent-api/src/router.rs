@@ -498,15 +498,13 @@ pub fn build_router_with_sql_audit_and_approval(
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
+    policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
 ) -> Router {
-    // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
+    // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
         Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
     let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> = Arc::new(
         intent_service::SqlxApprovalRequestRepository::new(pool.clone()),
-    );
-    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
-        intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
     );
 
     build_router(
@@ -551,15 +549,13 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     auth_config: crate::auth::AuthConfig,
     propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
+    policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
 ) -> Router {
-    // Construct SQL-backed audit, approval, and policy snapshot repositories from the pool
+    // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
         Arc::new(intent_rebase_types::SqlxAuditRepository::new(pool.clone()));
     let approval_request_repo: Arc<dyn intent_service::ApprovalRequestRepository> = Arc::new(
         intent_service::SqlxApprovalRequestRepository::new(pool.clone()),
-    );
-    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
-        intent_service::SqlxPolicySnapshotRepository::new(pool.clone()),
     );
 
     let router = build_router(

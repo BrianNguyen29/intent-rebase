@@ -15,6 +15,8 @@
 //! - `OTEL_EXPORTER_OTLP_ENDPOINT` — Optional OTLP endpoint for tracing export
 //! - `NATS_URL` — NATS server URL (optional, for event publishing)
 //! - `INTENT_API_NATS_CONSUMER` — Enable NATS consumer lifecycle (default: false, requires NATS_URL)
+//! - `INTENT_API_NATS_FULL_CONSUMER` — Enable full NATS consumer with DLQ publishing and additional consumers (default: false, requires INTENT_API_NATS_CONSUMER=true + NATS_URL)
+//!   - **NON-PRODUCTION**: This is a local-dev bounded path. Not production-ready.
 //! - `INTENT_API_REQUIRE_JWT` — Require JWT authentication (default: false)
 //!   - When true, fails startup if JWT_SECRET is missing or weak
 //!   - When false (default), uses dev fallback secret if JWT_SECRET not set
@@ -47,7 +49,9 @@ use intent_api::{
 #[cfg(feature = "jwt-auth")]
 use intent_api::build_router_with_sql_audit_and_approval_jwt;
 use intent_rebase_types::{EventPublisher, InMemoryEventPublisher, SqlxAuditRepository};
-use intent_service::event_consumer::CheckpointCreatorConsumer;
+use intent_service::event_consumer::{
+    CheckpointCreatorConsumer, InMemoryNotificationStore, NotifierConsumer, SnapshotCreatorConsumer,
+};
 use intent_service::{
     ApprovalRequestRepository, CheckpointService, InMemoryApprovalRequestRepository,
     InMemoryCheckpointRepository, InMemoryIntentRepository, InMemoryPolicySnapshotRepository,
@@ -310,7 +314,7 @@ fn build_inmemory_router() -> Router {
 
 /// Build a SQL-backed router (non-JWT version).
 ///
-/// Returns (router, checkpoint_service, dlq_handle) when SQL mode is used.
+/// Returns (router, checkpoint_service, dlq_handle, policy_snapshot_repo) when SQL mode is used.
 async fn build_sql_router_with_consumer(
     database_url: &str,
 ) -> Result<
@@ -318,6 +322,7 @@ async fn build_sql_router_with_consumer(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -335,6 +340,7 @@ async fn build_sql_router_with_consumer_jwt(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -452,6 +458,10 @@ async fn build_sql_router_with_consumer_jwt(
     let propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>> =
         Some(Arc::new(SqlxPropagationRecordRepository::new(pool.clone())));
 
+    // SQL-backed policy snapshot repository (needed for SnapshotCreatorConsumer behind FULL_CONSUMER gate)
+    let policy_snapshot_repo: Arc<dyn PolicySnapshotRepository> =
+        Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
+
     let router = build_router_with_sql_audit_and_approval_jwt(
         pool,
         intent_service,
@@ -467,9 +477,15 @@ async fn build_sql_router_with_consumer_jwt(
         auth_config,
         propagation_record_repo,
         Some(rls_pool),
+        policy_snapshot_repo.clone(),
     );
 
-    Ok((router, Some(checkpoint_service), dlq_handle))
+    Ok((
+        router,
+        Some(checkpoint_service),
+        dlq_handle,
+        Some(policy_snapshot_repo),
+    ))
 }
 
 /// Non-JWT implementation of SQL-backed router.
@@ -480,6 +496,7 @@ async fn build_sql_router_with_consumer_impl(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -605,6 +622,10 @@ async fn build_sql_router_with_consumer_impl(
     let propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>> =
         Some(Arc::new(SqlxPropagationRecordRepository::new(pool.clone())));
 
+    // SQL-backed policy snapshot repository (needed for SnapshotCreatorConsumer behind FULL_CONSUMER gate)
+    let policy_snapshot_repo: Arc<dyn PolicySnapshotRepository> =
+        Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
+
     let router = build_router_with_sql_audit_and_approval(
         pool,
         intent_service,
@@ -619,9 +640,15 @@ async fn build_sql_router_with_consumer_impl(
         forensic_bundle_service,
         propagation_record_repo,
         Some(rls_pool),
+        policy_snapshot_repo.clone(),
     );
 
-    Ok((router, Some(checkpoint_service), dlq_handle))
+    Ok((
+        router,
+        Some(checkpoint_service),
+        dlq_handle,
+        Some(policy_snapshot_repo),
+    ))
 }
 
 #[tokio::main]
@@ -656,6 +683,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(
             "INTENT_API_NATS_CONSUMER=true — NATS consumer lifecycle enabled (bounded Phase 4 first slice)"
         );
+    }
+
+    // =============================================================================
+    // NON-PRODUCTION: Full NATS consumer gate (additive, local-dev only)
+    // =============================================================================
+    // INTENT_API_NATS_FULL_CONSUMER enables additional consumers (SnapshotCreatorConsumer,
+    // NotifierConsumer) and app-level DLQ publishing on Failed/Retryable outcomes.
+    // This gate is additive: it requires INTENT_API_NATS_CONSUMER=true + NATS_URL.
+    // It defaults to OFF and is NOT production-ready.
+    let full_consumer_enabled = std::env::var("INTENT_API_NATS_FULL_CONSUMER")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true");
+
+    if full_consumer_enabled {
+        if !nats_consumer_enabled {
+            tracing::warn!(
+                "INTENT_API_NATS_FULL_CONSUMER=true but INTENT_API_NATS_CONSUMER is not true — full consumer requires NATS consumer"
+            );
+        }
+        if std::env::var("NATS_URL").is_err() {
+            tracing::warn!(
+                "INTENT_API_NATS_FULL_CONSUMER=true but NATS_URL is not set — full consumer requires NATS"
+            );
+        }
+        if nats_consumer_enabled && std::env::var("NATS_URL").is_ok() {
+            tracing::info!(
+                "INTENT_API_NATS_FULL_CONSUMER=true — full consumer path enabled (NON-PRODUCTION local-dev only)"
+            );
+        }
     }
 
     // =============================================================================
@@ -721,7 +777,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build router and get optional checkpoint service for NATS consumer
-    let (router, checkpoint_service, sql_dlq_handle) = if let Ok(database_url) =
+    let (router, checkpoint_service, sql_dlq_handle, policy_snapshot_repo) = if let Ok(
+        database_url,
+    ) =
         std::env::var("DATABASE_URL")
     {
         tracing::info!("DATABASE_URL set — using SQL-backed repositories");
@@ -738,9 +796,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sql_result = build_sql_router_with_consumer(&database_url).await;
 
         match sql_result {
-            Ok((router, checkpoint_service, dlq_handle)) => {
+            Ok((router, checkpoint_service, dlq_handle, policy_repo)) => {
                 tracing::info!("SQL-backed router initialized successfully");
-                (router, checkpoint_service, dlq_handle)
+                (router, checkpoint_service, dlq_handle, policy_repo)
             }
             Err(e) => {
                 tracing::error!("Failed to connect to database: {}", e);
@@ -750,7 +808,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 tracing::warn!("Falling back to in-memory repositories");
                 tracing::warn!("Set DATABASE_URL properly for production use");
-                (build_inmemory_router(), None, None)
+                (build_inmemory_router(), None, None, None)
             }
         }
     } else {
@@ -763,7 +821,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("DATABASE_URL not set — using in-memory repositories");
         tracing::warn!("This is suitable for development/smoke testing only");
         tracing::warn!("Set DATABASE_URL for production deployments");
-        (build_inmemory_router(), None, None)
+        (build_inmemory_router(), None, None, None)
     };
 
     // Spawn NATS consumer registry if enabled and NATS_URL is configured
@@ -790,20 +848,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Build the consumer registry with CheckpointCreatorConsumer
         // **Bounded:** Only checkpoint consumer enabled; room for future Snapshot/DLQ consumers
-        let registry_result = ConsumerRegistry::new().register(
-            "checkpoint_creator",
-            Arc::new(CheckpointCreatorConsumer::new(checkpoint_service)),
-            "audit_events",
-        );
+        // NON-PRODUCTION: Additional consumers and DLQ publishing are gated behind
+        // INTENT_API_NATS_FULL_CONSUMER (requires INTENT_API_NATS_CONSUMER=true + NATS_URL).
+        let registry_result: Result<
+            ConsumerRegistry,
+            intent_api::nats_jetstream::ConsumerRegistryError,
+        > = {
+            let mut reg = ConsumerRegistry::new();
+            reg = reg.register(
+                "checkpoint_creator",
+                Arc::new(CheckpointCreatorConsumer::new(checkpoint_service)),
+                "audit_events",
+            )?;
+
+            // NON-PRODUCTION: Full consumer path — register additional consumers and enable DLQ publishing
+            if full_consumer_enabled {
+                // SnapshotCreatorConsumer requires SQL-backed policy snapshot repository
+                if let Some(ref policy_repo) = policy_snapshot_repo {
+                    reg = reg.register(
+                        "snapshot_creator",
+                        Arc::new(SnapshotCreatorConsumer::new(policy_repo.clone())),
+                        "audit_events",
+                    )?;
+                } else {
+                    tracing::warn!(
+                        "INTENT_API_NATS_FULL_CONSUMER=true but no SQL-backed policy snapshot repository available — SnapshotCreatorConsumer not registered"
+                    );
+                }
+
+                // NotifierConsumer uses in-memory notification store (bounded local-dev only)
+                let notification_store = Arc::new(InMemoryNotificationStore::new());
+                reg = reg.register(
+                    "notifier",
+                    Arc::new(NotifierConsumer::new(notification_store)),
+                    "audit_events",
+                )?;
+
+                reg = reg.with_full_consumer(true);
+            }
+
+            Ok(reg)
+        };
 
         match registry_result {
             Ok(registry) => {
                 // Start all registered consumers
                 match registry.start_all(&nats_url).await {
                     Ok(handle) => {
-                        tracing::info!(
+                        if full_consumer_enabled {
+                            tracing::info!(
+                                "NATS consumer registry started (NON-PRODUCTION full-consumer path: checkpoint_creator, snapshot_creator, notifier)"
+                            );
+                        } else {
+                            tracing::info!(
                                 "NATS consumer registry started (bounded Phase 4 first slice: checkpoint_creator)"
                             );
+                        }
                         Some(handle)
                     }
                     Err(e) => {
