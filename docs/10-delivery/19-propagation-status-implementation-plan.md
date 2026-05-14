@@ -319,7 +319,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 #### Implementation Readiness Checklist (Pre-Implementation — Not Started)
 
-> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R7 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, test plan mapping, and rollback/non-goals acknowledgment decisions only; this is **not** an implementation Go. R8 remains unchecked and requires explicit approval before any code is written.
+> **Status:** Pre-flight checklist. Implementation has **not** started. R1–R7 are checked to record owner assignment / design review completion, dependency placement, schema/trait review, RLS/tenant implications, retry constants acceptance, test plan mapping, and rollback/non-goals acknowledgment decisions only; this is **not** an implementation Go. R8 is checked as **BOUNDED GO** for the first non-production Slice 3 implementation slice only; see R8 Decision Note below.
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
@@ -330,7 +330,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R6 | **Test Plan Mapping to G1–G8** — Decision recorded (see R6 Decision Note below). G1–G8 mapped to existing or future checks with concrete commands or file locations. G7 future unit test module and G8 future wiremock integration test proposed with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. No Rust, test, Cargo, or config files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Decision recorded (see R7 Decision Note below). Env gate `INTENT_API_WEBHOOK_DELIVERY` documented with default/conservative behavior and rollback/roll-forward procedure. `failure_reason` truncation/redaction policy accepted (max 500 chars, URL stripping, PII redaction). Failed-to-pending reset semantics: manual operator action only for Slice 3. Delivery task lifecycle: tokio::spawn fire-and-forget, no graceful shutdown. Non-goals restated. RB13 and Prometheus placeholders proposed only. No code, test, config, runbook, or alert files modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date | TBD | ☐ |
+| R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date. **BOUNDED GO** authorizes starting the first non-production Slice 3 implementation slice only; production readiness, production deployment, and external signoff are explicitly excluded. | Brian Nguyen | ☑ |
 
 #### R2 Decision Note (Docs-Only — No Cargo Changes)
 
@@ -606,20 +606,48 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 **No code, test, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, config, runbook, or alert file was modified in this docs-only update.
 
+#### R8 Decision Note (Docs-Only — Bounded Go for Non-Production Implementation Only)
+
+> **Status:** Bounded Go decision recorded. No code, test, migration, dependency, config, runbook, or alert changes were made. This is a docs-only scope boundary.
+
+**D19 — Bounded Go verdict:**
+- Decision: **BOUNDED GO** for the first non-production Slice 3 implementation slice only.
+- This authorizes starting the first implementation slice after this docs update is recorded.
+- This does **not** authorize production deployment, production readiness claims, or external signoff.
+- Production readiness, production deployment, and external signoff are explicitly excluded.
+
+**D20 — Prerequisites for first implementation slice:**
+- The first implementation slice requires B1 and B2 as prerequisites:
+  - B1: migration `018_create_webhook_subscriptions.sql` (webhook URL / subscription storage).
+  - B2: trait method additions `record_delivery_attempt` and `record_delivery_outcome` to `PropagationRecordRepository`.
+- No implementation work is performed in this docs-only task.
+
+**D21 — R1–R7 acceptance and N1–N6 resolution:**
+- R1–R7 are checked and accepted.
+- B1 and B2 have documented resolution paths (see Pre-R8 Blockers below and R3 Decision Note).
+- N1–N6 are resolved per R2 (dependency placement), R6 (test plan / metrics), and R7 (rollback, non-goals, env gate).
+
+**D22 — Scope boundaries and non-goals preserved:**
+- Env gate `INTENT_API_WEBHOOK_DELIVERY` defaults `false` outside local/dev; local-only testing may set `true`.
+- Bounded Go does **not** authorize: outbox pattern, transactional delivery, delivery guarantees, background retry workers, HMAC signing, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table, dead-letter queue, production readiness, or external receiver production config.
+- Owner Brian Nguyen signs off on the bounded scope and non-goals listed above.
+
+**No code, test, migration, dependency, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, `.sql`, `Cargo.toml`, config, runbook, or alert file was modified in this docs-only update.
+
 #### Pre-R8 Blockers / Open Decisions
 
-> **Status:** Blocking and non-blocking open items identified by independent design review. Must be resolved before R8 Go. Implementation has **not** started.
+> **Status:** Blocking and non-blocking open items identified by independent design review. B1–B2 resolution paths are documented and accepted as prerequisites for the first implementation slice. Implementation has **not** started.
 
-**Blockers (must resolve before Go):**
+**Blockers (must resolve as prerequisites for first implementation slice):**
 
 | # | Blocker | Impact if Unresolved |
 |---|---------|---------------------|
 | B1 | **No webhook URL / subscription storage exists** — There is no table, entity, or repository for storing downstream webhook URLs and their mapping to `subscription_id`. The design assumes a subscription registry but does not specify where URLs live or how they are queried at delivery time. | Delivery cannot target any URL; Slice 3 is unimplementable without a subscription source. |
 | B2 | **`PropagationRecordRepository` lacks delivery-outcome update methods** — The trait does not define methods to atomically update `delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, and status based on delivery outcome. | Delivery attempt recording and state transitions cannot be implemented against the existing repository contract. |
 
-**Proposed Resolution Paths (Docs-Only — Not Implemented):**
+**Resolution Paths (Docs-Only — Accepted as Prerequisites):**
 
-> **Note:** These are proposed directions for resolving B1–B2. They do not constitute implementation or blocker closure. R8 remains No-Go until these paths are reviewed and accepted.
+> **Note:** These are accepted directions for resolving B1–B2. They do not constitute implementation or blocker closure. Implementation of B1 and B2 is required before the first Slice 3 code slice begins.
 
 **B1 — Webhook URL / Subscription Storage**
 Preferred path: introduce a minimal `webhook_subscriptions` table (or equivalent entity) in a future migration with proposed columns `id`, `tenant_id`, `intent_id`, `subscription_id`, `webhook_url`, `created_at`, `updated_at`, plus a `tenant_id` RLS policy following existing P1 patterns. The dispatcher queries this table by `(tenant_id, intent_id)` to obtain target URLs at delivery time. No migration is created now; this is a design note for future implementation.
@@ -631,7 +659,7 @@ Preferred path: extend `PropagationRecordRepository` with two proposed async met
 
 No trait code is written now; these are proposed signatures for future implementation.
 
-**Non-blocking Readiness Refinements (should document before Go, do not block design approval):**
+**Non-blocking Readiness Refinements (documented, do not block design approval):**
 
 | # | Refinement | Recommendation |
 |---|------------|----------------|
@@ -642,9 +670,9 @@ No trait code is written now; these are proposed signatures for future implement
 | N5 | **`failure_reason` truncation / redaction** — Agree max length (e.g., 500 chars) and whether to redact URLs, tokens, or PII from downstream response bodies before persisting. | Default recommendation: truncate to 500 chars and redact any URL query parameters. |
 | N6 | **Feature flag / env rollback gate** — Choose an explicit env var or compile-time feature flag name to enable/disable dispatch without code change. | Default recommendation: env-gated at dispatcher spawn point; default disabled (false) until explicitly enabled. |
 
-> **Go criteria:** R1–R7 are checked and accepted; Pre-R8 Blockers B1–B2 have a documented resolution path; owner signs off on bounded scope and non-goals.
-> **No-Go criteria:** Any R1–R7 item is unresolved, any Pre-R8 Blocker (B1–B2) lacks a resolution path, or scope creep is introduced (e.g., outbox pattern, background worker, delivery guarantees).
-> **Re-review:** If No-Go, re-review no sooner than one week after blockers are addressed.
+> **Bounded Go criteria met:** R1–R7 are checked and accepted; Pre-R8 Blockers B1–B2 have documented resolution paths; owner Brian Nguyen signs off on bounded scope and non-goals. This is a **BOUNDED GO** for the first non-production Slice 3 implementation slice only. Production readiness, production deployment, and external signoff are explicitly excluded.
+> **No-Go criteria (still apply to any scope creep):** Any R1–R7 item is unresolved, any Pre-R8 Blocker (B1–B2) lacks a resolution path, or scope creep is introduced (e.g., outbox pattern, background worker, delivery guarantees, production deployment, production readiness claims, external signoff).
+> **Re-review:** If future review downgrades to No-Go, re-review no sooner than one week after blockers are addressed.
 
 ### Slice 4 — Event Stream Integration (Deferred)
 
