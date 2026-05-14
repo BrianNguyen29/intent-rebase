@@ -131,7 +131,7 @@ P1 items are required for safe production deployment but may be addressed in par
 | **Target Dates** | L4 30min sustained + all alert types + real receivers: Phase 4 (2026-Q3); L3-L5: gated on production infra provisioning |
 | **Evidence Strength** | L1/L2/L4 bounded are local-docker only; do not represent as staging or production load test results |
 
-**No overclaim:** L1/L2/L4 bounded harness results are not staging or production load test results. The 10-minute test is stronger than 90s but still not equivalent to 30min+ sustained load. Only one availability alert was triggered; latency, compensation, DLQ, and error budget alerts were not. Alertmanager receivers are localhost placeholders — no real external notification validated.
+**No overclaim:** L1/L2/L4 bounded harness results are not staging or production load test results. The 10-minute test is stronger than 90s but still not equivalent to 30min+ sustained load. Only one availability alert was triggered; latency, compensation, and error budget alerts were not. DLQ alerts existed in rules but were not triggered because the test did not produce DLQ traffic. Alertmanager receivers are localhost placeholders — no real external notification validated.
 
 ---
 
@@ -765,6 +765,55 @@ function verify_signature(header, body, known_secrets):
 | `404` | Subscription not found or tenant mismatch | `{"error": "not_found"}` |
 | `409` | Duplicate `downstream_system_id` for tenant | `{"error": "duplicate_downstream_system"}` |
 | `429` | Rate limit exceeded | `{"error": "rate_limited", "retry_after": 60}` |
+
+**Design Review Gap — Oracle Finding (REQUEST CHANGES)**
+
+> **Status:** Design resolution required before implementation. No code or migration changes are made in this task.
+
+**Migration 018 Schema Mismatch**
+
+The current `webhook_subscriptions` table (migration 018) has the following columns:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | PRIMARY KEY |
+| `tenant_id` | UUID | RLS isolation key |
+| `intent_id` | UUID | Per-intent subscription (current schema) |
+| `subscription_id` | UUID | Logical identifier |
+| `webhook_url` | TEXT | Target URL |
+| `downstream_system_id` | TEXT | Consumer label |
+| `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | |
+
+The P2-6d design proposes the following fields that are **not** in migration 018:
+
+| Design Field | Migration 018 Status | Gap |
+|--------------|---------------------|-----|
+| `status` | Absent | Required for lifecycle (`active`/`disabled`/`deleted`) |
+| `max_attempts` | Absent | Required for per-subscription retry cap |
+| `event_types` | Absent | Required for event filtering |
+| `active_kid` | Absent | Required for HMAC signing (P2-6c) |
+| `revoked_kid` | Absent | Required for key rotation grace window |
+
+Additionally, migration 018 ties subscriptions to a single `intent_id` (per-intent model), whereas the P2-6d design envisions **tenant-scoped subscriptions** that may cover multiple intents via pattern matching or explicit intent lists. This is a **schema-model mismatch** that must be resolved before implementation.
+
+**Event Catalog Alignment**
+
+- The design references `intent_changed`, `rebase.plan_created`, etc. as `event_types`.
+- There is no central event catalog documenting all valid event types and their schemas.
+- Implementation of `event_types` validation requires a catalog or enum that does not yet exist.
+
+**Required Design Decisions Before Implementation**
+
+1. **Schema evolution:** Decide whether to:
+   - Add columns to migration 018 (`status`, `max_attempts`, `event_types`, `active_kid`, `revoked_kid`), or
+   - Create a new migration (`019`) that alters the table, or
+   - Redesign the subscription model to separate per-intent and tenant-scoped subscriptions.
+2. **Per-intent vs tenant-scoped:** Resolve whether subscriptions are per-intent (current) or tenant-scoped with intent filters (design).
+3. **Event catalog:** Define the canonical event type list and schema before implementing `event_types` validation.
+4. **Secret storage boundary:** Confirm how `active_kid`/`revoked_kid` interact with the secret manager (P2-6c) and whether the subscription record should store key material references or only `kid`.
+
+**No overclaim:** This gap is documented for future design resolution. No migration or code is implemented in this task.
 
 **Relationship to P2-6a / P2-6b / P2-6c**
 

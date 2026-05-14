@@ -162,7 +162,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 
 ## RB11. DLQ Messages Found
 
-> **⚠️ Deployment Status:** DLQ alert rules (`DLQDepthHigh`, `DLQMessageStale`, `DLQReplayFailures`) were previously defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` but reference metrics that are **not instrumented** (`intent_api_dlq_messages_current`, `intent_api_dlq_message_age_seconds`, `intent_api_dlq_replay_failures_total`). These alerts have been **removed from local rules** as part of stale observability cleanup. **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
+> **Status:** Bounded observability slice — DLQ alert rules (`DLQDepthHigh`, `DLQMessageStale`, `DLQReplayFailures`) are defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` as **local dev scaffolding only**. Metrics are emitted by `DlqMetricsWorker` when `INTENT_API_NATS_DLQ_WORKER=true` (depth/age gauges and replay failure counter). Full DLQ replay worker remains Phase 4+ deferred. **Production alerting requires external SRE routing/signoff and receiver configuration** — do not claim production-ready.
 
 **Symptoms:**
 - `nats stream ls` or `nats consumer ls` shows messages in DLQ subjects
@@ -228,7 +228,7 @@ A rebase operation is stuck (no progress, not completing, not erroring) and the 
 4. Check application logs for `Nats-Message-Name` correlation
 
 **Prevention:**
-- `intent_api_dlq_messages_current`, `intent_api_dlq_message_age_seconds`, and `intent_api_dlq_replay_failures_total` are **not instrumented** — alerts removed from local rules
+- `intent_api_dlq_messages_current`, `intent_api_dlq_message_age_seconds`, and `intent_api_dlq_replay_failures_total` are instrumented by `DlqMetricsWorker` (behind `INTENT_API_NATS_DLQ_WORKER=true` gate) — local alert rules exist; production alerting still requires SRE sign-off
 - Review DLQ messages weekly if volume is non-zero
 - Set `max_deliver` appropriately per message type (see `14-dlq-retry-design.md`)
 
@@ -387,9 +387,12 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
 | PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
 | WebhookDeliveryFailureRate | Warning | Check downstream URL health and webhook delivery metrics; see RB13 |
+| DLQDepthHigh | Warning | Check DLQ subject count and replay messages; see RB11 |
+| DLQMessageStale | Warning | Investigate oldest DLQ message; see RB11 |
+| DLQReplayFailures | Warning | Check replay logs and consumer health; see RB11 |
 | LocalAlertReceiver | Info | Standalone: `python3 infrastructure/local/alertmanager/webhook_receiver.py` → http://localhost:9094/webhook; Docker Compose: `docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d` → Alertmanager routes to `alert-receiver:9094` internally; local/manual-only — not a production receiver |
 
-> **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated`, `DLQDepthHigh`, `DLQMessageStale` — panels and rules cleaned up as part of stale observability cleanup.
+> **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated` — panel and rule cleaned up as part of stale observability cleanup. DLQ alerts are now present as local dev scaffolding.
 > **Propagation alerts:** `PropagationSignalFailureRate` is documented in RB12 and defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` as local dev scaffolding only; production alerting still requires SRE sign-off and receiver configuration.
 
 ---

@@ -3,7 +3,7 @@
 **Status:** `DOCUMENTED — Template Only; No External Review Conducted`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** April 2026
+**Last Updated:** May 2026
 
 ---
 
@@ -30,6 +30,15 @@ This packet should be used when:
 - All solo self-review gates documented in `16-solo-ops-evidence-plan.md` are marked PASS
 - All Phase 3 deliverables are documented
 - Staging-like evidence has been collected (or staging scaffold exists)
+
+**Current Local Evidence (WAIVED-SOLO — Non-Production Phase 3 Only)**
+- Solo self-review completed; external SRE/security review not engaged.
+- Local canonical gates pass: `cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`.
+- RLS integration tests pass locally (RLC-3: migration_integration 1/1, rls_integration --ignored 4/4).
+- Load testing: L1/L2 bounded local evidence collected; L3-L5 deferred.
+- Penetration testing: threat model v2 documented; pen test scope defined; execution deferred.
+- Webhook delivery Phase 4 design baseline (P2-6a..P2-6f) complete as design-only documentation.
+- **No external sign-off obtained.** All external gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
 
 ---
 
@@ -452,4 +461,5 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external sign-off claimed. |
 | April 2026 | (fixer) | Initial creation — external SRE/security review packet template with sections for request header, system overview, review scope, evidence package, SRE areas, security areas, findings tracker, and sign-off |

@@ -3,7 +3,7 @@
 **Status:** `DOCUMENTED — Template Only; No External Testing Conducted`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** April 2026
+**Last Updated:** May 2026
 
 ---
 
@@ -18,6 +18,12 @@ These are **planning and execution artifacts** — they document how testing sho
 > **⚠️ Evidence Strength Disclaimer**
 >
 > This is a **template for test execution**. No penetration testing or load testing has been conducted by an external party. Do not represent these templates as evidence of test completion. Local load test evidence (L1/L2) is documented separately in `docs/11-quality/load-test-results.md`.
+
+**Current Local Evidence (WAIVED-SOLO — Non-Production Phase 3 Only)**
+- Load testing: L1/L2 bounded local evidence collected (L1 p95 5ms, L2 p95 33ms, SQLx-L1 p95 5ms, SQLx-L2 p95 4ms, 0% errors). L3-L5 deferred pending staging/production infrastructure.
+- Penetration testing: threat model v2 documented; pen test scope defined; no external execution.
+- Webhook delivery Phase 4 design baseline (P2-6a..P2-6f) complete as design-only documentation.
+- **No external testing conducted.** All external test gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
 
 ---
 
@@ -757,4 +763,5 @@ L5 (production load testing) requires:
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external testing claimed. |
 | April 2026 | (fixer) | Initial creation — pen test execution packet (PT-1 through PT-6) and load test execution packet (LT-1 through LT-6); L1/L2 marked completed, L3-L5 and external pen test marked pending/blocked |

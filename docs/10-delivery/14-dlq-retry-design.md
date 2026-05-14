@@ -254,7 +254,7 @@ done
 
 ### Metrics to Expose
 
-> **⚠️ Metric Naming Note:** All `intent_api_*` metrics listed below are defined as stubs in `crates/intent-api/src/dlq_metrics.rs`. They follow the `intent_api_` prefix convention used throughout the intent-api crate. These metrics are **designed but not yet fully instrumented** — gauge/depth/age emission awaits Phase 4 DLQ worker lifecycle wiring (G1–G5 gates must pass first).
+> **⚠️ Metric Naming Note:** All `intent_api_*` metrics listed below are defined in `crates/intent-api/src/dlq_metrics.rs`. Depth/age gauges and replay failure counter are emitted by `DlqMetricsWorker` when `INTENT_API_NATS_DLQ_WORKER=true`. Full DLQ replay worker remains Phase 4+ deferred.
 
 | Metric | Description | Alert Threshold |
 |--------|-------------|-----------------|
@@ -266,7 +266,7 @@ done
 
 ### Prometheus Alert Rules
 
-> **⚠️ Deployment Status:** Alert rules are **deployed to local/staging** (`infrastructure/local/prometheus/rules/intent_api_alerts.yml`). The DLQ worker implementation (which produces these metrics) is Phase 4 scope — DLQ metric stubs compile but runtime emissions await worker lifecycle wiring. **Production alerting requires external SRE routing/signoff** — do not claim production-ready.
+> **⚠️ Deployment Status:** Alert rules are **deployed to local rules** (`infrastructure/local/prometheus/rules/intent_api_alerts.yml`). `DlqMetricsWorker` emits depth/age gauges and replay failure counter at runtime when enabled. Full DLQ replay worker remains Phase 4+ deferred. **Production alerting requires external SRE routing/signoff and receiver configuration** — do not claim production-ready.
 
 ```yaml
 groups:
