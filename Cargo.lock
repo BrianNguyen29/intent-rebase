@@ -2520,6 +2520,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "rand 0.8.5",
  "rebase-engine",
  "rebase-orchestrator",
  "reqwest",

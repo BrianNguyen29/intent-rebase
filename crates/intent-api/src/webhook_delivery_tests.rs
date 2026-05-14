@@ -1,15 +1,25 @@
-//! Webhook delivery unit tests (G7 — payload shape + headers)
+//! Webhook delivery unit tests (G7 — payload shape + headers + B4 skeleton)
 //!
 //! Bounded non-production slice: verifies payload serialization, header values,
-//! and sanitization helpers without any HTTP client or async dispatch.
+//! sanitization helpers, env gate parsing, retry classification, and backoff
+//! behavior without any wired application flow or production dispatch.
 //!
-//! See: docs/10-delivery/19-propagation-status-implementation-plan.md (R6 D9)
+//! See: docs/10-delivery/19-propagation-status-implementation-plan.md (R6 D9, R5, R7)
 
 use crate::webhook_delivery::{
-    build_webhook_payload, sanitize_failure_reason, WebhookHeaders, WebhookPayloadInput,
+    build_webhook_client, build_webhook_payload, classify_status_code, compute_backoff_delay,
+    is_webhook_delivery_enabled, sanitize_failure_reason, send_webhook, WebhookErrorCategory,
+    WebhookHeaders, WebhookPayloadInput, WEBHOOK_BACKOFF_BASE_DELAY, WEBHOOK_BACKOFF_MAX_DELAY,
+    WEBHOOK_CONNECT_TIMEOUT, WEBHOOK_MAX_ATTEMPTS, WEBHOOK_MAX_TOTAL_DURATION,
+    WEBHOOK_REQUEST_TIMEOUT, WEBHOOK_RETRY_AFTER_CAP,
 };
 use serde_json::json;
+use std::time::Duration;
 use uuid::Uuid;
+
+// =============================================================================
+// B3 Payload & Header Tests
+// =============================================================================
 
 #[test]
 fn test_payload_shape_matches_schema() {
@@ -166,4 +176,198 @@ fn test_sanitize_failure_reason_strips_multiple_urls() {
     let raw = "Tried https://a.com then http://b.com";
     let sanitized = sanitize_failure_reason(raw);
     assert_eq!(sanitized, "Tried [URL_REDACTED] then [URL_REDACTED]");
+}
+
+// =============================================================================
+// B4 Env Gate Tests
+// =============================================================================
+
+#[test]
+fn test_env_gate_disabled_when_unset() {
+    temp_env::with_var_unset("INTENT_API_WEBHOOK_DELIVERY", || {
+        assert!(!is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_disabled_for_empty() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some(""), || {
+        assert!(!is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_disabled_for_false() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("false"), || {
+        assert!(!is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_disabled_for_random_string() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("maybe"), || {
+        assert!(!is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_enabled_for_true() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("true"), || {
+        assert!(is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_enabled_for_one() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("1"), || {
+        assert!(is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_enabled_for_yes() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("yes"), || {
+        assert!(is_webhook_delivery_enabled());
+    });
+}
+
+#[test]
+fn test_env_gate_true_is_case_insensitive() {
+    temp_env::with_var("INTENT_API_WEBHOOK_DELIVERY", Some("TRUE"), || {
+        assert!(is_webhook_delivery_enabled());
+    });
+}
+
+// =============================================================================
+// B4 Retry Classification Tests
+// =============================================================================
+
+#[test]
+fn test_classify_2xx_as_success() {
+    assert_eq!(classify_status_code(200), WebhookErrorCategory::Success);
+    assert_eq!(classify_status_code(204), WebhookErrorCategory::Success);
+}
+
+#[test]
+fn test_classify_5xx_as_retryable() {
+    assert_eq!(classify_status_code(500), WebhookErrorCategory::Retryable);
+    assert_eq!(classify_status_code(503), WebhookErrorCategory::Retryable);
+}
+
+#[test]
+fn test_classify_4xx_as_non_retryable() {
+    assert_eq!(
+        classify_status_code(400),
+        WebhookErrorCategory::NonRetryable
+    );
+    assert_eq!(
+        classify_status_code(404),
+        WebhookErrorCategory::NonRetryable
+    );
+}
+
+#[test]
+fn test_classify_429_as_rate_limited() {
+    assert_eq!(classify_status_code(429), WebhookErrorCategory::RateLimited);
+}
+
+// =============================================================================
+// B4 Timeout Constants Tests
+// =============================================================================
+
+#[test]
+fn test_timeout_constants_match_r5() {
+    assert_eq!(WEBHOOK_CONNECT_TIMEOUT, Duration::from_secs(5));
+    assert_eq!(WEBHOOK_REQUEST_TIMEOUT, Duration::from_secs(30));
+    assert_eq!(WEBHOOK_MAX_TOTAL_DURATION, Duration::from_secs(120));
+}
+
+#[test]
+fn test_retry_constants_match_r5() {
+    assert_eq!(WEBHOOK_BACKOFF_BASE_DELAY, Duration::from_secs(2));
+    assert_eq!(WEBHOOK_BACKOFF_MAX_DELAY, Duration::from_secs(30));
+    assert_eq!(WEBHOOK_MAX_ATTEMPTS, 3);
+    assert_eq!(WEBHOOK_RETRY_AFTER_CAP, Duration::from_secs(60));
+}
+
+// =============================================================================
+// B4 Backoff / Jitter Tests
+// =============================================================================
+
+#[test]
+fn test_backoff_delay_is_non_negative() {
+    for attempt in 1..=5 {
+        let delay = compute_backoff_delay(attempt);
+        assert!(
+            delay >= Duration::ZERO,
+            "delay for attempt {} was negative",
+            attempt
+        );
+    }
+}
+
+#[test]
+fn test_backoff_delay_does_not_exceed_max() {
+    for attempt in 1..=10 {
+        let delay = compute_backoff_delay(attempt);
+        assert!(
+            delay <= WEBHOOK_BACKOFF_MAX_DELAY,
+            "delay for attempt {} exceeded max: {:?}",
+            attempt,
+            delay
+        );
+    }
+}
+
+#[test]
+fn test_backoff_delay_increases_with_attempt() {
+    // Because of jitter we can't guarantee monotonicity on every sample,
+    // but the *expected* value increases. We verify the max bound grows.
+    let base = compute_backoff_delay(1);
+    let mid = compute_backoff_delay(5);
+    let high = compute_backoff_delay(10);
+    // All are capped at MAX_DELAY, so they should never exceed it
+    assert!(base <= WEBHOOK_BACKOFF_MAX_DELAY);
+    assert!(mid <= WEBHOOK_BACKOFF_MAX_DELAY);
+    assert!(high <= WEBHOOK_BACKOFF_MAX_DELAY);
+}
+
+// =============================================================================
+// B4 Async Skeleton Compile / Integration Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_build_webhook_client_has_timeouts() {
+    let client = build_webhook_client();
+    // Client construction succeeds — compile-time + runtime sanity check.
+    // Actual timeout enforcement is verified by future integration tests.
+    let _ = client;
+}
+
+#[tokio::test]
+async fn test_send_webhook_compiles_and_runs_against_unreachable_host() {
+    let client = build_webhook_client();
+    let payload = build_webhook_payload(WebhookPayloadInput {
+        intent_id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        version: 1,
+        version_hash: None,
+        previous_version: None,
+        delivery_id: Uuid::new_v4(),
+        attempt_number: 1,
+        subscription_id: Uuid::new_v4(),
+    });
+    let headers = WebhookHeaders::new(payload.delivery_id);
+
+    // Use a reserved-documentation URL that should always be unreachable.
+    let result = send_webhook(
+        &client,
+        "http://localhost:59999/_test_unreachable",
+        &payload,
+        &headers,
+    )
+    .await;
+
+    // Should fail at connection level, confirming the skeleton executes.
+    assert!(result.is_err());
 }

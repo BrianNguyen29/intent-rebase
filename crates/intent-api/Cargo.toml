@@ -48,6 +48,13 @@ opentelemetry-otlp = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 tracing-opentelemetry = "0.25"
 
+# Webhook delivery client (B4 bounded slice — crate-local only)
+# No blocking feature; no workspace promotion.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Full jitter for webhook retry backoff (B4 bounded slice — crate-local only)
+rand = "0.8"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 axum = { workspace = true }

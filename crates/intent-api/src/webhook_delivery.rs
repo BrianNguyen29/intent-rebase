@@ -1,14 +1,19 @@
-//! Webhook delivery scaffolding (B3 — internal payload/header builders)
+//! Webhook delivery scaffolding (B3/B4 — internal payload/header builders + async skeleton)
 //!
 //! Bounded non-production slice: provides pure data builders for webhook
-//! payloads and header values. No HTTP client, no async dispatch, no
-//! env gate, and no production readiness claims.
+//! payloads and header values, plus an internal async delivery skeleton
+//! that is NOT wired into application flow.
 //!
-//! See: docs/10-delivery/19-propagation-status-implementation-plan.md (R6 D9)
+//! See: docs/10-delivery/19-propagation-status-implementation-plan.md (R6 D9, R2, R5, R7)
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::time::Duration;
 use uuid::Uuid;
+
+// =============================================================================
+// Payload & Headers
+// =============================================================================
 
 /// Webhook payload posted to subscription URLs.
 ///
@@ -109,4 +114,174 @@ pub fn sanitize_failure_reason(reason: &str) -> String {
         }
     }
     result
+}
+
+// =============================================================================
+// Env Gate
+// =============================================================================
+
+/// Environment variable name for the webhook delivery enablement gate.
+pub const WEBHOOK_DELIVERY_ENV_VAR: &str = "INTENT_API_WEBHOOK_DELIVERY";
+
+/// Parse the webhook delivery env gate.
+///
+/// - Explicit "true" / "1" / "yes" → enabled
+/// - Unset, empty, or any other value → disabled (conservative default)
+///
+/// R7 D13: default disabled outside local/dev; conservative fail-closed.
+#[allow(dead_code)]
+pub fn is_webhook_delivery_enabled() -> bool {
+    matches!(
+        std::env::var(WEBHOOK_DELIVERY_ENV_VAR),
+        Ok(v) if v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
+    )
+}
+
+// =============================================================================
+// Timeout & Retry Constants (R5)
+// =============================================================================
+
+/// TCP + TLS handshake establishment timeout.
+pub const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Total per-delivery attempt timeout (connect + send + wait-for-response).
+pub const WEBHOOK_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Hard ceiling for all attempts including retries.
+pub const WEBHOOK_MAX_TOTAL_DURATION: Duration = Duration::from_secs(120);
+
+/// Exponential backoff base delay.
+pub const WEBHOOK_BACKOFF_BASE_DELAY: Duration = Duration::from_secs(2);
+
+/// Exponential backoff multiplier.
+pub const WEBHOOK_BACKOFF_MULTIPLIER: f64 = 2.0;
+
+/// Exponential backoff maximum delay.
+pub const WEBHOOK_BACKOFF_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// Maximum delivery attempts (initial + retries).
+pub const WEBHOOK_MAX_ATTEMPTS: u32 = 3;
+
+/// Retry-After header cap for 429 responses.
+pub const WEBHOOK_RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
+
+// =============================================================================
+// Error Classification
+// =============================================================================
+
+/// Classification of a webhook delivery error for retry decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookErrorCategory {
+    /// Success — no error.
+    Success,
+    /// Retryable: HTTP 5xx, connect timeout, request timeout, DNS failure,
+    /// connection refused, connection reset.
+    Retryable,
+    /// Non-retryable: HTTP 4xx (except 429), malformed URL, TLS cert failure,
+    /// unresolvable host.
+    NonRetryable,
+    /// Special case: HTTP 429 Too Many Requests — retry once with backoff.
+    RateLimited,
+}
+
+/// Classify an HTTP status code into an error category.
+#[allow(dead_code)]
+pub fn classify_status_code(status: u16) -> WebhookErrorCategory {
+    match status {
+        200..=299 => WebhookErrorCategory::Success,
+        429 => WebhookErrorCategory::RateLimited,
+        500..=599 => WebhookErrorCategory::Retryable,
+        _ => WebhookErrorCategory::NonRetryable,
+    }
+}
+
+// =============================================================================
+// Backoff / Jitter
+// =============================================================================
+
+/// Compute the backoff delay for a given attempt number using exponential
+/// backoff with full jitter.
+///
+/// Formula: delay = min(base * multiplier^(attempt-1), max_delay)
+/// Jitter: rand::random::<f64>() * delay
+#[allow(dead_code)]
+pub fn compute_backoff_delay(attempt_number: u32) -> Duration {
+    let raw_delay_secs = WEBHOOK_BACKOFF_BASE_DELAY.as_secs_f64()
+        * WEBHOOK_BACKOFF_MULTIPLIER
+            .powi(i32::try_from(attempt_number.saturating_sub(1)).unwrap_or(0));
+    let capped_delay_secs = raw_delay_secs.min(WEBHOOK_BACKOFF_MAX_DELAY.as_secs_f64());
+    let jittered_secs = rand::random::<f64>() * capped_delay_secs;
+    Duration::from_secs_f64(jittered_secs)
+}
+
+// =============================================================================
+// Async Delivery Skeleton
+// =============================================================================
+
+/// Bounded result of a webhook delivery attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WebhookDeliveryResult {
+    /// HTTP 2xx response — delivery acknowledged.
+    Success,
+    /// Retryable failure — caller may retry if attempts remain.
+    RetryableFailure { reason: String },
+    /// Non-retryable failure — caller should not retry.
+    NonRetryableFailure { reason: String },
+    /// Rate limited (429) — caller may retry once per R5 policy.
+    RateLimited { retry_after: Option<Duration> },
+}
+
+/// Build a `reqwest::Client` configured with webhook timeout constants.
+#[allow(dead_code)]
+pub fn build_webhook_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
+        .timeout(WEBHOOK_REQUEST_TIMEOUT)
+        .build()
+        .expect("reqwest client with basic timeouts should always build")
+}
+
+/// Send a webhook payload to the given URL.
+///
+/// Bounded skeleton: performs the HTTP POST and classifies the result.
+/// NOT wired into application flow — called only by future dispatcher code.
+#[allow(dead_code)]
+pub async fn send_webhook(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &WebhookPayload,
+    headers: &WebhookHeaders,
+) -> Result<WebhookDeliveryResult, reqwest::Error> {
+    let body = serde_json::to_string(payload).unwrap_or_default();
+
+    let response = client
+        .post(url)
+        .header("Content-Type", &headers.content_type)
+        .header("X-Idempotency-Key", &headers.idempotency_key)
+        .body(body)
+        .send()
+        .await?;
+
+    let status = response.status().as_u16();
+    let category = classify_status_code(status);
+
+    match category {
+        WebhookErrorCategory::Success => Ok(WebhookDeliveryResult::Success),
+        WebhookErrorCategory::RateLimited => {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .map(|d| d.min(WEBHOOK_RETRY_AFTER_CAP));
+            Ok(WebhookDeliveryResult::RateLimited { retry_after })
+        }
+        WebhookErrorCategory::Retryable => Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: format!("HTTP {}", status),
+        }),
+        WebhookErrorCategory::NonRetryable => Ok(WebhookDeliveryResult::NonRetryableFailure {
+            reason: format!("HTTP {}", status),
+        }),
+    }
 }
