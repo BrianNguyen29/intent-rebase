@@ -6,6 +6,8 @@
 
 > **Background Worker Lifecycle:** A draft background delivery worker design (env gating, polling/claim loop, graceful shutdown, metrics) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6b. It is design-only — no implementation has been written.
 
+> **HMAC Signing + Key Rotation:** A draft HMAC signing design (header format, canonical string, key rotation with dual-key grace window, consumer verification guidance) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6c. It is design-only — no implementation or secret material exists.
+
 ## Mục tiêu
 Cho phép tích hợp IRE với:
 - Git providers

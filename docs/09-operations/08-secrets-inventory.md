@@ -30,6 +30,7 @@ This document provides a **secrets inventory template** and **rotation procedure
 | JWT signing keys | ✅ Yes | 🟡 Template only | ❌ No |
 | TLS certificates | 🟡 Partial | 🟡 Template only | ❌ No |
 | Encryption keys (at-rest) | 🟡 Partial | ❌ Not documented | ❌ No |
+| Webhook subscription secrets | ✅ Yes | 🟡 Template only | ❌ No |
 
 ---
 
@@ -314,6 +315,52 @@ echo "[$(date -Iseconds)] TLS certificate rotation complete."
 
 ---
 
+### 6. Webhook Subscription Secrets
+
+| Secret | Location | Used By | Rotation Cadence | Current Status |
+|--------|----------|---------|-----------------|----------------|
+| Per-subscription webhook secret | Secret manager (Vault/AWS SM/K8s) | Webhook delivery worker (P2-6b) | 90 days (per-subscription) | Template — not rotated |
+
+**Webhook Secret Rotation Procedure Template:**
+
+```bash
+#!/bin/bash
+# rotate-webhook-secret.sh — Webhook Subscription Secret Rotation Template
+# Cadence: 90 days (per-subscription)
+# Downtime: Zero (dual-key grace window)
+
+set -euo pipefail
+
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-}"
+OLD_KID="${OLD_KID:-}"
+NEW_KID="kid_$(openssl rand -hex 8)"
+NEW_SECRET=$(openssl rand -base64 32)
+
+echo "[$(date -Iseconds)] Rotating webhook secret for subscription: ${SUBSCRIPTION_ID}"
+
+# 1. Generate new secret and key id
+# Store in secret manager (example: Vault)
+# vault kv put secret/intent-rebase/webhooks/${SUBSCRIPTION_ID}/${NEW_KID} secret="${NEW_SECRET}"
+
+# 2. Update subscription record to mark new kid as active
+# UPDATE webhook_subscriptions SET active_kid = '${NEW_KID}', updated_at = NOW() WHERE id = '${SUBSCRIPTION_ID}';
+
+# 3. Old kid remains valid during 24-hour grace window
+# Consumers must accept both kids during the grace window
+
+# 4. After grace window, revoke old kid
+# UPDATE webhook_subscriptions SET revoked_kid = '${OLD_KID}', updated_at = NOW() WHERE id = '${SUBSCRIPTION_ID}';
+
+# 5. Delete old secret from secret manager after retention period
+# vault kv delete secret/intent-rebase/webhooks/${SUBSCRIPTION_ID}/${OLD_KID}
+
+echo "[$(date -Iseconds)] Webhook secret rotation complete. New KID: ${NEW_KID}"
+```
+
+> **No secret material:** This template does not contain real secrets. `NEW_SECRET` is generated at rotation time and must never be logged in plaintext.
+
+---
+
 ## Secret Rotation Cadence Summary
 
 | Secret Category | Rotation Cadence | Zero-Downtime Support | Notes |
@@ -324,6 +371,7 @@ echo "[$(date -Iseconds)] TLS certificate rotation complete."
 | Tenant API keys | 90 days (per-tenant) | ✅ Yes (dual-key window) | 24-hour overlap recommended |
 | JWT signing keys | 365 days | ✅ Yes (dual-key window) | 24-hour overlap recommended |
 | TLS certificates | 90-365 days | ✅ Yes (reload, no restart) | Use `systemctl reload`, not restart |
+| Webhook subscription secrets | 90 days (per-subscription) | ✅ Yes (dual-key window) | 24-hour grace window; per-subscription secret stored in secret manager |
 
 ---
 

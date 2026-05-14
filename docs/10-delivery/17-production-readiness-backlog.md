@@ -308,7 +308,7 @@ These items cannot proceed until specific external conditions are met.
 |-------|-------------|--------|
 | **P2-6a** | Outbox schema — detailed design below | 🔴 Deferred — schema design only; no migration or code |
 | **P2-6b** | Background delivery worker lifecycle — detailed design below | 🔴 Deferred — design only |
-| **P2-6c** | HMAC signing + key rotation — per-subscription secret storage, `X-Webhook-Signature` header generation (`sha256=<hmac>`), secret rotation workflow with dual-secret grace period | 🔴 Deferred — design only |
+| **P2-6c** | HMAC signing + key rotation — detailed design below | 🔴 Deferred — design only |
 | **P2-6d** | Subscription CRUD API — `POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}` with tenant isolation and RLS | 🔴 Deferred — design only |
 | **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
 | **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
@@ -539,6 +539,138 @@ RETURNING webhook_outbox.*;
 - No production readiness or at-least-once guarantee claim as current behavior.
 
 **No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a migration, and does not confer any production readiness.
+
+#### P2-6c: HMAC Signing + Key Rotation
+
+> **Scope:** Design-only. No Rust implementation, no secret backend integration, no production readiness claim.
+
+**Header Format**
+
+```
+X-Webhook-Signature: t=<unix_timestamp>,v1=<hmac_hex>,kid=<key_id>
+```
+
+- `t`: Unix timestamp (seconds since epoch) of the signing time.
+- `v1`: HMAC-SHA256 of the canonical signing string, rendered as lowercase hexadecimal.
+- `kid`: Key identifier (UUID or short slug) that identifies which secret was used. Enables dual-key grace periods and audit.
+
+**Canonical Signing String**
+
+The canonical string is a newline-delimited concatenation of the following fields in order:
+
+```
+delivery_id
+event_id
+event_type
+occurred_at
+tenant_id
+workflow_id
+body_hash
+```
+
+- `body_hash`: SHA-256 hash of the raw request body bytes, lowercase hex.
+- Fields are concatenated with a single newline (`\n`) between each.
+- No trailing newline after the last field.
+- If a field is absent, use an empty string for that line.
+
+**Algorithm / Versioning**
+
+- Version: `v1` (HMAC-SHA256).
+- Future versions may introduce `v2` with a different algorithm (e.g., Ed25519). The `v1` prefix in the header allows version negotiation.
+- The consumer must reject signatures with an unrecognized version prefix.
+
+**Key Identifier (`kid`)**
+
+- `kid` is a stable identifier for the secret used to generate the signature.
+- It is **not** the secret itself; it is a lookup key for the consumer (and for the service’s secret store).
+- During rotation, two `kid` values may be valid simultaneously (dual-key grace window).
+
+**Secret Storage Boundary**
+
+- Per-subscription secrets are stored in a production secret manager (e.g., HashiCorp Vault, AWS Secrets Manager, Kubernetes Secrets).
+- The service retrieves the secret by `(tenant_id, subscription_id, kid)` at delivery time.
+- **Local dev:** Secrets may be stored in environment variables or a local secrets file (never committed).
+- **No secret material is included in this document.** No keys, no placeholders, no examples of real secrets.
+- Secret access must be logged at `info` level (access event, not the secret value).
+
+**Rotation Workflow**
+
+1. **Generate new key:**
+   - Create a new secret for the subscription.
+   - Assign a new `kid` (e.g., UUID v4).
+   - Store the new secret in the secret manager.
+   - Update the subscription record to mark the new `kid` as active.
+
+2. **Dual-key grace window:**
+   - Both the old `kid` and the new `kid` remain valid for a configurable grace period (default: 24 hours).
+   - Deliveries during the grace window use the new `kid` (and new secret).
+   - Consumers must accept signatures generated with either `kid` during the grace window.
+
+3. **Consumer notification:**
+   - Notify the consumer out-of-band (e.g., via the subscription management API or email) of the new `kid` and its effective date.
+   - The consumer updates their verification logic to accept the new `kid`.
+
+4. **Revoke old key:**
+   - After the grace period expires, mark the old `kid` as revoked.
+   - The service stops accepting the old `kid` for new deliveries.
+   - The old secret may be deleted from the secret manager after a retention period (e.g., 7 days) to allow for audit or emergency rollback.
+
+**Replay Protection / Timestamp Tolerance**
+
+- Consumers must validate the `t` field to prevent replay attacks.
+- **Tolerance window:** ±300 seconds (5 minutes) from the current time.
+- Signatures with `t` outside the tolerance window must be rejected.
+- Consumers should cache recently seen `delivery_id` values for at least the tolerance window to detect duplicate deliveries.
+
+**Consumer Verification Guidance (Pseudocode)**
+
+```
+function verify_signature(header, body, known_secrets):
+    parts = parse_header(header)  // t, v1, kid
+    if abs(now() - parts.t) > 300:
+        return "timestamp out of tolerance"
+    secret = known_secrets[parts.kid]
+    if secret is None:
+        return "unknown key id"
+    canonical = build_canonical_string(body)
+    expected = hmac_sha256(secret, canonical).hex()
+    if not constant_time_compare(parts.v1, expected):
+        return "signature mismatch"
+    if delivery_id_seen_recently(parts.delivery_id):
+        return "duplicate delivery"
+    return "ok"
+```
+
+- Use constant-time comparison (`constant_time_compare`) to prevent timing attacks.
+- `known_secrets` is a map of `kid → secret` maintained by the consumer.
+
+**Failure Behavior**
+
+| Scenario | Service Behavior | Consumer Behavior |
+|---|---|---|
+| Secret missing from store | Skip delivery; log error; mark row `failed` | N/A |
+| Secret retrieval fails | Retry per delivery policy; mark `failed` if exhausted | N/A |
+| Consumer rejects signature (4xx) | Mark `failed`; no auto-retry | Return 4xx with reason |
+| Consumer timestamp tolerance reject | Mark `failed` | Return 4xx with `X-Webhook-Error: timestamp_tolerance` |
+| Rotation in progress, old `kid` used | Accept during grace window; prefer new `kid` for new deliveries | Accept both `kid`s during grace window |
+
+**Relationship to P2-6a / P2-6b**
+
+- P2-6c depends on the `webhook_outbox` table (P2-6a) for delivery state and on the background worker (P2-6b) for dispatch timing.
+- The signing step occurs inside the delivery sub-task immediately before the HTTP request is sent.
+- `kid` and secret retrieval are part of the delivery task, not part of the outbox schema.
+
+**Explicit Non-Goals**
+
+- No Rust code or HMAC implementation is included in this subsection.
+- No migration DDL (covered by P2-6a).
+- No secret backend implementation or Vault integration.
+- No real secret material, placeholders, or example keys.
+- No subscription CRUD API (P2-6d).
+- No per-attempt delivery log table (P2-6e).
+- No production readiness or signed-delivery guarantee claim as current behavior.
+
+**No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a secret, and does not confer any production readiness.
 
 ---
 

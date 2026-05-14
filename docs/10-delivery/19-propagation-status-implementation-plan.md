@@ -204,7 +204,7 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 >
 > **Current bounded behavior:** Dispatch is `.await`ed synchronously within the apply handler post-commit. `tokio::spawn` fire-and-forget conversion remains deferred.
 >
-> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table.
+> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table.
 
 #### HTTP Client Choice
 
@@ -255,7 +255,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 }
 ```
 
-- **Signature header (design-only, not implemented):** `X-Webhook-Signature: sha256=<hmac>` using a per-subscription secret. Key management and rotation are deferred.
+- **Signature header (design-only, not implemented):** `X-Webhook-Signature: sha256=<hmac>` using a per-subscription secret. Key management and rotation are deferred. See P2-6c HMAC signing + key rotation design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - **Idempotency key:** `delivery_id` (UUID v4) passed in the `X-Idempotency-Key` header so downstream systems can deduplicate.
 - **Bounded:** No payload compression, no chunked transfer encoding, no custom media types, no partial/delta payloads. Payload size is expected to be small (< 10 KB).
 
@@ -589,7 +589,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No delivery guarantees (best-effort only).
 - No background retry worker (in-process sequential retries only).
 - No production-readiness claim.
-- No HMAC signing or key rotation (deferred).
+- No HMAC signing or key rotation (deferred). See P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - No subscription CRUD API endpoints (deferred).
 - No event streaming / NATS integration (Slice 4).
 - No cross-workflow lineage (Slice 5).
