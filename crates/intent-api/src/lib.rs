@@ -58,6 +58,9 @@ pub mod simulation_handlers;
 /// Replay handlers (Phase 2b bounded replay slice)
 pub mod replay_handlers;
 
+/// Webhook delivery scaffolding (B3 — internal payload/header builders)
+pub mod webhook_delivery;
+
 /// Policy snapshot handlers (Phase 2 bounded read-only slice, extracted as bounded handler decomposition slice)
 pub mod policy_snapshot_handlers;
 
@@ -330,3 +333,6 @@ mod impact_report_tests;
 
 #[cfg(test)]
 mod rebase_apply_handler_tests;
+
+#[cfg(test)]
+mod webhook_delivery_tests;
