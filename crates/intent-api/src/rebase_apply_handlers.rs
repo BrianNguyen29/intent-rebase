@@ -154,14 +154,28 @@ async fn create_propagation_signals_after_apply(
         );
     }
 
-    // B5 bounded: env-gated webhook dispatch.
+    // B5/B6 bounded: env-gated webhook dispatch.
     // When enabled, records delivery attempt, sends webhook, and records outcome.
     // When disabled (default), this block is skipped and no delivery attempts are recorded.
     if crate::webhook_delivery::is_webhook_delivery_enabled() {
         let client = crate::webhook_delivery::build_webhook_client();
-        let resolver = crate::webhook_delivery::EmptyWebhookSubscriptionResolver;
+        // B6: SQL-backed resolver when RLS pool is available; empty fallback otherwise.
+        let resolver: Box<dyn crate::webhook_delivery::WebhookSubscriptionResolver> =
+            match &state.rls_pool {
+                Some(rls_pool) => Box::new(
+                    crate::webhook_delivery::SqlxWebhookSubscriptionResolver::new(
+                        rls_pool.pool().clone(),
+                    ),
+                ),
+                None => Box::new(crate::webhook_delivery::EmptyWebhookSubscriptionResolver),
+            };
         crate::webhook_delivery::dispatch_webhooks_for_intent(
-            repo, &client, &resolver, tenant_id, intent_id, to_version,
+            repo,
+            &client,
+            resolver.as_ref(),
+            tenant_id,
+            intent_id,
+            to_version,
         )
         .await;
     }

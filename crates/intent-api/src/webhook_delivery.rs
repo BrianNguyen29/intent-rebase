@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use intent_rebase_types::{IntentRebaseError, PropagationStatus};
 use intent_service::PropagationRecordRepository;
 use serde::Serialize;
+use sqlx::Row;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -402,6 +403,74 @@ impl WebhookSubscriptionResolver for InMemoryWebhookSubscriptionResolver {
             .filter(|s| s.tenant_id == tenant_id && s.intent_id == intent_id)
             .cloned()
             .collect())
+    }
+}
+
+/// SQL-backed resolver querying migration 018 `webhook_subscriptions`.
+///
+/// Bounded B6: uses `sqlx::query` (not `query!`) so no compile-time DB is required.
+/// Tenant filtering is application-layer mandatory; RLS on the table is defense-in-depth.
+pub struct SqlxWebhookSubscriptionResolver {
+    pool: sqlx::PgPool,
+}
+
+impl SqlxWebhookSubscriptionResolver {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl WebhookSubscriptionResolver for SqlxWebhookSubscriptionResolver {
+    async fn resolve_by_intent(
+        &self,
+        tenant_id: Uuid,
+        intent_id: Uuid,
+    ) -> Result<Vec<WebhookSubscription>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, tenant_id, intent_id, subscription_id, webhook_url, downstream_system_id
+            FROM webhook_subscriptions
+            WHERE tenant_id = $1 AND intent_id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(intent_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "Failed to resolve webhook subscriptions: {}",
+                e
+            ))
+        })?;
+
+        let mut subscriptions = Vec::with_capacity(rows.len());
+        for row in rows {
+            subscriptions.push(WebhookSubscription {
+                id: row.try_get("id").map_err(|e| {
+                    IntentRebaseError::StorageError(format!("Invalid id column: {}", e))
+                })?,
+                tenant_id: row.try_get("tenant_id").map_err(|e| {
+                    IntentRebaseError::StorageError(format!("Invalid tenant_id column: {}", e))
+                })?,
+                intent_id: row.try_get("intent_id").map_err(|e| {
+                    IntentRebaseError::StorageError(format!("Invalid intent_id column: {}", e))
+                })?,
+                subscription_id: row.try_get("subscription_id").map_err(|e| {
+                    IntentRebaseError::StorageError(format!(
+                        "Invalid subscription_id column: {}",
+                        e
+                    ))
+                })?,
+                webhook_url: row.try_get("webhook_url").map_err(|e| {
+                    IntentRebaseError::StorageError(format!("Invalid webhook_url column: {}", e))
+                })?,
+                downstream_system_id: row.try_get("downstream_system_id").ok(),
+            });
+        }
+
+        Ok(subscriptions)
     }
 }
 
