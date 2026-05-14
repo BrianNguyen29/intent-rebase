@@ -306,12 +306,112 @@ These items cannot proceed until specific external conditions are met.
 
 | Slice | Description | Status |
 |-------|-------------|--------|
-| **P2-6a** | Outbox schema — `webhook_outbox` table with `id`, `tenant_id`, `intent_id`, `subscription_id`, `payload`, `created_at`, `scheduled_at`, `attempt_count`, `status` (pending/delivered/failed), and RLS policy | 🔴 Deferred — schema design only; no migration or code |
+| **P2-6a** | Outbox schema — detailed design below | 🔴 Deferred — schema design only; no migration or code |
 | **P2-6b** | Background delivery worker lifecycle — `tokio::spawn` fire-and-forget dispatch, graceful shutdown via `CancellationToken`, in-flight delivery tracking, worker health/readiness probe | 🔴 Deferred — design only |
 | **P2-6c** | HMAC signing + key rotation — per-subscription secret storage, `X-Webhook-Signature` header generation (`sha256=<hmac>`), secret rotation workflow with dual-secret grace period | 🔴 Deferred — design only |
 | **P2-6d** | Subscription CRUD API — `POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}` with tenant isolation and RLS | 🔴 Deferred — design only |
 | **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
 | **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
+
+#### P2-6a: Outbox Schema Design
+
+> **Scope:** Schema design only. No migration DDL, no Rust code, no worker implementation, no production readiness claim.
+
+**Columns / Types / Constraints**
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | UUID | PRIMARY KEY | Delivery identifier (same as `delivery_id` in the event envelope). |
+| `tenant_id` | UUID | NOT NULL | RLS isolation key. |
+| `intent_id` | UUID | NOT NULL | Logical FK to `intents`; enforce at application layer or defer to migration. |
+| `subscription_id` | UUID | NOT NULL | Logical FK to `webhook_subscriptions`; enforce at application layer or defer to migration. |
+| `event_type` | TEXT | NOT NULL | e.g., `intent_changed`, `rebase.plan_created`. |
+| `payload` | JSONB | NOT NULL | Event payload envelope. |
+| `status` | TEXT | NOT NULL | `pending`, `claimed`, `delivered`, `failed`. |
+| `attempt_count` | INT | NOT NULL DEFAULT 0 | Incremented per delivery attempt. |
+| `max_attempts` | INT | NOT NULL DEFAULT 3 | Configurable per subscription or system default. |
+| `scheduled_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | Next delivery attempt time; supports back-off scheduling. |
+| `locked_at` | TIMESTAMPTZ | NULL | Claim timestamp for worker concurrency. |
+| `locked_by` | TEXT | NULL | Worker identity token (e.g., hostname + pid). |
+| `delivered_at` | TIMESTAMPTZ | NULL | Set on final success. |
+| `last_error` | TEXT | NULL | Error message from the last failed attempt. |
+| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | Insert timestamp. |
+| `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | Updated on any state change. |
+| `lock_version` | INT | NOT NULL DEFAULT 0 | Optimistic locking for claim/release. |
+
+**Indexes**
+
+```sql
+-- Pending due queue (primary worker polling index)
+CREATE INDEX idx_webhook_outbox_pending_due
+  ON webhook_outbox (scheduled_at, id)
+  WHERE status = 'pending';
+
+-- Tenant + intent lookup (support idempotency / replay queries)
+CREATE INDEX idx_webhook_outbox_tenant_intent
+  ON webhook_outbox (tenant_id, intent_id, created_at DESC);
+
+-- Claimed rows (stale-claim recovery)
+CREATE INDEX idx_webhook_outbox_claimed
+  ON webhook_outbox (locked_at, locked_by)
+  WHERE status = 'claimed';
+```
+
+**RLS Policy Draft**
+
+```sql
+ALTER TABLE webhook_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE webhook_outbox FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON webhook_outbox
+  USING (tenant_id = current_tenant_id());
+```
+
+- `current_tenant_id()` is the existing RLS helper (or session variable) used by `RlsAwarePool`.
+- `FORCE` ensures all queries respect the policy, including table owners.
+
+**State Machine**
+
+```
+pending → claimed → delivered
+            ↓
+          failed
+claimed --(stale recovery)--> pending
+```
+
+- `pending`: Awaiting delivery.
+- `claimed`: Worker has taken ownership via optimistic lock (`lock_version` compare-and-set). Worker must set `locked_at`, `locked_by`, and increment `lock_version`.
+- `delivered`: Final success; immutable. Worker sets `delivered_at`.
+- `failed`: Exhausted `max_attempts` or non-retryable error. Worker sets `last_error`.
+
+**Stale-Claim Recovery / Concurrency Note**
+
+- Workers heartbeat via `locked_at`. A supervisor or scheduled sweep reclaims rows where `status = 'claimed'` and `locked_at < now() - interval '<stale_threshold>'` (e.g., 5 minutes).
+- Reclaim transitions `claimed → pending` and clears `locked_at`/`locked_by` without incrementing `attempt_count`.
+- Multiple workers may race; optimistic locking (`lock_version`) prevents double-delivery within the same claim window. At-least-once semantics are assumed; idempotency must be handled by subscribers.
+- This design does **not** guarantee exactly-once delivery. Production hardening for stronger semantics remains Phase 4+.
+
+**Retention / Partitioning Note**
+
+- Phase 4+ should consider time-based partitioning or a retention job for delivered/failed rows to prevent unbounded growth.
+- A separate `propagation_records` table already tracks high-level propagation status; `webhook_outbox` is the delivery mechanism, not the source of truth for propagation state.
+
+**Relationship to Existing Tables**
+
+- `propagation_records`: High-level propagation status per intent. `webhook_outbox` rows are generated from propagation signals but do not replace `propagation_records`.
+- `webhook_subscriptions`: Subscriber configuration (URL, secret, event filters). `subscription_id` references this table. FK enforcement is deferred to implementation; schema design does not mandate it.
+
+**Explicit Non-Goals**
+
+- No migration DDL file (this is design-only).
+- No Rust code, worker implementation, or `tokio::spawn` fire-and-forget conversion.
+- No HMAC signing or key rotation (P2-6c).
+- No subscription CRUD API (P2-6d).
+- No per-attempt log table (P2-6e deferred).
+- No DLQ / external queue integration (P2-3, P2-6e).
+- No production readiness or at-least-once guarantee claim as current behavior.
+
+**No overclaim:** This subsection is a schema design draft to guide a future migration. It is not a migration, not executable code, and does not confer any production readiness.
 
 ---
 
