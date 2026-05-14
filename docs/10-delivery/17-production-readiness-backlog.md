@@ -311,7 +311,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2-6c** | HMAC signing + key rotation — detailed design below | 🔴 Deferred — design only |
 | **P2-6d** | Subscription CRUD API — detailed design below | 🔴 Deferred — design only |
 | **P2-6e** | Retry / dead-letter semantics — detailed design below | 🔴 Deferred — design only |
-| **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
+| **P2-6f** | Rollback plan — detailed design below | 🔴 Deferred — design only |
 
 #### P2-6a: Outbox Schema Design
 
@@ -873,6 +873,116 @@ A future table may capture per-attempt detail for audit and debugging:
 - No delivery guarantee claim.
 
 **No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a migration, and does not confer any production readiness.
+
+#### P2-6f: Rollback Plan Design
+
+> **Scope:** Design-only. No automation scripts, no code, no production readiness claim.
+
+**Rollback Scenarios Summary**
+
+| Scenario | Trigger | Rollback Action |
+|----------|---------|-----------------|
+| **A. Feature disable** | Webhook delivery causing instability | Set env gates to `false`; restart |
+| **B. Worker drain** | Need to stop background worker safely | Graceful shutdown with drain timeout |
+| **C. Subscription disable** | Single downstream system misbehaving | PATCH subscription to `disabled` |
+| **D. Subscription deregister** | Downstream system permanently decommissioned | Soft-delete subscription; retain audit |
+| **E. Outbox state recovery** | Corrupted or stuck outbox rows | Manual SQL update per rollback matrix |
+| **F. Full rollback** | Catastrophic failure of webhook subsystem | Disable gates + disable all subscriptions + drain |
+
+**Env-Gate Disable Procedure**
+
+Two independent env gates control webhook delivery:
+
+| Gate | Default | Disable Action | Effect |
+|------|---------|----------------|--------|
+| `INTENT_API_WEBHOOK_DELIVERY` | `false` | Set `false` (or unset) | Stops in-process dispatch inside apply handler |
+| `INTENT_API_WEBHOOK_OUTBOX_WORKER` | `false` | Set `false` (or unset) | Stops background worker polling |
+
+- **Rollback (A / F):** Set both gates to `false` and restart the service.
+- **No data loss:** Outbox rows remain in `pending`/`claimed` status; they are not deleted.
+- **No in-flight loss:** In-process deliveries complete before the handler returns; background worker drain is best-effort (see below).
+
+**Worker Drain / Shutdown**
+
+- Background worker uses `watch::Receiver<bool>` shutdown pattern (P2-6b).
+- On shutdown signal:
+  1. Stop polling for new rows.
+  2. Wait up to `OUTBOX_SHUTDOWN_DRAIN_SECONDS` (default 30s) for in-flight `JoinSet` tasks to complete.
+  3. After timeout, abort remaining tasks.
+- **Rollback (B / F):** Trigger shutdown via `SIGTERM` or programmatic signal; wait for drain timeout.
+- **Best-effort:** Tasks aborted after timeout leave rows in `claimed` status; stale-claim recovery (P2-6a) reclaims them on next worker startup.
+
+**Subscription Disable / Deregister Without Data Loss**
+
+- **Disable (C):** `PATCH /webhooks/subscriptions/{id}` → `{ "status": "disabled" }`.
+  - Disabled subscriptions are skipped by the delivery worker.
+  - Existing outbox rows for this subscription remain; they are not automatically cancelled.
+- **Deregister (D):** `DELETE /webhooks/subscriptions/{id}` → soft-delete to `deleted` status.
+  - Soft-delete retains the subscription record for audit.
+  - New outbox rows will not reference this subscription.
+  - Existing outbox rows referencing this subscription will fail delivery (404 or DNS failure) and eventually exhaust retries → DLQ (P2-6e).
+
+**Outbox State Rollback Matrix**
+
+| Current State | Desired Rollback State | Manual SQL (illustrative) | Notes |
+|---------------|------------------------|---------------------------|-------|
+| `claimed` (stuck) | `pending` | `UPDATE webhook_outbox SET status='pending', locked_at=NULL, locked_by=NULL WHERE status='claimed' AND locked_at < NOW() - INTERVAL '5 minutes';` | Use stale-claim recovery query |
+| `failed` (transient) | `pending` | `UPDATE webhook_outbox SET status='pending', attempt_count=0, scheduled_at=NOW() WHERE status='failed' AND subscription_id = ?;` | Bulk retry after fixing root cause |
+| `delivered` | N/A | None | Immutable; do not rollback |
+| `dlq` (future) | `pending` | `UPDATE webhook_outbox_dlq SET status='pending', attempt_count=0, scheduled_at=NOW() WHERE ...;` | Replay from DLQ (P2-6e) |
+
+- **Data loss prevention:** All state transitions are updates; no rows are deleted.
+- **Audit:** `updated_at` is touched on every state change.
+
+**DLQ Replay / Rollback Interaction**
+
+- DLQ rows (P2-6e) can be replayed to `pending` after the root cause is resolved.
+- Replay does **not** automatically re-enable subscriptions; if the subscription is `disabled` or `deleted`, the replayed delivery will fail again.
+- Operator must verify subscription status before bulk replay.
+
+**Rollback Verification Checklist**
+
+- [ ] Both env gates (`INTENT_API_WEBHOOK_DELIVERY`, `INTENT_API_WEBHOOK_OUTBOX_WORKER`) are set to `false`.
+- [ ] Service has restarted and health checks pass.
+- [ ] Background worker is no longer polling (check logs for "worker shutdown complete").
+- [ ] In-flight deliveries have drained or timed out (check `outbox_outstanding_count` gauge if available).
+- [ ] Subscriptions are in expected state (`active`/`disabled`/`deleted`).
+- [ ] Outbox rows are in expected state (no unexpected `claimed` rows older than stale threshold).
+- [ ] No webhook HTTP requests are being sent (verify via network logs or downstream metrics).
+- [ ] Apply path is unaffected (rebase apply returns 200 without delivery errors).
+
+**Failure Escalation Path**
+
+| Severity | Condition | Action | Owner |
+|----------|-----------|--------|-------|
+| P1 | Webhook delivery causing apply path failures | Immediate disable both gates; escalate to Backend Lead | On-call engineer |
+| P2 | Persistent downstream 5xx for single subscription | Disable subscription; open incident | On-call engineer |
+| P3 | Worker panic or claim loop failure | Restart worker; check logs; escalate if repeated | On-call engineer |
+| P4 | Metrics anomaly (spike in failed deliveries) | Investigate downstream health; no immediate rollback needed | SRE (future) |
+
+**Operator Runbook References**
+
+- RB13 — Webhook Delivery Failures: diagnosis and mitigation for delivery errors.
+- P2-6a — Outbox Schema Design: stale-claim recovery query and state machine.
+- P2-6b — Background Delivery Worker Lifecycle: graceful shutdown and drain semantics.
+- P2-6c — HMAC Signing + Key Rotation: secret revocation during rollback.
+- P2-6d — Subscription CRUD API: disable/deregister endpoints and lifecycle states.
+- P2-6e — Retry / Dead-Letter Semantics: DLQ replay and bulk retry procedures.
+
+**Relationship to P2-6a..P2-6e**
+
+- This rollback plan depends on the outbox schema (P2-6a), worker lifecycle (P2-6b), subscription management (P2-6d), and DLQ semantics (P2-6e).
+- It does **not** introduce new schema or code; it documents operator procedures using the primitives defined in prior slices.
+
+**Explicit Non-Goals**
+
+- No automation scripts or operator tooling.
+- No code changes or migration DDL.
+- No infra changes (e.g., load balancer rules, DNS changes).
+- No production readiness or automated rollback claim.
+- No guarantee that rollback is instant or lossless.
+
+**No overclaim:** This subsection is a design draft to guide future operator runbooks. It is not automation, not code, and does not confer any production readiness.
 
 ---
 

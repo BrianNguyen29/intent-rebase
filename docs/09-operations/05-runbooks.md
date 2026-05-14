@@ -307,7 +307,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 ## RB13. Webhook Delivery Failures
 
-> **Status:** Bounded observability slice — metrics instrumented, no production alerting claim. Webhook delivery remains Phase 4+ deferred; no production delivery guarantees, outbox, event streaming, HMAC, key rotation, subscription CRUD, or retry/DLQ implementation. See P2-6e retry / dead-letter semantics design in [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md).
+> **Status:** Bounded observability slice — metrics instrumented, no production alerting claim. Webhook delivery remains Phase 4+ deferred; no production delivery guarantees, outbox, event streaming, HMAC, key rotation, subscription CRUD, retry/DLQ, or rollback automation. See P2-6e retry / dead-letter semantics design and P2-6f rollback plan design in [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md).
 
 **Symptoms:**
 - `intent_api_webhook_deliveries_failed_total` counter is increasing
@@ -369,6 +369,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 - `intent_api_webhook_deliveries_retry_exhausted_total` is informational — indicates persistent downstream issues
 - Local Prometheus rule `WebhookDeliveryFailureRate` is defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding only — production alerting requires SRE sign-off and receiver configuration)
 - Outbox DLQ and automatic retry queue are design-only (P2-6e). No queue, table, or worker exists.
+- Rollback plan (env-gate disable, worker drain, subscription deregister) is design-only (P2-6f). No automation or scripts exist.
 
 ---
 

@@ -204,7 +204,7 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 >
 > **Current bounded behavior:** Dispatch is `.await`ed synchronously within the apply handler post-commit. `tokio::spawn` fire-and-forget conversion remains deferred.
 >
-> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints (P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), retry/dead-letter semantics (P2-6e design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), event streaming, cross-workflow lineage, per-attempt delivery log table.
+> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints (P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), retry/dead-letter semantics (P2-6e design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), rollback plan (P2-6f design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), event streaming, cross-workflow lineage, per-attempt delivery log table.
 
 #### HTTP Client Choice
 
@@ -637,7 +637,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 **D22 — Scope boundaries and non-goals preserved:**
 - Env gate `INTENT_API_WEBHOOK_DELIVERY` defaults `false` outside local/dev; local-only testing may set `true`.
-- Bounded Go does **not** authorize: outbox pattern, transactional delivery, delivery guarantees, background retry workers, HMAC signing, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table, dead-letter queue, production readiness, or external receiver production config.
+- Bounded Go does **not** authorize: outbox pattern, transactional delivery, delivery guarantees, background retry workers, HMAC signing, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table, dead-letter queue, rollback plan automation, production readiness, or external receiver production config.
 - Owner Brian Nguyen signs off on the bounded scope and non-goals listed above.
 
 #### Pre-R8 Blockers / Open Decisions

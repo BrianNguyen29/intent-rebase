@@ -12,6 +12,8 @@
 
 > **Retry / Dead-Letter Semantics:** A draft retry and DLQ design (webhook outbox DLQ vs NATS DLQ, per-attempt log concept, replay/operator actions, metrics) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6e. It is design-only — no queue or worker implementation exists.
 
+> **Rollback Plan:** A draft rollback plan design (env-gate disable, worker drain, subscription disable/deregister, outbox state matrix, DLQ interaction, verification checklist, escalation path) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6f. It is design-only — no automation or scripts exist.
+
 ## Mục tiêu
 Cho phép tích hợp IRE với:
 - Git providers
