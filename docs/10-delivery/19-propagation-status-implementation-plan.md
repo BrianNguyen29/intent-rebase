@@ -326,7 +326,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | G7 — Handler unit test | Payload shape + headers | `cargo test --lib webhook_delivery_tests` (57 tests, including payload/header assertions) |
 | G8 — Delivery simulation | Mock HTTP server verifies retry behavior | `cargo test --lib webhook_delivery_tests` (wiremock-based delivery simulation tests) |
 
-> **Note:** G1–G8 reflect bounded implementation status. G7–G8 are implemented in `webhook_delivery_tests.rs`. Full end-to-end apply integration test with live wiremock dispatch remains deferred.
+> **Note:** G1–G8 reflect bounded implementation status. G7–G8 are implemented in `webhook_delivery_tests.rs`. Apply-level wiremock success/failure outcome coverage (200-success and 500-failure) is delivered in commit 5dcdd36 via `create_propagation_signals_after_apply_with_resolver` test seam in `rebase_apply_handler_tests.rs`. Full end-to-end production delivery with outbox, background worker, and real subscriptions remains deferred.
 
 #### Implementation Readiness Checklist (Bounded Implementation Complete — B3-B18)
 

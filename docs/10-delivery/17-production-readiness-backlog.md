@@ -295,7 +295,7 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Production-grade webhook delivery with outbox pattern, HMAC signing, key rotation, subscription CRUD API, and dedicated delivery worker |
-| **Current State** | Bounded non-production slice delivered (B3-B18): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup; no outbox guarantees, no HMAC, no key rotation, no subscription management API, no background worker |
+| **Current State** | Bounded non-production slice delivered (B3-B18): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup; apply-path wiremock success/failure tests (200-success, 500-failure) delivered as bounded baseline in commit 5dcdd36; no outbox guarantees, no HMAC, no key rotation, no subscription management API, no background worker |
 | **Owner** | Backend Lead |
 | **Status** | 🔴 DEFERRED — production delivery guarantees require outbox + worker infrastructure |
 | **External Dependency** | None for local implementation; production deployment requires infrastructure for background workers and secret management |
@@ -324,7 +324,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
-| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 slice is non-production only |
+| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 slice is non-production only; apply-path wiremock success/failure tests (commit 5dcdd36) are a bounded baseline |
 
 ---
 
