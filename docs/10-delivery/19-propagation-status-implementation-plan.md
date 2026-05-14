@@ -204,7 +204,7 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 >
 > **Current bounded behavior:** Dispatch is `.await`ed synchronously within the apply handler post-commit. `tokio::spawn` fire-and-forget conversion remains deferred.
 >
-> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints (P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), event streaming, cross-workflow lineage, per-attempt delivery log table.
+> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints (P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), retry/dead-letter semantics (P2-6e design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), event streaming, cross-workflow lineage, per-attempt delivery log table.
 
 #### HTTP Client Choice
 
@@ -388,7 +388,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
   - `updated_at TIMESTAMPTZ`
 - RLS policy on `tenant_id` following the migration 017 pattern.
 - The dispatcher queries by `(tenant_id, intent_id)` to obtain target URLs.
-- **Deferred to future scope:** secret/HMAC keys, custom headers, enabled/disabled flag, subscription CRUD API endpoints, per-attempt delivery log table.
+- **Deferred to future scope:** secret/HMAC keys, custom headers, enabled/disabled flag, subscription CRUD API endpoints, per-attempt delivery log table, retry/dead-letter semantics (P2-6e).
 
 **B2 resolution — repository trait methods:**
 - Decision: extend the existing `PropagationRecordRepository` trait (do not create a new trait).
@@ -593,8 +593,8 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No subscription CRUD API endpoints (deferred). See P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - No event streaming / NATS integration (Slice 4).
 - No cross-workflow lineage (Slice 5).
-- No per-attempt delivery log table (deferred).
-- No dead-letter topic or queue (deferred).
+- No per-attempt delivery log table (deferred). See P2-6e design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
+- No dead-letter topic or queue (deferred). See P2-6e design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - No consumer-managed subscriptions (deferred).
 - No multi-region replication (deferred).
 - No SLA or latency guarantee (deferred).

@@ -310,7 +310,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2-6b** | Background delivery worker lifecycle — detailed design below | 🔴 Deferred — design only |
 | **P2-6c** | HMAC signing + key rotation — detailed design below | 🔴 Deferred — design only |
 | **P2-6d** | Subscription CRUD API — detailed design below | 🔴 Deferred — design only |
-| **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
+| **P2-6e** | Retry / dead-letter semantics — detailed design below | 🔴 Deferred — design only |
 | **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
 
 #### P2-6a: Outbox Schema Design
@@ -782,6 +782,97 @@ function verify_signature(header, body, known_secrets):
 - No role-based access control or advanced authorization.
 
 **No overclaim:** This subsection is a design draft to guide future implementation. It is not an API contract implementation, not code, and does not confer any production readiness.
+
+#### P2-6e: Retry / Dead-Letter Semantics Design
+
+> **Scope:** Design-only. No queue implementation, no migration DDL, no Rust code, no production readiness claim.
+
+**Critical Distinction: Two DLQ Concepts**
+
+| DLQ | Source | Metrics Prefix | Current State |
+|-----|--------|----------------|---------------|
+| **NATS JetStream DLQ** | NATS consumer `max_deliver` exhaustion | `intent_api_dlq_*` | Bounded `DlqMetricsWorker` exists (depth/age gauges only); full replay worker deferred (P2-3). See `14-dlq-retry-design.md` for NATS-specific semantics. |
+| **Webhook Outbox DLQ** | `webhook_outbox` rows that exhaust `max_attempts` | `intent_api_outbox_dlq_*` | Design-only. No table, no topic, no worker. This subsection defines the future semantics. |
+
+> **Do not conflate the two.** NATS DLQ handles message-stream retries; webhook outbox DLQ handles HTTP delivery retries. They may coexist but are independent.
+
+**Per-Attempt Delivery Log Table Concept (`propagation_delivery_attempts`)**
+
+A future table may capture per-attempt detail for audit and debugging:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | PRIMARY KEY |
+| `tenant_id` | UUID | RLS isolation key |
+| `outbox_id` | UUID | Logical FK to `webhook_outbox` |
+| `attempt_number` | INT | 1-indexed |
+| `attempted_at` | TIMESTAMPTZ | When the HTTP request was sent |
+| `http_status` | INT | Response status code (NULL if timeout/network error) |
+| `duration_ms` | INT | Round-trip duration |
+| `failure_reason` | TEXT | Sanitized error detail |
+| `created_at` | TIMESTAMPTZ | Insert timestamp |
+
+- **RLS:** Same `tenant_isolation` policy as `webhook_outbox`.
+- **Retention:** Time-based partitioning or TTL recommended to prevent unbounded growth.
+- **Scope:** This is a design concept only. No migration or code is included.
+
+**Retry Queue Semantics**
+
+- **Source:** `webhook_outbox` rows with `status = 'failed'` and `attempt_count < max_attempts`.
+- **Retry trigger:** A background worker (P2-6b) or a dedicated retry scheduler picks up failed rows after a backoff delay.
+- **Backoff policy:** Same as Slice 3 bounded policy (exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s). See P2-6b for worker polling semantics.
+- **Retry cap:** `max_attempts` (default 3, configurable per subscription 1–10).
+- **Ordering:** Retries are ordered by `scheduled_at` (earliest first). No strict FIFO guarantee across tenants.
+
+**DLQ Topic / Table Semantics**
+
+- **Entry condition:** `attempt_count >= max_attempts` and final attempt returned a retryable error, OR a non-retryable error occurred on any attempt.
+- **Webhook outbox DLQ options:**
+  1. **DLQ table:** A `webhook_outbox_dlq` table with the same schema as `webhook_outbox` plus `dlq_reason` and `dlq_entered_at`.
+  2. **DLQ topic:** A NATS/SQS topic `webhook.dlq` where exhausted rows are published as events for external systems.
+  3. **Hybrid:** Rows moved to DLQ table; an async publisher emits events to the topic for integration with external observability.
+- **Exit condition:** Manual operator review, automatic replay after a cooldown, or subscription update that resolves the root cause.
+- **No auto-retry from DLQ:** By default, DLQ rows remain until an operator or explicit replay job acts on them.
+
+**Replay / Operator Actions**
+
+| Action | Behavior | Required State |
+|--------|----------|----------------|
+| **Manual replay** | Operator selects a DLQ row and triggers a new delivery attempt | `dlq` → `pending` (reset `attempt_count` to 0) |
+| **Bulk replay** | Operator replays all DLQ rows for a subscription or tenant | Batch update to `pending` |
+| **Purge** | Operator permanently removes DLQ rows (audit retention policy applies) | `dlq` → `deleted` |
+| **Auto-replay (future)** | Scheduled job replays DLQ rows after a cooldown period (e.g., 1 hour) | Deferred to Phase 4+ |
+
+**Metrics / Alerts (Design-Only)**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `intent_api_outbox_dlq_entries_total` | Counter | Rows entering the webhook outbox DLQ. |
+| `intent_api_outbox_dlq_replayed_total` | Counter | Rows manually or bulk-replayed from DLQ. |
+| `intent_api_outbox_dlq_purged_total` | Counter | Rows purged from DLQ. |
+| `intent_api_outbox_dlq_current_count` | Gauge | Current DLQ depth. |
+| `intent_api_outbox_dlq_oldest_age_seconds` | Gauge | Age of oldest DLQ row. |
+
+- **Alert (design-only):** `WebhookOutboxDLQDepthHigh` — fired when `intent_api_outbox_dlq_current_count > threshold` for `duration`.
+- **Alert (design-only):** `WebhookOutboxDLQStale` — fired when `intent_api_outbox_dlq_oldest_age_seconds > threshold`.
+- These metrics and alerts are **not instrumented** and have **no local rules**. They are documented here for future SRE implementation.
+
+**Relationship to P2-6a / P2-6b / P2-6d**
+
+- P2-6e depends on the `webhook_outbox` schema (P2-6a) for retry source data and the delivery worker (P2-6b) for execution.
+- Subscriptions (P2-6d) define `max_attempts` and the downstream URL, which influence retry and DLQ entry behavior.
+- NATS DLQ semantics (P2-3, `14-dlq-retry-design.md`) are a separate concern and should not be confused with webhook outbox DLQ.
+
+**Explicit Non-Goals**
+
+- No NATS/SQS queue implementation or DLQ topic creation.
+- No migration DDL for `propagation_delivery_attempts` or `webhook_outbox_dlq`.
+- No Rust retry worker or DLQ consumer code.
+- No automatic replay implementation.
+- No production readiness or current DLQ availability claim.
+- No delivery guarantee claim.
+
+**No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a migration, and does not confer any production readiness.
 
 ---
 

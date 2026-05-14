@@ -248,5 +248,6 @@ Prometheus alerting rules defined in `infrastructure/local/prometheus/rules/inte
 - `WebhookDeliveryFailureRate` (> 10% failed/attempted ratio with meaningful traffic) — see RB13
 
 > **Not instrumented:** Approval wait, audit append, compensation execution, DLQ, and error-budget-remaining alerts are not yet backed by real metrics and have been removed from local rules.
+> **Webhook outbox DLQ metrics:** `intent_api_outbox_dlq_*` metrics are design-only (P2-6e). No queue, table, or worker is implemented.
 > **Propagation alerts:** `PropagationSignalFailureRate` is instrumented and defined in local rules but is **local dev scaffolding only**. Production deployment requires SRE sign-off and receiver configuration.
 > **Webhook delivery alerts:** `WebhookDeliveryFailureRate` is instrumented and defined in local rules but is **local dev scaffolding only**. No production delivery guarantees, outbox, HMAC, or subscription CRUD are in scope.

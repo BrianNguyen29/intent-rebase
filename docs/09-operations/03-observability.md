@@ -22,6 +22,7 @@
 - propagation signal creation rate (attempted / succeeded / failed / no-downstream)
 - webhook delivery rate (attempted / succeeded / failed / retry-exhausted) — Slice 3 bounded; metrics instrumented in `send_webhook_with_retries`; local dev only, default disabled via `INTENT_API_WEBHOOK_DELIVERY`
 - downstream system acknowledgment rate (pending → acknowledged / failed) — **not instrumented; deferred to Phase 4+**
+- webhook outbox DLQ depth / age / replay rate — **not instrumented; design-only (P2-6e). No queue or worker exists.**
 
 ## Logs
 Structured logs với:

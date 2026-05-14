@@ -10,6 +10,8 @@
 
 > **Subscription CRUD API:** A draft subscription management API design (endpoints, schemas, lifecycle states, tenant isolation, validation rules, secret redaction) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6d. It is design-only — no routes or handlers have been implemented.
 
+> **Retry / Dead-Letter Semantics:** A draft retry and DLQ design (webhook outbox DLQ vs NATS DLQ, per-attempt log concept, replay/operator actions, metrics) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6e. It is design-only — no queue or worker implementation exists.
+
 ## Mục tiêu
 Cho phép tích hợp IRE với:
 - Git providers
