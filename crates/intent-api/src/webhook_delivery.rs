@@ -1,13 +1,17 @@
-//! Webhook delivery scaffolding (B3/B4 — internal payload/header builders + async skeleton)
+//! Webhook delivery scaffolding (B3/B4/B5 — internal payload/header builders + async skeleton + dispatcher)
 //!
 //! Bounded non-production slice: provides pure data builders for webhook
 //! payloads and header values, plus an internal async delivery skeleton
-//! that is NOT wired into application flow.
+//! and env-gated dispatcher integration that is NOT wired into production flow.
 //!
 //! See: docs/10-delivery/19-propagation-status-implementation-plan.md (R6 D9, R2, R5, R7)
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use intent_rebase_types::{IntentRebaseError, PropagationStatus};
+use intent_service::PropagationRecordRepository;
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -231,6 +235,37 @@ pub enum WebhookDeliveryResult {
     RateLimited { retry_after: Option<Duration> },
 }
 
+/// Error returned by the webhook sender abstraction.
+#[derive(Debug, Clone)]
+pub enum WebhookSendError {
+    Network(String),
+}
+
+/// Abstraction over HTTP webhook transport for testability.
+#[async_trait]
+pub trait WebhookSender: Send + Sync {
+    async fn send(
+        &self,
+        url: &str,
+        payload: &WebhookPayload,
+        headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError>;
+}
+
+#[async_trait]
+impl WebhookSender for reqwest::Client {
+    async fn send(
+        &self,
+        url: &str,
+        payload: &WebhookPayload,
+        headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
+        send_webhook(self, url, payload, headers)
+            .await
+            .map_err(|e| WebhookSendError::Network(e.to_string()))
+    }
+}
+
 /// Build a `reqwest::Client` configured with webhook timeout constants.
 #[allow(dead_code)]
 pub fn build_webhook_client() -> reqwest::Client {
@@ -283,5 +318,263 @@ pub async fn send_webhook(
         WebhookErrorCategory::NonRetryable => Ok(WebhookDeliveryResult::NonRetryableFailure {
             reason: format!("HTTP {}", status),
         }),
+    }
+}
+
+// =============================================================================
+// Subscription Resolver (minimal scaffolding)
+// =============================================================================
+
+/// Minimal webhook subscription record (B1 schema mirror).
+#[derive(Debug, Clone)]
+pub struct WebhookSubscription {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+    pub subscription_id: Uuid,
+    pub webhook_url: String,
+    pub downstream_system_id: Option<String>,
+}
+
+/// Resolver for webhook subscriptions by intent.
+///
+/// Bounded scaffolding: no DB-backed implementation yet.
+/// Future Slice 3+ work will replace the in-memory/empty variants with a
+/// real repository querying `webhook_subscriptions` (migration 018).
+#[async_trait]
+pub trait WebhookSubscriptionResolver: Send + Sync {
+    async fn resolve_by_intent(
+        &self,
+        tenant_id: Uuid,
+        intent_id: Uuid,
+    ) -> Result<Vec<WebhookSubscription>, IntentRebaseError>;
+}
+
+/// Empty resolver — always returns no subscriptions.
+///
+/// Used in production paths until a real subscription repository is wired.
+pub struct EmptyWebhookSubscriptionResolver;
+
+#[async_trait]
+impl WebhookSubscriptionResolver for EmptyWebhookSubscriptionResolver {
+    async fn resolve_by_intent(
+        &self,
+        _tenant_id: Uuid,
+        _intent_id: Uuid,
+    ) -> Result<Vec<WebhookSubscription>, IntentRebaseError> {
+        Ok(Vec::new())
+    }
+}
+
+/// In-memory resolver for tests.
+pub struct InMemoryWebhookSubscriptionResolver {
+    subscriptions: std::sync::Mutex<Vec<WebhookSubscription>>,
+}
+
+impl InMemoryWebhookSubscriptionResolver {
+    pub fn new() -> Self {
+        Self {
+            subscriptions: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn add(&self, sub: WebhookSubscription) {
+        self.subscriptions.lock().unwrap().push(sub);
+    }
+}
+
+impl Default for InMemoryWebhookSubscriptionResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl WebhookSubscriptionResolver for InMemoryWebhookSubscriptionResolver {
+    async fn resolve_by_intent(
+        &self,
+        tenant_id: Uuid,
+        intent_id: Uuid,
+    ) -> Result<Vec<WebhookSubscription>, IntentRebaseError> {
+        let subs = self.subscriptions.lock().unwrap();
+        Ok(subs
+            .iter()
+            .filter(|s| s.tenant_id == tenant_id && s.intent_id == intent_id)
+            .cloned()
+            .collect())
+    }
+}
+
+// =============================================================================
+// Dispatcher
+// =============================================================================
+
+/// Dispatch webhooks for all propagation records of an intent.
+///
+/// Bounded B5 integration:
+/// - Records delivery attempt via repository
+/// - Builds payload/headers for each matching subscription
+/// - Sends via the injected `WebhookSender`
+/// - Records delivery outcome via repository
+///
+/// NOT wired into application flow by default — gated by `is_webhook_delivery_enabled`.
+#[allow(dead_code)]
+pub async fn dispatch_webhooks_for_intent(
+    repo: &Arc<dyn PropagationRecordRepository>,
+    sender: &dyn WebhookSender,
+    resolver: &dyn WebhookSubscriptionResolver,
+    tenant_id: Uuid,
+    intent_id: Uuid,
+    version: i32,
+) {
+    let records = match repo.list_by_intent(intent_id, tenant_id).await {
+        Ok(recs) => recs,
+        Err(e) => {
+            tracing::warn!("Failed to list propagation records for dispatch: {}", e);
+            return;
+        }
+    };
+
+    let subscriptions = match resolver.resolve_by_intent(tenant_id, intent_id).await {
+        Ok(subs) => subs,
+        Err(e) => {
+            tracing::warn!("Failed to resolve webhook subscriptions: {}", e);
+            return;
+        }
+    };
+
+    for sub in subscriptions {
+        let record = records
+            .iter()
+            .find(|r| {
+                r.downstream_system_id == sub.downstream_system_id.clone().unwrap_or_default()
+            })
+            .cloned();
+
+        let record = match record {
+            Some(r) => r,
+            None => {
+                tracing::debug!(
+                    "No propagation record for downstream system {:?}, skipping",
+                    sub.downstream_system_id
+                );
+                continue;
+            }
+        };
+
+        let updated = match repo.record_delivery_attempt(record.id, tenant_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to record delivery attempt for record {}: {}",
+                    record.id,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let payload = build_webhook_payload(WebhookPayloadInput {
+            intent_id,
+            tenant_id,
+            version,
+            version_hash: None,
+            previous_version: None,
+            delivery_id: Uuid::new_v4(),
+            attempt_number: updated.delivery_attempt_count,
+            subscription_id: sub.subscription_id,
+        });
+        let headers = WebhookHeaders::new(payload.delivery_id);
+
+        let result = sender.send(&sub.webhook_url, &payload, &headers).await;
+
+        match result {
+            Ok(WebhookDeliveryResult::Success) => {
+                if let Err(e) = repo
+                    .record_delivery_outcome(
+                        record.id,
+                        tenant_id,
+                        PropagationStatus::Acknowledged,
+                        None,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to record delivery outcome for record {}: {}",
+                        record.id,
+                        e
+                    );
+                }
+            }
+            Ok(WebhookDeliveryResult::RetryableFailure { reason }) => {
+                if let Err(e) = repo
+                    .record_delivery_outcome(
+                        record.id,
+                        tenant_id,
+                        PropagationStatus::Failed,
+                        Some(sanitize_failure_reason(&reason)),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to record delivery outcome for record {}: {}",
+                        record.id,
+                        e
+                    );
+                }
+            }
+            Ok(WebhookDeliveryResult::NonRetryableFailure { reason }) => {
+                if let Err(e) = repo
+                    .record_delivery_outcome(
+                        record.id,
+                        tenant_id,
+                        PropagationStatus::Failed,
+                        Some(sanitize_failure_reason(&reason)),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to record delivery outcome for record {}: {}",
+                        record.id,
+                        e
+                    );
+                }
+            }
+            Ok(WebhookDeliveryResult::RateLimited { retry_after }) => {
+                let reason = format!("rate limited, retry_after={:?}", retry_after);
+                if let Err(e) = repo
+                    .record_delivery_outcome(
+                        record.id,
+                        tenant_id,
+                        PropagationStatus::Failed,
+                        Some(sanitize_failure_reason(&reason)),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to record delivery outcome for record {}: {}",
+                        record.id,
+                        e
+                    );
+                }
+            }
+            Err(WebhookSendError::Network(reason)) => {
+                if let Err(e) = repo
+                    .record_delivery_outcome(
+                        record.id,
+                        tenant_id,
+                        PropagationStatus::Failed,
+                        Some(sanitize_failure_reason(&reason)),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to record delivery outcome for record {}: {}",
+                        record.id,
+                        e
+                    );
+                }
+            }
+        }
     }
 }

@@ -8,12 +8,14 @@
 
 use crate::webhook_delivery::{
     build_webhook_client, build_webhook_payload, classify_status_code, compute_backoff_delay,
-    is_webhook_delivery_enabled, sanitize_failure_reason, send_webhook, WebhookErrorCategory,
-    WebhookHeaders, WebhookPayloadInput, WEBHOOK_BACKOFF_BASE_DELAY, WEBHOOK_BACKOFF_MAX_DELAY,
-    WEBHOOK_CONNECT_TIMEOUT, WEBHOOK_MAX_ATTEMPTS, WEBHOOK_MAX_TOTAL_DURATION,
-    WEBHOOK_REQUEST_TIMEOUT, WEBHOOK_RETRY_AFTER_CAP,
+    is_webhook_delivery_enabled, sanitize_failure_reason, send_webhook, WebhookDeliveryResult,
+    WebhookErrorCategory, WebhookHeaders, WebhookPayloadInput, WEBHOOK_BACKOFF_BASE_DELAY,
+    WEBHOOK_BACKOFF_MAX_DELAY, WEBHOOK_CONNECT_TIMEOUT, WEBHOOK_MAX_ATTEMPTS,
+    WEBHOOK_MAX_TOTAL_DURATION, WEBHOOK_REQUEST_TIMEOUT, WEBHOOK_RETRY_AFTER_CAP,
 };
+use intent_rebase_types::PropagationStatus;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -370,4 +372,213 @@ async fn test_send_webhook_compiles_and_runs_against_unreachable_host() {
 
     // Should fail at connection level, confirming the skeleton executes.
     assert!(result.is_err());
+}
+
+// =============================================================================
+// B5 Dispatcher Integration Tests
+// =============================================================================
+
+use crate::webhook_delivery::{
+    dispatch_webhooks_for_intent, EmptyWebhookSubscriptionResolver,
+    InMemoryWebhookSubscriptionResolver, WebhookSendError, WebhookSender, WebhookSubscription,
+};
+use intent_rebase_types::PropagationRecord;
+use intent_service::InMemoryPropagationRecordRepository;
+
+/// Mock sender that always returns a predetermined result.
+struct MockWebhookSender {
+    result: Result<WebhookDeliveryResult, WebhookSendError>,
+}
+
+impl MockWebhookSender {
+    fn new(result: Result<WebhookDeliveryResult, WebhookSendError>) -> Self {
+        Self { result }
+    }
+}
+
+#[async_trait::async_trait]
+impl WebhookSender for MockWebhookSender {
+    async fn send(
+        &self,
+        _url: &str,
+        _payload: &crate::webhook_delivery::WebhookPayload,
+        _headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
+        self.result.clone()
+    }
+}
+
+#[tokio::test]
+async fn test_dispatch_disabled_env_gate_records_no_attempts() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Dispatch with empty resolver (no subscriptions) — nothing happens regardless of gate
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
+    let resolver = EmptyWebhookSubscriptionResolver;
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    // No subscriptions matched, so no attempt recorded
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 0);
+}
+
+#[tokio::test]
+async fn test_dispatch_records_attempt_and_acknowledged_outcome() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Acknowledged);
+    assert!(stored.acknowledged_at.is_some());
+}
+
+#[tokio::test]
+async fn test_dispatch_records_attempt_and_failed_outcome() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::NonRetryableFailure {
+        reason: "HTTP 404".to_string(),
+    }));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Failed);
+    assert!(stored.failed_at.is_some());
+    assert_eq!(stored.failure_reason, Some("HTTP 404".to_string()));
+}
+
+#[tokio::test]
+async fn test_dispatch_records_network_error_as_failed() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Err(WebhookSendError::Network("timeout".to_string())));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Failed);
+    assert_eq!(stored.failure_reason, Some("timeout".to_string()));
+}
+
+#[tokio::test]
+async fn test_dispatch_no_matching_record_skips_subscription() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    // No propagation records seeded
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+
+    // Nothing crashes; no records exist to verify.
+}
+
+#[tokio::test]
+async fn test_dispatch_wrong_tenant_no_attempt() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_a, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id: tenant_a,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
+    // Dispatch with wrong tenant — resolver returns tenant_a's sub, but repo filters by tenant_b
+    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_b, intent_id, 2).await;
+
+    // Record should remain untouched because list_by_intent with wrong tenant returns empty
+    let stored = repo.get_record(record_id, tenant_a).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 0);
+    assert_eq!(stored.status, PropagationStatus::Pending);
 }

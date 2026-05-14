@@ -153,6 +153,18 @@ async fn create_propagation_signals_after_apply(
             intent_id
         );
     }
+
+    // B5 bounded: env-gated webhook dispatch.
+    // When enabled, records delivery attempt, sends webhook, and records outcome.
+    // When disabled (default), this block is skipped and no delivery attempts are recorded.
+    if crate::webhook_delivery::is_webhook_delivery_enabled() {
+        let client = crate::webhook_delivery::build_webhook_client();
+        let resolver = crate::webhook_delivery::EmptyWebhookSubscriptionResolver;
+        crate::webhook_delivery::dispatch_webhooks_for_intent(
+            repo, &client, &resolver, tenant_id, intent_id, to_version,
+        )
+        .await;
+    }
 }
 
 /// Build the RebaseApplyResponse from plan and apply result.
