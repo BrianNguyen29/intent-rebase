@@ -85,6 +85,46 @@ pub(crate) async fn create_propagation_signals_after_apply(
     tenant_id: Uuid,
     to_version: i32,
 ) {
+    let resolver: Box<dyn crate::webhook_delivery::WebhookSubscriptionResolver> = match &state
+        .rls_pool
+    {
+        Some(rls_pool) => Box::new(
+            crate::webhook_delivery::SqlxWebhookSubscriptionResolver::new(rls_pool.pool().clone()),
+        ),
+        None => Box::new(crate::webhook_delivery::EmptyWebhookSubscriptionResolver),
+    };
+    create_propagation_signals_after_apply_inner(
+        state,
+        intent_id,
+        tenant_id,
+        to_version,
+        resolver.as_ref(),
+    )
+    .await;
+}
+
+/// Test-only seam for injecting a custom `WebhookSubscriptionResolver` into the
+/// apply-path webhook dispatch flow. Production must continue using the normal
+/// resolver derived from `AppState` / `rls_pool`.
+#[cfg(test)]
+pub(crate) async fn create_propagation_signals_after_apply_with_resolver(
+    state: &AppState,
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    to_version: i32,
+    resolver: &dyn crate::webhook_delivery::WebhookSubscriptionResolver,
+) {
+    create_propagation_signals_after_apply_inner(state, intent_id, tenant_id, to_version, resolver)
+        .await;
+}
+
+async fn create_propagation_signals_after_apply_inner(
+    state: &AppState,
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    to_version: i32,
+    resolver: &dyn crate::webhook_delivery::WebhookSubscriptionResolver,
+) {
     let repo = match &state.propagation_record_repo {
         Some(repo) => repo,
         None => return,
@@ -159,20 +199,10 @@ pub(crate) async fn create_propagation_signals_after_apply(
     // When disabled (default), this block is skipped and no delivery attempts are recorded.
     if crate::webhook_delivery::is_webhook_delivery_enabled() {
         let client = crate::webhook_delivery::build_webhook_client();
-        // B6: SQL-backed resolver when RLS pool is available; empty fallback otherwise.
-        let resolver: Box<dyn crate::webhook_delivery::WebhookSubscriptionResolver> =
-            match &state.rls_pool {
-                Some(rls_pool) => Box::new(
-                    crate::webhook_delivery::SqlxWebhookSubscriptionResolver::new(
-                        rls_pool.pool().clone(),
-                    ),
-                ),
-                None => Box::new(crate::webhook_delivery::EmptyWebhookSubscriptionResolver),
-            };
         crate::webhook_delivery::dispatch_webhooks_for_intent(
             repo,
             &client,
-            resolver.as_ref(),
+            resolver,
             tenant_id,
             intent_id,
             to_version,

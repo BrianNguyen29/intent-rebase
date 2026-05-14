@@ -441,16 +441,22 @@ async fn test_rebase_apply_no_signals_when_no_downstream_records() {
 // B16: Apply → env gate → webhook dispatch integration tests.
 // Uses a pub(crate) test seam on `create_propagation_signals_after_apply`
 // to verify env-gated dispatch without full HTTP handler overhead.
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
-static WEBHOOK_ENV_LOCK: Mutex<()> = Mutex::new(());
+/// Serialize access to the `INTENT_API_WEBHOOK_DELIVERY` env var across
+/// async tests. `std::env` is process-wide and `#[tokio::test]`s run
+/// concurrently by default; holding this lock for the entire test body
+/// prevents parallel env mutations from causing flaky reads.
+/// Uses `tokio::sync::Mutex` so the guard can be held across await points
+/// without triggering clippy `await_holding_lock`.
+static WEBHOOK_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 async fn test_create_propagation_signals_webhook_disabled_by_default() {
     use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
 
     {
-        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _guard = WEBHOOK_ENV_LOCK.lock().await;
         // Ensure env var is unset (disabled by default)
         std::env::remove_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR);
     }
@@ -513,7 +519,7 @@ async fn test_create_propagation_signals_webhook_enabled_no_panic_with_empty_res
     use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
 
     {
-        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _guard = WEBHOOK_ENV_LOCK.lock().await;
         // Enable webhook delivery
         std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
     }
@@ -571,7 +577,206 @@ async fn test_create_propagation_signals_webhook_enabled_no_panic_with_empty_res
 
     // Clean up env var
     {
-        let _guard = WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _guard = WEBHOOK_ENV_LOCK.lock().await;
         std::env::remove_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR);
     }
+}
+
+#[tokio::test]
+async fn test_create_propagation_signals_webhook_enabled_wiremock_dispatch() {
+    use crate::webhook_delivery::{InMemoryWebhookSubscriptionResolver, WebhookSubscription};
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    // Hold the env lock for the entire test to prevent concurrent env mutations
+    // from other tests running in parallel.
+    let _guard = WEBHOOK_ENV_LOCK.lock().await;
+    std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-wiremock".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Create a subscription pointing to the wiremock server
+    let subscription = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: format!("{}/webhook", mock_server.uri()),
+        downstream_system_id: Some("workflow-runner-wiremock".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(subscription);
+
+    // Call with injected resolver through the test seam
+    rebase_apply_handlers::create_propagation_signals_after_apply_with_resolver(
+        &state, intent_id, tenant_id, 2, &resolver,
+    )
+    .await;
+
+    // Verify propagation record was updated to acknowledged
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Acknowledged,
+        "Propagation record should be acknowledged after successful webhook delivery"
+    );
+    assert_eq!(
+        updated.delivery_attempt_count, 1,
+        "Delivery attempt count should be 1 after successful delivery"
+    );
+    assert!(
+        updated.acknowledged_at.is_some(),
+        "acknowledged_at should be set after successful delivery"
+    );
+
+    // wiremock's expect(1) will fail the test if the mock was not called exactly once
+
+    // env var cleaned up when lock is dropped at end of scope
+}
+
+#[tokio::test]
+async fn test_create_propagation_signals_webhook_enabled_wiremock_500_failure() {
+    use crate::webhook_delivery::{InMemoryWebhookSubscriptionResolver, WebhookSubscription};
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    // Hold the env lock for the entire test to prevent concurrent env mutations
+    // from other tests running in parallel.
+    let _guard = WEBHOOK_ENV_LOCK.lock().await;
+    std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
+
+    let mock_server = MockServer::start().await;
+
+    // Return 500 for every request; the retry loop will exhaust WEBHOOK_MAX_ATTEMPTS.
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-wiremock-500".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Create a subscription pointing to the wiremock server
+    let subscription = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: format!("{}/webhook", mock_server.uri()),
+        downstream_system_id: Some("workflow-runner-wiremock-500".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(subscription);
+
+    // Call with injected resolver through the test seam
+    rebase_apply_handlers::create_propagation_signals_after_apply_with_resolver(
+        &state, intent_id, tenant_id, 2, &resolver,
+    )
+    .await;
+
+    // Verify propagation record was updated to failed after retry exhaustion
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Failed,
+        "Propagation record should be failed after webhook 500 retry exhaustion"
+    );
+    assert_eq!(
+        updated.delivery_attempt_count, 1,
+        "Delivery attempt count should be 1 (one dispatch block, retries are in-loop)"
+    );
+    assert!(
+        updated.failed_at.is_some(),
+        "failed_at should be set after delivery failure"
+    );
+    assert!(
+        updated
+            .failure_reason
+            .as_ref()
+            .unwrap()
+            .contains("retry exhausted"),
+        "failure_reason should indicate retry exhaustion, got: {:?}",
+        updated.failure_reason
+    );
+
+    // env var cleaned up when lock is dropped at end of scope
 }

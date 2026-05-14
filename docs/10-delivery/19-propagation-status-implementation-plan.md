@@ -311,7 +311,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - [x] Local Prometheus rule `WebhookDeliveryFailureRate` defined — B13.
 - [x] Ignored live RLS tests for `webhook_subscriptions` tenant isolation — B14.
 - [x] Env-gated dispatch integration tested via dispatcher-level tests — B16.
-- [ ] Full end-to-end apply integration test with `INTENT_API_WEBHOOK_DELIVERY=true` triggering live dispatch against wiremock — **deferred** (current coverage is unit/dispatcher-level).
+- [x] Full end-to-end apply integration test with `INTENT_API_WEBHOOK_DELIVERY=true` triggering live dispatch against wiremock — implemented in `rebase_apply_handler_tests.rs` via `create_propagation_signals_after_apply_with_resolver` test seam and wiremock.
 
 #### Validation Gates (Slice 3 — Bounded Implemented)
 
@@ -335,17 +335,17 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | # | Item | Owner | Status |
 |---|------|-------|--------|
 | R1 | **Owner / Approval** — Named owner (individual or pair) assigned to Slice 3 implementation; design reviewed and approved by a second maintainer | Brian Nguyen (owner) / AI-oracle (reviewer) | ☑ |
-| R2 | **Dependency Readiness** — Decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`; verify latest compatible version at implementation time. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. No `Cargo.toml` changes made in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R3 | **Schema & Trait Review** — Decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as future `webhook_subscriptions` table (migration 018). B2 resolved as future trait methods `record_delivery_attempt` and `record_delivery_outcome`. No migration or Rust files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R4 | **RLS / Tenant Implications** — Decision recorded (see R4 Decision Note below). Future `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. No migration, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R5 | **Retry Constants Acceptance** — Decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. No Cargo, Rust, or test files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
-| R6 | **Test Plan Mapping to G1–G8** — Decision recorded (see R6 Decision Note below). G1–G8 mapped to existing or future checks with concrete commands or file locations. G7 future unit test module and G8 future wiremock integration test proposed with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. No Rust, test, Cargo, or config files were modified in this docs-only slice. | Brian Nguyen / AI-oracle | ☑ |
+| R2 | **Dependency Readiness** — Original decision recorded (see R2 Decision Note below). `reqwest` 0.12 with features `json`, `rustls-tls` only (no `blocking`) as crate-local regular dependency of `intent-api`; not promoted to workspace unless a second crate needs it. `wiremock` as crate-local `dev-dependency` of `intent-api`. Caveat: if delivery code moves away from `intent-api`, placement must be revisited. Bounded non-production implementation was subsequently delivered in B3-B18. | Brian Nguyen / AI-oracle | ☑ |
+| R3 | **Schema & Trait Review** — Original decision recorded (see R3 Decision Note below). Migration 017 delivery columns are sufficient for Slice 3; no additive migration needed for `propagation_records`. `PropagationRecordRepository` trait gap identified (missing delivery attempt/outcome methods). B1 resolved as `webhook_subscriptions` table (migration 018). B2 resolved as trait methods `record_delivery_attempt` and `record_delivery_outcome`. Bounded non-production implementation was subsequently delivered in B3-B18. | Brian Nguyen / AI-oracle | ☑ |
+| R4 | **RLS / Tenant Implications** — Original decision recorded (see R4 Decision Note below). `webhook_subscriptions` table follows existing P1 RLS pattern (`ENABLE RLS`, `FORCE RLS`, `tenant_isolation` policy). Dispatcher lookup is application-layer tenant-scoped with `tenant_id` on every query; RLS is defense-in-depth only. URL logging redaction policy documented. Bounded non-production implementation was subsequently delivered in B3-B18. | Brian Nguyen / AI-oracle | ☑ |
+| R5 | **Retry Constants Acceptance** — Original decision recorded (see R5 Decision Note below). Timeout constants accepted: `WEBHOOK_CONNECT_TIMEOUT=5s`, `WEBHOOK_REQUEST_TIMEOUT=30s`, `WEBHOOK_MAX_TOTAL_DURATION=120s`. Retry/backoff policy accepted: exponential backoff with full jitter, base 2s, multiplier 2.0, max delay 30s, max 3 attempts. Error classification and 429 special-case behavior accepted. 120s ceiling edge case documented. Bounded non-production implementation was subsequently delivered in B3-B18. | Brian Nguyen / AI-oracle | ☑ |
+| R6 | **Test Plan Mapping to G1–G8** — Original decision recorded (see R6 Decision Note below). G1–G8 mapped to checks with concrete commands or file locations. G7 unit test module and G8 wiremock integration test delivered with case lists. Delivery metrics counters added to test plan. Live Postgres RLS tests remain ignored/manual. Bounded non-production implementation was subsequently delivered in B3-B18. | Brian Nguyen / AI-oracle | ☑ |
 | R7 | **Rollback / Non-Goals Acknowledgment** — Decision recorded (see R7 Decision Note below). Env gate `INTENT_API_WEBHOOK_DELIVERY` documented with default/conservative behavior and rollback/roll-forward procedure. `failure_reason` truncation/redaction policy accepted (max 500 chars, URL stripping, PII redaction). Failed-to-pending reset semantics: manual operator action only for Slice 3. Delivery task lifecycle: `.await`ed synchronously within the apply handler post-commit; `tokio::spawn` fire-and-forget remains a deferred aspiration. Non-goals restated. RB13 runbook and `WebhookDeliveryFailureRate` local alert rule delivered in B12-B13. No production readiness claim. | Brian Nguyen / AI-oracle | ☑ |
 | R8 | **Go / No-Go Decision** — Explicit go/no-go gate convened before first commit; if any R1–R7 item is unresolved or any Pre-R8 Blocker (B1–B2) lacks a documented resolution path, decision must be **No-Go** with recorded reason and re-review date. **BOUNDED GO** authorizes starting the first non-production Slice 3 implementation slice only; production readiness, production deployment, and external signoff are explicitly excluded. | Brian Nguyen | ☑ |
 
-#### R2 Decision Note (Docs-Only — No Cargo Changes)
+#### R2 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** Dependency placement decision recorded. No `Cargo.toml` edits were made. R8 remains No-Go.
+> **Status:** Dependency placement decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered `reqwest` as a crate-local regular dependency and `wiremock` as a crate-local dev-dependency in `intent-api`. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **`reqwest` placement:**
 - Crate: `intent-api` (regular dependency, not workspace-level).
@@ -359,11 +359,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Choice: `wiremock` (verify latest compatible version at implementation time).
 - Rationale: `wiremock` provides declarative HTTP mocking suitable for async Rust integration tests; `mockito` was considered but `wiremock` is preferred for tokio-based test suites in this repo.
 
-**No Cargo changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml` was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added the corresponding non-production `Cargo.toml` changes (`reqwest` regular dependency, `wiremock` dev-dependency).
 
-#### R3 Decision Note (Docs-Only — No Migration or Rust Changes)
+#### R3 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** Schema and trait review decision recorded. No migration DDL or Rust files were modified. R8 remains No-Go.
+> **Status:** Schema and trait review decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered migration `018_create_webhook_subscriptions.sql`, `record_delivery_attempt` and `record_delivery_outcome` trait methods, and their SQL/in-memory implementations. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **Existing schema findings (migration 017):**
 - `propagation_records` already includes the delivery columns needed for Slice 3: `delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, and `failed_at`.
@@ -373,7 +373,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 **Trait gap:**
 - `PropagationRecordRepository` currently lacks methods to atomically record delivery attempts and outcomes.
 - The existing `update_status` method does not cover incrementing `delivery_attempt_count`, setting `last_delivery_attempt_at`, or recording `failure_reason`.
-- **Conclusion:** Future implementation must add delivery-specific methods to the trait (see B2 resolution below).
+- **Conclusion:** Delivery-specific methods were added to the trait in bounded implementation B3-B18 (see B2 resolution below).
 
 **B1 resolution — `webhook_subscriptions` table:**
 - Decision: introduce a separate `webhook_subscriptions` table in a future migration (proposed name: `018_create_webhook_subscriptions.sql`). Do **not** inline the webhook URL onto `propagation_records`.
@@ -397,11 +397,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
   - `record_delivery_outcome(id, tenant_id, status: PropagationStatus, failure_reason: Option<String>) -> Result<PropagationRecord, IntentRebaseError>` — atomically updates `status`, `acknowledged_at`/`failed_at`, and `failure_reason`, and increments `lock_version`.
 - SQL implementation should use optimistic locking (`lock_version`) consistently with existing repository patterns.
 
-**No migration or Rust changes:** These decisions are recorded for the future implementation phase. No `.sql` migration file and no `.rs` source file was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added migration `018_create_webhook_subscriptions.sql` and the corresponding non-production Rust trait and repository changes.
 
-#### R4 Decision Note (Docs-Only — No Migration, Rust, or Test Changes)
+#### R4 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** RLS and tenant implications decision recorded. No migration, Rust, or test files were modified. R8 remains No-Go.
+> **Status:** RLS and tenant implications decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered migration 018 with RLS policies, tenant-scoped dispatcher queries, URL redaction in `sanitize_failure_reason`, and ignored live RLS tests for `webhook_subscriptions`. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **D1 — RLS policy for future `webhook_subscriptions` table:**
 - Decision: apply the existing P1 RLS pattern exactly.
@@ -441,11 +441,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Log aggregator tenancy is unknown; centralized logging may see cross-tenant webhook delivery traces if not filtered by deployment.
 - Secrets/HMAC key storage for webhook signing remains deferred (not in Slice 3).
 
-**No migration, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `.sql` migration, `.rs` source, or test file was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added migration 018 with RLS, `sanitize_failure_reason` implementation, and ignored live RLS tests for `webhook_subscriptions`.
 
-#### R5 Decision Note (Docs-Only — No Cargo, Rust, or Test Changes)
+#### R5 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** Retry constants and error classification decision recorded. No `Cargo.toml`, Rust, or test files were modified. R8 remains No-Go.
+> **Status:** Retry constants and error classification decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered timeout/retry constants, exponential backoff with full jitter, error classification, and 429 special-case handling in `webhook_delivery.rs`. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **D5 — Timeout constants (accepted):**
 - `WEBHOOK_CONNECT_TIMEOUT`: 5 seconds — TCP + TLS handshake establishment.
@@ -456,7 +456,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Exponential backoff with full jitter.
 - Base delay: 2 seconds; multiplier: 2.0; max delay: 30 seconds; max attempts: 3 total (initial + 2 retries).
 - Jitter formula: `rand::random::<f64>() * delay` (full jitter).
-- **Dependency caveat:** full jitter requires a future crate-local regular dependency `rand = "0.8"` in `intent-api`. No `Cargo.toml` change is made now; placement is crate-local unless a second crate needs random generation.
+- **Dependency caveat:** full jitter uses the crate-local regular dependency `rand` in `intent-api`, added during bounded implementation B3-B18.
 
 **D7 — Error classification (accepted):**
 - **Retryable:** HTTP 5xx, connect timeout, request timeout, DNS failure, connection refused, connection reset.
@@ -475,11 +475,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No circuit breaker or per-host backoff state.
 - No `failure_reason` truncation/redaction implementation (deferred to R7).
 
-**No Cargo, Rust, or test changes:** These decisions are recorded for the future implementation phase. No `Cargo.toml`, `.rs` source, or test file was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added the non-production retry/backoff Rust code, error classification logic, and `rand` crate-local dependency.
 
-#### R6 Decision Note (Docs-Only — No Rust, Test, Cargo, or Config Changes)
+#### R6 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** Test plan mapping decision recorded. No Rust, test, Cargo, or config files were modified. R8 remains No-Go.
+> **Status:** Test plan mapping decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered `webhook_delivery_tests.rs` with G7 payload/header tests and G8 wiremock delivery simulation tests, plus metrics counters and local Prometheus alert rules. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **G1–G8 mapping (accepted):**
 
@@ -544,11 +544,11 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No load/stress testing.
 - No cross-workflow lineage testing.
 
-**No Rust, test, Cargo, or config changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, `Cargo.toml`, or config file was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added `webhook_delivery_tests.rs` (57 tests), metrics counters, local Prometheus alert rules, and apply-path wiremock integration tests.
 
-#### R7 Decision Note (Docs-Only — No Code, Test, Config, Runbook, or Alert Changes)
+#### R7 Decision Note (Original Decision — Delivered in B3-B18)
 
-> **Status:** Rollback, non-goals, and operational policy decision recorded. No code, test, config, runbook, or alert files were modified. R8 remains No-Go.
+> **Status:** Rollback, non-goals, and operational policy decision recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently delivered env gate `INTENT_API_WEBHOOK_DELIVERY`, `sanitize_failure_reason`, RB13 runbook, `WebhookDeliveryFailureRate` local alert rule, and observability docs updates. R8 was a **BOUNDED GO** for the first non-production implementation slice.
 
 **D13 — Env gate rollback / roll-forward:**
 - Gate name: `INTENT_API_WEBHOOK_DELIVERY` (boolean).
@@ -566,8 +566,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Body snippet: max 100 characters from downstream response body; do not log full bodies.
 - PII redaction: detect and mask common patterns (email addresses, IP addresses, JWT tokens).
 - **Ownership:** R7 consolidates R4 D3 (URL logging redaction) and R5 D7 (error classification redaction).
-- **Future helper suggestion:** a small sanitize helper function for consistent redaction across logging and `failure_reason`.
-- No implementation is written now.
+- **Implementation:** `sanitize_failure_reason` was delivered in bounded implementation B3-B18.
 
 **D15 — Failed-to-pending reset semantics (accepted):**
 - Slice 3: `failed` records reset to `pending` only via explicit operator action (manual re-signal or direct SQL update).
@@ -615,7 +614,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 | N5 | `failure_reason` truncation / redaction | R7 D14 | Max 500 chars, URL stripping, body snippet 100 chars, PII redaction |
 | N6 | Feature flag / env rollback gate | R7 D13 | `INTENT_API_WEBHOOK_DELIVERY` boolean; conservative default |
 
-**No code, test, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, config, runbook, or alert file was modified in this docs-only update.
+**Historical note:** These decisions were recorded in the original docs-only slice. Bounded implementation B3-B18 subsequently added `sanitize_failure_reason`, RB13 runbook, local Prometheus alert rules, and observability docs updates.
 
 #### R8 Decision Note (Bounded Implementation Complete — B3-B18)
 
