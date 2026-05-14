@@ -589,10 +589,10 @@ impl WebhookSubscriptionResolver for SqlxWebhookSubscriptionResolver {
 
 /// Dispatch webhooks for all propagation records of an intent.
 ///
-/// Bounded B5 integration:
+/// Bounded B5/B9 integration:
 /// - Records delivery attempt via repository
 /// - Builds payload/headers for each matching subscription
-/// - Sends via the injected `WebhookSender`
+/// - Sends via `send_webhook_with_retries` (B8) with injected `Sleeper`
 /// - Records delivery outcome via repository
 ///
 /// NOT wired into application flow by default — gated by `is_webhook_delivery_enabled`.
@@ -604,6 +604,7 @@ pub async fn dispatch_webhooks_for_intent(
     tenant_id: Uuid,
     intent_id: Uuid,
     version: i32,
+    sleeper: &dyn Sleeper,
 ) {
     let records = match repo.list_by_intent(intent_id, tenant_id).await {
         Ok(recs) => recs,
@@ -664,7 +665,8 @@ pub async fn dispatch_webhooks_for_intent(
         });
         let headers = WebhookHeaders::new(payload.delivery_id);
 
-        let result = sender.send(&sub.webhook_url, &payload, &headers).await;
+        let result =
+            send_webhook_with_retries(sender, &sub.webhook_url, &payload, &headers, sleeper).await;
 
         match result {
             Ok(WebhookDeliveryResult::Success) => {
@@ -674,23 +676,6 @@ pub async fn dispatch_webhooks_for_intent(
                         tenant_id,
                         PropagationStatus::Acknowledged,
                         None,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to record delivery outcome for record {}: {}",
-                        record.id,
-                        e
-                    );
-                }
-            }
-            Ok(WebhookDeliveryResult::RetryableFailure { reason }) => {
-                if let Err(e) = repo
-                    .record_delivery_outcome(
-                        record.id,
-                        tenant_id,
-                        PropagationStatus::Failed,
-                        Some(sanitize_failure_reason(&reason)),
                     )
                     .await
                 {
@@ -718,40 +703,20 @@ pub async fn dispatch_webhooks_for_intent(
                     );
                 }
             }
-            Ok(WebhookDeliveryResult::RateLimited { retry_after }) => {
-                let reason = format!("rate limited, retry_after={:?}", retry_after);
-                if let Err(e) = repo
-                    .record_delivery_outcome(
-                        record.id,
-                        tenant_id,
-                        PropagationStatus::Failed,
-                        Some(sanitize_failure_reason(&reason)),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to record delivery outcome for record {}: {}",
-                        record.id,
-                        e
-                    );
-                }
+            // send_webhook_with_retries normalizes all other variants into one of the above
+            Ok(other) => {
+                tracing::warn!(
+                    "Unexpected delivery result after retries for record {}: {:?}",
+                    record.id,
+                    other
+                );
             }
-            Err(WebhookSendError::Network(reason)) => {
-                if let Err(e) = repo
-                    .record_delivery_outcome(
-                        record.id,
-                        tenant_id,
-                        PropagationStatus::Failed,
-                        Some(sanitize_failure_reason(&reason)),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to record delivery outcome for record {}: {}",
-                        record.id,
-                        e
-                    );
-                }
+            Err(e) => {
+                tracing::warn!(
+                    "Unexpected delivery error after retries for record {}: {:?}",
+                    record.id,
+                    e
+                );
             }
         }
     }

@@ -380,10 +380,21 @@ async fn test_send_webhook_compiles_and_runs_against_unreachable_host() {
 
 use crate::webhook_delivery::{
     dispatch_webhooks_for_intent, EmptyWebhookSubscriptionResolver,
-    InMemoryWebhookSubscriptionResolver, WebhookSendError, WebhookSender, WebhookSubscription,
+    InMemoryWebhookSubscriptionResolver, Sleeper, WebhookSendError, WebhookSender,
+    WebhookSubscription,
 };
 use intent_rebase_types::PropagationRecord;
 use intent_service::InMemoryPropagationRecordRepository;
+
+/// No-op sleeper for fast deterministic dispatcher tests.
+struct NoOpSleeper;
+
+#[async_trait::async_trait]
+impl Sleeper for NoOpSleeper {
+    async fn sleep(&self, _duration: std::time::Duration) {
+        // no sleep in tests
+    }
+}
 
 /// Mock sender that always returns a predetermined result.
 struct MockWebhookSender {
@@ -408,6 +419,35 @@ impl WebhookSender for MockWebhookSender {
     }
 }
 
+/// Mock sender that returns a predetermined sequence of results.
+struct SequenceMockWebhookSender {
+    results: std::sync::Mutex<Vec<Result<WebhookDeliveryResult, WebhookSendError>>>,
+}
+
+impl SequenceMockWebhookSender {
+    fn new(results: Vec<Result<WebhookDeliveryResult, WebhookSendError>>) -> Self {
+        Self {
+            results: std::sync::Mutex::new(results),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WebhookSender for SequenceMockWebhookSender {
+    async fn send(
+        &self,
+        _url: &str,
+        _payload: &crate::webhook_delivery::WebhookPayload,
+        _headers: &WebhookHeaders,
+    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
+        let mut results = self.results.lock().unwrap();
+        if results.is_empty() {
+            panic!("SequenceMockWebhookSender exhausted: no more results");
+        }
+        results.remove(0)
+    }
+}
+
 #[tokio::test]
 async fn test_dispatch_disabled_env_gate_records_no_attempts() {
     let repo: Arc<dyn intent_service::PropagationRecordRepository> =
@@ -422,7 +462,16 @@ async fn test_dispatch_disabled_env_gate_records_no_attempts() {
     // Dispatch with empty resolver (no subscriptions) — nothing happens regardless of gate
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
     let resolver = EmptyWebhookSubscriptionResolver;
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     // No subscriptions matched, so no attempt recorded
     let stored = repo.get_record(record_id, tenant_id).await.unwrap();
@@ -452,7 +501,16 @@ async fn test_dispatch_records_attempt_and_acknowledged_outcome() {
     resolver.add(sub);
 
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     let stored = repo.get_record(record_id, tenant_id).await.unwrap();
     assert_eq!(stored.delivery_attempt_count, 1);
@@ -485,7 +543,16 @@ async fn test_dispatch_records_attempt_and_failed_outcome() {
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::NonRetryableFailure {
         reason: "HTTP 404".to_string(),
     }));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     let stored = repo.get_record(record_id, tenant_id).await.unwrap();
     assert_eq!(stored.delivery_attempt_count, 1);
@@ -516,8 +583,19 @@ async fn test_dispatch_records_network_error_as_failed() {
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
 
-    let sender = MockWebhookSender::new(Err(WebhookSendError::Network("timeout".to_string())));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::NonRetryableFailure {
+        reason: "timeout".to_string(),
+    }));
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     let stored = repo.get_record(record_id, tenant_id).await.unwrap();
     assert_eq!(stored.delivery_attempt_count, 1);
@@ -545,7 +623,16 @@ async fn test_dispatch_no_matching_record_skips_subscription() {
     resolver.add(sub);
 
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     // Nothing crashes; no records exist to verify.
 }
@@ -575,7 +662,16 @@ async fn test_dispatch_wrong_tenant_no_attempt() {
 
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
     // Dispatch with wrong tenant — resolver returns tenant_a's sub, but repo filters by tenant_b
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_b, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_b,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     // Record should remain untouched because list_by_intent with wrong tenant returns empty
     let stored = repo.get_record(record_id, tenant_a).await.unwrap();
@@ -849,10 +945,19 @@ async fn test_dispatch_rate_limited_outcome() {
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
 
-    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::RateLimited {
-        retry_after: Some(std::time::Duration::from_secs(30)),
+    let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::NonRetryableFailure {
+        reason: "rate limited after retry".to_string(),
     }));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     let stored = repo.get_record(record_id, tenant_id).await.unwrap();
     assert_eq!(stored.delivery_attempt_count, 1);
@@ -899,7 +1004,16 @@ async fn test_dispatch_multiple_subscriptions() {
     resolver.add(sub_b);
 
     let sender = MockWebhookSender::new(Ok(WebhookDeliveryResult::Success));
-    dispatch_webhooks_for_intent(&repo, &sender, &resolver, tenant_id, intent_id, 2).await;
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
 
     let stored_a = repo.get_record(record_id_a, tenant_id).await.unwrap();
     let stored_b = repo.get_record(record_id_b, tenant_id).await.unwrap();
@@ -910,49 +1024,155 @@ async fn test_dispatch_multiple_subscriptions() {
 }
 
 // =============================================================================
+// B9 Dispatcher Retry Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_dispatch_retry_transient_success() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::Success),
+    ]);
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Acknowledged);
+}
+
+#[tokio::test]
+async fn test_dispatch_retry_exhaustion() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender = SequenceMockWebhookSender::new(vec![
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+        Ok(WebhookDeliveryResult::RetryableFailure {
+            reason: "HTTP 503".to_string(),
+        }),
+    ]);
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Failed);
+    assert!(stored
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains("retry exhausted"));
+}
+
+#[tokio::test]
+async fn test_dispatch_no_retry_4xx() {
+    let repo: Arc<dyn intent_service::PropagationRecordRepository> =
+        Arc::new(InMemoryPropagationRecordRepository::new());
+    let tenant_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    let record = PropagationRecord::new(tenant_id, intent_id, "system-a".to_string());
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    let sub = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: "http://localhost:59999/callback".to_string(),
+        downstream_system_id: Some("system-a".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(sub);
+
+    let sender =
+        SequenceMockWebhookSender::new(vec![Ok(WebhookDeliveryResult::NonRetryableFailure {
+            reason: "HTTP 400".to_string(),
+        })]);
+    dispatch_webhooks_for_intent(
+        &repo,
+        &sender,
+        &resolver,
+        tenant_id,
+        intent_id,
+        2,
+        &NoOpSleeper,
+    )
+    .await;
+
+    let stored = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(stored.delivery_attempt_count, 1);
+    assert_eq!(stored.status, PropagationStatus::Failed);
+    assert_eq!(stored.failure_reason, Some("HTTP 400".to_string()));
+}
+
+// =============================================================================
 // B8 Retry Loop Tests (deterministic, no wall-clock sleeps)
 // =============================================================================
 
-use crate::webhook_delivery::{send_webhook_with_retries, Sleeper};
-
-/// No-op sleeper for fast deterministic tests.
-struct NoOpSleeper;
-
-#[async_trait::async_trait]
-impl Sleeper for NoOpSleeper {
-    async fn sleep(&self, _duration: std::time::Duration) {
-        // no sleep in tests
-    }
-}
-
-/// Mock sender that returns a predetermined sequence of results.
-struct SequenceMockWebhookSender {
-    results: std::sync::Mutex<Vec<Result<WebhookDeliveryResult, WebhookSendError>>>,
-}
-
-impl SequenceMockWebhookSender {
-    fn new(results: Vec<Result<WebhookDeliveryResult, WebhookSendError>>) -> Self {
-        Self {
-            results: std::sync::Mutex::new(results),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl WebhookSender for SequenceMockWebhookSender {
-    async fn send(
-        &self,
-        _url: &str,
-        _payload: &crate::webhook_delivery::WebhookPayload,
-        _headers: &WebhookHeaders,
-    ) -> Result<WebhookDeliveryResult, WebhookSendError> {
-        let mut results = self.results.lock().unwrap();
-        if results.is_empty() {
-            panic!("SequenceMockWebhookSender exhausted: no more results");
-        }
-        results.remove(0)
-    }
-}
+use crate::webhook_delivery::send_webhook_with_retries;
 
 #[tokio::test]
 async fn test_retry_503_then_503_then_200() {

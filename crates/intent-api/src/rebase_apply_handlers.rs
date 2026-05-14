@@ -176,6 +176,7 @@ async fn create_propagation_signals_after_apply(
             tenant_id,
             intent_id,
             to_version,
+            &crate::webhook_delivery::TokioSleeper,
         )
         .await;
     }
