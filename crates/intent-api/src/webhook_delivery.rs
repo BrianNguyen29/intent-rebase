@@ -58,7 +58,6 @@ pub struct WebhookPayloadInput {
 }
 
 /// Build a webhook payload for an intent change event.
-#[allow(dead_code)]
 pub fn build_webhook_payload(input: WebhookPayloadInput) -> WebhookPayload {
     WebhookPayload {
         event_type: "intent_changed".to_string(),
@@ -86,7 +85,6 @@ impl WebhookHeaders {
     ///
     /// X-Webhook-Signature is intentionally absent because HMAC signing
     /// is deferred (Slice 3 design note).
-    #[allow(dead_code)]
     pub fn new(delivery_id: Uuid) -> Self {
         Self {
             content_type: "application/json".to_string(),
@@ -96,7 +94,6 @@ impl WebhookHeaders {
 
     /// Returns true if the signature header should be present.
     /// Currently always false (deferred).
-    #[allow(dead_code)]
     pub fn has_signature_header(&self) -> bool {
         false
     }
@@ -106,7 +103,6 @@ impl WebhookHeaders {
 ///
 /// Bounded helper: strips anything that looks like an HTTP/HTTPS URL,
 /// replacing it with `[URL_REDACTED]`.
-#[allow(dead_code)]
 pub fn sanitize_failure_reason(reason: &str) -> String {
     let mut result = reason.to_string();
     for prefix in ["http://", "https://"] {
@@ -134,7 +130,6 @@ pub const WEBHOOK_DELIVERY_ENV_VAR: &str = "INTENT_API_WEBHOOK_DELIVERY";
 /// - Unset, empty, or any other value → disabled (conservative default)
 ///
 /// R7 D13: default disabled outside local/dev; conservative fail-closed.
-#[allow(dead_code)]
 pub fn is_webhook_delivery_enabled() -> bool {
     matches!(
         std::env::var(WEBHOOK_DELIVERY_ENV_VAR),
@@ -190,7 +185,6 @@ pub enum WebhookErrorCategory {
 }
 
 /// Classify an HTTP status code into an error category.
-#[allow(dead_code)]
 pub fn classify_status_code(status: u16) -> WebhookErrorCategory {
     match status {
         200..=299 => WebhookErrorCategory::Success,
@@ -209,7 +203,6 @@ pub fn classify_status_code(status: u16) -> WebhookErrorCategory {
 ///
 /// Formula: delay = min(base * multiplier^(attempt-1), max_delay)
 /// Jitter: rand::random::<f64>() * delay
-#[allow(dead_code)]
 pub fn compute_backoff_delay(attempt_number: u32) -> Duration {
     let raw_delay_secs = WEBHOOK_BACKOFF_BASE_DELAY.as_secs_f64()
         * WEBHOOK_BACKOFF_MULTIPLIER
@@ -268,7 +261,6 @@ impl WebhookSender for reqwest::Client {
 }
 
 /// Build a `reqwest::Client` configured with webhook timeout constants.
-#[allow(dead_code)]
 pub fn build_webhook_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
@@ -281,7 +273,6 @@ pub fn build_webhook_client() -> reqwest::Client {
 ///
 /// Bounded skeleton: performs the HTTP POST and classifies the result.
 /// NOT wired into application flow — called only by future dispatcher code.
-#[allow(dead_code)]
 pub async fn send_webhook(
     client: &reqwest::Client,
     url: &str,
@@ -380,7 +371,6 @@ pub(crate) fn would_exceed_max_duration(elapsed: Duration, delay: Duration) -> b
 /// - Max total duration: `WEBHOOK_MAX_TOTAL_DURATION` (120s hard ceiling)
 ///
 /// Bounded B8: retries are in-process sequential; no external queue or worker.
-#[allow(dead_code)]
 pub async fn send_webhook_with_retries(
     sender: &dyn WebhookSender,
     url: &str,
@@ -637,7 +627,6 @@ impl WebhookSubscriptionResolver for SqlxWebhookSubscriptionResolver {
 /// - Records delivery outcome via repository
 ///
 /// NOT wired into application flow by default — gated by `is_webhook_delivery_enabled`.
-#[allow(dead_code)]
 pub async fn dispatch_webhooks_for_intent(
     repo: &Arc<dyn PropagationRecordRepository>,
     sender: &dyn WebhookSender,
