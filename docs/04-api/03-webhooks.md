@@ -1,6 +1,6 @@
 # Webhooks
 
-> **Status:** Design-only / future contract. This document describes the intended webhook event envelope and payload schemas for future integration. The current implementation (B3-B14 bounded slice) delivers only an env-gated, best-effort webhook dispatcher for `intent_changed` events with no production delivery guarantees, no outbox, no HMAC signing, no key rotation, no subscription CRUD API, and no event streaming. See `docs/10-delivery/19-propagation-status-implementation-plan.md` for the bounded Slice 3 scope.
+> **Status:** Design-only / future contract. This document describes the intended webhook event envelope and payload schemas for future integration. The current implementation (B3-B16 bounded slice) delivers only an env-gated, best-effort webhook dispatcher for `intent_changed` events with no production delivery guarantees, no outbox, no HMAC signing, no key rotation, no subscription CRUD API, and no event streaming. See `docs/10-delivery/19-propagation-status-implementation-plan.md` for the bounded Slice 3 scope.
 
 ## Mục tiêu
 Cho phép tích hợp IRE với:
@@ -181,7 +181,36 @@ Fired when a Phase 2 audit export is available for download.
 }
 ```
 
-## Webhook payload requirements
+## Current Bounded Implementation Payload (B3-B16)
+
+The currently implemented webhook delivery (env-gated, default disabled) sends an `intent_changed` event with this JSON payload:
+
+```json
+{
+  "event_type": "intent_changed",
+  "intent_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tenant_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "version": 42,
+  "version_hash": "sha256:abc123...",
+  "previous_version": 41,
+  "timestamp": "2026-05-13T12:00:00Z",
+  "delivery_id": "550e8400-e29b-41d4-a716-446655440001",
+  "attempt_number": 1,
+  "subscription_id": "550e8400-e29b-41d4-a716-446655440002"
+}
+```
+
+Headers:
+- `Content-Type: application/json`
+- `X-Idempotency-Key: <delivery_id>`
+
+**Bounded scope:** No `X-Webhook-Signature` header (HMAC deferred). No payload compression. Delivery is best-effort with 3 attempts max and exponential backoff. See `crates/intent-api/src/webhook_delivery.rs` for the implementation.
+
+## Future Design Envelope (not yet implemented)
+
+The following describes the intended full webhook event envelope for future integration. It diverges from the current bounded `intent_changed` payload above.
+
+### Webhook payload requirements
 - signed secret
 - delivery id
 - event id

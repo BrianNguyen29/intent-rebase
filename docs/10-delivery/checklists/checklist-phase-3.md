@@ -301,8 +301,8 @@
 
 [x] Runbooks for common failure scenarios — Batch 2 Slice 3
     Evidence:
-    - Doc: docs/09-operations/05-runbooks.md (RB6-RB10)
-    - Runbooks: RB6 (rebase-stuck), RB7 (approval-backlog), RB8 (artifact-quarantine-fail), RB9 (compensation-timeout), RB10 (error-budget-burn)
+    - Doc: docs/09-operations/05-runbooks.md (RB6-RB13)
+    - Runbooks: RB6 (rebase-stuck), RB7 (approval-backlog), RB8 (artifact-quarantine-fail), RB9 (compensation-timeout), RB10 (error-budget-burn), RB12 (propagation-signal-failures), RB13 (webhook-delivery-failures)
     - Doc: docs/09-operations/05-runbooks.md (On-Call Quick Reference table)
 
 [x] Error budget tracking dashboard + runbook — Batch 2 Slice 5 + Slice 7 ✅ P2-S2
@@ -311,6 +311,17 @@
     - Code: infrastructure/local/grafana/provisioning/dashboards/slo-overview.json (version 3, new 6h and 3d burn-rate panels)
     - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (6 new multi-window burn-rate alerting rules: PreviewPathBurnRate1h, ApplyPathBurnRate1h, PreviewPathBurnRate6h, ApplyPathBurnRate6h, PreviewPathBurnRate3d, ApplyPathBurnRate3d)
     - Note: Bounded to 1h/6h/3d burn-rate stat panels and multi-window alerting for preview and apply paths; budget depletion forecasting, 30-day budget tracking, and production Alertmanager deployment remain future scope
+
+[x] Webhook delivery bounded slice (B3-B16) — post-Batch 2 bounded non-production delivery
+    Evidence:
+    - Code: crates/intent-api/src/webhook_delivery.rs (payload builders, env gate, retry loop, metrics, dispatcher)
+    - Code: crates/intent-api/src/webhook_delivery_tests.rs (G7 payload/header tests, B10 attempt_number regression tests, wiremock delivery simulation tests)
+    - Code: infrastructure/migrations/018_create_webhook_subscriptions.sql (subscription storage with RLS)
+    - Metrics: intent_api_webhook_deliveries_attempted_total, succeeded_total, failed_total, retry_exhausted_total (B11)
+    - Doc: docs/09-operations/05-runbooks.md (RB13 — Webhook Delivery Failures) (B12)
+    - Code: infrastructure/local/prometheus/rules/intent_api_alerts.yml (WebhookDeliveryFailureRate alert rule) (B13)
+    - Tests: crates/intent-api/tests/rls_integration.rs (ignored webhook_subscriptions tenant-isolation test) (B14)
+    - Note: Env-gated (`INTENT_API_WEBHOOK_DELIVERY`, default disabled). Best-effort — no outbox, no HMAC, no subscription CRUD API, no production delivery guarantees.
 
 [x] Distributed tracing across all services (Phase 3 Batch 2 Slice 2 — bounded OTEL propagation) ✅ P2-S3
     Evidence:
@@ -641,7 +652,7 @@
     - Doc: ../14-governance/14-incident-response-plan.md
     - Scope: SEV1-4, Phases 1-6 (detection through post-incident review), RACI, communication plan
     - Doc: ../14-governance/11-incident-freeze.md (data freeze procedures — already existing)
-    - Note: Operational runbooks (RB6-RB9) remain in progress per section 3.
+    - Note: Operational runbooks (RB6-RB13) delivered per section 3.
 
 [x] Data retention and deletion verified (P6-S1 bounded slice)
     Evidence:

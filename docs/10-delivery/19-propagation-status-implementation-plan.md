@@ -198,9 +198,11 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 - [x] Runbook RB12 documents alerting guidance and manual re-signal workflow
 - [x] Local Prometheus rule `PropagationSignalFailureRate` defined in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (local dev scaffolding; production requires SRE sign-off)
 
-### Slice 3 — Webhook Delivery (Design Refinement — Not Implemented)
+### Slice 3 — Webhook Delivery (Bounded Implemented — B3-B16)
 
-> **Status:** Design-only. No code implementation started. Webhook delivery remains deferred to future Phase 4+ work. The following are concrete design decisions proposed for when implementation begins; they are not live code or production commitments.
+> **Status:** Bounded non-production implementation delivered (B3-B16). Payload/header builders, async skeleton, env-gated dispatcher, retry loop, metrics, runbook, alert rule, and RLS tests are implemented. The following design decisions were originally proposed in the docs-only slice and have since been implemented as bounded code; remaining deferred items are explicitly called out.
+>
+> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table.
 
 #### HTTP Client Choice
 
@@ -289,18 +291,25 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 > **Known bounded limitation:** Because there is no outbox/transactional boundary, a crash between HTTP delivery and DB update can leave the delivery state inconsistent (delivered but not recorded, or recorded but not delivered). This is accepted for Slice 3 and can be addressed later with an outbox or idempotent re-delivery log.
 
-#### Acceptance Criteria (Design-Level — Not Implemented)
+#### Acceptance Criteria (Bounded Implementation — B3-B16)
 
-- [ ] HTTP client (`reqwest`) configured with connect/request timeouts matching proposed constants.
-- [ ] Retry policy implements exponential backoff with full jitter (3 attempts max).
-- [ ] Payload schema matches proposed JSON structure and includes `delivery_id` + `attempt_number`.
-- [ ] Delivery is async (does not block the signal creation handler).
-- [ ] `propagation_records.status` transitions correctly per outcome table.
-- [ ] `delivery_attempt_count` and `last_delivery_attempt_at` are updated before every attempt.
-- [ ] Non-retryable errors (4xx) mark record as `failed` immediately without retries.
-- [ ] Retryable errors (5xx, timeout, network) retry up to max attempts.
-- [ ] Handler-level unit test verifies payload shape and header presence (proposed gate G7).
-- [ ] Route contract test verifies `POST /intents/{intent_id}/propagation-signals` remains reachable with no regression.
+- [x] HTTP client (`reqwest`) configured with connect/request timeouts matching proposed constants.
+- [x] Retry policy implements exponential backoff with full jitter (3 attempts max).
+- [x] Payload schema matches proposed JSON structure and includes `delivery_id` + `attempt_number`.
+- [x] `attempt_number` increments correctly across retries (1, 2, 3) — B10 regression test verifies this.
+- [x] Delivery is async (does not block the signal creation handler) — env-gated dispatcher runs post-commit in `create_propagation_signals_after_apply`.
+- [x] `propagation_records.status` transitions correctly per outcome table.
+- [x] `delivery_attempt_count` and `last_delivery_attempt_at` are updated before every attempt.
+- [x] Non-retryable errors (4xx) mark record as `failed` immediately without retries.
+- [x] Retryable errors (5xx, timeout, network) retry up to max attempts.
+- [x] Handler-level unit test verifies payload shape and header presence (G7 — `webhook_delivery_tests.rs`).
+- [x] Route contract test verifies `POST /intents/{intent_id}/propagation-signals` remains reachable with no regression.
+- [x] Metrics counters instrumented (`intent_api_webhook_deliveries_attempted_total`, `succeeded_total`, `failed_total`, `retry_exhausted_total`) — B11.
+- [x] RB13 runbook documents webhook delivery failure diagnosis and rollback boundaries — B12.
+- [x] Local Prometheus rule `WebhookDeliveryFailureRate` defined — B13.
+- [x] Ignored live RLS tests for `webhook_subscriptions` tenant isolation — B14.
+- [x] Env-gated dispatch integration tested via dispatcher-level tests — B16.
+- [ ] Full end-to-end apply integration test with `INTENT_API_WEBHOOK_DELIVERY=true` triggering live dispatch against wiremock — **deferred** (current coverage is unit/dispatcher-level).
 
 #### Validation Gates (Slice 3 — Proposed for Future Implementation)
 
@@ -589,10 +598,10 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No multi-region replication (deferred).
 - No SLA or latency guarantee (deferred).
 
-**D18 — Runbook and observability placeholders (proposed only):**
-- Proposed future runbook: **RB13 — Webhook Delivery Failures** (placeholder; do not edit runbook files now).
-- Proposed future local-dev Prometheus rule: `WebhookDeliveryFailureRate` (placeholder; do not edit alert rules now).
-- Observability docs update is future implementation-phase scope, not R7.
+**D18 — Runbook and observability (delivered in B12-B13):**
+- **RB13 — Webhook Delivery Failures** delivered in `docs/09-operations/05-runbooks.md` (B12).
+- **Local Prometheus rule `WebhookDeliveryFailureRate`** delivered in `infrastructure/local/prometheus/rules/intent_api_alerts.yml` (B13).
+- Observability docs updated in `docs/09-operations/03-observability.md` and `docs/09-operations/04-sre-and-slos.md` (B15).
 
 **N1–N6 resolution summary:**
 | # | Refinement | Resolved In | Decision |
@@ -606,25 +615,23 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 **No code, test, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, config, runbook, or alert file was modified in this docs-only update.
 
-#### R8 Decision Note (Docs-Only — Bounded Go for Non-Production Implementation Only)
+#### R8 Decision Note (Bounded Implementation Complete — B3-B16)
 
-> **Status:** Bounded Go decision recorded. No code, test, migration, dependency, config, runbook, or alert changes were made. This is a docs-only scope boundary.
+> **Status:** Bounded Go decision was recorded in the docs-only slice. Subsequent commits B3-B16 implemented the bounded non-production Slice 3 code. The R8 scope boundaries and non-goals listed in D22 remain in force — no production readiness claim is made.
 
 **D19 — Bounded Go verdict:**
 - Decision: **BOUNDED GO** for the first non-production Slice 3 implementation slice only.
-- This authorizes starting the first implementation slice after this docs update is recorded.
+- Implementation completed in commits B3-B16 (payload builders, async skeleton, env-gated dispatcher, retry loop with incrementing `attempt_number`, metrics counters, RB13 runbook, `WebhookDeliveryFailureRate` local alert rule, webhook_subscriptions RLS test/helpers).
 - This does **not** authorize production deployment, production readiness claims, or external signoff.
 - Production readiness, production deployment, and external signoff are explicitly excluded.
 
-**D20 — Prerequisites for first implementation slice:**
-- The first implementation slice requires B1 and B2 as prerequisites:
-  - B1: migration `018_create_webhook_subscriptions.sql` (webhook URL / subscription storage).
-  - B2: trait method additions `record_delivery_attempt` and `record_delivery_outcome` to `PropagationRecordRepository`.
-- No implementation work is performed in this docs-only task.
+**D20 — Prerequisites resolved:**
+- B1: migration `018_create_webhook_subscriptions.sql` delivered (webhook URL / subscription storage with RLS).
+- B2: trait methods `record_delivery_attempt` and `record_delivery_outcome` delivered on `PropagationRecordRepository`.
 
 **D21 — R1–R7 acceptance and N1–N6 resolution:**
-- R1–R7 are checked and accepted.
-- B1 and B2 have documented resolution paths (see Pre-R8 Blockers below and R3 Decision Note).
+- R1–R7 were checked and accepted in the docs-only slice.
+- B1 and B2 are now implemented.
 - N1–N6 are resolved per R2 (dependency placement), R6 (test plan / metrics), and R7 (rollback, non-goals, env gate).
 
 **D22 — Scope boundaries and non-goals preserved:**
@@ -632,32 +639,16 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - Bounded Go does **not** authorize: outbox pattern, transactional delivery, delivery guarantees, background retry workers, HMAC signing, subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table, dead-letter queue, production readiness, or external receiver production config.
 - Owner Brian Nguyen signs off on the bounded scope and non-goals listed above.
 
-**No code, test, migration, dependency, config, runbook, or alert changes:** These decisions are recorded for the future implementation phase. No `.rs`, test, `.sql`, `Cargo.toml`, config, runbook, or alert file was modified in this docs-only update.
-
 #### Pre-R8 Blockers / Open Decisions
 
-> **Status:** Blocking and non-blocking open items identified by independent design review. B1–B2 resolution paths are documented and accepted as prerequisites for the first implementation slice. Implementation has **not** started.
+> **Status:** B1–B2 were blockers for the first implementation slice and are now **resolved** in commits B3-B16. Implementation has been delivered as bounded non-production code.
 
-**Blockers (must resolve as prerequisites for first implementation slice):**
+**Blockers (resolved in B3-B16):**
 
-| # | Blocker | Impact if Unresolved |
-|---|---------|---------------------|
-| B1 | **No webhook URL / subscription storage exists** — There is no table, entity, or repository for storing downstream webhook URLs and their mapping to `subscription_id`. The design assumes a subscription registry but does not specify where URLs live or how they are queried at delivery time. | Delivery cannot target any URL; Slice 3 is unimplementable without a subscription source. |
-| B2 | **`PropagationRecordRepository` lacks delivery-outcome update methods** — The trait does not define methods to atomically update `delivery_attempt_count`, `last_delivery_attempt_at`, `failure_reason`, and status based on delivery outcome. | Delivery attempt recording and state transitions cannot be implemented against the existing repository contract. |
-
-**Resolution Paths (Docs-Only — Accepted as Prerequisites):**
-
-> **Note:** These are accepted directions for resolving B1–B2. They do not constitute implementation or blocker closure. Implementation of B1 and B2 is required before the first Slice 3 code slice begins.
-
-**B1 — Webhook URL / Subscription Storage**
-Preferred path: introduce a minimal `webhook_subscriptions` table (or equivalent entity) in a future migration with proposed columns `id`, `tenant_id`, `intent_id`, `subscription_id`, `webhook_url`, `created_at`, `updated_at`, plus a `tenant_id` RLS policy following existing P1 patterns. The dispatcher queries this table by `(tenant_id, intent_id)` to obtain target URLs at delivery time. No migration is created now; this is a design note for future implementation.
-
-**B2 — Repository Trait Extension**
-Preferred path: extend `PropagationRecordRepository` with two proposed async methods:
-- `record_delivery_attempt(tenant_id, intent_id, downstream_system_id)` — atomically increments `delivery_attempt_count` and sets `last_delivery_attempt_at`.
-- `record_delivery_outcome(tenant_id, intent_id, downstream_system_id, status, failure_reason)` — atomically sets `status`, `acknowledged_at`/`failed_at`, and `failure_reason`.
-
-No trait code is written now; these are proposed signatures for future implementation.
+| # | Blocker | Resolution |
+|---|---|---------|
+| B1 | **No webhook URL / subscription storage existed** — Migration `018_create_webhook_subscriptions.sql` delivered with `tenant_id` RLS policy. `SqlxWebhookSubscriptionResolver` and `InMemoryWebhookSubscriptionResolver` implementations exist. | Resolved — dispatcher queries `webhook_subscriptions` by `(tenant_id, intent_id)`. |
+| B2 | **`PropagationRecordRepository` lacked delivery-outcome update methods** — Trait methods `record_delivery_attempt` and `record_delivery_outcome` delivered with in-memory and SQLx implementations. | Resolved — `InMemoryPropagationRecordRepository` and `SqlxPropagationRecordRepository` both implement delivery attempt/outcome recording. |
 
 **Non-blocking Readiness Refinements (documented, do not block design approval):**
 
