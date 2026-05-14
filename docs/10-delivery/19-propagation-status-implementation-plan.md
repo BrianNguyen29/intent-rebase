@@ -26,7 +26,7 @@
 
 Real propagation status requires a **registry of downstream systems** that consume intent changes. Proposed tracking sources (in priority order):
 
-1. **Explicit webhook subscriptions** — downstream systems register via a future `POST /webhooks/subscriptions` endpoint (Phase 4+ deferred)
+1. **Explicit webhook subscriptions** — downstream systems register via a future `POST /webhooks/subscriptions` endpoint (Phase 4+ deferred). See P2-6d subscription CRUD API design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 2. **Event stream consumers** — NATS JetStream consumer metadata (consumer name, last delivered sequence, ack wait)
 3. **Graph lineage edges** — cross-workflow lineage (N2) records which workflows consume artifacts from this intent
 4. **Runtime adapter heartbeats** — bounded optional: adapter reports last-seen intent version during health checks
@@ -204,7 +204,7 @@ Append-only log of propagation events (`signaled`, `acknowledged`, `failed`, `re
 >
 > **Current bounded behavior:** Dispatch is `.await`ed synchronously within the apply handler post-commit. `tokio::spawn` fire-and-forget conversion remains deferred.
 >
-> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints, event streaming, cross-workflow lineage, per-attempt delivery log table.
+> **Deferred (still not implemented):** outbox pattern, transactional delivery boundary, background retry worker, `tokio::spawn` fire-and-forget lifecycle conversion, production readiness, HMAC signing/key rotation (P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), subscription CRUD API endpoints (P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md)), event streaming, cross-workflow lineage, per-attempt delivery log table.
 
 #### HTTP Client Choice
 
@@ -590,7 +590,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 - No background retry worker (in-process sequential retries only).
 - No production-readiness claim.
 - No HMAC signing or key rotation (deferred). See P2-6c design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
-- No subscription CRUD API endpoints (deferred).
+- No subscription CRUD API endpoints (deferred). See P2-6d design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - No event streaming / NATS integration (Slice 4).
 - No cross-workflow lineage (Slice 5).
 - No per-attempt delivery log table (deferred).

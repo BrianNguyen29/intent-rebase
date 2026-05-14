@@ -309,7 +309,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2-6a** | Outbox schema — detailed design below | 🔴 Deferred — schema design only; no migration or code |
 | **P2-6b** | Background delivery worker lifecycle — detailed design below | 🔴 Deferred — design only |
 | **P2-6c** | HMAC signing + key rotation — detailed design below | 🔴 Deferred — design only |
-| **P2-6d** | Subscription CRUD API — `POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}` with tenant isolation and RLS | 🔴 Deferred — design only |
+| **P2-6d** | Subscription CRUD API — detailed design below | 🔴 Deferred — design only |
 | **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
 | **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
 
@@ -671,6 +671,117 @@ function verify_signature(header, body, known_secrets):
 - No production readiness or signed-delivery guarantee claim as current behavior.
 
 **No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a secret, and does not confer any production readiness.
+
+#### P2-6d: Subscription CRUD API Design
+
+> **Scope:** Design-only. No API implementation, no handler code, no OpenAPI contract implementation, no production readiness claim.
+
+**Endpoints Summary**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| `POST` | `/webhooks/subscriptions` | Create a new subscription | JWT + tenant isolation |
+| `GET` | `/webhooks/subscriptions` | List subscriptions for the tenant | JWT + tenant isolation |
+| `GET` | `/webhooks/subscriptions/{subscription_id}` | Get a single subscription | JWT + tenant isolation |
+| `PATCH` | `/webhooks/subscriptions/{subscription_id}` | Update subscription fields | JWT + tenant isolation |
+| `DELETE` | `/webhooks/subscriptions/{subscription_id}` | Soft-delete (disable) a subscription | JWT + tenant isolation |
+
+**Request / Response Schemas**
+
+*Create (`POST /webhooks/subscriptions`)*
+```json
+{
+  "webhook_url": "https://downstream.example.com/webhooks",
+  "event_types": ["intent_changed", "rebase.plan_created"],
+  "downstream_system_id": "github-prod",
+  "max_attempts": 3
+}
+```
+
+*Response (all routes)*
+```json
+{
+  "subscription_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tenant_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "webhook_url": "https://downstream.example.com/webhooks",
+  "event_types": ["intent_changed"],
+  "downstream_system_id": "github-prod",
+  "max_attempts": 3,
+  "status": "active",
+  "created_at": "2026-05-13T12:00:00Z",
+  "updated_at": "2026-05-13T12:00:00Z"
+}
+```
+
+**Lifecycle States**
+
+| State | Meaning | Transitions |
+|-------|---------|-------------|
+| `active` | Subscription is eligible for delivery | `active` → `disabled` (PATCH or DELETE) |
+| `disabled` | Subscription is paused; no new deliveries | `disabled` → `active` (PATCH) |
+| `deleted` | Soft-deleted; retained for audit | `deleted` → none (immutable) |
+
+- Hard delete is **not** supported to preserve audit lineage.
+- `deleted` subscriptions are filtered out of the list endpoint by default.
+
+**Tenant Isolation / RLS Behavior**
+
+- `tenant_id` is required on every request and is sourced from the JWT claim.
+- The SQL layer enforces tenant isolation via RLS (`tenant_id = current_tenant_id()`), identical to the P2-6a `webhook_outbox` pattern.
+- Cross-tenant subscription access returns `404 Not Found` (fail-closed) rather than `403`, to avoid leaking subscription existence.
+
+**Auth / Authorization**
+
+- All endpoints require a valid JWT with `tenant_id` claim.
+- No additional role-based checks for Phase 4 baseline; all authenticated tenant users may manage subscriptions.
+- Future scope: role-based access control (e.g., `webhook:admin` scope) may be added later.
+
+**Validation Rules**
+
+| Field | Rule | Error |
+|-------|------|-------|
+| `webhook_url` | Valid URL; HTTPS required in production | `400` — `invalid_url` |
+| `webhook_url` | Max length 2048 characters | `400` — `url_too_long` |
+| `event_types` | Non-empty array; each element must be a known event type | `400` — `unknown_event_type` |
+| `max_attempts` | Integer 1–10 (inclusive) | `400` — `max_attempts_out_of_range` |
+| `downstream_system_id` | Non-empty string; max length 256 | `400` — `invalid_downstream_system_id` |
+
+**Secret Redaction / HMAC Boundary**
+
+- The `POST` response must **not** include the secret or `kid`. The secret is returned exactly once during creation (in the `secret` field of the `201 Created` response) and is never retrievable again.
+- The `GET` response omits the `secret` and `kid` fields entirely.
+- HMAC signing details (header format, canonical string, rotation) are defined in P2-6c. This subsection only covers the subscription management surface.
+- Secret storage is delegated to the production secret manager; the subscription record stores only the `active_kid` and `revoked_kid` references.
+
+**Error Semantics**
+
+| Status | Scenario | Response Body |
+|--------|----------|---------------|
+| `201` | Subscription created | Full response including one-time `secret` |
+| `200` | List / get / update success | Response without `secret` |
+| `204` | Soft-delete success | Empty body |
+| `400` | Validation failure | `{"error": "invalid_request", "details": [...]}` |
+| `401` | Missing or invalid JWT | `{"error": "unauthorized"}` |
+| `404` | Subscription not found or tenant mismatch | `{"error": "not_found"}` |
+| `409` | Duplicate `downstream_system_id` for tenant | `{"error": "duplicate_downstream_system"}` |
+| `429` | Rate limit exceeded | `{"error": "rate_limited", "retry_after": 60}` |
+
+**Relationship to P2-6a / P2-6b / P2-6c**
+
+- P2-6d is the management surface that creates the subscriptions used by the outbox (P2-6a) and the delivery worker (P2-6b).
+- The `subscription_id` in `webhook_outbox` references the subscription created here.
+- HMAC signing (P2-6c) depends on the `active_kid` stored in the subscription record.
+
+**Explicit Non-Goals**
+
+- No Rust handler code or route wiring is included in this subsection.
+- No OpenAPI endpoint definitions claiming availability (the spec remains deferred).
+- No migration DDL (covered by P2-6a).
+- No secret backend implementation.
+- No production readiness or current subscription CRUD availability claim.
+- No role-based access control or advanced authorization.
+
+**No overclaim:** This subsection is a design draft to guide future implementation. It is not an API contract implementation, not code, and does not confer any production readiness.
 
 ---
 

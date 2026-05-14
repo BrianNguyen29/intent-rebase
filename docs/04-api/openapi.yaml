@@ -77,6 +77,7 @@ info:
     - Compensation planner: full risk scoring, strategy selection (Batch 1+ scope)
     - Compensation executor: real rollback/counter-action logic (Batch 1+ scope; stub executor implemented)
     - Compensation retry logic: max retries, backoff (Batch 1+ scope)
+    - Webhook subscription CRUD API (`POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}`) — Phase 4+ deferred; see P2-6d design in production readiness backlog
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team

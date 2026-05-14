@@ -8,6 +8,8 @@
 
 > **HMAC Signing + Key Rotation:** A draft HMAC signing design (header format, canonical string, key rotation with dual-key grace window, consumer verification guidance) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6c. It is design-only — no implementation or secret material exists.
 
+> **Subscription CRUD API:** A draft subscription management API design (endpoints, schemas, lifecycle states, tenant isolation, validation rules, secret redaction) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6d. It is design-only — no routes or handlers have been implemented.
+
 ## Mục tiêu
 Cho phép tích hợp IRE với:
 - Git providers
