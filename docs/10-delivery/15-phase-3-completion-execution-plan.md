@@ -154,7 +154,7 @@ G3 (DLQ metrics) ─────────────┘
 |------|-------------|-------|-------------------|--------|
 | **G1: Design Approval** | DLQ/retry design doc reviewed and approved | Backend Lead + SRE | Approved design doc with sign-off lines | 🟢 PASS (solo self-review) — Brian Nguyen / 2026-04-28; external dual sign-off not claimed |
 | **G2: JetStream Config** | JetStream streams and consumers configured with retry/advisory config | Backend Lead | nats-box stream info and consumer info showing max_deliver=3, ack_wait=30s, explicit ack, pull mode | 🟢 PASS — JetStream retry/advisory config validated via nats-box (stream/consumer with max_deliver=3) |
-| **G3: Monitoring** | DLQ metrics exposed and alerting rules deployed | SRE | Prometheus metrics endpoint shows `dlq_messages_current`, `dlq_message_age_seconds`; Alertmanager has DLQ alert rules | 🔴 PENDING — G3 stubs/metrics plan required before G5 tests |
+| **G3: Monitoring** | DLQ metrics exposed and alerting rules deployed | SRE | Prometheus metrics endpoint shows `dlq_messages_current`, `dlq_message_age_seconds`; Alertmanager has DLQ alert rules | 🟢 CLOSED (local-dev) — 17 alert rules passed promtool validation (`docker run --rm --entrypoint promtool ... check rules ...` output `SUCCESS: 17 rules found`); production deployment deferred |
 | **G4: Runbook** | DLQ investigation and replay procedure documented | SRE | RB11 in `docs/09-operations/05-runbooks.md` covering DLQ inspection, validation, replay | 🟢 PASS — RB11 present in `docs/09-operations/05-runbooks.md`; external SRE approval not claimed |
 | **G5: Test Coverage** | Unit tests for retry logic, DLQ routing, replay | Backend Lead | `cargo test --all-features` passes; DLQ test suite results | 🟢 PASS (bounded) — 9 unit tests + 7 live ignored tests passed; app-level DLQ routing remains Phase 4+ future |
 
@@ -172,13 +172,14 @@ G2: JetStream Config (LOCAL DOCKER-COMPOSE)
   □ Evidence: consumer config showing dead_letter subject
   □ Note: LOCAL ONLY — not production-equivalent
 
-G3: Monitoring Stubs/Plan (REQUIRED BEFORE G5 TESTS)
-  □ dlq_messages_current metric defined in code
-  □ dlq_message_age_seconds metric defined in code
-  □ dlq_replay_total metric defined in code
-  □ dlq_replay_failures_total metric defined in code
-  □ Evidence: grep for dlq_* in crates/
-  □ Note: Full G3 requires production deployment; stubs/plan required for G5
+G3: Monitoring / Alert Rules (CLOSED FOR LOCAL-DEV)
+  ✅ dlq_messages_current metric defined in code
+  ✅ dlq_message_age_seconds metric defined in code
+  ✅ dlq_replay_total metric defined in code
+  ✅ dlq_replay_failures_total metric defined in code
+  ✅ Evidence: `cargo check` / `cargo clippy -D warnings` pass
+  ✅ Evidence: 17 alert rules passed promtool validation (`docker run --rm --entrypoint promtool ... check rules ...` output `SUCCESS: 17 rules found`)
+  > Note: Runtime metric emissions await lifecycle/worker wiring. Production alerting deployment deferred.
 
 G4: Runbook
   □ DLQ investigation procedure written (RB11)

@@ -619,7 +619,7 @@ The following items require production infrastructure or external engagement and
 >
 > - **G1**: DLQ design self-reviewed by Brian Nguyen on 2026-04-28 (Phase A) — PASS
 > - **G2**: JetStream retry/advisory config validated with stream/consumer via nats-box (Phase B) — PASS
-> - **G3**: DLQ metrics stubs exist (`dlq_messages_current`, `dlq_message_age_seconds`, `dlq_replay_total`, `dlq_replay_failures_total`) — stubs compile; runtime emissions await lifecycle/worker
+> - **G3**: DLQ metrics stubs exist and 17 alert rules passed promtool validation (`SUCCESS: 17 rules found`) — closed for local-dev; runtime emissions await lifecycle/worker; production deployment deferred
 > - **G4**: RB11 DLQ runbook written in `docs/09-operations/05-runbooks.md` (Phase A) — PASS
 > - **G5**: Bounded unit/live tests pass; app-level DLQ publish remains Phase 4+ future — PASS (bounded)
 >
@@ -632,7 +632,7 @@ The following items require production infrastructure or external engagement and
 | Consumer subscription lifecycle | G1, G2 | 🔴 BLOCKED |
 | Background worker runtime | G1-G5 | 🔴 BLOCKED |
 | DLQ metrics instrumentation | G3 | 🟡 STUBS COMPILE — runtime emissions await DLQ worker/lifecycle wiring |
-| DLQ alerting rules deployment | G3 | 🔴 BLOCKED — alert rules cannot be validated until runtime emissions exist |
+| DLQ alerting rules deployment | G3 | 🟢 CLOSED (local-dev) — 17 alert rules passed promtool validation; production deployment deferred |
 | Automatic DLQ replay | G1-G5 | 🔴 BLOCKED |
 
 **Evidence Required Before Implementation:**
@@ -679,7 +679,7 @@ The following claims must **NOT** appear in any Phase 3 documentation:
 
 | Forbidden Claim | Allowed Replacement |
 |----------------|-------------------|
-| `G1-G5 externally approved` | `G1 self-reviewed (solo); G2 retry/advisory config validated; G3 stubs compile; G4 RB11 present; G5 bounded tests pass; external approval still not claimed` |
+| `G1-G5 externally approved` | `G1 self-reviewed (solo); G2 retry/advisory config validated; G3 local-dev closed (promtool validated 17 rules); G4 RB11 present; G5 bounded tests pass; external approval still not claimed` |
 | `production load test passed` | `L1/L2 local evidence exists; L3-L5 pending` |
 | `SRE sign-off complete` | `SRE self-review (solo) completed; external sign-off pending` |
 | `Security sign-off complete` | `Security self-review (solo) completed; external review pending` |

@@ -254,8 +254,8 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Full NATS consumer lifecycle with DLQ routing and automatic replay worker |
-| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; G1-G5 design gates passed (solo self-review) |
-| **Status** | 🔴 DEFERRED — implementation gated on G1-G5 evidence; G1 self-reviewed, G2 validated, G3 stubs, G4 RB11, G5 bounded tests |
+| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; G1 solo self-review closed, G3 local-dev closed (promtool validated 17 alert rules), G5 bounded pass |
+| **Status** | 🔴 DEFERRED — full DLQ replay worker remains Phase 4+; G1/G3/G5 closed for local-dev, G2 validated, G4 RB11 pass |
 | **Requirements** | G1-G5 gates must pass before any DLQ worker implementation begins |
 | **External Dependency** | Requires Phase 4 infrastructure and design review completion |
 
@@ -1052,7 +1052,7 @@ Two independent env gates control webhook delivery:
 | **P2** | Artifact side-effect tx boundary ADR | ✅ BOUNDED IMPLEMENTED | ADR-08 Option A delivered for SQL/RLS path; non-RLS fallback preserved |
 | **P2** | Panic hardening (local-executable) | 🟡 BOUNDED SLICE DELIVERED | Bounded panic hook; full hardening Phase 4 scope |
 | **P2** | File decomposition (local-executable) | 🟡 BOUNDED SLICES DELIVERED | Handler test groups extracted; `handler_tests.rs` reduced to router smoke test; `build_router_with_jwt_auth` deduplicated (delegates to `build_router`); broader router route grouping/split remains Phase 4 |
-| **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
+| **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1 solo self-review closed, G3 local-dev closed (promtool validated), G5 bounded pass; full DLQ replay worker remains Phase 4+ |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
 | **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 + 5dcdd36 + 2ab1c4b form the locally verified non-production baseline; P2-6a..P2-6f design baseline complete (design-only, no implementation) |
@@ -1070,7 +1070,7 @@ The following external evidence/gates remain pending and are not yet available:
 | Penetration test report | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment |
 | Load test L3-L5 results | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Production deployment; L4 10min sustained + one alert firing validated; 30min sustained + all alert types + real receivers pending Phase 4 |
 | Production infrastructure | 🟡 WAIVED-SOLO (non-production Phase 3 only) | Staging/production deployment |
-| DLQ replay worker | 🔴 DEFERRED | Phase 4 (requires G1-G5 gates) |
+| DLQ replay worker | 🔴 DEFERRED | Phase 4 (full worker scope deferred; G1/G3/G5 closed for local-dev, G2 validated, G4 pass) |
 | Cross-process trace propagation | 🔴 DEFERRED | Phase 4 (requires SDK fix) |
 | Forensic replay + Object Lock | 🟡 BOUNDED DELIVERED — replay evidence slice (per-section hashes + replay verification API) complete; full runtime replay + Object Lock remain Phase 4+ | Phase 4+ |
 
