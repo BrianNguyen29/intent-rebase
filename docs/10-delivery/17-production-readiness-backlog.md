@@ -295,12 +295,23 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Production-grade webhook delivery with outbox pattern, HMAC signing, key rotation, subscription CRUD API, and dedicated delivery worker |
-| **Current State** | Bounded non-production slice delivered (B3-B18): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup; apply-path wiremock success/failure tests (200-success, 500-failure) delivered as bounded baseline in commit 5dcdd36; no outbox guarantees, no HMAC, no key rotation, no subscription management API, no background worker |
+| **Current State** | Bounded non-production slice delivered (B3-B18): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup. Commits 5dcdd36 (apply-level wiremock 200-success/500-failure) and 2ab1c4b (verified bounded baseline) complete the locally verified baseline: `cargo test -p intent-api --lib webhook_delivery_tests` 57/57 passed; `cargo test -p intent-api --lib rebase_apply_handler_tests` 9/9 passed. No outbox guarantees, no HMAC, no key rotation, no subscription management API, no background worker |
 | **Owner** | Backend Lead |
 | **Status** | 🔴 DEFERRED — production delivery guarantees require outbox + worker infrastructure |
 | **External Dependency** | None for local implementation; production deployment requires infrastructure for background workers and secret management |
 
 **No overclaim:** The current webhook delivery is a bounded non-production slice. It runs in-process with best-effort dispatch and no delivery guarantee. Production hardening requires an outbox table, a background delivery worker, HMAC signature generation with per-subscription secrets, key rotation, and a subscription CRUD API. All of these remain Phase 4+ scope.
+
+**Phase 4 Planning Slices (Deferred — Planning Only)**
+
+| Slice | Description | Status |
+|-------|-------------|--------|
+| **P2-6a** | Outbox schema — `webhook_outbox` table with `id`, `tenant_id`, `intent_id`, `subscription_id`, `payload`, `created_at`, `scheduled_at`, `attempt_count`, `status` (pending/delivered/failed), and RLS policy | 🔴 Deferred — schema design only; no migration or code |
+| **P2-6b** | Background delivery worker lifecycle — `tokio::spawn` fire-and-forget dispatch, graceful shutdown via `CancellationToken`, in-flight delivery tracking, worker health/readiness probe | 🔴 Deferred — design only |
+| **P2-6c** | HMAC signing + key rotation — per-subscription secret storage, `X-Webhook-Signature` header generation (`sha256=<hmac>`), secret rotation workflow with dual-secret grace period | 🔴 Deferred — design only |
+| **P2-6d** | Subscription CRUD API — `POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}` with tenant isolation and RLS | 🔴 Deferred — design only |
+| **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
+| **P2-6f** | Rollback plan — env-gate disable procedure, in-flight delivery drain, subscription deregister without data loss, rollback verification checklist | 🔴 Deferred — design only |
 
 ---
 
@@ -324,7 +335,7 @@ These items cannot proceed until specific external conditions are met.
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1-G5 gates + Phase 4 infra |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
-| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 slice is non-production only; apply-path wiremock success/failure tests (commit 5dcdd36) are a bounded baseline |
+| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 + 5dcdd36 + 2ab1c4b form the locally verified non-production baseline; planning slices P2-6a..P2-6f documented |
 
 ---
 
