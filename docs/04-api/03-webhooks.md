@@ -4,6 +4,8 @@
 
 > **Outbox Schema Design:** A draft outbox schema (`webhook_outbox`) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md). It is design-only — no migration or code has been implemented.
 
+> **Background Worker Lifecycle:** A draft background delivery worker design (env gating, polling/claim loop, graceful shutdown, metrics) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6b. It is design-only — no implementation has been written.
+
 ## Mục tiêu
 Cho phép tích hợp IRE với:
 - Git providers

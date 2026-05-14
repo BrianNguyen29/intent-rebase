@@ -576,7 +576,7 @@ Proposed JSON payload posted to each subscription URL with `Content-Type: applic
 
 **D16 — Delivery task lifecycle (accepted):**
 - Current bounded behavior: `.await`ed synchronously within the apply handler post-commit. Delivery completes before the handler returns.
-- Deferred aspiration: `tokio::spawn` fire-and-forget conversion (not implemented; remains Phase 4+ scope).
+- Deferred aspiration: `tokio::spawn` fire-and-forget conversion (not implemented; remains Phase 4+ scope). See P2-6b background delivery worker lifecycle design in [Production Readiness Backlog](./17-production-readiness-backlog.md).
 - Process restart: in-flight deliveries are lost; no in-flight recovery.
 - Shutdown: no `CancellationToken` or graceful shutdown for Slice 3.
 - Timeout enforcement: 120s max total duration per R5 D8.

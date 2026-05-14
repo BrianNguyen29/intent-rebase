@@ -307,7 +307,7 @@ These items cannot proceed until specific external conditions are met.
 | Slice | Description | Status |
 |-------|-------------|--------|
 | **P2-6a** | Outbox schema — detailed design below | 🔴 Deferred — schema design only; no migration or code |
-| **P2-6b** | Background delivery worker lifecycle — `tokio::spawn` fire-and-forget dispatch, graceful shutdown via `CancellationToken`, in-flight delivery tracking, worker health/readiness probe | 🔴 Deferred — design only |
+| **P2-6b** | Background delivery worker lifecycle — detailed design below | 🔴 Deferred — design only |
 | **P2-6c** | HMAC signing + key rotation — per-subscription secret storage, `X-Webhook-Signature` header generation (`sha256=<hmac>`), secret rotation workflow with dual-secret grace period | 🔴 Deferred — design only |
 | **P2-6d** | Subscription CRUD API — `POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}` with tenant isolation and RLS | 🔴 Deferred — design only |
 | **P2-6e** | Retry / dead-letter semantics — external retry queue (NATS/SQS), dead-letter topic for exhausted attempts, per-attempt delivery log table (`propagation_delivery_attempts`) | 🔴 Deferred — design only |
@@ -412,6 +412,133 @@ claimed --(stale recovery)--> pending
 - No production readiness or at-least-once guarantee claim as current behavior.
 
 **No overclaim:** This subsection is a schema design draft to guide a future migration. It is not a migration, not executable code, and does not confer any production readiness.
+
+#### P2-6b: Background Delivery Worker Lifecycle
+
+> **Scope:** Design-only. No Rust implementation, no `tokio::spawn` wiring, no production readiness claim.
+
+**Startup / Gating**
+
+- Env gate: `INTENT_API_WEBHOOK_OUTBOX_WORKER` (boolean).
+- **Default:** `false` (conservative). Must be explicitly enabled.
+- **Behavior when enabled:** On HTTP server startup, spawn a background task that polls the `webhook_outbox` table (P2-6a) and delivers pending rows.
+- **Behavior when disabled:** No background task is spawned; outbox rows accumulate until a future worker starts or until manual intervention.
+
+**Tokio Task Lifecycle**
+
+```
+main startup
+  └─> if INTENT_API_WEBHOOK_OUTBOX_WORKER == true:
+        spawn background_delivery_worker(shutdown_rx)
+          └─> loop until shutdown_rx.changed() == true
+                poll & claim rows
+                dispatch HTTP requests
+                record outcomes
+```
+
+- The worker is a single top-level `tokio::task` (or a small `tokio::spawn` family). Multiple worker instances are possible for horizontal scaling, but a single instance is the bounded design starting point.
+- Each claimed row spawns a short-lived delivery sub-task. The parent worker uses a `JoinSet` (or equivalent) to track in-flight deliveries.
+
+**Cancellation / Shutdown**
+
+- Use the existing `watch::Receiver<bool>` shutdown pattern (same as `CheckpointCreatorConsumer`).
+- On `SIGINT`/`SIGTERM`, the shutdown sender flips to `true`.
+- The worker loop checks `shutdown_rx.has_changed()` (or `changed().await`) between poll iterations.
+- **Graceful shutdown behavior:**
+  1. Stop polling for new rows.
+  2. Wait up to `OUTBOX_SHUTDOWN_DRAIN_SECONDS` (e.g., 30s) for in-flight `JoinSet` tasks to complete.
+  3. After drain timeout, abort remaining tasks.
+  4. Tasks that complete within the window record their outcome normally; tasks that are aborted record no outcome (best-effort; will be reclaimed as stale on next startup).
+- No `CancellationToken` per sub-task is required for the bounded design; abort-on-drop is acceptable.
+
+**Polling / Claim Loop**
+
+```sql
+-- Illustrative claim query (pseudocode)
+WITH next_row AS (
+  SELECT id, tenant_id, subscription_id, payload, lock_version
+  FROM webhook_outbox
+  WHERE status = 'pending'
+    AND scheduled_at <= NOW()
+  ORDER BY scheduled_at, id
+  LIMIT <batch_size>
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE webhook_outbox
+SET status = 'claimed',
+    locked_at = NOW(),
+    locked_by = :worker_id,
+    lock_version = lock_version + 1
+FROM next_row
+WHERE webhook_outbox.id = next_row.id
+  AND webhook_outbox.lock_version = next_row.lock_version
+RETURNING webhook_outbox.*;
+```
+
+- **Worker identity (`:worker_id`):** A short token such as `{hostname}:{pid}:{task_id}` to aid stale-claim diagnosis.
+- **Batch size:** 10–50 rows per poll to balance throughput and lock contention.
+- **Poll interval:** 1–5 seconds (configurable via `OUTBOX_POLL_INTERVAL_MS`).
+- **Claim semantics:** Optimistic locking via `lock_version` (see P2-6a). Only rows matching the pre-selected `lock_version` are updated; races are resolved by the `WHERE` clause.
+
+**In-Flight Tracking**
+
+- A `JoinSet<DeliveryResult>` (or equivalent) holds handles for active delivery sub-tasks.
+- When a sub-task completes, it is removed from the set and its outcome is recorded via `record_delivery_outcome` (see P2-6a / P2-6e).
+- The readiness probe reports `outbox_outstanding_count = join_set.len()`.
+
+**Health / Readiness Probes**
+
+- Extend the existing `GET /ready` response with two optional fields:
+  - `outbox_worker_healthy`: `true` if the worker task is running and the last poll succeeded within `2 * poll_interval`.
+  - `outbox_outstanding_count`: number of in-flight deliveries (`JoinSet` size).
+- If the worker is disabled by env gate, `outbox_worker_healthy` may be omitted or set to `null`.
+- Liveness: if the worker task panics or the claim loop errors repeatedly, the main process may choose to exit (fail-closed) or log and retry (fail-open). The bounded design recommends fail-open with `tracing::error!` and backoff.
+
+**Metrics / Logging**
+
+| Metric Name | Type | Description |
+|---|---|---|
+| `intent_api_outbox_claimed_total` | Counter | Rows successfully claimed by this worker. |
+| `intent_api_outbox_delivered_total` | Counter | Rows delivered successfully (2xx). |
+| `intent_api_outbox_failed_total` | Counter | Rows moved to `failed` (exhausted or non-retryable). |
+| `intent_api_outbox_stale_reclaimed_total` | Counter | Rows reclaimed from stale workers (stale-claim recovery). |
+| `intent_api_outbox_outstanding_count` | Gauge | Current in-flight delivery count. |
+
+- Log at `info` level: worker startup, shutdown start, shutdown complete.
+- Log at `debug` level: each poll iteration, claim count, per-row delivery start.
+- Log at `warn` level: delivery failures, stale claims detected, claim races lost.
+- Log at `error` level: worker panic, repeated DB connection failures, shutdown drain timeout.
+
+**Failure Handling**
+
+| Scenario | Behavior | Recorded State |
+|---|---|---|
+| DB connection lost during poll | Back off and retry poll loop | None (no rows claimed) |
+| Claim race lost (lock_version mismatch) | Skip row; it will be picked up next poll | None |
+| HTTP 2xx | Success | `delivered` |
+| HTTP 4xx (non-429) | Non-retryable; mark failed | `failed` |
+| HTTP 429 | Retry once with backoff; then failed if still 429 | `pending` → `failed` |
+| HTTP 5xx / timeout / network error | Retry per policy; mark failed if exhausted | `pending` → `failed` |
+| Worker panic during delivery | Task aborts; row remains `claimed` until stale recovery | `claimed` → `pending` (via stale reclaim) |
+| Graceful shutdown with in-flight tasks | Wait for drain timeout; abort remaining | Best-effort (may leave `claimed` rows) |
+
+**Relationship to P2-6a**
+
+- This worker design depends on the `webhook_outbox` schema defined in P2-6a.
+- `lock_version`, `locked_at`, `locked_by`, and `scheduled_at` are the coordination primitives.
+- Stale-claim recovery (reclaiming `claimed` rows from crashed workers) is shared semantics between P2-6a and P2-6b.
+
+**Explicit Non-Goals**
+
+- No Rust code or `tokio::spawn` wiring is included in this subsection.
+- No migration DDL (covered by P2-6a).
+- No HMAC signing or key rotation (P2-6c).
+- No subscription CRUD API (P2-6d).
+- No per-attempt delivery log table (P2-6e).
+- No DLQ / external retry queue (P2-3, P2-6e).
+- No production readiness or at-least-once guarantee claim as current behavior.
+
+**No overclaim:** This subsection is a design draft to guide future implementation. It is not code, not a migration, and does not confer any production readiness.
 
 ---
 
