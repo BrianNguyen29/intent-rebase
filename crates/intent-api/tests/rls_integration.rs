@@ -107,7 +107,7 @@ const TENANT_B_UUID: &str = "550e8400-e29b-41d4-a716-446655440002";
 const TEST_WORKFLOW_UUID: &str = "550e8400-e29b-41d4-a716-446655440099";
 
 /// Key tables to verify RLS isolation on.
-/// All 11 tenant-scoped tables (migration 013 + 015).
+/// All tenant-scoped tables (migrations 013, 015, 017, 018).
 const RLS_SCOPED_TABLES: &[&str] = &[
     "intents",
     "audit_events",
@@ -122,6 +122,7 @@ const RLS_SCOPED_TABLES: &[&str] = &[
     "orchestration_runs",
     "forensic_bundles",
     "propagation_records",
+    "webhook_subscriptions",
 ];
 
 /// Test result type for clearer error handling

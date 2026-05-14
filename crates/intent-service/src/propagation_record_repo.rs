@@ -44,6 +44,24 @@ pub trait PropagationRecordRepository: Send + Sync {
         status: intent_rebase_types::PropagationStatus,
         last_seen_version: i32,
     ) -> Result<PropagationRecord, IntentRebaseError>;
+
+    /// Record a delivery attempt — increments delivery_attempt_count,
+    /// sets last_delivery_attempt_at, and increments lock_version.
+    async fn record_delivery_attempt(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PropagationRecord, IntentRebaseError>;
+
+    /// Record a delivery outcome — updates status, timestamps, failure_reason,
+    /// and increments lock_version.
+    async fn record_delivery_outcome(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        status: intent_rebase_types::PropagationStatus,
+        failure_reason: Option<String>,
+    ) -> Result<PropagationRecord, IntentRebaseError>;
 }
 
 /// In-memory propagation record repository for Slice 1 bounded testing
@@ -146,6 +164,69 @@ impl PropagationRecordRepository for InMemoryPropagationRecordRepository {
         record.last_seen_version = last_seen_version;
         record.updated_at = chrono::Utc::now();
         record.lock_version += 1;
+
+        match record.status {
+            intent_rebase_types::PropagationStatus::Acknowledged => {
+                record.acknowledged_at = Some(chrono::Utc::now());
+                record.failed_at = None;
+            }
+            intent_rebase_types::PropagationStatus::Failed => {
+                record.failed_at = Some(chrono::Utc::now());
+                record.acknowledged_at = None;
+            }
+            intent_rebase_types::PropagationStatus::Pending => {
+                record.acknowledged_at = None;
+                record.failed_at = None;
+            }
+        }
+
+        Ok(record.clone())
+    }
+
+    async fn record_delivery_attempt(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let mut records = self.records.write().await;
+
+        let record = records
+            .get_mut(&id)
+            .filter(|r| r.tenant_id == tenant_id)
+            .ok_or(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            )))?;
+
+        record.delivery_attempt_count += 1;
+        record.last_delivery_attempt_at = Some(chrono::Utc::now());
+        record.lock_version += 1;
+        record.updated_at = chrono::Utc::now();
+
+        Ok(record.clone())
+    }
+
+    async fn record_delivery_outcome(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        status: intent_rebase_types::PropagationStatus,
+        failure_reason: Option<String>,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let mut records = self.records.write().await;
+
+        let record = records
+            .get_mut(&id)
+            .filter(|r| r.tenant_id == tenant_id)
+            .ok_or(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            )))?;
+
+        record.status = status;
+        record.failure_reason = failure_reason;
+        record.lock_version += 1;
+        record.updated_at = chrono::Utc::now();
 
         match record.status {
             intent_rebase_types::PropagationStatus::Acknowledged => {
@@ -332,6 +413,97 @@ impl PropagationRecordRepository for SqlxPropagationRecordRepository {
             ))),
         }
     }
+
+    async fn record_delivery_attempt(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let now = chrono::Utc::now();
+
+        let row = sqlx::query(
+            r#"
+            UPDATE propagation_records
+            SET delivery_attempt_count = delivery_attempt_count + 1,
+                last_delivery_attempt_at = $1,
+                updated_at = $1,
+                lock_version = lock_version + 1
+            WHERE id = $2 AND tenant_id = $3
+            RETURNING id, tenant_id, intent_id, downstream_system_id, status,
+                      last_seen_version, signaled_at, acknowledged_at, failed_at,
+                      failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                      lock_version, created_at, updated_at
+            "#,
+        )
+        .bind(now)
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to record delivery attempt: {}", e))
+        })?;
+
+        match row {
+            Some(row) => Ok(map_row_to_record(row)),
+            None => Err(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            ))),
+        }
+    }
+
+    async fn record_delivery_outcome(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        status: intent_rebase_types::PropagationStatus,
+        failure_reason: Option<String>,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let now = chrono::Utc::now();
+        let (acknowledged_at, failed_at) = match status {
+            intent_rebase_types::PropagationStatus::Acknowledged => (Some(now), None),
+            intent_rebase_types::PropagationStatus::Failed => (None, Some(now)),
+            intent_rebase_types::PropagationStatus::Pending => (None, None),
+        };
+
+        let row = sqlx::query(
+            r#"
+            UPDATE propagation_records
+            SET status = $1,
+                acknowledged_at = $2,
+                failed_at = $3,
+                failure_reason = $4,
+                updated_at = $5,
+                lock_version = lock_version + 1
+            WHERE id = $6 AND tenant_id = $7
+            RETURNING id, tenant_id, intent_id, downstream_system_id, status,
+                      last_seen_version, signaled_at, acknowledged_at, failed_at,
+                      failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                      lock_version, created_at, updated_at
+            "#,
+        )
+        .bind(format!("{:?}", status).to_lowercase())
+        .bind(acknowledged_at)
+        .bind(failed_at)
+        .bind(failure_reason.as_deref().unwrap_or(""))
+        .bind(now)
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("Failed to record delivery outcome: {}", e))
+        })?;
+
+        match row {
+            Some(row) => Ok(map_row_to_record(row)),
+            None => Err(IntentRebaseError::StorageError(format!(
+                "Propagation record not found: {}",
+                id
+            ))),
+        }
+    }
 }
 
 fn map_row_to_record(row: sqlx::postgres::PgRow) -> PropagationRecord {
@@ -457,5 +629,180 @@ mod tests {
         let records_2 = repo.list_by_intent(intent_id, tenant_2).await.unwrap();
         assert_eq!(records_2.len(), 1);
         assert_eq!(records_2[0].downstream_system_id, "system-b");
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_attempt_increments_and_sets_timestamp() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+        let tenant_id = record.tenant_id;
+
+        repo.create_record(record).await.unwrap();
+
+        let before = chrono::Utc::now();
+        let updated = repo.record_delivery_attempt(id, tenant_id).await.unwrap();
+        let after = chrono::Utc::now();
+
+        assert_eq!(updated.delivery_attempt_count, 1);
+        assert!(updated.last_delivery_attempt_at.is_some());
+        assert!(
+            updated.last_delivery_attempt_at.unwrap() >= before
+                && updated.last_delivery_attempt_at.unwrap() <= after
+        );
+        assert_eq!(updated.lock_version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_attempt_multiple_times() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+        let tenant_id = record.tenant_id;
+
+        repo.create_record(record).await.unwrap();
+
+        let first = repo.record_delivery_attempt(id, tenant_id).await.unwrap();
+        let second = repo.record_delivery_attempt(id, tenant_id).await.unwrap();
+
+        assert_eq!(first.delivery_attempt_count, 1);
+        assert_eq!(second.delivery_attempt_count, 2);
+        assert_eq!(second.lock_version, 3);
+        assert!(
+            second.last_delivery_attempt_at.unwrap() >= first.last_delivery_attempt_at.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_outcome_success() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+        let tenant_id = record.tenant_id;
+
+        repo.create_record(record).await.unwrap();
+        repo.record_delivery_attempt(id, tenant_id).await.unwrap();
+
+        let updated = repo
+            .record_delivery_outcome(
+                id,
+                tenant_id,
+                intent_rebase_types::PropagationStatus::Acknowledged,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated.status,
+            intent_rebase_types::PropagationStatus::Acknowledged
+        );
+        assert!(updated.acknowledged_at.is_some());
+        assert!(updated.failed_at.is_none());
+        assert_eq!(updated.failure_reason, None);
+        assert_eq!(updated.lock_version, 3);
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_outcome_failure() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+        let tenant_id = record.tenant_id;
+
+        repo.create_record(record).await.unwrap();
+
+        let updated = repo
+            .record_delivery_outcome(
+                id,
+                tenant_id,
+                intent_rebase_types::PropagationStatus::Failed,
+                Some("timeout".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated.status,
+            intent_rebase_types::PropagationStatus::Failed
+        );
+        assert!(updated.failed_at.is_some());
+        assert!(updated.acknowledged_at.is_none());
+        assert_eq!(updated.failure_reason, Some("timeout".to_string()));
+        assert_eq!(updated.lock_version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_attempt_wrong_tenant_not_found() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+
+        repo.create_record(record).await.unwrap();
+
+        let wrong_tenant = Uuid::new_v4();
+        let result = repo.record_delivery_attempt(id, wrong_tenant).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_outcome_wrong_tenant_not_found() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+
+        repo.create_record(record).await.unwrap();
+
+        let wrong_tenant = Uuid::new_v4();
+        let result = repo
+            .record_delivery_outcome(
+                id,
+                wrong_tenant,
+                intent_rebase_types::PropagationStatus::Acknowledged,
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_record_delivery_outcome_overwrites_failure_reason() {
+        let repo = InMemoryPropagationRecordRepository::new();
+        let record = create_test_record();
+        let id = record.id;
+        let tenant_id = record.tenant_id;
+
+        repo.create_record(record).await.unwrap();
+
+        // First fail
+        repo.record_delivery_outcome(
+            id,
+            tenant_id,
+            intent_rebase_types::PropagationStatus::Failed,
+            Some("first failure".to_string()),
+        )
+        .await
+        .unwrap();
+
+        // Then succeed — failure_reason should be overwritten (kept as provided)
+        let updated = repo
+            .record_delivery_outcome(
+                id,
+                tenant_id,
+                intent_rebase_types::PropagationStatus::Acknowledged,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated.status,
+            intent_rebase_types::PropagationStatus::Acknowledged
+        );
+        assert_eq!(updated.failure_reason, None);
     }
 }
