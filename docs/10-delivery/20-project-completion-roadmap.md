@@ -32,7 +32,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ### Remaining (P0)
 - [ ] Extract `rebase_apply_handlers.rs` inline tests → deferred per task constraints
-- [ ] Ensure all handler test modules follow consistent import style (`crate::...` paths)
+- [x] Ensure all handler test modules follow consistent import style (`crate::...` paths)
 
 ### Acceptance Criteria
 - `cargo fmt --all -- --check` passes
@@ -51,7 +51,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [ ] Extract `rebase_apply_handlers.rs` inline tests → `rebase_apply_handler_tests.rs` (currently deferred)
 - [ ] Extract any remaining inline `#[cfg(test)] mod tests` blocks from handler files
 - [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
-- [ ] Normalize `super::...` references to `crate::...` paths in all extracted test modules
+- [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
 **Constraints:**
 - Do NOT change production behavior

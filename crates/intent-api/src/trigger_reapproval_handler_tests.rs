@@ -1,6 +1,7 @@
-use super::*;
 use crate::test_helpers::{create_test_optional_rls_claims, create_test_service};
 use crate::types::TriggerReapprovalRequest;
+use axum::extract::State;
+use axum::Json;
 use intent_rebase_types::{
     AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAuthority, IntentConstraints,
     IntentMetadataV1, IntentObjective, IntentPayload, IntentPreferences, IntentReferences,
@@ -96,7 +97,7 @@ async fn test_trigger_reapproval_creates_pending_approval_when_scope_differs() {
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await
@@ -202,7 +203,7 @@ async fn test_trigger_reapproval_returns_bad_request_when_scope_matches() {
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await;
@@ -229,7 +230,7 @@ async fn test_trigger_reapproval_returns_not_found_when_intent_missing() {
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await;
@@ -359,7 +360,7 @@ async fn test_trigger_reapproval_cancels_existing_approved_approvals() {
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await
@@ -490,7 +491,7 @@ async fn test_trigger_reapproval_does_not_cancel_pending_approvals() {
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await
@@ -631,7 +632,7 @@ async fn test_trigger_reapproval_does_not_create_or_cancel_when_scope_matches() 
 
     let result = crate::trigger_reapproval_handlers::trigger_reapproval(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await;

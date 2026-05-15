@@ -3,7 +3,11 @@
 //! RLC-14: Tenant mismatch rejection test for rebase_apply handler.
 //! Extracted from handler_tests.rs as a focused module.
 
-use super::*;
+use crate::rebase_apply_handlers;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use uuid::Uuid;
 
 #[cfg(feature = "jwt-auth")]
 use crate::test_helpers::create_test_optional_rls_claims;

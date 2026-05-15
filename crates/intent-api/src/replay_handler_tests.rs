@@ -1,4 +1,9 @@
-use super::*;
+use crate::types::{ReplayRequest, ReplayResponse};
+use crate::{ApiErrorResponse, AppState};
+use axum::extract::{Path, State};
+use axum::Json;
+use uuid::Uuid;
+
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
 #[cfg(feature = "jwt-auth")]
@@ -15,7 +20,7 @@ async fn call_replay_intent(
 ) -> Result<Json<ReplayResponse>, ApiErrorResponse> {
     crate::replay_handlers::replay_intent(
         State(state),
-        auth::OptionalRlsTenantClaims(None), // No JWT - tests basic replay without tenant isolation
+        crate::auth::OptionalRlsTenantClaims(None), // No JWT - tests basic replay without tenant isolation
         Path(intent_id),
         Json(request),
     )

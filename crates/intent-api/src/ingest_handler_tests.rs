@@ -1,7 +1,7 @@
-use super::*;
 use crate::ingest_handlers::validate_artifact_ingest_request;
 use crate::test_helpers::{create_test_service, create_test_service_with_graph_repo};
 use crate::types::ArtifactIngestRequest;
+use crate::IntentRebaseError;
 use intent_rebase_types::{ExternalRef, ExternalRefType, SideEffectCaptureContext};
 use uuid::Uuid;
 
