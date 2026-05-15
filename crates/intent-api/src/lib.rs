@@ -362,4 +362,10 @@ mod diff_handler_tests;
 mod compensation_planner_handler_tests;
 
 #[cfg(test)]
+mod error_response_tests;
+
+#[cfg(test)]
+mod panic_hardening_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;

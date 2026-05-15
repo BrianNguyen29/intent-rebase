@@ -2,6 +2,7 @@ name: Smoke Test
 
 on:
   workflow_dispatch:
+  pull_request:
 
 # Free-safe: lightweight smoke only, no heavy resource use.
 permissions:
@@ -12,7 +13,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hello:
+  smoke:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Smoke test passed — lightweight gate only"
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Type check
+        run: cargo check --workspace --all-features
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-features -- -D warnings
+
+      - name: Run in-memory lib tests
+        run: cargo test --workspace --lib --all-features
