@@ -254,12 +254,12 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Full NATS consumer lifecycle with DLQ routing and automatic replay worker |
-| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; G1 solo self-review closed, G3 local-dev closed (promtool validated 17 alert rules), G5 bounded pass |
-| **Status** | 🔴 DEFERRED — full DLQ replay worker remains Phase 4+; G1/G3/G5 closed for local-dev, G2 validated, G4 RB11 pass |
-| **Requirements** | G1-G5 gates must pass before any DLQ worker implementation begins |
+| **Current State** | Bounded CheckpointCreatorConsumer behind `INTENT_API_NATS_CONSUMER=true` gate; DlqMetricsWorker delivered; bounded local-dev full-consumer gate (`INTENT_API_NATS_FULL_CONSUMER=true`) delivered at commit `0d14c1b` — app-level DLQ publish on Failed/Retryable before ack, plus SnapshotCreatorConsumer and NotifierConsumer registration; G1 solo self-review closed, G3 local-dev closed (promtool validated 17 alert rules), G5 bounded pass |
+| **Status** | 🟡 BOUNDED LOCAL-DEV DELIVERED — full-consumer gate (`0d14c1b`) is local-dev only, NOT production-ready; full DLQ replay worker remains Phase 4+ deferred; G1/G3/G5 closed for local-dev, G2 validated, G4 RB11 pass |
+| **Requirements** | G1-G5 gates must pass before any DLQ worker implementation begins; full-consumer gate requires external sign-off before production |
 | **External Dependency** | Requires Phase 4 infrastructure and design review completion |
 
-**Note:** DLQ design is approved; DLQ worker implementation is future work gated on G1-G5.
+**Note:** DLQ design is approved; DLQ worker implementation is future work gated on G1-G5. The `INTENT_API_NATS_FULL_CONSUMER` gate (commit `0d14c1b`) closes the bounded local-dev app-level DLQ publish gap but is explicitly non-production.
 
 ---
 

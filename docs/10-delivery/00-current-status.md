@@ -52,9 +52,19 @@ Phase 4 lifecycle first slice delivered as bounded non-production feature:
 - **Delivered:** Bounded DLQ metrics worker (`DlqMetricsWorker`) behind `INTENT_API_NATS_DLQ_WORKER=true` gate
   - Emits `intent_api_dlq_messages_current` gauge (depth)
   - Emits `intent_api_dlq_message_age_seconds` gauge (oldest message age)
-  - Uses lightweight peek (no_ack=true) to count without consuming
+  - Uses lightweight peek (ack_policy = None) to count without consuming
   - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
-- **NOT delivered:** Full DLQ replay worker (remains Phase 4+ future work)
+- **Delivered:** Bounded DLQ replay worker (`DlqReplayWorker`) behind `INTENT_API_NATS_DLQ_REPLAY_WORKER=true` gate
+  - Replays messages from `audit.events.v1.DLQ` to original subject via `DlqHelper::replay_from_dlq()`
+  - ACKs DLQ message only on successful replay; leaves unacked on failure
+  - Single subject, bounded `max_replay` per poll (default: 10)
+  - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
+- **Delivered (commit `0d14c1b`):** Bounded local-dev full-consumer gate (`INTENT_API_NATS_FULL_CONSUMER=true`)
+  - Additive gate requiring `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`; defaults off
+  - App-level DLQ publishing on `Failed`/`Retryable` outcomes **before** ack via `DlqHelper`
+  - Registers `SnapshotCreatorConsumer` and `NotifierConsumer` when dependencies are available
+  - **NON-PRODUCTION local-dev only** — not production-ready
+- **NOT delivered:** Production-ready DLQ replay (exponential backoff, poison-message detection, batch replay remain Phase 4+ future work)
 - **NOT delivered:** Multi-consumer chain (remains future scope)
 - **NOT delivered:** S3 runtime wiring (remains Phase 4 scope)
 - **NOT delivered:** Production readiness (external sign-off not claimed)
@@ -62,10 +72,13 @@ Phase 4 lifecycle first slice delivered as bounded non-production feature:
 **Env gate behavior:**
 - `INTENT_API_NATS_CONSUMER=true` enables consumer lifecycle (requires `NATS_URL`)
 - `INTENT_API_NATS_DLQ_WORKER=true` enables DLQ metrics worker (requires `INTENT_API_NATS_CONSUMER=true`)
+- `INTENT_API_NATS_DLQ_REPLAY_WORKER=true` enables DLQ replay worker (requires `INTENT_API_NATS_CONSUMER=true`)
+- `INTENT_API_NATS_FULL_CONSUMER=true` enables additional consumers and app-level DLQ publishing (requires `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`)
+  - Defaults off; additive only — existing `INTENT_API_NATS_CONSUMER` behavior remains backwards-compatible
 - Default (unset/false): HTTP startup behavior unchanged
 - If NATS unavailable: fail-open with warning unless strict mode
 
-**Bounded scope claim:** This is a bounded Phase 4 first slice implementing a single CheckpointCreatorConsumer behind a compile/runtime gate. DLQ metrics worker is bounded (depth/age gauges only). Full DLQ replay, multi-consumer chain, and S3 runtime wiring remain future work. Production deployment readiness is not claimed.
+**Bounded scope claim:** This is a bounded Phase 4 first slice implementing a single CheckpointCreatorConsumer behind a compile/runtime gate. DLQ metrics worker is bounded (depth/age gauges only). Full-consumer gate (`0d14c1b`) is bounded local-dev only and appends `SnapshotCreatorConsumer` + `NotifierConsumer` + DLQ publish-on-failed when explicitly enabled. Full DLQ replay, multi-consumer chain, and S3 runtime wiring remain future work. Production deployment readiness is not claimed.
 
 ### Side Effect Ledger
 - Model with `effect_id`, `intent_id`, `intent_version`, `effect_type`, `target`, `timestamp`, `tenant_id`

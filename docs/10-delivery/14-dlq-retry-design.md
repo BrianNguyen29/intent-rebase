@@ -13,6 +13,8 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 > **⚠️ Production Readiness Warning**
 >
 > A **bounded app-level DLQ first slice** is now implemented in `crates/intent-api/src/nats_jetstream.rs` (`DlqHelper` struct and `DlqMetricsWorker`). This is NOT a full production DLQ worker. G1 is closed under solo self-review; G3 is closed for local-dev after promtool validation of alert rules. Full production DLQ worker remains Phase 4+ deferred.
+>
+> **Bounded local-dev full-consumer gate (commit `0d14c1b`):** `INTENT_API_NATS_FULL_CONSUMER=true` enables app-level DLQ publishing on `Failed`/`Retryable` outcomes **before** ack, plus registration of `SnapshotCreatorConsumer` and `NotifierConsumer`. This is additive, defaults off, and **NOT production-ready**.
 
 ---
 
@@ -35,6 +37,17 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
   - Bounded peek-based polling (no message consumption)
   - Behind `INTENT_API_NATS_DLQ_WORKER=true` env gate
   - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
+- **BOUNDED FIRST SLICE**: DLQ replay worker (`DlqReplayWorker`)
+  - Replays messages from DLQ to original subject via `DlqHelper::replay_from_dlq()`
+  - ACKs DLQ message only on successful replay; leaves unacked on failure
+  - Single subject (`audit.events.v1.DLQ`), bounded `max_replay` per poll
+  - Behind `INTENT_API_NATS_DLQ_REPLAY_WORKER=true` env gate
+  - Requires `INTENT_API_NATS_CONSUMER=true` and `NATS_URL`
+- **BOUNDED LOCAL-DEV (commit `0d14c1b`):** Full-consumer gate (`INTENT_API_NATS_FULL_CONSUMER=true`)
+  - App-level DLQ publish on `Failed`/`Retryable` outcomes **before** ack via `NatsPullConsumerAdapter` + `DlqHelper`
+  - Registers `SnapshotCreatorConsumer` and `NotifierConsumer` when dependencies available
+  - Additive, defaults off, requires `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`
+  - Live integration test `live_jetstream_full_consumer_dlq_publish_on_failed` verifies end-to-end DLQ publish (ignored, requires docker-compose NATS)
 
 ### Out of Scope (Phase 4+)
 
@@ -42,11 +55,12 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 - G2: JetStream consumer `dead_letter` config (CLI/server-side)
 - G3: Monitoring/alert rules (closed for local-dev — promtool validated 17 rules; production deployment deferred)
 - G4: RB11 runbook update for app-level DLQ
-- G5: Integration test coverage (bounded pass — 9 unit + 7 live ignored tests)
-- Automatic DLQ replay worker (gated on gate approvals)
+- G5: Integration test coverage (bounded pass — 9 unit + 7 live ignored tests + 1 full-consumer live ignored test + 1 DLQ peek live ignored test)
+- **Bounded first slice delivered:** Automatic DLQ replay worker (`DlqReplayWorker`) — production deployment still gated on G1-G5 approvals
 - Retry with exponential backoff (future enhancement)
 - Per-message-type retry policies (future enhancement)
 - DLQ message transformation before replay
+- **Production readiness of full-consumer gate:** `INTENT_API_NATS_FULL_CONSUMER` is local-dev only; production deployment requires G1-G5 + external sign-off
 
 ---
 
@@ -67,9 +81,15 @@ The Intent Rebase Engine uses NATS with JetStream for event-driven workflows. Wh
   - Polls DLQ subjects at configured interval (default: 30s)
   - Emits `intent_api_dlq_messages_current` gauge (depth)
   - Emits `intent_api_dlq_message_age_seconds` gauge (oldest message age)
-  - Uses lightweight peek (no_ack=true) to count without consuming
+  - Uses lightweight peek (ack_policy = None) to count without consuming
   - Wired behind `INTENT_API_NATS_DLQ_WORKER=true` env gate
-- Production DLQ worker NOT YET production-ready (G1 solo self-review, G3 local-dev closed; full worker scope remains Phase 4+ deferred)
+- **BOUNDED FIRST SLICE**: `DlqReplayWorker` for automatic DLQ replay
+  - Polls `audit.events.v1.DLQ` at configured interval (default: 60s)
+  - Replays up to `max_replay` messages per poll via `DlqHelper::replay_from_dlq()`
+  - ACKs DLQ message only on successful replay; leaves unacked on failure for manual investigation
+  - Wired behind `INTENT_API_NATS_DLQ_REPLAY_WORKER=true` env gate
+- **Bounded local-dev full-consumer gate (commit `0d14c1b`):** `NatsPullConsumerAdapter` accepts `Option<Arc<DlqHelper>>`; `process_one()` publishes to DLQ on `Failed`/`Retryable` before ack; `ConsumerRegistry` supports `with_full_consumer(true)`; `SnapshotCreatorConsumer` + `NotifierConsumer` registered behind gate when dependencies available
+- Production DLQ workers NOT YET production-ready (G1 solo self-review, G3 local-dev closed; full worker scope remains Phase 4+ deferred)
 
 ### Dependencies
 

@@ -41,7 +41,8 @@ use intent_api::{
     build_router, build_router_with_sql_audit_and_approval, init_panic_hook, init_tracing,
     nats_jetstream::{
         ConsumerRegistry, ConsumerRegistryHandle, DlqMetricsWorkerBuilder, DlqMetricsWorkerConfig,
-        DlqMetricsWorkerHandle, JetStreamInitializer,
+        DlqMetricsWorkerHandle, DlqReplayWorkerBuilder, DlqReplayWorkerConfig,
+        DlqReplayWorkerHandle, JetStreamInitializer,
     },
     NatsEventPublisher,
 };
@@ -220,6 +221,64 @@ async fn maybe_start_dlq_metrics_worker(
     }
 }
 
+/// Optionally start the DLQ replay worker based on INTENT_API_NATS_DLQ_REPLAY_WORKER env var.
+///
+/// - `INTENT_API_NATS_DLQ_REPLAY_WORKER=true` + JetStream available → starts DlqReplayWorker
+/// - Otherwise → returns None
+///
+/// The DLQ replay worker polls a DLQ subject and replays messages to their original
+/// subjects via `DlqHelper::replay_from_dlq()`. Messages are ACKed only on successful replay.
+async fn maybe_start_dlq_replay_worker(
+    jetstream_ctx: Option<async_nats::jetstream::Context>,
+    subject_filter: &str,
+) -> Option<DlqReplayWorkerHandle> {
+    let replay_worker_enabled = std::env::var("INTENT_API_NATS_DLQ_REPLAY_WORKER")
+        .unwrap_or_default()
+        .to_lowercase();
+
+    if replay_worker_enabled != "true" {
+        tracing::info!(
+            "INTENT_API_NATS_DLQ_REPLAY_WORKER not set to 'true' — DLQ replay worker not started"
+        );
+        return None;
+    }
+
+    let jetstream_ctx = match jetstream_ctx {
+        Some(ctx) => ctx,
+        None => {
+            tracing::warn!(
+                "INTENT_API_NATS_DLQ_REPLAY_WORKER=true but JetStream context not available — DLQ replay worker not started"
+            );
+            return None;
+        }
+    };
+
+    tracing::info!("INTENT_API_NATS_DLQ_REPLAY_WORKER=true — starting DLQ replay worker");
+
+    // Derive DLQ subject from subject filter (e.g., "audit.events.v1.>" → "audit.events.v1.DLQ")
+    let dlq_subject = subject_filter.replace(".>", ".DLQ");
+    let config = DlqReplayWorkerConfig::new(&dlq_subject)
+        .with_poll_interval(std::time::Duration::from_secs(60))
+        .with_max_replay(10);
+
+    match DlqReplayWorkerBuilder::new(jetstream_ctx, config)
+        .start()
+        .await
+    {
+        Ok(handle) => {
+            tracing::info!("DLQ replay worker started successfully");
+            Some(handle)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to start DLQ replay worker: {} — continuing without it",
+                e
+            );
+            None
+        }
+    }
+}
+
 /// Build an in-memory-based router for development/smoke testing
 fn build_inmemory_router() -> Router {
     // In-memory intent repository
@@ -314,7 +373,7 @@ fn build_inmemory_router() -> Router {
 
 /// Build a SQL-backed router (non-JWT version).
 ///
-/// Returns (router, checkpoint_service, dlq_handle, policy_snapshot_repo) when SQL mode is used.
+/// Returns (router, checkpoint_service, dlq_handle, replay_handle, policy_snapshot_repo) when SQL mode is used.
 async fn build_sql_router_with_consumer(
     database_url: &str,
 ) -> Result<
@@ -322,6 +381,7 @@ async fn build_sql_router_with_consumer(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<DlqReplayWorkerHandle>,
         Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
@@ -340,6 +400,7 @@ async fn build_sql_router_with_consumer_jwt(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<DlqReplayWorkerHandle>,
         Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
@@ -421,9 +482,12 @@ async fn build_sql_router_with_consumer_jwt(
         None
     };
 
-    // Phase 3 bounded JetStream initialization and DLQ metrics worker startup.
-    // Also starts DLQ metrics worker if INTENT_API_NATS_DLQ_WORKER=true.
-    let dlq_handle: Option<DlqMetricsWorkerHandle> = if std::env::var("NATS_URL").is_ok() {
+    // Phase 3 bounded JetStream initialization and DLQ workers startup.
+    // Also starts DLQ metrics/replay workers if their respective env gates are true.
+    let (dlq_handle, replay_handle): (
+        Option<DlqMetricsWorkerHandle>,
+        Option<DlqReplayWorkerHandle>,
+    ) = if std::env::var("NATS_URL").is_ok() {
         let nats_url = std::env::var("NATS_URL").unwrap();
         let jetstream_initializer = JetStreamInitializer::new();
         match jetstream_initializer.ensure_stream(&nats_url).await {
@@ -433,25 +497,30 @@ async fn build_sql_router_with_consumer_jwt(
                     jetstream_initializer.stream_name(),
                     jetstream_initializer.subject_filter()
                 );
-                // Start DLQ metrics worker if enabled
-                maybe_start_dlq_metrics_worker(
-                    Some(jetstream_ctx),
-                    jetstream_initializer.subject_filter(),
-                )
-                .await
+                let subject_filter = jetstream_initializer.subject_filter();
+                let dlq_metrics_handle =
+                    maybe_start_dlq_metrics_worker(Some(jetstream_ctx.clone()), subject_filter)
+                        .await;
+                let dlq_replay_handle =
+                    maybe_start_dlq_replay_worker(Some(jetstream_ctx), subject_filter).await;
+                (dlq_metrics_handle, dlq_replay_handle)
             }
             Err(e) => {
                 tracing::warn!(
                     "JetStream initialization failed (NATS may be unavailable): {} — continuing without JetStream",
                     e
                 );
-                // Still try to start DLQ metrics worker without JetStream (will fail gracefully)
-                maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
+                let dlq_metrics_handle =
+                    maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await;
+                let dlq_replay_handle =
+                    maybe_start_dlq_replay_worker(None, "audit.events.v1.>").await;
+                (dlq_metrics_handle, dlq_replay_handle)
             }
         }
     } else {
-        // NATS_URL not set - try to start DLQ metrics worker anyway (will fail gracefully if NATS unavailable)
-        maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
+        let dlq_metrics_handle = maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await;
+        let dlq_replay_handle = maybe_start_dlq_replay_worker(None, "audit.events.v1.>").await;
+        (dlq_metrics_handle, dlq_replay_handle)
     };
 
     // Slice 2: SQL-backed propagation record repository
@@ -484,6 +553,7 @@ async fn build_sql_router_with_consumer_jwt(
         router,
         Some(checkpoint_service),
         dlq_handle,
+        replay_handle,
         Some(policy_snapshot_repo),
     ))
 }
@@ -496,6 +566,7 @@ async fn build_sql_router_with_consumer_impl(
         Router,
         Option<Arc<CheckpointService>>,
         Option<DlqMetricsWorkerHandle>,
+        Option<DlqReplayWorkerHandle>,
         Option<Arc<dyn PolicySnapshotRepository>>,
     ),
     Box<dyn std::error::Error>,
@@ -584,10 +655,12 @@ async fn build_sql_router_with_consumer_impl(
     };
 
     // Phase 3 bounded JetStream initialization: ensure audit_events stream exists when NATS_URL is configured.
-    // Also starts DLQ metrics worker if INTENT_API_NATS_DLQ_WORKER=true.
+    // Also starts DLQ metrics/replay workers if their respective env gates are true.
     // Fail-safe: if NATS is unavailable, log warning and continue without JetStream.
-    // This is intentional bounded behavior — NATS unavailability should not crash the service.
-    let dlq_handle: Option<DlqMetricsWorkerHandle> = if std::env::var("NATS_URL").is_ok() {
+    let (dlq_handle, replay_handle): (
+        Option<DlqMetricsWorkerHandle>,
+        Option<DlqReplayWorkerHandle>,
+    ) = if std::env::var("NATS_URL").is_ok() {
         let nats_url = std::env::var("NATS_URL").unwrap();
         let jetstream_initializer = JetStreamInitializer::new();
         match jetstream_initializer.ensure_stream(&nats_url).await {
@@ -597,25 +670,30 @@ async fn build_sql_router_with_consumer_impl(
                     jetstream_initializer.stream_name(),
                     jetstream_initializer.subject_filter()
                 );
-                // Start DLQ metrics worker if enabled
-                maybe_start_dlq_metrics_worker(
-                    Some(jetstream_ctx),
-                    jetstream_initializer.subject_filter(),
-                )
-                .await
+                let subject_filter = jetstream_initializer.subject_filter();
+                let dlq_metrics_handle =
+                    maybe_start_dlq_metrics_worker(Some(jetstream_ctx.clone()), subject_filter)
+                        .await;
+                let dlq_replay_handle =
+                    maybe_start_dlq_replay_worker(Some(jetstream_ctx), subject_filter).await;
+                (dlq_metrics_handle, dlq_replay_handle)
             }
             Err(e) => {
                 tracing::warn!(
                     "JetStream initialization failed (NATS may be unavailable): {} — continuing without JetStream",
                     e
                 );
-                // Still try to start DLQ metrics worker without JetStream (will fail gracefully)
-                maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
+                let dlq_metrics_handle =
+                    maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await;
+                let dlq_replay_handle =
+                    maybe_start_dlq_replay_worker(None, "audit.events.v1.>").await;
+                (dlq_metrics_handle, dlq_replay_handle)
             }
         }
     } else {
-        // NATS_URL not set - try to start DLQ metrics worker anyway (will fail gracefully if NATS unavailable)
-        maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await
+        let dlq_metrics_handle = maybe_start_dlq_metrics_worker(None, "audit.events.v1.>").await;
+        let dlq_replay_handle = maybe_start_dlq_replay_worker(None, "audit.events.v1.>").await;
+        (dlq_metrics_handle, dlq_replay_handle)
     };
 
     // Slice 2: SQL-backed propagation record repository
@@ -647,6 +725,7 @@ async fn build_sql_router_with_consumer_impl(
         router,
         Some(checkpoint_service),
         dlq_handle,
+        replay_handle,
         Some(policy_snapshot_repo),
     ))
 }
@@ -777,52 +856,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build router and get optional checkpoint service for NATS consumer
-    let (router, checkpoint_service, sql_dlq_handle, policy_snapshot_repo) = if let Ok(
-        database_url,
-    ) =
-        std::env::var("DATABASE_URL")
-    {
-        tracing::info!("DATABASE_URL set — using SQL-backed repositories");
-        tracing::info!("Connecting to PostgreSQL...");
+    let (router, checkpoint_service, sql_dlq_handle, sql_replay_handle, policy_snapshot_repo) =
+        if let Ok(database_url) = std::env::var("DATABASE_URL") {
+            tracing::info!("DATABASE_URL set — using SQL-backed repositories");
+            tracing::info!("Connecting to PostgreSQL...");
 
-        // Route to JWT or non-JWT SQL builder based on jwt_required
-        #[cfg(feature = "jwt-auth")]
-        let sql_result = if jwt_required {
-            build_sql_router_with_consumer_jwt(&database_url, auth_config.unwrap()).await
-        } else {
-            build_sql_router_with_consumer(&database_url).await
-        };
-        #[cfg(not(feature = "jwt-auth"))]
-        let sql_result = build_sql_router_with_consumer(&database_url).await;
+            // Route to JWT or non-JWT SQL builder based on jwt_required
+            #[cfg(feature = "jwt-auth")]
+            let sql_result = if jwt_required {
+                build_sql_router_with_consumer_jwt(&database_url, auth_config.unwrap()).await
+            } else {
+                build_sql_router_with_consumer(&database_url).await
+            };
+            #[cfg(not(feature = "jwt-auth"))]
+            let sql_result = build_sql_router_with_consumer(&database_url).await;
 
-        match sql_result {
-            Ok((router, checkpoint_service, dlq_handle, policy_repo)) => {
-                tracing::info!("SQL-backed router initialized successfully");
-                (router, checkpoint_service, dlq_handle, policy_repo)
-            }
-            Err(e) => {
-                tracing::error!("Failed to connect to database: {}", e);
-                if is_strict_mode {
-                    tracing::error!("INTENT_API_STRICT or INTENT_API_PRODUCTION is set — exiting instead of falling back");
-                    return Err(format!("Database connection failed in strict mode: {}", e).into());
+            match sql_result {
+                Ok((router, checkpoint_service, dlq_handle, replay_handle, policy_repo)) => {
+                    tracing::info!("SQL-backed router initialized successfully");
+                    (
+                        router,
+                        checkpoint_service,
+                        dlq_handle,
+                        replay_handle,
+                        policy_repo,
+                    )
                 }
-                tracing::warn!("Falling back to in-memory repositories");
-                tracing::warn!("Set DATABASE_URL properly for production use");
-                (build_inmemory_router(), None, None, None)
+                Err(e) => {
+                    tracing::error!("Failed to connect to database: {}", e);
+                    if is_strict_mode {
+                        tracing::error!("INTENT_API_STRICT or INTENT_API_PRODUCTION is set — exiting instead of falling back");
+                        return Err(
+                            format!("Database connection failed in strict mode: {}", e).into()
+                        );
+                    }
+                    tracing::warn!("Falling back to in-memory repositories");
+                    tracing::warn!("Set DATABASE_URL properly for production use");
+                    (build_inmemory_router(), None, None, None, None)
+                }
             }
-        }
-    } else {
-        if is_strict_mode {
-            tracing::error!(
-                "INTENT_API_STRICT or INTENT_API_PRODUCTION is set but DATABASE_URL is not set"
-            );
-            return Err("DATABASE_URL must be set in strict/production mode".into());
-        }
-        tracing::info!("DATABASE_URL not set — using in-memory repositories");
-        tracing::warn!("This is suitable for development/smoke testing only");
-        tracing::warn!("Set DATABASE_URL for production deployments");
-        (build_inmemory_router(), None, None, None)
-    };
+        } else {
+            if is_strict_mode {
+                tracing::error!(
+                    "INTENT_API_STRICT or INTENT_API_PRODUCTION is set but DATABASE_URL is not set"
+                );
+                return Err("DATABASE_URL must be set in strict/production mode".into());
+            }
+            tracing::info!("DATABASE_URL not set — using in-memory repositories");
+            tracing::warn!("This is suitable for development/smoke testing only");
+            tracing::warn!("Set DATABASE_URL for production deployments");
+            (build_inmemory_router(), None, None, None, None)
+        };
 
     // Spawn NATS consumer registry if enabled and NATS_URL is configured
     // **Phase 4 bounded slice:** Only CheckpointCreatorConsumer is registered.
@@ -943,6 +1027,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dlq_handle.shutdown();
         dlq_handle.wait_for_all().await;
         tracing::info!("DLQ metrics worker shutdown complete");
+    }
+
+    // Wait for DLQ replay worker to finish if it was started
+    if let Some(replay_handle) = sql_replay_handle {
+        tracing::info!("Waiting for DLQ replay worker to finish...");
+        replay_handle.shutdown();
+        replay_handle.wait_for_all().await;
+        tracing::info!("DLQ replay worker shutdown complete");
     }
 
     // Wait for NATS consumer to finish if it was started

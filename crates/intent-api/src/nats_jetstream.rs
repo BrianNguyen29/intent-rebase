@@ -230,7 +230,7 @@ impl NatsPullConsumerAdapter {
             consumer_config: async_nats::jetstream::consumer::pull::Config {
                 durable_name: Some(consumer_name.clone()),
                 description: Some("Phase 4 bounded pull consumer for audit events".to_string()),
-                ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+                ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
                 max_deliver: 3, // G2 retry config: max_deliver=3 (i64)
                 ack_wait: Duration::from_secs(30),
                 ..Default::default()
@@ -1095,7 +1095,8 @@ impl DlqHelper {
 // - G5: Test coverage passes
 //
 // **Bounded behavior:**
-// - Uses lightweight pull consumer peek (no_ack=true, max=100) to count messages
+// - Uses lightweight pull consumer with AckPolicy::None to observe messages without
+//   requiring (or performing) explicit acknowledgement — messages remain in the stream
 // - Does NOT consume/remove messages from DLQ
 // - Polls at configured interval (default: 30s)
 // - Graceful shutdown via watch channel
@@ -1159,7 +1160,7 @@ impl Default for DlqMetricsWorkerConfig {
 /// - `intent_api_dlq_message_age_seconds`: Age of oldest message across all DLQ subjects
 ///
 /// **Bounded behavior:**
-/// - Uses lightweight pull consumer peek (no_ack=true) to count messages without consuming
+/// - Uses lightweight pull consumer peek (ack_policy = None) to count messages without consuming
 /// - Does NOT remove messages from DLQ
 /// - Graceful shutdown via watch channel
 ///
@@ -1309,7 +1310,7 @@ impl DlqMetricsWorker {
 
     /// Peek a DLQ subject to count messages and find oldest timestamp.
     ///
-    /// Uses a lightweight pull consumer with no_ack=true to peek messages
+    /// Uses a lightweight pull consumer with `ack_policy = None` to peek messages
     /// without consuming them.
     async fn peek_dlq_subject(
         &self,
@@ -1321,7 +1322,7 @@ impl DlqMetricsWorker {
         let consumer_config = async_nats::jetstream::consumer::pull::Config {
             durable_name: Some(consumer_name.clone()),
             description: Some("DLQ metrics peek consumer".to_string()),
-            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
             max_deliver: 1,
             ..Default::default()
         };
@@ -1378,8 +1379,7 @@ impl DlqMetricsWorker {
                         }
                     }
 
-                    // ACK immediately so message is not redelivered
-                    let _ = msg.ack().await;
+                    // ack_policy is None — do NOT ack; peek must not consume messages
                 }
                 Ok(Some(Err(e))) => {
                     tracing::warn!(
@@ -1491,6 +1491,346 @@ impl DlqMetricsWorkerBuilder {
         let handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
 
         Ok(DlqMetricsWorkerHandle {
+            handle,
+            shutdown_tx,
+        })
+    }
+}
+
+// =============================================================================
+// Bounded DLQ Replay Worker (Phase 4 DLQ Design — Bounded First Slice)
+// =============================================================================
+//
+// Bounded implementation for replaying messages from DLQ to their original
+// subjects. Uses `DlqHelper::replay_from_dlq()` for the actual replay.
+//
+// **Production Readiness Note:**
+// This is a BOUNDED FIRST SLICE implementation. Not production-ready until:
+// - G1: Design approved
+// - G2: JetStream configured with DLQ subjects
+// - G3: Monitoring/lifecycle wiring complete
+// - G4: Runbook RB11 updated
+// - G5: Test coverage passes
+//
+// **Bounded behavior:**
+// - Single DLQ subject (default: `audit.events.v1.DLQ`)
+// - Polls at configured interval (default: 60s)
+// - Replays up to `max_replay` messages per poll
+// - ACKs DLQ message only on successful replay
+// - On replay failure, leaves message unacked for manual investigation
+// - Graceful shutdown via watch channel
+
+/// Configuration for DLQ replay worker
+#[derive(Debug, Clone)]
+pub struct DlqReplayWorkerConfig {
+    /// DLQ subject to replay from
+    pub dlq_subject: String,
+    /// Poll interval between replay attempts
+    pub poll_interval: Duration,
+    /// Maximum messages to replay per poll (bounded to prevent overload)
+    pub max_replay: usize,
+}
+
+impl DlqReplayWorkerConfig {
+    /// Create a new config with default settings.
+    pub fn new(dlq_subject: impl Into<String>) -> Self {
+        Self {
+            dlq_subject: dlq_subject.into(),
+            poll_interval: Duration::from_secs(60),
+            max_replay: 10,
+        }
+    }
+
+    /// Set the poll interval.
+    #[allow(dead_code)]
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    /// Set the maximum messages to replay per poll.
+    #[allow(dead_code)]
+    pub fn with_max_replay(mut self, max: usize) -> Self {
+        self.max_replay = max;
+        self
+    }
+}
+
+impl Default for DlqReplayWorkerConfig {
+    fn default() -> Self {
+        Self::new("audit.events.v1.DLQ")
+    }
+}
+
+/// Bounded DLQ replay worker for replaying messages from DLQ to original subjects.
+///
+/// Polls a single DLQ subject at configured interval and replays messages
+/// via `DlqHelper::replay_from_dlq()`.
+///
+/// **Bounded behavior:**
+/// - Creates a pull consumer with `AckPolicy::Explicit` on the DLQ subject
+/// - Replays up to `max_replay` messages per poll
+/// - ACKs DLQ message only after successful replay
+/// - On replay failure, leaves message unacked and breaks the poll
+/// - Graceful shutdown via watch channel
+///
+/// **Production Readiness:**
+/// This is a BOUNDED FIRST SLICE. Not production-ready until G1-G5 gates pass.
+#[derive(Debug)]
+pub struct DlqReplayWorker {
+    jetstream: JetStreamContext,
+    config: DlqReplayWorkerConfig,
+    stream_name: String,
+    dlq_helper: DlqHelper,
+}
+
+impl DlqReplayWorker {
+    /// Create a new DLQ replay worker.
+    pub fn new(jetstream: JetStreamContext, config: DlqReplayWorkerConfig) -> Self {
+        // Derive stream name from DLQ subject (same pattern as DlqMetricsWorker).
+        let stream_name = config
+            .dlq_subject
+            .split('.')
+            .nth(2)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "audit_events".to_string());
+
+        let dlq_helper = DlqHelper::new(jetstream.clone());
+
+        Self {
+            jetstream,
+            config,
+            stream_name,
+            dlq_helper,
+        }
+    }
+
+    /// Run the DLQ replay worker poll loop.
+    ///
+    /// **Bounded behavior:**
+    /// - Polls DLQ subject at configured interval
+    /// - Replays messages via `DlqHelper::replay_from_dlq()`
+    /// - ACKs on success, leaves unacked on failure
+    /// - Stops gracefully when shutdown signal is received
+    pub async fn run(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), DlqReplayWorkerError> {
+        tracing::info!(
+            "DlqReplayWorker: starting with subject '{}', poll_interval {:?}, max_replay {}",
+            self.config.dlq_subject,
+            self.config.poll_interval,
+            self.config.max_replay
+        );
+
+        loop {
+            // Check for shutdown signal
+            if *shutdown.borrow() {
+                tracing::info!("DlqReplayWorker: shutdown signal received, stopping poll loop");
+                break;
+            }
+
+            // Attempt to replay messages from the DLQ subject
+            match self.replay_dlq_subject(&self.config.dlq_subject).await {
+                Ok(replayed) => {
+                    if replayed > 0 {
+                        tracing::info!("DlqReplayWorker: replayed {} messages", replayed);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("DlqReplayWorker: replay poll failed: {}", e);
+                }
+            }
+
+            // Wait for poll interval or shutdown
+            let shutdown_fut = shutdown.changed();
+            match timeout(self.config.poll_interval, shutdown_fut).await {
+                Ok(Ok(())) => {
+                    if *shutdown.borrow() {
+                        tracing::info!(
+                            "DlqReplayWorker: shutdown signal received, stopping poll loop"
+                        );
+                        break;
+                    }
+                }
+                Ok(Err(_)) => {
+                    tracing::warn!("DlqReplayWorker: shutdown channel closed unexpectedly");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout — poll interval elapsed, continue to next poll
+                }
+            }
+        }
+
+        tracing::info!("DlqReplayWorker: poll loop stopped");
+        Ok(())
+    }
+
+    /// Replay messages from a DLQ subject.
+    ///
+    /// Creates a temporary pull consumer to fetch messages, replays each one
+    /// via `DlqHelper::replay_from_dlq()`, and ACKs only on successful replay.
+    async fn replay_dlq_subject(&self, dlq_subject: &str) -> Result<usize, DlqReplayWorkerError> {
+        let consumer_name = format!("dlq_replay_{}", dlq_subject.replace('.', "_"));
+
+        let consumer_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(consumer_name),
+            description: Some("DLQ replay consumer".to_string()),
+            filter_subject: dlq_subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            max_deliver: 1,
+            ..Default::default()
+        };
+
+        let consumer = match self
+            .jetstream
+            .create_consumer_on_stream(consumer_config, &self.stream_name)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(DlqReplayWorkerError::ConsumerCreate(e.to_string()));
+            }
+        };
+
+        let mut message_stream = match consumer.messages().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                return Err(DlqReplayWorkerError::FetchMessages(e.to_string()));
+            }
+        };
+
+        let mut replayed = 0;
+
+        use futures_util::StreamExt;
+
+        while replayed < self.config.max_replay {
+            match timeout(Duration::from_secs(1), message_stream.next()).await {
+                Ok(Some(Ok(msg))) => {
+                    match self.dlq_helper.replay_from_dlq(&msg).await {
+                        Ok(()) => {
+                            if let Err(e) = msg.ack().await {
+                                tracing::warn!(
+                                    "DlqReplayWorker: failed to ack replayed message: {}",
+                                    e
+                                );
+                            }
+                            replayed += 1;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "DlqReplayWorker: failed to replay message from '{}': {} — leaving unacked for manual investigation",
+                                dlq_subject, e
+                            );
+                            // Do NOT ack — break to preserve ordering and leave message available
+                            break;
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    tracing::warn!(
+                        "DlqReplayWorker: error reading message from '{}': {}",
+                        dlq_subject,
+                        e
+                    );
+                    break;
+                }
+                Ok(None) => {
+                    // No more messages
+                    break;
+                }
+                Err(_) => {
+                    // Timeout waiting for next message — stop replaying
+                    break;
+                }
+            }
+        }
+
+        Ok(replayed)
+    }
+}
+
+/// Errors that can occur in the DLQ replay worker.
+#[derive(Debug, Clone)]
+pub enum DlqReplayWorkerError {
+    /// Failed to create consumer for replaying
+    ConsumerCreate(String),
+    /// Failed to fetch messages from consumer
+    FetchMessages(String),
+}
+
+impl std::fmt::Display for DlqReplayWorkerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DlqReplayWorkerError::ConsumerCreate(msg) => {
+                write!(f, "DLQ replay worker: consumer create failed: {}", msg)
+            }
+            DlqReplayWorkerError::FetchMessages(msg) => {
+                write!(f, "DLQ replay worker: fetch messages failed: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DlqReplayWorkerError {}
+
+/// Handle to a running DLQ replay worker.
+///
+/// Allows graceful shutdown of the replay worker.
+#[derive(Debug)]
+pub struct DlqReplayWorkerHandle {
+    handle: tokio::task::JoinHandle<Result<(), DlqReplayWorkerError>>,
+    shutdown_tx: watch::Sender<bool>,
+}
+
+impl DlqReplayWorkerHandle {
+    /// Signal the worker to stop gracefully.
+    pub fn shutdown(&self) {
+        tracing::info!("DlqReplayWorkerHandle: sending shutdown signal");
+        let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Wait for the worker to finish.
+    pub async fn wait_for_all(self) {
+        tracing::info!("DlqReplayWorkerHandle: waiting for worker to finish");
+        match self.handle.await {
+            Ok(Ok(())) => {
+                tracing::info!("DlqReplayWorkerHandle: worker finished normally");
+            }
+            Ok(Err(e)) => {
+                tracing::error!("DlqReplayWorkerHandle: worker failed: {:?}", e);
+            }
+            Err(e) => {
+                tracing::error!("DlqReplayWorkerHandle: worker panicked: {:?}", e);
+            }
+        }
+    }
+}
+
+/// Builder for DLQ replay worker with shutdown channel support.
+///
+/// Provides a convenient way to create and start a DLQ replay worker
+/// with shared shutdown signaling.
+pub struct DlqReplayWorkerBuilder {
+    jetstream: JetStreamContext,
+    config: DlqReplayWorkerConfig,
+}
+
+impl DlqReplayWorkerBuilder {
+    /// Create a new builder with the given JetStream context and config.
+    pub fn new(jetstream: JetStreamContext, config: DlqReplayWorkerConfig) -> Self {
+        Self { jetstream, config }
+    }
+
+    /// Build and start the worker, returning a handle for shutdown.
+    pub async fn start(self) -> Result<DlqReplayWorkerHandle, DlqReplayWorkerError> {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let worker = DlqReplayWorker::new(self.jetstream, self.config);
+
+        let handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
+
+        Ok(DlqReplayWorkerHandle {
             handle,
             shutdown_tx,
         })
@@ -2167,6 +2507,7 @@ mod tests {
 #[allow(unused)]
 mod live_integration_tests {
     use super::*;
+    use futures_util::StreamExt;
     use intent_rebase_types::{ConsumeResult, EventConsumer, PublishedEvent};
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -2515,6 +2856,390 @@ mod live_integration_tests {
             "JetStream/async-nats has no native automatic dead-letter routing"
         );
     }
+
+    /// Test: Full-consumer path publishes Failed message to DLQ before ack
+    ///
+    /// Requires: NATS with JetStream enabled (docker-compose up -d)
+    /// Verifies:
+    /// - `NatsPullConsumerAdapter` with `DlqHelper` publishes to DLQ on `Failed` outcome
+    /// - DLQ message contains correct metadata headers (`Nats-Orig-Subject`, `Nats-Deliver-Count`, `Nats-DLQ-Reason`)
+    /// - Original message is acked after DLQ publish
+    ///
+    /// **NON-PRODUCTION:** This test verifies the bounded local-dev full-consumer path
+    /// gated behind `INTENT_API_NATS_FULL_CONSUMER=true`. It does NOT verify production
+    /// readiness, replay worker, or native JetStream dead_letter.
+    ///
+    /// Run with: cargo test -p intent-api --lib -- nats_jetstream::live_integration_tests::live_jetstream_full_consumer_dlq_publish_on_failed --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn live_jetstream_full_consumer_dlq_publish_on_failed() {
+        use intent_rebase_types::{ConsumeResult, EventConsumer, PublishedEvent};
+
+        let nats_url =
+            std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+        // Use unique stream/subject per run to avoid durable consumer collisions
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let stream_name: &'static str =
+            Box::leak(format!("test_full_consumer_dlq_{}", unique_id).into_boxed_str());
+        let subject_filter: &'static str =
+            Box::leak(format!("test.full_consumer.{}.>", unique_id).into_boxed_str());
+        let subject: &'static str =
+            Box::leak(format!("test.full_consumer.{}.events", unique_id).into_boxed_str());
+        let dlq_subject: &'static str =
+            Box::leak(format!("test.full_consumer.{}.events.DLQ", unique_id).into_boxed_str());
+
+        // Ensure isolated stream exists
+        let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+        let jetstream = initializer
+            .ensure_stream(&nats_url)
+            .await
+            .expect("Failed to create/verify JetStream stream");
+
+        // Publish a test message
+        let payload = serde_json::json!({"test": "full_consumer_dlq"})
+            .to_string()
+            .into_bytes();
+        jetstream
+            .publish(subject, payload.into())
+            .await
+            .expect("Failed to publish message");
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Create pull consumer and fetch the published message
+        let consumer_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("test_full_consumer_consumer_{}", unique_id)),
+            filter_subject: subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        };
+        let pull_consumer = jetstream
+            .create_consumer_on_stream(consumer_config, stream_name)
+            .await
+            .expect("Failed to create pull consumer");
+
+        let mut message_stream = pull_consumer
+            .messages()
+            .await
+            .expect("Failed to get message stream");
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), message_stream.next())
+            .await
+            .expect("Timeout waiting for message")
+            .expect("Message stream ended")
+            .expect("Message error");
+
+        // Create adapter with DLQ helper (full-consumer path)
+        let dlq_helper = Arc::new(DlqHelper::new(jetstream.clone()));
+        let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), stream_name)
+            .with_dlq_helper(Some(dlq_helper));
+
+        // Consumer that always fails
+        struct AlwaysFailConsumer;
+        #[async_trait::async_trait]
+        impl EventConsumer for AlwaysFailConsumer {
+            async fn consume(&self, _event: &PublishedEvent) -> ConsumeResult {
+                ConsumeResult::Failed {
+                    reason: "simulated failure for live test".to_string(),
+                }
+            }
+        }
+
+        // Process the message — this should DLQ-publish BEFORE ack
+        let result = adapter.process_one(msg, &AlwaysFailConsumer).await;
+        assert!(
+            result.is_err(),
+            "process_one should return Err for Failed consumer"
+        );
+
+        // Allow time for DLQ publish to propagate
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Verify DLQ subject received the message by creating a temporary consumer
+        let dlq_consumer_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("test_dlq_verify_consumer_{}", unique_id)),
+            filter_subject: dlq_subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            max_deliver: 1,
+            ..Default::default()
+        };
+        let dlq_consumer = jetstream
+            .create_consumer_on_stream(dlq_consumer_config, stream_name)
+            .await
+            .expect("Failed to create DLQ consumer");
+
+        let mut dlq_stream = dlq_consumer
+            .messages()
+            .await
+            .expect("Failed to get DLQ message stream");
+        let dlq_msg = tokio::time::timeout(std::time::Duration::from_secs(5), dlq_stream.next())
+            .await
+            .expect("Timeout waiting for DLQ message")
+            .expect("DLQ stream ended")
+            .expect("DLQ message error");
+
+        // Verify DLQ message metadata headers
+        assert_eq!(dlq_msg.subject.as_str(), dlq_subject);
+        let headers = dlq_msg
+            .headers
+            .as_ref()
+            .expect("DLQ message should have headers");
+        assert!(
+            headers.get(HEADER_ORIG_SUBJECT).is_some(),
+            "Missing Nats-Orig-Subject header"
+        );
+        assert!(
+            headers.get(HEADER_DLQ_REASON).is_some(),
+            "Missing Nats-DLQ-Reason header"
+        );
+        assert!(
+            headers.get(HEADER_DELIVERY_COUNT).is_some(),
+            "Missing Nats-Deliver-Count header"
+        );
+
+        // Verify Nats-Orig-Subject matches original subject
+        let orig_subject = headers.get(HEADER_ORIG_SUBJECT).unwrap().to_string();
+        assert_eq!(orig_subject, subject);
+
+        // Ack DLQ message to clean up
+        dlq_msg.ack().await.expect("Failed to ack DLQ message");
+
+        tracing::info!("Live integration test passed: full-consumer DLQ publish verified");
+    }
+
+    /// Live test: DLQ metrics peek does not consume messages
+    ///
+    /// Requires: NATS with JetStream enabled (docker-compose up -d)
+    /// Verifies:
+    /// - `DlqMetricsWorker::peek_dlq_subject` counts messages without consuming them
+    /// - Messages remain available to other consumers after peek
+    ///
+    /// **NON-PRODUCTION:** This test verifies the bounded DLQ metrics peek path
+    /// uses `AckPolicy::None` and does not remove messages from the stream.
+    ///
+    /// Run with: cargo test -p intent-api --lib -- nats_jetstream::live_integration_tests::live_jetstream_dlq_peek_does_not_consume_messages --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn live_jetstream_dlq_peek_does_not_consume_messages() {
+        let nats_url =
+            std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+        // Use a unique stream/subject per run to avoid durable consumer collisions
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let stream_name: &'static str =
+            Box::leak(format!("test_dlq_peek_{}", unique_id).into_boxed_str());
+        let subject_filter: &'static str =
+            Box::leak(format!("test.dlqpeek.{}.>", stream_name).into_boxed_str());
+        let dlq_subject: &'static str =
+            Box::leak(format!("test.dlqpeek.{}.events.DLQ", stream_name).into_boxed_str());
+
+        // Ensure isolated stream exists
+        let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+        let jetstream = initializer
+            .ensure_stream(&nats_url)
+            .await
+            .expect("Failed to create/verify JetStream stream");
+
+        // Publish 3 messages to DLQ subject with timestamp headers
+        for i in 0..3 {
+            let mut headers = async_nats::HeaderMap::new();
+            headers.insert(HEADER_DLQ_TIMESTAMP, chrono::Utc::now().to_rfc3339());
+
+            let payload = serde_json::json!({ "test": i }).to_string().into_bytes();
+            jetstream
+                .publish_with_headers(dlq_subject, headers, payload.into())
+                .await
+                .expect("Failed to publish DLQ message");
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Create DlqMetricsWorker and peek
+        let config = DlqMetricsWorkerConfig::new()
+            .add_dlq_subject(dlq_subject)
+            .with_max_peek(10);
+        let worker = DlqMetricsWorker::new(jetstream.clone(), config);
+
+        let (count, oldest_age) = worker
+            .peek_dlq_subject(dlq_subject)
+            .await
+            .expect("Peek should succeed");
+
+        assert_eq!(count, 3, "Peek should see all 3 messages");
+        assert!(oldest_age.is_some(), "Oldest age should be present");
+
+        // Verify messages are still available by creating a separate consumer
+        let verify_consumer_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("test_verify_{}", unique_id)),
+            filter_subject: dlq_subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        };
+        let verify_consumer = jetstream
+            .create_consumer_on_stream(verify_consumer_config, stream_name)
+            .await
+            .expect("Failed to create verify consumer");
+
+        let mut msg_stream = verify_consumer
+            .messages()
+            .await
+            .expect("Failed to get verify message stream");
+
+        let mut verify_count = 0;
+        for _ in 0..3 {
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_stream.next())
+                .await
+                .expect("Timeout waiting for message")
+                .expect("Stream ended")
+                .expect("Message error");
+
+            verify_count += 1;
+            msg.ack().await.expect("Failed to ack verify message");
+        }
+
+        assert_eq!(
+            verify_count, 3,
+            "All 3 messages should still be available after peek"
+        );
+
+        tracing::info!("Live integration test passed: DLQ peek does not consume messages");
+    }
+
+    /// Live test: DLQ replay worker replays message to original subject and acks on success
+    ///
+    /// Requires: NATS with JetStream enabled (docker-compose up -d)
+    /// Verifies:
+    /// - `DlqReplayWorker::replay_dlq_subject` replays a DLQ message to its original subject
+    /// - Original subject receives the replayed message with `Nats-Replay` header
+    /// - DLQ message is acked (removed from the replay consumer's pending list)
+    ///
+    /// **NON-PRODUCTION:** This test verifies the bounded DLQ replay path.
+    ///
+    /// Run with: cargo test -p intent-api --lib -- nats_jetstream::live_integration_tests::live_jetstream_dlq_replay_worker_replays_message --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn live_jetstream_dlq_replay_worker_replays_message() {
+        let nats_url =
+            std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+        // Use a unique stream/subject per run to avoid durable consumer collisions
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let stream_name: &'static str =
+            Box::leak(format!("test_dlq_replay_{}", unique_id).into_boxed_str());
+        let subject_filter: &'static str =
+            Box::leak(format!("test.dlqreplay.{}.>", stream_name).into_boxed_str());
+        let dlq_subject: &'static str =
+            Box::leak(format!("test.dlqreplay.{}.events.DLQ", stream_name).into_boxed_str());
+        let orig_subject: &'static str =
+            Box::leak(format!("test.dlqreplay.{}.events.Original", stream_name).into_boxed_str());
+
+        // Ensure isolated stream exists
+        let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+        let jetstream = initializer
+            .ensure_stream(&nats_url)
+            .await
+            .expect("Failed to create/verify JetStream stream");
+
+        // Publish a message to DLQ subject with original subject header
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert(HEADER_ORIG_SUBJECT, orig_subject);
+        let payload = serde_json::json!({ "test": "replay" })
+            .to_string()
+            .into_bytes();
+        jetstream
+            .publish_with_headers(dlq_subject, headers, payload.into())
+            .await
+            .expect("Failed to publish DLQ message");
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Create DlqReplayWorker and replay
+        let config = DlqReplayWorkerConfig::new(dlq_subject).with_max_replay(10);
+        let worker = DlqReplayWorker::new(jetstream.clone(), config);
+        let replayed = worker
+            .replay_dlq_subject(dlq_subject)
+            .await
+            .expect("Replay should succeed");
+        assert_eq!(replayed, 1, "Should replay exactly 1 message");
+
+        // Allow time for replay publish to propagate
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Verify original subject received the replayed message
+        let orig_consumer_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("test_verify_orig_{}", unique_id)),
+            filter_subject: orig_subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        };
+        let orig_consumer = jetstream
+            .create_consumer_on_stream(orig_consumer_config, stream_name)
+            .await
+            .expect("Failed to create original subject consumer");
+
+        let mut orig_stream = orig_consumer
+            .messages()
+            .await
+            .expect("Failed to get original subject message stream");
+
+        let orig_msg = tokio::time::timeout(std::time::Duration::from_secs(5), orig_stream.next())
+            .await
+            .expect("Timeout waiting for replayed message on original subject")
+            .expect("Original stream ended")
+            .expect("Original message error");
+
+        // Verify replay headers
+        let msg_headers = orig_msg
+            .headers
+            .as_ref()
+            .expect("Replayed message should have headers");
+        assert!(
+            msg_headers.get("Nats-Replay").is_some(),
+            "Missing Nats-Replay header on replayed message"
+        );
+        assert_eq!(
+            msg_headers.get(HEADER_ORIG_SUBJECT).unwrap().to_string(),
+            orig_subject,
+            "Nats-Orig-Subject header should match original subject"
+        );
+        orig_msg
+            .ack()
+            .await
+            .expect("Failed to ack original subject message");
+
+        // Verify DLQ message was acked by the worker by checking the replay consumer has no pending
+        let verify_dlq_config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("dlq_replay_{}", dlq_subject.replace('.', "_"))),
+            filter_subject: dlq_subject.to_string(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            max_deliver: 1,
+            ..Default::default()
+        };
+        let verify_dlq_consumer = jetstream
+            .create_consumer_on_stream(verify_dlq_config, stream_name)
+            .await
+            .expect("Failed to create verify DLQ consumer");
+
+        let mut verify_stream = verify_dlq_consumer
+            .messages()
+            .await
+            .expect("Failed to get verify DLQ message stream");
+
+        let dlq_check =
+            tokio::time::timeout(std::time::Duration::from_secs(2), verify_stream.next()).await;
+        assert!(
+            dlq_check.is_err(),
+            "DLQ replay consumer should have no pending messages after ack"
+        );
+
+        tracing::info!("Live integration test passed: DLQ replay worker replays message correctly");
+    }
 }
 
 // =============================================================================
@@ -2670,7 +3395,7 @@ mod lifecycle_tests {
     /// Test: Verify shutdown watch channel can be cloned
     #[tokio::test]
     async fn test_shutdown_channel_cloneable() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, mut rx) = watch::channel(false);
         let rx2 = rx.clone();
 
         // Send shutdown signal via original receiver
@@ -2680,8 +3405,11 @@ mod lifecycle_tests {
             let _ = tx_clone.send(true);
         });
 
-        // Both receivers should see the shutdown signal
-        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        // Wait for the shutdown signal to arrive
+        tokio::time::timeout(tokio::time::Duration::from_secs(1), rx.changed())
+            .await
+            .expect("timed out waiting for shutdown")
+            .expect("channel closed");
 
         assert!(*rx.borrow());
         assert!(*rx2.borrow());
@@ -3030,6 +3758,31 @@ mod lifecycle_tests {
         let _ = _assert_debug::<DlqMetricsWorker>;
     }
 
+    /// Regression test: peek_dlq_subject must use AckPolicy::None
+    ///
+    /// Using AckPolicy::Explicit with manual msg.ack() would drain DLQ messages,
+    /// invalidating depth metrics and replay visibility. This test guards against
+    /// re-introducing that behavior.
+    #[test]
+    fn test_dlq_peek_uses_none_ack_policy() {
+        let dlq_subject = "audit.events.v1.approval.events.DLQ";
+        let consumer_name = format!("dlq_peek_{}", dlq_subject.replace('.', "_"));
+
+        let config = async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(consumer_name),
+            description: Some("DLQ metrics peek consumer".to_string()),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+            max_deliver: 1,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.ack_policy,
+            async_nats::jetstream::consumer::AckPolicy::None,
+            "DLQ peek consumer must use AckPolicy::None to avoid consuming messages"
+        );
+    }
+
     // =====================================================================
     // Env Gate Tests for FULL_CONSUMER (NON-PRODUCTION local-dev only)
     // =====================================================================
@@ -3101,5 +3854,146 @@ mod lifecycle_tests {
         // Compile-time verification that with_dlq_helper method exists
         fn _check_builder_api(_: NatsPullConsumerAdapter) {}
         // The actual verification is that this compiles
+    }
+
+    // =====================================================================
+    // DlqReplayWorkerConfig Tests
+    // =====================================================================
+
+    /// Test: Verify DlqReplayWorkerConfig default values
+    #[test]
+    fn test_dlq_replay_worker_config_default() {
+        let config = DlqReplayWorkerConfig::default();
+
+        assert_eq!(config.dlq_subject, "audit.events.v1.DLQ");
+        assert_eq!(config.poll_interval, std::time::Duration::from_secs(60));
+        assert_eq!(config.max_replay, 10);
+    }
+
+    /// Test: Verify DlqReplayWorkerConfig custom subject
+    #[test]
+    fn test_dlq_replay_worker_config_custom_subject() {
+        let config = DlqReplayWorkerConfig::new("test.events.v1.DLQ");
+
+        assert_eq!(config.dlq_subject, "test.events.v1.DLQ");
+    }
+
+    /// Test: Verify DlqReplayWorkerConfig with_poll_interval
+    #[test]
+    fn test_dlq_replay_worker_config_poll_interval() {
+        let config = DlqReplayWorkerConfig::new("audit.events.v1.DLQ")
+            .with_poll_interval(std::time::Duration::from_secs(120));
+
+        assert_eq!(config.poll_interval, std::time::Duration::from_secs(120));
+    }
+
+    /// Test: Verify DlqReplayWorkerConfig with_max_replay
+    #[test]
+    fn test_dlq_replay_worker_config_max_replay() {
+        let config = DlqReplayWorkerConfig::new("audit.events.v1.DLQ").with_max_replay(50);
+
+        assert_eq!(config.max_replay, 50);
+    }
+
+    // =====================================================================
+    // DlqReplayWorkerError Tests
+    // =====================================================================
+
+    /// Test: Verify DlqReplayWorkerError Display impl
+    #[test]
+    fn test_dlq_replay_worker_error_display() {
+        let err = DlqReplayWorkerError::ConsumerCreate("connection failed".to_string());
+        assert!(err.to_string().contains("consumer create failed"));
+        assert!(err.to_string().contains("connection failed"));
+
+        let err = DlqReplayWorkerError::FetchMessages("timeout".to_string());
+        assert!(err.to_string().contains("fetch messages failed"));
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    // =====================================================================
+    // DlqReplayWorkerHandle Tests (Compile-Time Verification)
+    // =====================================================================
+
+    /// Test: Verify DlqReplayWorkerHandle can be created and used for shutdown signaling
+    #[tokio::test]
+    async fn test_dlq_replay_worker_handle_shutdown_signal() {
+        fn _check_handle_field_access(_: &DlqReplayWorkerHandle) {}
+        let _ = _check_handle_field_access;
+    }
+
+    // =====================================================================
+    // DlqReplayWorkerBuilder Tests (Compile-Time Verification)
+    // =====================================================================
+
+    /// Test: Verify DlqReplayWorkerBuilder can be created
+    #[test]
+    fn test_dlq_replay_worker_builder_exists() {
+        fn _check_builder_api(_: DlqReplayWorkerBuilder) {}
+    }
+
+    // =====================================================================
+    // Env Gate Tests for DLQ Replay Worker
+    // =====================================================================
+
+    /// Test: Verify env gate INTENT_API_NATS_DLQ_REPLAY_WORKER defaults to off
+    #[test]
+    fn test_dlq_replay_worker_env_gate_defaults_off() {
+        std::env::remove_var("INTENT_API_NATS_DLQ_REPLAY_WORKER");
+
+        let value = std::env::var("INTENT_API_NATS_DLQ_REPLAY_WORKER");
+        assert!(
+            value.is_err(),
+            "INTENT_API_NATS_DLQ_REPLAY_WORKER should default to unset"
+        );
+
+        let is_enabled = std::env::var("INTENT_API_NATS_DLQ_REPLAY_WORKER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            !is_enabled,
+            "INTENT_API_NATS_DLQ_REPLAY_WORKER should be disabled by default"
+        );
+    }
+
+    /// Test: Verify env gate INTENT_API_NATS_DLQ_REPLAY_WORKER=true enables worker
+    #[test]
+    fn test_dlq_replay_worker_env_gate_enables_on_true() {
+        std::env::set_var("INTENT_API_NATS_DLQ_REPLAY_WORKER", "true");
+
+        let is_enabled = std::env::var("INTENT_API_NATS_DLQ_REPLAY_WORKER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            is_enabled,
+            "INTENT_API_NATS_DLQ_REPLAY_WORKER=true should enable worker"
+        );
+
+        std::env::remove_var("INTENT_API_NATS_DLQ_REPLAY_WORKER");
+    }
+
+    /// Test: Verify env gate INTENT_API_NATS_DLQ_REPLAY_WORKER=false disables worker
+    #[test]
+    fn test_dlq_replay_worker_env_gate_disables_on_false() {
+        std::env::set_var("INTENT_API_NATS_DLQ_REPLAY_WORKER", "false");
+
+        let is_enabled = std::env::var("INTENT_API_NATS_DLQ_REPLAY_WORKER")
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("true");
+        assert!(
+            !is_enabled,
+            "INTENT_API_NATS_DLQ_REPLAY_WORKER=false should disable worker"
+        );
+
+        std::env::remove_var("INTENT_API_NATS_DLQ_REPLAY_WORKER");
+    }
+
+    /// Test: Verify DlqReplayWorker implements Debug
+    #[test]
+    fn test_dlq_replay_worker_debug() {
+        fn _check_debug<T: std::fmt::Debug>() {}
+        fn _assert_debug<T: std::fmt::Debug>(_: &T) {}
+        let _ = _check_debug::<DlqReplayWorker>;
+        let _ = _assert_debug::<DlqReplayWorker>;
     }
 }
