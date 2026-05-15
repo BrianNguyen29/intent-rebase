@@ -350,4 +350,7 @@ mod compensation_mutation_handler_tests;
 mod batch_handler_tests;
 
 #[cfg(test)]
+mod intent_mutation_handler_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;
