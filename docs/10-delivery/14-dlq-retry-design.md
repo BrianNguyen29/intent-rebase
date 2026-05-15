@@ -55,7 +55,7 @@ This document specifies the dead-letter queue (DLQ) and retry policy for message
 - G2: JetStream consumer `dead_letter` config (CLI/server-side)
 - G3: Monitoring/alert rules (closed for local-dev — promtool validated 17 rules; production deployment deferred)
 - G4: RB11 runbook update for app-level DLQ
-- G5: Integration test coverage (bounded pass — 9 unit + 7 live ignored tests + 1 full-consumer live ignored test + 1 DLQ peek live ignored test)
+- G5: Integration test coverage (bounded pass — 9 unit + 10 live ignored tests, including full-consumer, DLQ peek, and DLQ replay live ignored tests)
 - **Bounded first slice delivered:** Automatic DLQ replay worker (`DlqReplayWorker`) — production deployment still gated on G1-G5 approvals
 - Retry with exponential backoff (future enhancement)
 - Per-message-type retry policies (future enhancement)
@@ -331,7 +331,7 @@ The following gates must be PASSED before any DLQ worker code is implemented:
 | G2: NATS JetStream Config | JetStream streams and consumers configured with DLQ subjects | SRE | ✅ VALIDATED |
 | G3: Monitoring Instrumented | DLQ metrics exposed and alerting rules deployed | SRE | ✅ CLOSED (local-dev) — 17 alert rules passed promtool validation; production deployment deferred |
 | G4: Runbook Written | DLQ investigation and replay procedure documented in runbooks | SRE | ✅ PASS |
-| G5: Test Coverage | Unit tests for retry logic, DLQ routing, and replay | Backend Lead | ✅ PASS (bounded) — 9 unit + 7 live ignored tests |
+| G5: Test Coverage | Unit tests for retry logic, DLQ routing, and replay | Backend Lead | ✅ PASS (bounded) — 9 unit + 10 live ignored tests |
 
 ---
 
