@@ -335,4 +335,7 @@ mod impact_report_tests;
 mod rebase_apply_handler_tests;
 
 #[cfg(test)]
+mod ingest_handler_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;

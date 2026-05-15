@@ -230,6 +230,15 @@ pub fn create_test_service_with_forensic_config() -> AppState {
     }
 }
 
+/// Returns (state, graph_repo) so tests can create nodes directly via the graph_repo.
+#[cfg(test)]
+pub fn create_test_service_with_graph_repo(
+) -> (crate::AppState, Arc<dyn graph_service::GraphRepository>) {
+    let state = create_test_service();
+    let graph_repo = state.graph_service.repo().clone();
+    (state, graph_repo)
+}
+
 /// Helper to create RlsTenantClaims for testing.
 ///
 /// Creates test JWT claims with the specified tenant_id.
