@@ -28,6 +28,8 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] `.github/workflows/smoke.yml` — real lightweight smoke check (fmt + check + clippy + lib tests) replacing the stub `echo` workflow
 - [x] Extract `error_response.rs` inline tests → `error_response_tests.rs`
 - [x] Extract `panic_hardening.rs` inline tests → `panic_hardening_tests.rs`
+- [x] Extract `approval_invalidation.rs` inline tests → `approval_invalidation_tests.rs`
+- [x] Extract `nats_event_publisher.rs` inline tests → `event_publisher_tests.rs`
 - [x] Register extracted test modules in `lib.rs`
 
 ### Remaining (P0)

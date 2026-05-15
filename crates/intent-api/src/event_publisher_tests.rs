@@ -166,3 +166,86 @@ async fn test_build_router_accepts_event_publisher() {
     );
     // Router builds successfully - this verifies the signature change works
 }
+
+// =========================================================================
+// NATS Event Publisher Tests (extracted from nats_event_publisher.rs)
+// =========================================================================
+
+use crate::nats_event_publisher::NatsEventPublisher;
+use intent_rebase_types::{EventPublisher, EventSubject, PublishResult, TraceContext};
+
+#[test]
+fn test_build_traceparent() {
+    let tp = NatsEventPublisher::build_traceparent(
+        "0af7651916cd43dd8448eb211c80319c",
+        "b7ad6b7169203331",
+        true,
+    );
+    assert_eq!(
+        tp,
+        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    );
+
+    let tp_unsampled = NatsEventPublisher::build_traceparent(
+        "0af7651916cd43dd8448eb211c80319c",
+        "b7ad6b7169203331",
+        false,
+    );
+    assert_eq!(
+        tp_unsampled,
+        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00"
+    );
+}
+
+#[tokio::test]
+async fn test_nats_publisher_no_url() {
+    // Use temp_env for deterministic parallel test isolation
+    // Set env var synchronously before the async block, then test
+    let original = std::env::var("NATS_URL").ok();
+    std::env::remove_var("NATS_URL");
+
+    let publisher = NatsEventPublisher::new();
+    let subject = EventSubject::from_audit_event(uuid::Uuid::new_v4(), "RebaseApplied");
+    let payload = serde_json::json!({ "test": true });
+
+    let result = publisher
+        .publish(&subject, &payload, TraceContext::default())
+        .await;
+
+    // Restore original
+    match original {
+        Some(v) => std::env::set_var("NATS_URL", v),
+        None => std::env::remove_var("NATS_URL"),
+    }
+
+    match result {
+        PublishResult::Skipped { reason } => {
+            assert!(
+                reason.contains("NATS_URL not configured") || reason.contains("connection failed")
+            );
+        }
+        _ => panic!("Expected Skipped result"),
+    }
+}
+
+#[tokio::test]
+async fn test_nats_publisher_is_ready_no_url() {
+    // Use temp_env for deterministic parallel test isolation - empty string
+    temp_env::with_var("NATS_URL", Some(""), || {
+        let publisher = NatsEventPublisher::new();
+        assert!(
+            !publisher.is_ready(),
+            "Publisher should not be ready with empty NATS_URL"
+        );
+    });
+}
+
+#[tokio::test]
+async fn test_nats_publisher_is_ready_with_url() {
+    // Use temp_env for deterministic parallel test isolation - valid URL
+    temp_env::with_var("NATS_URL", Some("nats://localhost:4222"), || {
+        let publisher = NatsEventPublisher::new();
+        // is_ready checks if URL is set, not if connection succeeds
+        assert!(publisher.is_ready());
+    });
+}

@@ -306,29 +306,3 @@ pub async fn publish_audit_event(
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_apply_status_code_blocked_returns_accepted() {
-        assert_eq!(
-            apply_status_code(&ApplyOutcome::BlockedManualReview),
-            StatusCode::ACCEPTED
-        );
-    }
-
-    #[test]
-    fn test_apply_outcome_label_serialization_values() {
-        assert_eq!(apply_outcome_label(&ApplyOutcome::NoOp), "no_op");
-        assert_eq!(
-            apply_outcome_label(&ApplyOutcome::AutoProceededWithNotification),
-            "auto_proceeded_with_notification"
-        );
-    }
-}

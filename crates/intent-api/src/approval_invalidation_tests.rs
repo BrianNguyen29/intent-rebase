@@ -1,8 +1,11 @@
+use crate::approval_invalidation::{apply_outcome_label, apply_status_code};
 use crate::test_helpers::create_minimal_low_risk_payload;
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 use crate::{
     cancel_existing_approved_and_audit, cancel_specific_approved_and_audit, CancelApprovalContext,
 };
+use axum::http::StatusCode;
+use rebase_orchestrator::ApplyOutcome;
 use uuid::Uuid;
 
 // =========================================================================
@@ -674,4 +677,25 @@ async fn test_cancel_specific_approved_and_audit_only_cancels_approved_status() 
         .await
         .unwrap();
     assert_eq!(still_pending.status, ApprovalRequestStatus::Pending);
+}
+
+// =========================================================================
+// Label Helper Tests (extracted from approval_invalidation.rs)
+// =========================================================================
+
+#[test]
+fn test_apply_status_code_blocked_returns_accepted() {
+    assert_eq!(
+        apply_status_code(&ApplyOutcome::BlockedManualReview),
+        StatusCode::ACCEPTED
+    );
+}
+
+#[test]
+fn test_apply_outcome_label_serialization_values() {
+    assert_eq!(apply_outcome_label(&ApplyOutcome::NoOp), "no_op");
+    assert_eq!(
+        apply_outcome_label(&ApplyOutcome::AutoProceededWithNotification),
+        "auto_proceeded_with_notification"
+    );
 }
