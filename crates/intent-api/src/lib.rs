@@ -344,4 +344,7 @@ mod forensic_handler_tests;
 mod trigger_reapproval_handler_tests;
 
 #[cfg(test)]
+mod compensation_mutation_handler_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;
