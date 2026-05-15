@@ -338,4 +338,7 @@ mod rebase_apply_handler_tests;
 mod ingest_handler_tests;
 
 #[cfg(test)]
+mod forensic_handler_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;
