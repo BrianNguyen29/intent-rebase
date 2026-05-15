@@ -1,6 +1,10 @@
-use super::*;
-
-// Import forensic handlers for tests (verification/export/bundle tests moved to forensic_handlers.rs)
+use crate::diff_handlers;
+use crate::intent_mutation_handlers;
+use crate::rebase_apply_handlers;
+use crate::rebase_preview_handlers;
+use crate::router::build_router;
+use axum::routing::{get, post};
+use axum::Router;
 
 // Import intent read handlers for tests
 use crate::intent_read_handlers::{get_intent_head, get_version, list_versions};

@@ -2,11 +2,15 @@
 //!
 //! Extracted from handler_tests.rs as a focused module.
 
-use super::*;
+use axum::extract::{Path, State};
+use uuid::Uuid;
 
+#[cfg(feature = "jwt-auth")]
+use crate::auth::OptionalRlsTenantClaims;
 #[cfg(feature = "jwt-auth")]
 use crate::query_handlers::get_orchestration_dashboard;
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
+use crate::types::OrchestrationDashboardQuery;
 
 // =========================================================================
 // Orchestration Dashboard Tests (Phase 3 Batch 1 bounded read-only slice)
@@ -22,7 +26,7 @@ async fn test_orchestration_dashboard_empty_state() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -75,7 +79,7 @@ async fn test_orchestration_dashboard_with_side_effects() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -175,7 +179,7 @@ async fn test_orchestration_dashboard_with_compensation_actions() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -243,7 +247,7 @@ async fn test_orchestration_dashboard_dlq_candidates() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -307,7 +311,7 @@ async fn test_orchestration_dashboard_exhausted_budget_dlq() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -363,7 +367,7 @@ async fn test_orchestration_dashboard_response_shape() {
     let query = OrchestrationDashboardQuery { tenant_id };
     let result = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -430,7 +434,7 @@ async fn test_orchestration_dashboard_tenant_isolation() {
     };
     let result1 = get_orchestration_dashboard(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query1),
     )
@@ -446,7 +450,7 @@ async fn test_orchestration_dashboard_tenant_isolation() {
     };
     let result2 = get_orchestration_dashboard(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query2),
     )

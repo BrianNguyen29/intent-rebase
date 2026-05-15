@@ -32,7 +32,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ### Remaining (P0)
 - [ ] Extract `rebase_apply_handlers.rs` inline tests → deferred per task constraints
-- [x] Ensure all handler test modules follow consistent import style (`crate::...` paths)
+- [x] Ensure all test modules follow consistent import style (`crate::...` paths) — handler and non-handler
 
 ### Acceptance Criteria
 - `cargo fmt --all -- --check` passes

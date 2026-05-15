@@ -1,4 +1,11 @@
-use super::*;
+use crate::types::ApprovalRevalidationResponse;
+use crate::{ApiErrorResponse, AppState};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use uuid::Uuid;
+
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
 
 // === Approval Revalidation Handler Tests ===
@@ -9,9 +16,9 @@ async fn call_revalidate_approval_request(
     state: AppState,
     approval_request_id: Uuid,
 ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-    approval_handlers_readonly::revalidate_approval_request(
+    crate::approval_handlers_readonly::revalidate_approval_request(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Path(approval_request_id),
     )
     .await
@@ -22,8 +29,11 @@ async fn call_revalidate_approval_request(
     state: AppState,
     approval_request_id: Uuid,
 ) -> Result<Json<ApprovalRevalidationResponse>, ApiErrorResponse> {
-    approval_handlers_readonly::revalidate_approval_request(State(state), Path(approval_request_id))
-        .await
+    crate::approval_handlers_readonly::revalidate_approval_request(
+        State(state),
+        Path(approval_request_id),
+    )
+    .await
 }
 
 #[tokio::test]

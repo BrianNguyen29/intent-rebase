@@ -1,7 +1,16 @@
-use super::*;
 use crate::simulation_handlers::compensation_simulation_run;
+use crate::types::CompensationSimulationRequest;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use uuid::Uuid;
+
 use crate::test_helpers::create_test_payload;
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
+
+#[cfg(feature = "jwt-auth")]
+use crate::auth::OptionalRlsTenantClaims;
 
 // =========================================================================
 // N4-4 POST: Compensation Simulation Run Tests (Phase 3 Batch 1 bounded simulation slice)
@@ -68,13 +77,10 @@ async fn test_compensation_simulation_run_empty_side_effects() {
         side_effect_ids: None,
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await
-    .expect("Should run simulation");
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await
+            .expect("Should run simulation");
 
     // With no side effects, report should have 0 total actions
     assert_eq!(result.total_actions, 0);
@@ -157,13 +163,10 @@ async fn test_compensation_simulation_run_with_side_effects() {
         side_effect_ids: None,
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await
-    .expect("Should run simulation");
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await
+            .expect("Should run simulation");
 
     // Report should have 1 action and it should succeed (S1 + Automatic)
     assert_eq!(result.total_actions, 1);
@@ -233,12 +236,9 @@ async fn test_compensation_simulation_run_invalid_version_ordering() {
         side_effect_ids: None,
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await;
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await;
 
     // Should return error for invalid version ordering
     let err_response = result.unwrap_err();
@@ -309,7 +309,7 @@ async fn test_compensation_simulation_run_invalid_version_bounds() {
 
     let result = compensation_simulation_run(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await;
@@ -332,7 +332,7 @@ async fn test_compensation_simulation_run_invalid_version_bounds() {
 
     let result = compensation_simulation_run(
         State(state.clone()),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Json(request),
     )
     .await;
@@ -352,12 +352,9 @@ async fn test_compensation_simulation_run_invalid_version_bounds() {
         side_effect_ids: None,
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await;
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await;
 
     let err_response = result.unwrap_err();
     let response = err_response.into_response();
@@ -381,12 +378,9 @@ async fn test_compensation_simulation_run_intent_not_found() {
         side_effect_ids: None,
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await;
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await;
 
     // Should return error for non-existent intent
     let err_response = result.unwrap_err();
@@ -482,13 +476,10 @@ async fn test_compensation_simulation_run_with_side_effect_ids_filter() {
         side_effect_ids: Some(vec![se1.id]), // Only simulate se1
     };
 
-    let result = compensation_simulation_run(
-        State(state),
-        auth::OptionalRlsTenantClaims(None),
-        Json(request),
-    )
-    .await
-    .expect("Should run simulation");
+    let result =
+        compensation_simulation_run(State(state), OptionalRlsTenantClaims(None), Json(request))
+            .await
+            .expect("Should run simulation");
 
     // Report should only have 1 action (se1 only)
     assert_eq!(result.total_actions, 1);

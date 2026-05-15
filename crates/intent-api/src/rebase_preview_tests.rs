@@ -1,4 +1,13 @@
-use super::*;
+use crate::types::RebasePreviewResponse;
+use crate::{ApiErrorResponse, AppState, RebaseOrchestrator};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use intent_rebase_types::{AffectedItemsStatus, DiffRequest};
+use std::time::Instant;
+use uuid::Uuid;
+
 use crate::test_helpers::create_minimal_low_risk_payload;
 use crate::test_helpers::create_test_payload;
 use crate::test_helpers::create_test_payload_with_params;
@@ -17,9 +26,9 @@ async fn call_rebase_preview(
     intent_id: Uuid,
     request: DiffRequest,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-    rebase_preview_handlers::rebase_preview(
+    crate::rebase_preview_handlers::rebase_preview(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        crate::auth::OptionalRlsTenantClaims(None),
         Path(intent_id),
         Json(request),
     )
@@ -32,7 +41,8 @@ async fn call_rebase_preview(
     intent_id: Uuid,
     request: DiffRequest,
 ) -> Result<Json<RebasePreviewResponse>, ApiErrorResponse> {
-    rebase_preview_handlers::rebase_preview(State(state), Path(intent_id), Json(request)).await
+    crate::rebase_preview_handlers::rebase_preview(State(state), Path(intent_id), Json(request))
+        .await
 }
 
 #[tokio::test]

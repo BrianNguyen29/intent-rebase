@@ -2,8 +2,11 @@
 //!
 //! Phase 2 bounded MVP: Tests the on-demand read-only projection.
 
-use super::*;
+use axum::extract::{Path, State};
+use uuid::Uuid;
 
+#[cfg(feature = "jwt-auth")]
+use crate::auth::OptionalRlsTenantClaims;
 #[cfg(feature = "jwt-auth")]
 use crate::query_handlers::get_impact_report;
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service;
@@ -28,7 +31,7 @@ async fn test_impact_report_empty_state() {
 
     let result = get_impact_report(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
@@ -175,7 +178,7 @@ async fn test_impact_report_response_shape() {
 
     let result = get_impact_report(
         State(state),
-        auth::OptionalRlsTenantClaims(None),
+        OptionalRlsTenantClaims(None),
         Path(intent_id),
         axum::extract::Query(query),
     )
