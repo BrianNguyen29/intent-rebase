@@ -304,6 +304,9 @@ pub mod test_helpers;
 #[cfg(test)]
 mod router_smoke_tests;
 
+#[cfg(all(test, feature = "jwt-auth"))]
+mod auth_tests;
+
 #[cfg(test)]
 mod rebase_preview_tests;
 

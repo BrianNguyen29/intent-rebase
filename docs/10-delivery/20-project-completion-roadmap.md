@@ -30,6 +30,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract `panic_hardening.rs` inline tests → `panic_hardening_tests.rs`
 - [x] Extract `approval_invalidation.rs` inline tests → `approval_invalidation_tests.rs`
 - [x] Extract `nats_event_publisher.rs` inline tests → `event_publisher_tests.rs`
+- [x] Extract `auth.rs` inline tests → `auth_tests.rs` (preserving `jwt-auth` feature gating)
 - [x] Register extracted test modules in `lib.rs`
 
 ### Remaining (P0)
@@ -51,7 +52,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 **Items:**
 - [ ] Extract `rebase_apply_handlers.rs` inline tests → `rebase_apply_handler_tests.rs` (currently deferred)
-- [ ] Extract any remaining inline `#[cfg(test)] mod tests` blocks from handler files
+- [x] Extract any remaining inline `#[cfg(test)] mod tests` blocks from handler files (all cleared)
 - [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
