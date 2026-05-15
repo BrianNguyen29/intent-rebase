@@ -353,4 +353,13 @@ mod batch_handler_tests;
 mod intent_mutation_handler_tests;
 
 #[cfg(test)]
+mod intent_validation_handler_tests;
+
+#[cfg(test)]
+mod diff_handler_tests;
+
+#[cfg(test)]
+mod compensation_planner_handler_tests;
+
+#[cfg(test)]
 mod webhook_delivery_tests;
