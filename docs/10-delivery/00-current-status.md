@@ -3,7 +3,7 @@
 ## Executive Summary
 
 **Current Phase:** Phase 3 — Compensation + Production Hardening, **CLOSED — Non-Production Only (2026-05-11)**. Batch 1 largely delivered.
-**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`). Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — Brian Nguyen (sole signer, personal project) signed off as APPROVED for all three reviewer roles (Product Owner, Security, Runtime Integration) on 2026-04-28. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.
+**Phase 2b status:** Slice A (evidence verification) green — all canonical gates pass (`cargo test --workspace --lib --all-features`, `cargo check --workspace --all-features`, `cargo clippy --workspace --all-features -- -D warnings`, `cargo fmt --all -- --check`). Fast local verification uses `scripts/verify-fast.sh`. Slice B (residual risk items, deferral register, sign-off) complete. **Phase 2b is APPROVED — Brian Nguyen (sole signer, personal project) signed off as APPROVED for all three reviewer roles (Product Owner, Security, Runtime Integration) on 2026-04-28. Phase 2b exit gate is CLOSED. Phase 3 entry is AUTHORIZED.** See the [Phase 2b External Sign-Off Packet](./11-phase-2b-sign-off-packet.md) for the full decision capture and deferral register.
 **Phase 3 Batch 1 delivered:** Side effect ledger, compensation-actions CRUD + APIs, batch orchestration, policy gate, orchestration dashboard, orchestration coordination view, dry-run planner, single-shot orchestration runtime (HTTP + CLI), and POST /compensation-simulation/run (commit fe2a1f6). Tenant context hardening delivered (commit de2d80d). Phase 2b exit is closed; bounded planner/executor/retry/rollback record delivered as part of Phase 3 Batch 1. RLC-3 bounded RLS integration validated (commit 42cdbe2): migration_integration 1/1 passed on fresh DB; rls_integration --ignored 4/4 passed; migration 009 consolidation delivered with FORCE RLS; bounded handler RLS wiring for create_graph_edge/create_orchestration_run/create_forensic_bundle delivered.
 **Phase 3 Batch 2 status:** Bounded slices delivered (SLO definitions provisional, alerting rules, error budget panels, distributed tracing, benchmarks); propagation-status Slices 1-2 bounded MVP delivered locally; external SRE sign-off gates remain.
 **Phase 3 Batch 3b status:** Forensic verification with real entity counts (commit 7b05c5b), bounded generation (POST /forensic/bundle with env-gated S3BundleStorage wiring via FORENSIC_BUNDLE_STORAGE=s3; default in-memory), bounded export (POST /forensic/export), and bounded download slices delivered; S3-backed retrieval/storage lifecycle, Object Lock, chain-hash, and full runtime replay remain Phase 4 scope.
@@ -182,10 +182,28 @@ SQL-backed `SqlxGraphRepository` wired when `DATABASE_URL` is set:
 
 ## Canonical Verification Commands
 
+Fast local verification (no external services required):
 ```bash
-# Run all tests
-cargo test --all-features
+scripts/verify-fast.sh
+```
 
+Individual commands (matching `verify-fast.sh`):
+```bash
+# Format check
+cargo fmt --all -- --check
+
+# Type check (workspace, all features)
+cargo check --workspace --all-features
+
+# Lint (workspace, all features, deny warnings)
+cargo clippy --workspace --all-features -- -D warnings
+
+# In-memory lib tests (workspace, all features)
+cargo test --workspace --lib --all-features
+```
+
+Crate-specific test examples:
+```bash
 # Run compensation-service tests
 cargo test -p compensation-service --all-features
 
@@ -194,15 +212,6 @@ cargo test -p intent-api --all-features
 
 # Run graph-service tests
 cargo test -p graph-service --all-features
-
-# Build verification (no emit)
-cargo check --all
-
-# Intent-cli build
-cargo check -p intent-cli
-
-# lint
-cargo clippy --all-features -- -D warnings
 ```
 
 ---
@@ -215,10 +224,11 @@ Local verification is the source of truth:
 
 | Check | Command | Expected |
 |-------|---------|----------|
+| Fast verify | `scripts/verify-fast.sh` | All checks pass |
 | Format | `cargo fmt --all -- --check` | No diff |
-| Clippy | `cargo clippy --all-features -- -D warnings` | No warnings |
-| Type check | `cargo check --all` | Success |
-| Unit tests | `cargo test --all-features` | All pass |
+| Clippy | `cargo clippy --workspace --all-features -- -D warnings` | No warnings |
+| Type check | `cargo check --workspace --all-features` | Success |
+| Unit tests | `cargo test --workspace --lib --all-features` | All pass |
 | OpenAPI spec | `npx spectral lint docs/04-api/openapi.yaml` | No errors |
 | Git check | `git diff --check` | No conflicts |
 

@@ -33,7 +33,7 @@ This packet should be used when:
 
 **Current Local Evidence (WAIVED-SOLO — Non-Production Phase 3 Only)**
 - Solo self-review completed; external SRE/security review not engaged.
-- Local canonical gates pass: `cargo test --all-features`, `cargo check --all`, `cargo clippy --all-features -- -D warnings`.
+- Local canonical gates pass: `cargo test --workspace --lib --all-features`, `cargo check --workspace --all-features`, `cargo clippy --workspace --all-features -- -D warnings`, `cargo fmt --all -- --check`. Fast local verification uses `scripts/verify-fast.sh`.
 - RLS integration tests pass locally (RLC-3: migration_integration 1/1, rls_integration --ignored 4/4).
 - Load testing: L1/L2 bounded local evidence collected; L3-L5 deferred.
 - Penetration testing: threat model v2 documented; pen test scope defined; execution deferred.

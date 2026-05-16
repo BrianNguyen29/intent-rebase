@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **Only P0 is actively in scope.** P1–P3 are tracked for future planning and are NOT committed.
+This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **P0 and P1 are complete; P2 module-doc audit is in progress.** P3 is tracked for future planning and is NOT committed.
 
 | Batch | Theme | Status | Scope |
 |-------|-------|--------|-------|
@@ -19,7 +19,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ---
 
-## P0 — Quality & Cleanup (Active)
+## P0 — Quality & Cleanup (Complete)
 
 **Goal:** Establish a fast, reliable local verification loop and extract all low-risk inline test modules.
 
