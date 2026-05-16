@@ -32,10 +32,12 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract `nats_event_publisher.rs` inline tests → `event_publisher_tests.rs`
 - [x] Extract `auth.rs` inline tests → `auth_tests.rs` (preserving `jwt-auth` feature gating)
 - [x] Register extracted test modules in `lib.rs`
+- [x] Router Stage 1: extract JWT builders and auth middleware from `router.rs` into `router/jwt_builders.rs` and `router/auth_middleware.rs` (preserving `jwt-auth` feature gating and public signatures)
 
 ### Remaining (P0)
 - [ ] Extract `rebase_apply_handlers.rs` inline tests → deferred per task constraints
 - [x] Ensure all test modules follow consistent import style (`crate::...` paths) — handler and non-handler
+- [ ] Router Stage 2 (route-group split) → deferred to P1/P2 per bounded scope constraints
 
 ### Acceptance Criteria
 - `cargo fmt --all -- --check` passes
@@ -63,7 +65,8 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Relocate `tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_unit.rs` (A1)
 - [x] Relocate `live_integration_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_live_integration.rs` (A2)
 - [x] Relocate `lifecycle_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_lifecycle.rs` (A3)
-- [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
+- [x] Router Stage 1: JWT builders and auth middleware extracted from `router.rs` → `router/jwt_builders.rs` + `router/auth_middleware.rs` (preserves public API, gated by `jwt-auth` feature)
+- [ ] Router Stage 2: route-group split (e.g., graph-routes, compensation-routes, forensic-routes) → deferred to P2; requires evaluation of maintainability thresholds and API stability
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
 **Constraints:**
@@ -78,12 +81,12 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 **Goal:** Integrate benchmarks into CI, complete documentation gaps, and harden the local-dev experience.
 
 **Items:**
-- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only)
-- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag
-- [ ] Review and update all module-level documentation (`//!` headers)
-- [ ] Ensure every handler module has a brief doc comment explaining its bounded scope
-- [ ] Review `docs/10-delivery/` for stale references and update cross-links
-- [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just`
+- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred, no benchmarks exist yet
+- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred
+- [ ] Review and update all module-level documentation (`//!` headers) — deferred to P2 (module-doc audit)
+- [ ] Ensure every handler module has a brief doc comment explaining its bounded scope — deferred to P2 (module-doc audit)
+- [ ] Review `docs/10-delivery/` for stale references and update cross-links — deferred to P2
+- [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — deferred
 
 **Constraints:**
 - Benchmarks must not require live Postgres by default (use in-memory repos)
