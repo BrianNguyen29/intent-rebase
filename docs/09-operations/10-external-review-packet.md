@@ -394,10 +394,19 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 ### Internal Acknowledgment
 
-**Reviewed By:** _______________________
-**Date:** _______________________
+**Reviewed By:** BrianNguyen (Backend Lead, solo practitioner)
+**Date:** 2026-05-16
 
-**Signature:** _______________________
+**Attestation:**
+I, BrianNguyen, as the solo practitioner and internal owner of the Intent Rebase Engine, attest that:
+- This packet has been reviewed internally for planning and non-production Phase 3 close-out purposes only.
+- All external gates (SRE review, security review, pen test, production load test, production infrastructure) remain open/deferred and are WAIVED-SOLO for Phase 3 only.
+- No external SRE or security sign-off has been obtained.
+- No penetration test has been executed.
+- No production readiness claim is made.
+- This attestation is signed via authorized assistant (fixer) under my direction.
+
+**Signature:** BrianNguyen (signed via authorized assistant)
 
 ---
 ```
@@ -485,6 +494,7 @@ This checklist enumerates the gates that must close before any production-readin
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| 2026-05-16 | BrianNguyen (via authorized assistant fixer) | Signed Internal Acknowledgment (Section H) as solo practitioner attestation for non-production Phase 3 close-out. External reviewer fields remain blank. No production readiness or external signoff claimed. |
 | May 2026 | (fixer) | Populated Section D with specific citations/statuses; added Appendix A readiness gate checklist; marked threat model v2 and pen test scope as internal planning artifacts only. No production readiness or external signoff claimed. |
 | May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external sign-off claimed. |
 | April 2026 | (fixer) | Initial creation — external SRE/security review packet template with sections for request header, system overview, review scope, evidence package, SRE areas, security areas, findings tracker, and sign-off |
