@@ -1,3 +1,9 @@
+//! Live NATS integration tests.
+//!
+//! Tests that require a running NATS server with JetStream enabled.
+//! All tests are `#[ignore]` by default and must be run explicitly:
+//!   cargo test -p intent-api --lib nats_jetstream -- --ignored
+
 #![allow(unused)]
 
 use super::consumer::NatsPullConsumerAdapter;

@@ -1,3 +1,10 @@
+//! JWT-gated router builders.
+//!
+//! Bounded router decomposition slice: provides `build_router_with_jwt_auth`
+//! and `build_router_with_sql_audit_and_approval_jwt` behind the `jwt-auth`
+//! feature. Delegates to the canonical `build_router` and applies JWT
+//! middleware as the outermost layer.
+
 use axum::Router;
 use graph_service::GraphService;
 use intent_service::IntentService;

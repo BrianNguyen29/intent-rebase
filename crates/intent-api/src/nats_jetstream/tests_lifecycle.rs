@@ -1,3 +1,9 @@
+//! Lifecycle tests for NATS consumer registry and worker gates.
+//!
+//! In-memory tests for consumer registration, duplicate-name guards,
+//! shutdown signal propagation, and environment-gate behavior.
+//! Does NOT require a live NATS server.
+
 use super::consumer::NatsPullConsumerAdapter;
 use super::*;
 use intent_rebase_types::{ConsumeResult, EventConsumer, PublishedEvent};

@@ -1,3 +1,9 @@
+//! Unit tests for NATS JetStream helpers.
+//!
+//! In-memory tests that do NOT require a live NATS server.
+//! Covers trace context extraction, DLQ subject derivation, JetStream
+//! initializer defaults, and DLQ helper primitives.
+
 use super::consumer::NatsPullConsumerAdapter;
 use super::*;
 

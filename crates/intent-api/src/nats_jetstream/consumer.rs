@@ -1,3 +1,10 @@
+//! NATS pull-consumer adapter and consumer registry.
+//!
+//! Bounded decomposition slice (S7) from `nats_jetstream.rs`.
+//! Converts JetStream messages into `PublishedEvent`, extracts W3C traceparent
+//! headers, dispatches to `EventConsumer`, and manages bounded ack/NAK/DLQ
+//! behavior. Includes a consumer registry for lifecycle management.
+
 use async_nats::jetstream::Context as JetStreamContext;
 use std::collections::HashMap;
 use std::sync::Arc;

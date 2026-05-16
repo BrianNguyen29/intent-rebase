@@ -1,3 +1,9 @@
+//! JWT authentication middleware.
+//!
+//! Bounded router decomposition slice: validates Bearer tokens on protected
+//! routes and bypasses public paths (/health, /ready, /metrics).
+//! Gated by the `jwt-auth` feature.
+
 use axum::http::StatusCode;
 
 /// JWT authentication middleware for protected routes.

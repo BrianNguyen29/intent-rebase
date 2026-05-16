@@ -1,6 +1,6 @@
 # Project Completion Roadmap
 
-> **Status:** P0 in progress — quality/cleanup batch  
+> **Status:** P0 complete, P1 complete, P2 module-doc audit in progress  
 > **Last updated:** 2026-05-16  
 > **Non-production caveat:** This project is explicitly **NOT production-ready**. All phases below are bounded non-production feature delivery. Production readiness requires external sign-off (SRE, Security, Runtime Integration), load testing, pen testing, and compliance audit — none of which are claimed here.
 
@@ -12,9 +12,9 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 | Batch | Theme | Status | Scope |
 |-------|-------|--------|-------|
-| **P0** | Quality & Cleanup | 🔄 In Progress | Fast verification, test extraction, CI smoke, code hygiene |
-| **P1** | Test Completeness | ⬜ Planned | Remaining inline test extractions, router decomposition |
-| **P2** | Observability & Docs | ⬜ Planned | Benchmark integration, documentation review, CI hardening |
+| **P0** | Quality & Cleanup | ✅ Complete | Fast verification, test extraction, CI smoke, code hygiene |
+| **P1** | Test Completeness | ✅ Complete | Remaining inline test extractions, router decomposition Stage 1 |
+| **P2** | Observability & Docs | 🔄 In Progress | Module-level documentation audit for recently extracted modules; benchmark integration deferred |
 | **P3** | Production Readiness | ⬜ Planned | External gates, load testing, pen testing, compliance (future scope) |
 
 ---
@@ -83,9 +83,10 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 **Items:**
 - [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred, no benchmarks exist yet
 - [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred
-- [ ] Review and update all module-level documentation (`//!` headers) — deferred to P2 (module-doc audit)
-- [ ] Ensure every handler module has a brief doc comment explaining its bounded scope — deferred to P2 (module-doc audit)
-- [ ] Review `docs/10-delivery/` for stale references and update cross-links — deferred to P2
+- [x] Review and update module-level documentation (`//!` headers) for recently extracted modules — completed for router/auth_middleware, router/jwt_builders, nats_jetstream/consumer, nats_jetstream/tests_*
+- [x] Ensure recently extracted modules have brief doc comments explaining bounded scope — completed
+- [ ] Review and update `//!` headers for remaining handler modules — deferred (consciously scoped to recently extracted modules only)
+- [ ] Review `docs/10-delivery/` for stale references and update cross-links — deferred
 - [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — deferred
 
 **Constraints:**
