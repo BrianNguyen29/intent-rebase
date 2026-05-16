@@ -231,7 +231,7 @@ Pen Test:
 □ Threat model v2 documented in docs/14-governance/06-threat-model-v2.md
 □ Pen test scope defined; execution pending
 
-Self-Review Date: <date>
+Self-Review Date: 2026-05-16
 Self-Reviewer: Brian Nguyen (solo practitioner)
 Evidence Strength: SOLO SELF-REVIEW — not equivalent to external SRE/Security sign-off
 ```
