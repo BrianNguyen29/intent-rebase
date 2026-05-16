@@ -186,10 +186,10 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Production-grade webhook delivery with outbox pattern, background worker, HMAC signing, key rotation, subscription CRUD API |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P2-6), `docs/10-delivery/19-propagation-status-implementation-plan.md`, `docs/09-operations/10-external-review-packet.md` (G-WEB-1) |
-| **Design/Implementation Status** | 🟡 SLICE 1 DELIVERED — outbox schema (migration 019), repository trait, in-memory implementation, and bounded tests delivered. Slices 2–5 remain deferred. |
+| **Design/Implementation Status** | 🟡 SLICES 1–2 DELIVERED — outbox schema (migration 019), repository trait, in-memory implementation, bounded tests (Slice 1); env-gated worker with claim/list-pending flow and bounded tests (Slice 2). Slices 3–5 remain deferred. |
 | **Dependencies** | Slice 1: local Postgres for migration; Slices 2–5: background worker, secret manager, subscription CRUD API |
 | **Owner** | Backend Lead |
-| **Validation Path** | Slice 1: `cargo test -p intent-api --lib webhook_outbox_repo` passes. Slices 2–5: end-to-end delivery test with real subscriber; HMAC verification; key rotation grace window test |
+| **Validation Path** | Slice 1: `cargo test -p intent-api --lib webhook_outbox_repo` passes. Slice 2: `cargo test -p intent-api --lib webhook_outbox_worker` passes. Slices 3–5: end-to-end delivery test with real subscriber; HMAC verification; key rotation grace window test |
 | **Non-Production Caveat** | Current webhook delivery is a bounded non-production slice (in-process, best-effort, no delivery guarantee). Outbox foundation (Slice 1) is local-dev only; production hardening requires Slices 2–5. |
 
 ### Slice Execution Checklist
@@ -197,14 +197,14 @@ This document provides a comprehensive todo-list and execution plan for entering
 | Slice | Description | Status | Evidence |
 |-------|-------------|--------|----------|
 | **Slice 1** | Outbox schema + repository foundation | 🟡 DELIVERED | Migration `019_create_webhook_outbox.sql`; `crates/intent-api/src/webhook_outbox_repo.rs` (trait + in-memory impl + tests) |
-| **Slice 2** | Background delivery worker lifecycle | 🔴 DEFERRED | Design documented in `docs/10-delivery/17-production-readiness-backlog.md` (P2-6b) |
+| **Slice 2** | Background delivery worker lifecycle | 🟡 DELIVERED | `crates/intent-api/src/webhook_outbox_worker.rs` (env-gated `WebhookOutboxWorker` trait, claim/list-pending `process_once`, in-memory tests) |
 | **Slice 3** | HMAC signing + key rotation | 🔴 DEFERRED | Design documented in `docs/10-delivery/17-production-readiness-backlog.md` (P2-6c) |
 | **Slice 4** | Subscription CRUD API | 🔴 DEFERRED | Design documented in `docs/10-delivery/17-production-readiness-backlog.md` (P2-6d) |
 | **Slice 5** | Retry / dead-letter semantics | 🔴 DEFERRED | Design documented in `docs/10-delivery/17-production-readiness-backlog.md` (P2-6e) |
 
 ### Next Action
 
-Wire `WebhookOutboxRepository` into `dispatch_webhooks_for_intent` and application state when Slice 2 (background worker) begins. Slice 1 does not alter the existing env-gated dispatcher behavior.
+Wire `WebhookOutboxWorker` into application state and a background task loop when Slice 3 (HTTP dispatch + HMAC signing) begins. Slice 2 does not alter the existing env-gated dispatcher behavior; the worker is local-dev only and not wired into app startup.
 
 ---
 
