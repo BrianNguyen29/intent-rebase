@@ -55,6 +55,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract any remaining inline `#[cfg(test)] mod tests` blocks from handler files (all cleared)
 - [x] Extract propagation-signal helper block from `rebase_apply_handlers.rs` → `propagation_signals.rs`
 - [x] Extract DLQ error types + `validate_nats_subject` from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S2 only)
+- [x] Extract `JetStreamInitializer` from `nats_jetstream.rs` → `nats_jetstream/stream.rs` (S3 only)
 - [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
