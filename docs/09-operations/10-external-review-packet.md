@@ -36,7 +36,7 @@ This packet should be used when:
 - Local canonical gates pass: `cargo test --workspace --lib --all-features`, `cargo check --workspace --all-features`, `cargo clippy --workspace --all-features -- -D warnings`, `cargo fmt --all -- --check`. Fast local verification uses `scripts/verify-fast.sh`.
 - RLS integration tests pass locally (RLC-3: migration_integration 1/1, rls_integration --ignored 4/4).
 - Load testing: L1/L2 bounded local evidence collected; L3-L5 deferred.
-- Penetration testing: threat model v2 documented; pen test scope defined; execution deferred.
+- Penetration testing: threat model v2 and pen test scope accepted as internal planning artifacts; no external pen test executed.
 - Webhook delivery Phase 4 design baseline (P2-6a..P2-6f) complete as design-only documentation.
 - **No external sign-off obtained.** All external gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
 
@@ -145,52 +145,54 @@ intent and rebase operations. Key components:
 ```markdown
 ## Evidence Package
 
-The following evidence is provided for review:
+The following evidence is provided for review. All evidence is bounded to local development or documented planning artifacts unless explicitly noted. No production evidence or external sign-off is claimed.
 
 ### Core Documentation
 
-| Document | Location | Purpose |
-|----------|----------|---------|
-| Architecture Overview | `docs/02-architecture/01-system-overview.md` | System architecture |
-| Component Boundaries | `docs/06-backend/01-service-boundaries.md` | Service interface contracts |
-| API OpenAPI Spec | `docs/04-api/openapi.yaml` | API contract |
-| Security Architecture | `docs/08-security/` | Security design |
-| Threat Model | `docs/14-governance/06-threat-model-v2.md` | Threat analysis |
-| Pen Test Scope | `docs/08-security/06-pen-test-scope.md` | Pen test plan |
-| SLO/SRE Documentation | `docs/09-operations/04-sre-and-slos.md` | SLO definitions |
-| Runbooks | `docs/09-operations/05-runbooks.md` | Operational procedures |
-| Backup/Restore Procedures | `docs/09-operations/07-backup-restore.md` | Recovery procedures |
-| Secrets Inventory | `docs/09-operations/08-secrets-inventory.md` | Secret management |
-| Observability Evidence | `docs/09-operations/09-observability-evidence-checklist.md` | Observability config |
+| Document | Location | Purpose | Status / Evidence Annotation |
+|----------|----------|---------|------------------------------|
+| Architecture Overview | `docs/02-architecture/01-system-overview.md` | System architecture | DOCUMENTED |
+| Component Boundaries | `docs/06-backend/01-service-boundaries.md` | Service interface contracts | DOCUMENTED |
+| API OpenAPI Spec | `docs/04-api/openapi.yaml` | API contract | DOCUMENTED — validated via `npx @stoplight/spectral-cli` when CI is enabled; currently disabled by design |
+| Security Architecture | `docs/08-security/` | Security design | DOCUMENTED — see `02-authn-authz.md` for bounded RLS/authn implementation; not externally reviewed |
+| Threat Model v2 | `docs/14-governance/06-threat-model-v2.md` | Threat analysis | Accepted Internal Planning Artifact — internal planning acceptance only; no external security review |
+| Pen Test Scope | `docs/08-security/06-pen-test-scope.md` | Pen test plan | Accepted Internal Planning Artifact — internal planning acceptance only; no pen test execution |
+| SLO/SRE Documentation | `docs/09-operations/04-sre-and-slos.md` | SLO definitions | PROVISIONAL — not SRE-approved; local dev stack only (Prometheus/Grafana/Alertmanager in docker-compose); no production telemetry |
+| Runbooks | `docs/09-operations/05-runbooks.md` | Operational procedures | DOCUMENTED — RB1-RB13 documented; not externally reviewed |
+| Backup/Restore Procedures | `docs/09-operations/07-backup-restore.md` | Recovery procedures | TEMPLATE ONLY — procedures documented for RPO=1h/RTO=30m; not executed against production; automated restore testing deferred to Phase 4 |
+| Secrets Inventory | `docs/09-operations/08-secrets-inventory.md` | Secret management | TEMPLATE ONLY — inventory known, rotation procedures documented; no live rotation validated; Vault/AWS SM not deployed |
+| Observability Evidence | `docs/09-operations/09-observability-evidence-checklist.md` | Observability config | LOCAL DOCKER-COMPOSE (bounded) — metrics endpoint validated, Prometheus scrape confirmed, Grafana dashboards provisioned, one availability alert fired via fault injection (2026-05-11); production telemetry not connected; real Alertmanager receivers not configured |
+| Security Audit (Public Repo) | `docs/09-operations/09-security-audit.md` | Public repo secret scan | SCANNED — no high-confidence secrets found in current code or git history; GitHub Advanced Security not enabled |
+| Authn/Authz Implementation | `docs/08-security/02-authn-authz.md` | Authentication & authorization | BOUNDED IMPLEMENTED — JWT production guard, RLS context helper, RLS-aware pool, `create_graph_node` RLS wrapping delivered; full transaction wrapping pending (see P1-S5i) |
 
 ### Solo Self-Review Evidence
 
-| Gate | Status | Evidence Location |
-|------|--------|-------------------|
-| G1: DLQ Design | PASS (solo) | `docs/10-delivery/14-dlq-retry-design.md` |
-| G2: JetStream Config | PASS (solo) | `docs/10-delivery/16-solo-ops-evidence-plan.md` |
-| G3: DLQ Metrics Stubs | STUBS COMPILE | `crates/intent-api/src/nats_jetstream.rs` |
-| G4: DLQ Runbook | PASS (solo) | `docs/09-operations/05-runbooks.md` (RB11) |
-| G5: Bounded Tests | PASS (bounded) | `docs/10-delivery/16-solo-ops-evidence-plan.md` |
+| Gate | Status | Evidence Location | Notes |
+|------|--------|-------------------|-------|
+| G1: DLQ Design | PASS (solo) | `docs/10-delivery/14-dlq-retry-design.md` | Design accepted; full replay worker deferred |
+| G2: JetStream Config | PASS (solo) | `docs/10-delivery/16-solo-ops-evidence-plan.md` | Config validated locally |
+| G3: DLQ Metrics Stubs | STUBS COMPILE | `crates/intent-api/src/nats_jetstream.rs` | Metrics stubs compile; full instrumentation pending |
+| G4: DLQ Runbook | PASS (solo) | `docs/09-operations/05-runbooks.md` (RB11) | Runbook documented |
+| G5: Bounded Tests | PASS (bounded) | `docs/10-delivery/16-solo-ops-evidence-plan.md` | Local canonical gates pass |
 
 ### Load Test Evidence
 
-| Level | Status | Evidence Location |
-|-------|--------|-------------------|
-| L1: In-memory | PASS | `docs/11-quality/load-test-results.md` |
-| L2: SQLx-backed | PASS | `docs/11-quality/load-test-results.md` |
-| L3: Full stack | PENDING | Staging environment required |
-| L4: Observability | PENDING | Staging environment required |
-| L5: Production | BLOCKED | Production infrastructure required |
+| Level | Status | Evidence Location | Notes |
+|-------|--------|-------------------|-------|
+| L1: In-memory | PASS (local) | `docs/11-quality/load-test-results.md` | 2026-04-15 & 2026-05-11: p95 latency 4–5 ms, 0% error, SLO pass (in-memory repos, dev profile) |
+| L2: SQLx-backed | PASS (local) | `docs/11-quality/load-test-results.md` | 2026-04-15 & 2026-05-11: p95 latency 4–15 ms, 0% error, SLO pass (docker-compose Postgres, dev profile) |
+| L3: Full stack | BLOCKED | — | Staging environment required; no full-stack (NATS + Postgres + MinIO) load test executed |
+| L4: Observability | BOUNDED LOCAL (2026-05-11) | `docs/11-quality/load-test-results.md` | 6 core metrics scraped by Prometheus, 10-minute sustained load passed (30,005 req, 0% error, RSS +4.7%, FD flat), one availability alert fired via fault injection, Grafana dashboards provisioned; Alertmanager receivers remain localhost placeholders; not production-equivalent |
+| L5: Production | BLOCKED | — | Production infrastructure required |
 
 ### Operational Evidence
 
-| Item | Status | Evidence Location |
-|------|--------|-------------------|
-| Backup/Restore Procedures | TEMPLATE ONLY | `docs/09-operations/07-backup-restore.md` |
-| Secrets Inventory | TEMPLATE ONLY | `docs/09-operations/08-secrets-inventory.md` |
-| Observability Checklist | TEMPLATE ONLY | `docs/09-operations/09-observability-evidence-checklist.md` |
-| S3 Option B | IMPLEMENTED | `docs/14-governance/05b-s3-option-b-decision.md` |
+| Item | Status | Evidence Location | Notes |
+|------|--------|-------------------|-------|
+| Backup/Restore Procedures | TEMPLATE ONLY | `docs/09-operations/07-backup-restore.md` | Procedures documented for RPO=1h/RTO=30m; not executed against production; automated restore testing deferred to Phase 4 |
+| Secrets Inventory | TEMPLATE ONLY | `docs/09-operations/08-secrets-inventory.md` | Inventory known, rotation procedures documented; no live rotation validated; Vault/AWS SM not deployed |
+| Observability Checklist | LOCAL DOCKER-COMPOSE (bounded) | `docs/09-operations/09-observability-evidence-checklist.md` | Metrics endpoint, Prometheus scrape, Grafana provisioning, one alert firing validated locally; production telemetry not connected |
+| S3 Option B | DECISION DOCUMENTED | `docs/14-governance/05b-s3-option-b-decision.md` | Decision accepted; Object Lock Phase 4+ |
 
 ---
 ```
@@ -433,6 +435,26 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 ---
 
+## Appendix A: Readiness Gate Checklist
+
+This checklist enumerates the gates that must close before any production-readiness claim. All gates are open for Phase 3 close-out; WAIVED-SOLO items are accepted for internal planning only and must be revisited with named external evidence before production.
+
+| Gate ID | Criteria | Current Status | Owner | Missing Evidence / Closure Condition |
+|---------|----------|---------------|-------|--------------------------------------|
+| G-EXT-1 | External SRE operational review (SLOs, alerting, runbooks, on-call) | WAIVED-SOLO (Phase 3) | Backend Lead (solo) | External SRE reviewer name, date, signed assessment in Section H |
+| G-EXT-2 | External security architecture review (authn/authz, RLS, threat model, residual risks) | WAIVED-SOLO (Phase 3) | Backend Lead (solo) | External security reviewer name, date, signed assessment in Section H |
+| G-EXT-3 | Penetration test execution and remediation | WAIVED-SOLO (Phase 3) | Security | External pen test report (PDF + JSON); HIGH/CRITICAL findings remediated with evidence |
+| G-EXT-4 | Staging / production load testing (L3–L5) | WAIVED-SOLO (Phase 3) | Backend Lead / SRE | L3: staged k6/Artillery results; L4: 30min sustained load + all alert types + real receivers; L5: production load test results |
+| G-OPS-1 | Backup/restore executed and validated against production-like infrastructure | TEMPLATE ONLY | Backend Lead | Automated restore test pass log; backup integrity verification (checksum + sample restore) |
+| G-OPS-2 | Secrets rotation validated in production environment | TEMPLATE ONLY | Backend Lead | Live rotation execution log; secret audit log; Vault/AWS SM integration verified |
+| G-OPS-3 | Observability stack deployed with production telemetry and real receivers | LOCAL DOCKER-COMPOSE ONLY | Backend Lead | Production Prometheus/Grafana/Alertmanager deployment; real PagerDuty/Slack/email receiver validation |
+| G-CI-1 | Remote CI / automated checks (GitHub Actions or equivalent) | DISABLED BY DESIGN | Backend Lead | Decision to enable remote CI or documented acceptance of local gates as SOQ (source of truth) |
+| G-RLS-1 | Full RLS transaction wrapping across all SQL paths | BOUNDED PARTIAL | Backend Lead | Pending: NATS tenant isolation, forensic/orchestration full RLS tx (P1-S5i residual), production certification |
+| G-DLQ-1 | DLQ full consumer lifecycle + replay worker | LOCAL-DEV GATE ONLY | Backend Lead | External SRE sign-off before production; full replay worker implementation |
+| G-WEB-1 | Webhook delivery production hardening (outbox, worker, HMAC, key rotation) | DESIGN ONLY | Backend Lead | Outbox schema migration, background worker, subscription CRUD API, HMAC implementation |
+
+---
+
 ## Forbidden Claims
 
 | Forbidden Claim | Allowed Replacement |
@@ -454,6 +476,8 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 | `docs/09-operations/05-runbooks.md` | Runbooks under review |
 | `docs/09-operations/07-backup-restore.md` | Backup/restore under review |
 | `docs/09-operations/08-secrets-inventory.md` | Secrets management under review |
+| `docs/09-operations/09-security-audit.md` | Public repo security audit |
+| `docs/08-security/02-authn-authz.md` | Authn/authz implementation status |
 
 ---
 
@@ -461,5 +485,6 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 | Date | Updated By | Changes |
 |------|------------|---------|
+| May 2026 | (fixer) | Populated Section D with specific citations/statuses; added Appendix A readiness gate checklist; marked threat model v2 and pen test scope as internal planning artifacts only. No production readiness or external signoff claimed. |
 | May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external sign-off claimed. |
 | April 2026 | (fixer) | Initial creation — external SRE/security review packet template with sections for request header, system overview, review scope, evidence package, SRE areas, security areas, findings tracker, and sign-off |

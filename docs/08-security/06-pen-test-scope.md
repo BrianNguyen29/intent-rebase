@@ -1,6 +1,6 @@
 # 06 — Penetration Testing Scope
 
-**Status:** Proposed  
+**Status:** Accepted Internal Planning Artifact — internal planning acceptance only; not externally reviewed
 **Phase:** Phase 3  
 **Owner:** Security Team
 
