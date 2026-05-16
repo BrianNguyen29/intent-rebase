@@ -57,6 +57,8 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract DLQ error types + `validate_nats_subject` from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S2 only)
 - [x] Extract `JetStreamInitializer` from `nats_jetstream.rs` → `nats_jetstream/stream.rs` (S3 only)
 - [x] Extract `DlqHelper` + DLQ header constants from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S4 only)
+- [x] Extract `DlqMetricsWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_metrics_worker.rs` (S5 only)
+- [x] Extract `DlqReplayWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_replay_worker.rs` (S6 only)
 - [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
