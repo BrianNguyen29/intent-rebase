@@ -59,6 +59,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract `DlqHelper` + DLQ header constants from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S4 only)
 - [x] Extract `DlqMetricsWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_metrics_worker.rs` (S5 only)
 - [x] Extract `DlqReplayWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_replay_worker.rs` (S6 only)
+- [x] Extract `NatsPullConsumerAdapter` + consumer registry family from `nats_jetstream.rs` → `nats_jetstream/consumer.rs` (S7 only)
 - [x] Relocate `tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_unit.rs` (A1)
 - [x] Relocate `live_integration_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_live_integration.rs` (A2)
 - [x] Relocate `lifecycle_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_lifecycle.rs` (A3)

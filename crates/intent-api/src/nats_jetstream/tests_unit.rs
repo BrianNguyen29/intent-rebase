@@ -1,3 +1,4 @@
+use super::consumer::NatsPullConsumerAdapter;
 use super::*;
 
 #[test]

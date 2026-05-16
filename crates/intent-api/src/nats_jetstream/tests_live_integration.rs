@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use super::consumer::NatsPullConsumerAdapter;
 use super::*;
 use futures_util::StreamExt;
 use intent_rebase_types::{ConsumeResult, EventConsumer, PublishedEvent};

@@ -1,3 +1,4 @@
+use super::consumer::NatsPullConsumerAdapter;
 use super::*;
 use intent_rebase_types::{ConsumeResult, EventConsumer, PublishedEvent};
 use std::sync::Arc;
