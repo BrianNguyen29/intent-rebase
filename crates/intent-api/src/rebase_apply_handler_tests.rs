@@ -500,8 +500,10 @@ async fn test_create_propagation_signals_webhook_disabled_by_default() {
     repo.create_record(record).await.unwrap();
 
     // Call create_propagation_signals_after_apply directly
-    rebase_apply_handlers::create_propagation_signals_after_apply(&state, intent_id, tenant_id, 2)
-        .await;
+    crate::propagation_signals::create_propagation_signals_after_apply(
+        &state, intent_id, tenant_id, 2,
+    )
+    .await;
 
     // Verify signal was updated
     let updated = repo.get_record(record_id, tenant_id).await.unwrap();
@@ -564,8 +566,10 @@ async fn test_create_propagation_signals_webhook_enabled_no_panic_with_empty_res
 
     // Call create_propagation_signals_after_apply directly.
     // rls_pool is None → EmptyWebhookSubscriptionResolver → no HTTP calls.
-    rebase_apply_handlers::create_propagation_signals_after_apply(&state, intent_id, tenant_id, 3)
-        .await;
+    crate::propagation_signals::create_propagation_signals_after_apply(
+        &state, intent_id, tenant_id, 3,
+    )
+    .await;
 
     // Verify signal was updated
     let updated = repo.get_record(record_id, tenant_id).await.unwrap();
@@ -656,7 +660,7 @@ async fn test_create_propagation_signals_webhook_enabled_wiremock_dispatch() {
     resolver.add(subscription);
 
     // Call with injected resolver through the test seam
-    rebase_apply_handlers::create_propagation_signals_after_apply_with_resolver(
+    crate::propagation_signals::create_propagation_signals_after_apply_with_resolver(
         &state, intent_id, tenant_id, 2, &resolver,
     )
     .await;
@@ -752,7 +756,7 @@ async fn test_create_propagation_signals_webhook_enabled_wiremock_500_failure() 
     resolver.add(subscription);
 
     // Call with injected resolver through the test seam
-    rebase_apply_handlers::create_propagation_signals_after_apply_with_resolver(
+    crate::propagation_signals::create_propagation_signals_after_apply_with_resolver(
         &state, intent_id, tenant_id, 2, &resolver,
     )
     .await;

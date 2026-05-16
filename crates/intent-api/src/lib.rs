@@ -61,6 +61,9 @@ pub mod replay_handlers;
 /// Webhook delivery scaffolding (B3 — internal payload/header builders)
 pub mod webhook_delivery;
 
+/// Propagation signal helpers (bounded helper decomposition slice)
+pub mod propagation_signals;
+
 /// Policy snapshot handlers (Phase 2 bounded read-only slice, extracted as bounded handler decomposition slice)
 pub mod policy_snapshot_handlers;
 
