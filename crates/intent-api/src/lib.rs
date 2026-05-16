@@ -61,6 +61,9 @@ pub mod replay_handlers;
 /// Webhook delivery scaffolding (B3 — internal payload/header builders)
 pub mod webhook_delivery;
 
+/// Webhook outbox repository (Phase 4a Slice 1 — bounded local-dev foundation)
+pub mod webhook_outbox_repo;
+
 /// Propagation signal helpers (bounded helper decomposition slice)
 pub mod propagation_signals;
 
