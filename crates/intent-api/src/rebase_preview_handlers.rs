@@ -2,6 +2,9 @@
 //!
 //! Bounded handler decomposition slice: Contains the rebase_preview handler
 //! for generating rebase preview plans.
+//!
+//! This is a bounded non-production slice; preview logic is validated but
+//! full production readiness requires external gates.
 
 use axum::{
     extract::{Path, State},

@@ -2,6 +2,9 @@
 //!
 //! Bounded handler decomposition slice: Contains the compute_diff handler
 //! for computing diffs between intent versions.
+//!
+//! This is a bounded non-production slice; diff rules are validated but not
+//! exhaustively tested against all production edge cases.
 
 use axum::{
     extract::{Path, State},

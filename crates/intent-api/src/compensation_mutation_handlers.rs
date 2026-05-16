@@ -1,7 +1,12 @@
 //! Compensation action mutation handlers.
 //!
-//! Phase 3: Contains POST handlers for approve, waive, execute, and reapprove
-//! compensation actions.
+//! Phase 3 bounded slice: Contains POST handlers for approve, waive, execute,
+//! and reapprove compensation actions using four bounded executors
+//! (Rollback, CounterAction, FollowupNotice, Escalation) with fail-closed
+//! semantics on unsupported strategy classes.
+//!
+//! This is a bounded non-production slice; production hardening requires
+//! external SRE/security review and load testing.
 
 use axum::{
     extract::{Path, State},

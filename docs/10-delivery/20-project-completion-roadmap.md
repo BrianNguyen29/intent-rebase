@@ -1,6 +1,6 @@
 # Project Completion Roadmap
 
-> **Status:** P0 complete, P1 complete, P2 module-doc audit in progress  
+> **Status:** P0 complete, P1 complete, P2 docs audit complete (benchmarks deferred)  
 > **Last updated:** 2026-05-16  
 > **Non-production caveat:** This project is explicitly **NOT production-ready**. All phases below are bounded non-production feature delivery. Production readiness requires external sign-off (SRE, Security, Runtime Integration), load testing, pen testing, and compliance audit — none of which are claimed here.
 
@@ -8,13 +8,13 @@
 
 ## Overview
 
-This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **P0 and P1 are complete; P2 module-doc audit is in progress.** P3 is tracked for future planning and is NOT committed.
+This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **P0, P1, and P2 docs audit are complete.** P3 is tracked for future planning and is NOT committed.
 
 | Batch | Theme | Status | Scope |
 |-------|-------|--------|-------|
 | **P0** | Quality & Cleanup | ✅ Complete | Fast verification, test extraction, CI smoke, code hygiene |
 | **P1** | Test Completeness | ✅ Complete | Remaining inline test extractions, router decomposition Stage 1 |
-| **P2** | Observability & Docs | 🔄 In Progress | Module-level documentation audit for recently extracted modules; benchmark integration deferred |
+| **P2** | Observability & Docs | ✅ Docs Complete (benchmarks deferred) | Module-level documentation audit for extracted and handler modules; cross-link consistency review; benchmark integration deferred |
 | **P3** | Production Readiness | ⬜ Planned | External gates, load testing, pen testing, compliance (future scope) |
 
 ---
@@ -85,7 +85,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred
 - [x] Review and update module-level documentation (`//!` headers) for recently extracted modules — completed for router/auth_middleware, router/jwt_builders, nats_jetstream/consumer, nats_jetstream/tests_*
 - [x] Ensure recently extracted modules have brief doc comments explaining bounded scope — completed
-- [ ] Review and update `//!` headers for remaining handler modules — deferred (consciously scoped to recently extracted modules only)
+- [x] Review and update `//!` headers for remaining handler modules — completed (added bounded/non-production caveats to the weakest modules; all 21 listed handler modules have concise `//!` docs)
 - [x] Review `docs/10-delivery/` for stale references and update cross-links — completed for delivery/quality docs in the P2 cross-link consistency review
 - [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — deferred
 

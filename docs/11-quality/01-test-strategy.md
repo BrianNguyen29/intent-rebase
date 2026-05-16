@@ -77,10 +77,13 @@ cargo test -p intent-api -- --ignored
 
 This policy keeps `cargo test --workspace --lib --all-features` fast and free of external-service dependencies.
 
+## Completed audits (P2)
+- Module-level documentation (`//!` headers) for extracted modules and all handler modules — completed
+- Cross-link consistency between test strategy and delivery docs — completed
+
 ## Deferred audits (P2 / future)
 - Benchmark integration (`cargo bench` in `verify-fast.sh` or CI) — no benchmarks exist yet
 - Dev-experience verification (optional `justfile` alternative to `verify-fast.sh`)
-- Cross-link consistency between test strategy and delivery docs — completed for delivery/quality docs in the P2 cross-link consistency review
 - Router Stage 2 route-group split evaluation (deferred to P2)
 
 > **Non-production caveat:** This test strategy supports bounded non-production feature delivery. Full production readiness requires additional external gates (SRE, Security, load/pen testing) tracked in P3 and explicitly NOT claimed here.

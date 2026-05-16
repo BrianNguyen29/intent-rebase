@@ -1,6 +1,10 @@
 //! Trigger reapproval handlers.
 //!
-//! Phase 2b ADR-07: Contains POST handler for triggering re-approval when scope changes.
+//! Phase 2b ADR-07 bounded slice: Contains POST handler for triggering
+//! re-approval when scope hashes differ, including cancellation of existing
+//! approved requests.
+//!
+//! This is a bounded non-production slice.
 
 use axum::{extract::State, Json};
 use intent_rebase_types::get_current_trace_context;

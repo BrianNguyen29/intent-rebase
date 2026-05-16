@@ -1,7 +1,9 @@
 //! Read-only approval request handlers.
 //!
-//! Phase 2b: Contains GET handlers for listing pending approval requests
-//! and revalidating approval request validity.
+//! Phase 2b bounded slice: Contains GET handlers for listing pending approval
+//! requests and revalidating approval request validity against current scope.
+//!
+//! This is a bounded non-production slice.
 
 use axum::{
     extract::{Path, State},

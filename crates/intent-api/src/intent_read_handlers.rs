@@ -2,6 +2,8 @@
 //!
 //! Phase 2 bounded slice: Contains GET handlers for reading intent data
 //! including intent head, version list, and specific version retrieval.
+//!
+//! This is a bounded non-production slice.
 
 use axum::{
     extract::{Path, State},

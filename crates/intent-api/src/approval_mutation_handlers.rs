@@ -1,7 +1,10 @@
 //! Approval request mutation handlers.
 //!
-//! Phase 2b: Contains POST handlers for approve, reject, and expire
-//! approval requests.
+//! Phase 2b bounded slice: Contains POST handlers for approve, reject, and
+//! expire approval requests with tenant-scoped validation and audit event
+//! publishing.
+//!
+//! This is a bounded non-production slice.
 
 use axum::{
     extract::{Path, State},

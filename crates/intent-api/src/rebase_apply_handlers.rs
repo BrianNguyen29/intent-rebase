@@ -2,6 +2,9 @@
 //!
 //! Bounded handler decomposition slice: Contains the rebase_apply handler
 //! for applying rebase operations to intents.
+//!
+//! This is a bounded non-production slice; full production readiness requires
+//! external SRE/security sign-off, load testing, and pen testing.
 
 use axum::{
     extract::{Path, State},
