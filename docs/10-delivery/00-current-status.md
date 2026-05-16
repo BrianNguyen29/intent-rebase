@@ -261,7 +261,7 @@ Phase 1 (Documentation & API Contract Stabilization) is complete:
 
 Phase 2 (Agent Safety Core Language & Domain Model) is in progress:
 - ImpactReport bounded MVP implemented and verified
-- Vocabulary formalization ongoing
+- Vocabulary formalization ongoing → see [Glossary](../01-product/05-glossary.md)
 
 **No production claim:** External SRE sign-off, security review, load testing, penetration testing, and production infrastructure remain open. See [Production Readiness Backlog](./17-production-readiness-backlog.md).
 

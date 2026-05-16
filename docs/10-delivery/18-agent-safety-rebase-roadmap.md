@@ -27,7 +27,7 @@ This repository remains **Intent Rebase Engine** — no repo or package rename.
 - Strengthen route/OpenAPI drift guard (contract map + automated test)
 
 ### Phase 2 — Agent Safety Core Language & Domain Model (Current)
-- Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc.
+- Formalize vocabulary: IntentVersion, RebasePlan, ImpactReport, SafetyGate, etc. → see [Glossary](../01-product/05-glossary.md)
 - Design ImpactReport as an on-demand read-only projection across pillars (no persistence for MVP)
 - Define API contract for impact-report (ADR-10 bounded MVP implemented)
 - Define API contract for propagation-status (Slice 1 bounded implemented locally — migration 017, record type, in-memory repo, stub fallback; full downstream tracking deferred to Phase 4+)

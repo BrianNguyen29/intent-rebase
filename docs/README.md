@@ -102,6 +102,7 @@ Bộ tài liệu cung cấp **procedure templates và plans** cho production-har
 ### Bắt đầu dự án (Phase 0)
 - [ADR Pack README](./13-adrs/README.md) — Hiểu các quyết định kiến trúc đã được đánh giá trước khi bắt đầu implementation
 - [Implementation Checklist: Phase 0](./10-delivery/checklists/checklist-phase-0.md) — Exit gate checklist để bắt đầu Phase 1
+- [Glossary](./01-product/05-glossary.md) — Standardized vocabulary for Intent Rebase Engine domain terms (IntentVersion, RebasePlan, ImpactReport, SafetyGate, PropagationStatus, PolicySnapshot, CompensationAction, ForensicBundle, IntentFamily)
 
 ### Triển khai theo Phase
 - [10-delivery/checklists/](./10-delivery/checklists/README.md) — Tất cả phase checklists từ Phase 0 đến Phase 4

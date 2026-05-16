@@ -18,9 +18,9 @@ Tracks the 10 major work proposals required to move the Intent Rebase Engine fro
 | [P5](#p5--phase-3-batch-4a--performance-work) | Phase 3 Batch 4a — Performance Work | 🔄 In Progress (bounded slices delivered: P5-S1 graph traversal benchmarks, P5-S2 DB query benchmarks, bounded HTTP load harness) | Medium |
 | [P6](#p6--phase-3-batch-4b--security-hardening) | Phase 3 Batch 4b — Security Hardening | 🔄 In Progress (bounded slices delivered: JWT auth, RLS policies, audit immutability trigger, retention verification types) | High |
 | [P7](#p7--phase-3-batch-1-closure--compensation-plannerexecutor) | Phase 3 Batch 1 Closure — Compensation Planner/Executor | ✅ Closed (Phase 3 Batch 1) | Critical |
-| [P8](#p8--phase-4-enterprise-expansion--policy-simulation) | Phase 4 — Enterprise Expansion: Policy Simulation | ⬜ Not Started | Medium |
-| [P9](#p9--phase-4-enterprise-expansion--advanced-adapters--cross-workflow) | Phase 4 — Advanced Adapters + Cross-Workflow Families | ⬜ Not Started | Medium |
-| [P10](#p10--phase-4-enterprise-expansion--trust-scoring--integrations) | Phase 4 — Trust Scoring + Enterprise Integrations | ⬜ Not Started | Low |
+| [P8](#p8--phase-4-enterprise-expansion--policy-simulation) | Phase 4 — Enterprise Expansion: Policy Simulation | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) | Medium |
+| [P9](#p9--phase-4-enterprise-expansion--advanced-adapters--cross-workflow) | Phase 4 — Advanced Adapters + Cross-Workflow Families | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) | Medium |
+| [P10](#p10--phase-4-enterprise-expansion--trust-scoring--integrations) | Phase 4 — Trust Scoring + Enterprise Integrations | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) | Low |
 
 ---
 
@@ -222,11 +222,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P8 |
 | **Title** | Phase 4 — Enterprise Expansion: Policy Simulation |
 | **Purpose** | Deliver policy simulation capability: dry-run policy changes against production state, what-if analysis for rule pack changes, impact preview before applying policy updates. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead / Product |
 | **Suggested Next Step** | Define policy simulation use cases and success criteria with product team |
-| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Policy simulation enables safer policy changes in multi-tenant production environments. |
+| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Policy simulation enables safer policy changes in multi-tenant production environments. Tracked in Phase 4 Entry Plan (A-13 / 4c). Not yet implemented. |
 
 **Items:**
 - [ ] Policy simulation model and API surface
@@ -243,11 +243,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P9 |
 | **Title** | Phase 4 — Advanced Adapters + Cross-Workflow Families |
 | **Purpose** | Support cross-workflow intent families (shared intent lineage across multiple workflows), advanced runtime adapters beyond the initial Temporal integration, and multi-adapter coordination. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) |
 | **Priority** | Medium |
 | **Owner** | Backend Lead |
 | **Suggested Next Step** | Survey runtime adapter requirements from early adopters; design adapter abstraction |
-| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Current runtime adapter v1 is Temporal-focused. Advanced adapters and cross-workflow families require broader design discussion. |
+| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Current runtime adapter v1 is Temporal-focused. Advanced adapters and cross-workflow families require broader design discussion. Tracked in Phase 4 Entry Plan (A-13 / 4c). Not yet implemented. |
 
 **Items:**
 - [ ] Advanced runtime adapters (beyond Temporal v1)
@@ -264,11 +264,11 @@ Phase 2b scoped slices (runtime adapter, apply endpoint, risk classification, gr
 | **ID** | P10 |
 | **Title** | Phase 4 — Trust Scoring + Enterprise Integrations |
 | **Purpose** | Introduce trust scoring by source (e.g., human agent, AI agent, automated system), enterprise integrations (SSO, SCIM, audit log forwarding), and elevated enterprise tier capabilities. |
-| **Status** | ⬜ Not Started |
+| **Status** | 🔄 Planned — see [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) |
 | **Priority** | Low |
 | **Owner** | Product / Backend Lead |
 | **Suggested Next Step** | Define trust scoring taxonomy with product team; identify enterprise integration priorities |
-| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Trust scoring is a future Phase 4 item; currently no trust level classification in the intent model. |
+| **Progress Notes** | Phase 4 gated on Phase 3 exit gate. Trust scoring is a future Phase 4 item; currently no trust level classification in the intent model. Tracked in Phase 4 Entry Plan (A-13 / 4c). Not yet implemented. |
 
 **Items:**
 - [ ] Trust scoring taxonomy by source (human agent, AI agent, automated system)

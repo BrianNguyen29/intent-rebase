@@ -81,13 +81,13 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 **Goal:** Integrate benchmarks into CI, complete documentation gaps, and harden the local-dev experience.
 
 **Items:**
-- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred, no benchmarks exist yet
-- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred
+- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred; no benchmark harnesses exist in the workspace yet (benchmark stubs are design-only)
+- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred; no benchmarks exist yet
 - [x] Review and update module-level documentation (`//!` headers) for recently extracted modules — completed for router/auth_middleware, router/jwt_builders, nats_jetstream/consumer, nats_jetstream/tests_*
 - [x] Ensure recently extracted modules have brief doc comments explaining bounded scope — completed
 - [x] Review and update `//!` headers for remaining handler modules — completed (added bounded/non-production caveats to the weakest modules; all 21 listed handler modules have concise `//!` docs)
 - [x] Review `docs/10-delivery/` for stale references and update cross-links — completed for delivery/quality docs in the P2 cross-link consistency review
-- [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — deferred
+- [x] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — delivered at root `justfile` with fmt-check, check, clippy, test-lib, verify-fast targets
 
 **Constraints:**
 - Benchmarks must not require live Postgres by default (use in-memory repos)
@@ -138,3 +138,4 @@ This codebase delivers **bounded non-production features** per phase. The follow
 - [Phase 2b Residual Risk & Deferral Register](./10-phase-2b-residual-risk-deferral-register.md)
 - [Production Readiness Backlog](./17-production-readiness-backlog.md)
 - [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md)
+- [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) — detailed A-01..A-13 todo-list and execution roadmap

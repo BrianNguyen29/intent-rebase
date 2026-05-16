@@ -40,6 +40,7 @@
 **10 completion proposals:** See [Completion Proposals Tracker](./09-completion-proposals-tracker.md) for a structured view of all remaining major work items.
 
 ## Phase 4 — Enterprise Expansion (ongoing)
+- **Phase 4 Entry Plan:** see [22-phase-4-entry-plan.md](./22-phase-4-entry-plan.md) for detailed A-01..A-13 todo-list, sub-phase grouping (4a/4b/4c), and execution order.
 - Workflow migration / rebase pillar (ADR-12 design-only; see [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md))
 - Propagation status Slice 1 bounded implemented locally (migration 017, record type, in-memory repo, stub fallback; full downstream tracking, webhook delivery, and event streaming deferred to Phase 4+; see [Propagation Status Implementation Plan](./19-propagation-status-implementation-plan.md))
 - Webhook delivery production hardening — P2-6a..P2-6f Phase 4 design baseline complete (outbox schema, worker lifecycle, HMAC signing, subscription CRUD, retry/DLQ, rollback plan). Design-only; no implementation, no production readiness claim.
