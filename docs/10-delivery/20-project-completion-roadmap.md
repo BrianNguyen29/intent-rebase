@@ -48,7 +48,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ---
 
-## P1 — Test Completeness (Planned)
+## P1 — Test Completeness (Complete)
 
 **Goal:** Extract all remaining inline test modules and decompose oversized files.
 
@@ -76,7 +76,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ---
 
-## P2 — Observability & Documentation (Planned)
+## P2 — Observability & Documentation (In Progress)
 
 **Goal:** Integrate benchmarks into CI, complete documentation gaps, and harden the local-dev experience.
 
