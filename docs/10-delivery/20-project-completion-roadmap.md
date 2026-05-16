@@ -1,7 +1,7 @@
 # Project Completion Roadmap
 
 > **Status:** P0 in progress — quality/cleanup batch  
-> **Last updated:** 2026-05-15  
+> **Last updated:** 2026-05-16  
 > **Non-production caveat:** This project is explicitly **NOT production-ready**. All phases below are bounded non-production feature delivery. Production readiness requires external sign-off (SRE, Security, Runtime Integration), load testing, pen testing, and compliance audit — none of which are claimed here.
 
 ---
@@ -59,6 +59,9 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Extract `DlqHelper` + DLQ header constants from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S4 only)
 - [x] Extract `DlqMetricsWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_metrics_worker.rs` (S5 only)
 - [x] Extract `DlqReplayWorker` family from `nats_jetstream.rs` → `nats_jetstream/dlq_replay_worker.rs` (S6 only)
+- [x] Relocate `tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_unit.rs` (A1)
+- [x] Relocate `live_integration_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_live_integration.rs` (A2)
+- [x] Relocate `lifecycle_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_lifecycle.rs` (A3)
 - [ ] Router decomposition: evaluate splitting `router.rs` if it exceeds maintainability thresholds
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
