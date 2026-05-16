@@ -78,24 +78,29 @@ pub fn build_webhook_payload(input: WebhookPayloadInput) -> WebhookPayload {
 pub struct WebhookHeaders {
     pub content_type: String,
     pub idempotency_key: String,
+    /// HMAC-SHA256 signature (Slice 3 — present when env secret is configured).
+    pub signature: Option<String>,
 }
 
 impl WebhookHeaders {
     /// Build headers for a webhook delivery.
-    ///
-    /// X-Webhook-Signature is intentionally absent because HMAC signing
-    /// is deferred (Slice 3 design note).
     pub fn new(delivery_id: Uuid) -> Self {
         Self {
             content_type: "application/json".to_string(),
             idempotency_key: delivery_id.to_string(),
+            signature: None,
         }
     }
 
+    /// Attach an HMAC signature to these headers.
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
     /// Returns true if the signature header should be present.
-    /// Currently always false (deferred).
     pub fn has_signature_header(&self) -> bool {
-        false
+        self.signature.is_some()
     }
 }
 
@@ -281,13 +286,16 @@ pub async fn send_webhook(
 ) -> Result<WebhookDeliveryResult, reqwest::Error> {
     let body = serde_json::to_string(payload).unwrap_or_default();
 
-    let response = client
+    let mut request = client
         .post(url)
         .header("Content-Type", &headers.content_type)
-        .header("X-Idempotency-Key", &headers.idempotency_key)
-        .body(body)
-        .send()
-        .await?;
+        .header("X-Idempotency-Key", &headers.idempotency_key);
+
+    if let Some(ref signature) = headers.signature {
+        request = request.header("X-Webhook-Signature", signature);
+    }
+
+    let response = request.body(body).send().await?;
 
     let status = response.status().as_u16();
     let category = classify_status_code(status);

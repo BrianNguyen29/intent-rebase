@@ -51,6 +51,8 @@ pub struct WebhookOutboxRecord {
     pub event_type: String,
     /// Payload envelope
     pub payload: Value,
+    /// Target webhook URL (optional until subscription CRUD wires URLs)
+    pub webhook_url: Option<String>,
     /// Current status
     pub status: WebhookOutboxStatus,
     /// Number of delivery attempts made
@@ -83,6 +85,7 @@ impl WebhookOutboxRecord {
         subscription_id: Uuid,
         event_type: String,
         payload: Value,
+        webhook_url: Option<String>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -92,6 +95,7 @@ impl WebhookOutboxRecord {
             subscription_id,
             event_type,
             payload,
+            webhook_url,
             status: WebhookOutboxStatus::Pending,
             attempt_count: 0,
             max_attempts: 3,
@@ -329,6 +333,7 @@ mod tests {
             subscription_id,
             "intent_changed".to_string(),
             serde_json::json!({"foo": "bar"}),
+            None,
         )
     }
 

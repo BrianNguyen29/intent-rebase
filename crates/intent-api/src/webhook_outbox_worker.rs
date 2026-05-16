@@ -1,15 +1,19 @@
-//! Webhook outbox worker (Phase 4a Slice 2)
+//! Webhook outbox worker (Phase 4a Slice 2 + 3)
 //!
 //! Bounded local-dev worker foundation around `WebhookOutboxRepository`.
-//! Does NOT perform actual HTTP dispatch — that is Slice 3+ scope.
-//! Provides a deterministic single-batch processing method for testability.
+//! Slice 2: claim/list-pending flow.
+//! Slice 3: dispatch boundary integration with HMAC signing.
 //!
-//! See: docs/10-delivery/22-phase-4-entry-plan.md (A-12 Slice 2)
+//! Does NOT run a background loop — provides deterministic single-batch
+//! `process_once` for testability.
+//!
+//! See: docs/10-delivery/22-phase-4-entry-plan.md (A-12 Slice 2–3)
 
 use async_trait::async_trait;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::webhook_dispatcher::WebhookDispatcher;
 use crate::webhook_outbox_repo::WebhookOutboxRepository;
 use intent_rebase_types::IntentRebaseError;
 
@@ -56,7 +60,8 @@ pub trait WebhookOutboxWorker: Send + Sync {
     ///
     /// - Lists pending records up to `batch_size`
     /// - Claims each record (optimistic concurrency)
-    /// - Marks each claimed record as delivered (bounded Slice 2 — no real HTTP dispatch)
+    /// - Dispatches via `WebhookDispatcher`
+    /// - Marks delivered on success, failed on dispatch failure
     ///
     /// Returns the number of records successfully processed.
     async fn process_once(
@@ -70,14 +75,16 @@ pub trait WebhookOutboxWorker: Send + Sync {
 // Worker Implementation
 // =============================================================================
 
-/// Concrete worker implementation backed by a `WebhookOutboxRepository`.
+/// Concrete worker implementation backed by a `WebhookOutboxRepository`
+/// and a `WebhookDispatcher`.
 pub struct WebhookOutboxWorkerImpl<R: WebhookOutboxRepository> {
     repo: Arc<R>,
+    dispatcher: Arc<dyn WebhookDispatcher>,
 }
 
 impl<R: WebhookOutboxRepository> WebhookOutboxWorkerImpl<R> {
-    pub fn new(repo: Arc<R>) -> Self {
-        Self { repo }
+    pub fn new(repo: Arc<R>, dispatcher: Arc<dyn WebhookDispatcher>) -> Self {
+        Self { repo, dispatcher }
     }
 }
 
@@ -114,21 +121,38 @@ impl<R: WebhookOutboxRepository> WebhookOutboxWorker for WebhookOutboxWorkerImpl
                 }
             };
 
-            // Bounded Slice 2: no actual HTTP dispatch.
-            // Mark as delivered for local-dev testability.
-            // Future slices will replace this with real dispatch + retry logic.
-            if let Err(e) = self.repo.mark_delivered(claimed.id, tenant_id).await {
-                tracing::warn!(
-                    "Failed to mark outbox record {} as delivered for tenant {}: {}",
-                    claimed.id,
-                    tenant_id,
-                    e
-                );
-                record_webhook_outbox_worker_item_failed();
-                continue;
+            match self.dispatcher.dispatch(&claimed).await {
+                Ok(()) => {
+                    if let Err(e) = self.repo.mark_delivered(claimed.id, tenant_id).await {
+                        tracing::warn!(
+                            "Failed to mark outbox record {} as delivered for tenant {}: {}",
+                            claimed.id,
+                            tenant_id,
+                            e
+                        );
+                        record_webhook_outbox_worker_item_failed();
+                        continue;
+                    }
+                    processed += 1;
+                }
+                Err(reason) => {
+                    tracing::warn!(
+                        "Dispatch failed for outbox record {} for tenant {}: {}",
+                        claimed.id,
+                        tenant_id,
+                        reason
+                    );
+                    if let Err(e) = self.repo.mark_failed(claimed.id, tenant_id, reason).await {
+                        tracing::warn!(
+                            "Failed to mark outbox record {} as failed for tenant {}: {}",
+                            claimed.id,
+                            tenant_id,
+                            e
+                        );
+                    }
+                    record_webhook_outbox_worker_item_failed();
+                }
             }
-
-            processed += 1;
         }
 
         record_webhook_outbox_worker_batch_processed(processed);
@@ -143,9 +167,27 @@ impl<R: WebhookOutboxRepository> WebhookOutboxWorker for WebhookOutboxWorkerImpl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webhook_dispatcher::WebhookDispatcher;
     use crate::webhook_outbox_repo::{
         InMemoryWebhookOutboxRepository, WebhookOutboxRecord, WebhookOutboxStatus,
     };
+
+    struct MockDispatcher {
+        result: Result<(), String>,
+    }
+
+    impl MockDispatcher {
+        fn new(result: Result<(), String>) -> Self {
+            Self { result }
+        }
+    }
+
+    #[async_trait]
+    impl WebhookDispatcher for MockDispatcher {
+        async fn dispatch(&self, _record: &WebhookOutboxRecord) -> Result<(), String> {
+            self.result.clone()
+        }
+    }
 
     fn sample_record(
         tenant_id: Uuid,
@@ -158,6 +200,7 @@ mod tests {
             subscription_id,
             "intent_changed".to_string(),
             serde_json::json!({"foo": "bar"}),
+            None,
         )
     }
 
@@ -166,7 +209,8 @@ mod tests {
         temp_env::with_var_unset(WEBHOOK_OUTBOX_WORKER_ENV_VAR, || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
-            let worker = WebhookOutboxWorkerImpl::new(repo);
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let worker = WebhookOutboxWorkerImpl::new(repo, dispatcher);
             let tenant = Uuid::new_v4();
             let result = rt.block_on(worker.process_once(tenant, 10));
             assert_eq!(result.unwrap(), 0);
@@ -178,7 +222,8 @@ mod tests {
         temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
-            let worker = WebhookOutboxWorkerImpl::new(repo.clone());
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
             let tenant = Uuid::new_v4();
             let intent = Uuid::new_v4();
             let sub = Uuid::new_v4();
@@ -200,7 +245,8 @@ mod tests {
         temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
-            let worker = WebhookOutboxWorkerImpl::new(repo);
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let worker = WebhookOutboxWorkerImpl::new(repo, dispatcher);
             let tenant = Uuid::new_v4();
 
             let result = rt.block_on(worker.process_once(tenant, 10));
@@ -213,7 +259,8 @@ mod tests {
         temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
-            let worker = WebhookOutboxWorkerImpl::new(repo.clone());
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
             let tenant = Uuid::new_v4();
             let intent = Uuid::new_v4();
             let sub = Uuid::new_v4();
@@ -229,6 +276,30 @@ mod tests {
             let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
             assert_eq!(fetched.status, WebhookOutboxStatus::Claimed);
             assert_eq!(fetched.locked_by, Some("other-worker".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_worker_marks_failed_on_dispatch_error() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Err("network timeout".to_string())));
+            let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
+            let tenant = Uuid::new_v4();
+            let intent = Uuid::new_v4();
+            let sub = Uuid::new_v4();
+            let record = sample_record(tenant, intent, sub);
+
+            rt.block_on(repo.create(record.clone())).unwrap();
+
+            let result = rt.block_on(worker.process_once(tenant, 10));
+            assert_eq!(result.unwrap(), 0);
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Failed);
+            assert_eq!(fetched.last_error, Some("network timeout".to_string()));
+            assert_eq!(fetched.lock_version, 2); // claim + failed
         });
     }
 }

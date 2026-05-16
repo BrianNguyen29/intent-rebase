@@ -67,6 +67,12 @@ pub mod webhook_outbox_repo;
 /// Webhook outbox worker (Phase 4a Slice 2 — bounded local-dev worker)
 pub mod webhook_outbox_worker;
 
+/// Webhook HMAC signing (Phase 4a Slice 3 — bounded local-dev signing)
+pub mod webhook_hmac;
+
+/// Webhook dispatcher (Phase 4a Slice 3 — bounded dispatch boundary)
+pub mod webhook_dispatcher;
+
 /// Propagation signal helpers (bounded helper decomposition slice)
 pub mod propagation_signals;
 

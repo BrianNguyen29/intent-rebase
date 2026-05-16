@@ -31,6 +31,8 @@ uuid = { workspace = true }
 validator = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 jsonwebtoken = "9"
 
