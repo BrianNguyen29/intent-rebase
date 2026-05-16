@@ -86,7 +86,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Review and update module-level documentation (`//!` headers) for recently extracted modules — completed for router/auth_middleware, router/jwt_builders, nats_jetstream/consumer, nats_jetstream/tests_*
 - [x] Ensure recently extracted modules have brief doc comments explaining bounded scope — completed
 - [ ] Review and update `//!` headers for remaining handler modules — deferred (consciously scoped to recently extracted modules only)
-- [ ] Review `docs/10-delivery/` for stale references and update cross-links — deferred
+- [x] Review `docs/10-delivery/` for stale references and update cross-links — completed for delivery/quality docs in the P2 cross-link consistency review
 - [ ] Add `justfile` alternative to `scripts/verify-fast.sh` for teams using `just` — deferred
 
 **Constraints:**

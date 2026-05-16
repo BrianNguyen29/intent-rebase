@@ -80,7 +80,7 @@ This policy keeps `cargo test --workspace --lib --all-features` fast and free of
 ## Deferred audits (P2 / future)
 - Benchmark integration (`cargo bench` in `verify-fast.sh` or CI) — no benchmarks exist yet
 - Dev-experience verification (optional `justfile` alternative to `verify-fast.sh`)
-- Cross-link consistency between test strategy and delivery docs
+- Cross-link consistency between test strategy and delivery docs — completed for delivery/quality docs in the P2 cross-link consistency review
 - Router Stage 2 route-group split evaluation (deferred to P2)
 
 > **Non-production caveat:** This test strategy supports bounded non-production feature delivery. Full production readiness requires additional external gates (SRE, Security, load/pen testing) tracked in P3 and explicitly NOT claimed here.
