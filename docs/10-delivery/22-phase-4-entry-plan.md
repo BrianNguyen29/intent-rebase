@@ -8,7 +8,7 @@
 
 ## Purpose
 
-This document provides a comprehensive todo-list and execution plan for entering Phase 4 of the Intent Rebase Engine. It is a **planning artifact only** — it does not claim that any Phase 4 work has been implemented or that the system is production-ready.
+This document provides a comprehensive todo-list and execution plan for entering Phase 4 of the Intent Rebase Engine. It is a **bounded planning and execution tracker** — it may record local-dev slices that have been implemented and verified, but it does not claim Phase 4 is complete or that the system is production-ready.
 
 > **⚠️ Non-Production Caveat**
 >
@@ -206,6 +206,51 @@ This document provides a comprehensive todo-list and execution plan for entering
 
 Wire `WebhookOutboxWorker` into application state and a background task loop when Slice 4 (subscription CRUD + URL resolution) begins. Slice 3 does not alter the existing env-gated dispatcher behavior; the worker remains local-dev only and not wired into app startup. Production secret manager and key rotation remain future scope.
 
+### Remaining Production Blocker Todo-List
+
+The following list tracks all remaining webhook production blockers after Slices 1–3. Items are split into locally executable work, design-gated work, and externally blocked work. Completing local items improves the bounded implementation, but **does not** make webhook delivery production-ready.
+
+#### Locally Executable — Bounded Implementation
+
+| ID | Todo | Current State | Execution Notes | Status |
+|----|------|---------------|-----------------|--------|
+| WEB-LOCAL-1 | Add `SqlxWebhookOutboxRepository` and wire durable outbox writes into the dispatch/propagation path | In-memory outbox repository exists; migration `019_create_webhook_outbox.sql` exists; no SQLx implementation yet | Implement SQLx repository without requiring live Postgres in default tests; write outbox records before/alongside current env-gated dispatch path; preserve fallback behavior | ⬜ Pending |
+| WEB-LOCAL-2 | Wire `WebhookOutboxWorker` + `WebhookDeliveryDispatcher` into application startup behind `INTENT_API_WEBHOOK_OUTBOX_WORKER` | Worker and dispatcher modules exist; no `tokio::spawn`/startup wiring | Keep default-off; add graceful shutdown only if bounded; do not enable production background delivery by default | ⬜ Pending |
+| WEB-LOCAL-3 | Add bounded pipeline integration tests | Unit tests exist for outbox repo, worker, dispatcher, HMAC, and existing delivery path | Add in-memory/wiremock test for outbox → worker → dispatcher → HMAC → sender behavior; no live DB/network dependency beyond local mocks | ⬜ Pending |
+
+#### Design-Gated — Requires Schema/Architecture Resolution
+
+| ID | Todo | Blocker | Owner | Status |
+|----|------|---------|-------|--------|
+| WEB-DESIGN-1 | Resolve subscription CRUD API model before implementing routes | Migration `018_create_webhook_subscriptions.sql` is per-intent, while P2-6d design expects tenant-scoped subscriptions with `status`, `max_attempts`, `event_types`, `active_kid`, and `revoked_kid` | Backend Lead | 🔴 Blocked |
+| WEB-DESIGN-2 | Design retry/backoff/DLQ lifecycle for webhook outbox | Current worker marks failed immediately on dispatch error; production semantics require retryable/non-retryable classification, scheduled backoff, final failure/DLQ, retention, and runbook coverage | Backend Lead / SRE | 🔴 Blocked |
+
+#### External/Infrastructure Blockers — Cannot Be Closed Locally
+
+| ID | Todo | Required Evidence | Owner | Status |
+|----|------|-------------------|-------|--------|
+| WEB-EXT-1 | Production secret manager and HMAC key rotation | Vault/AWS Secrets Manager/Kubernetes Secret integration, per-subscription key material, `kid` support, rotation/grace-window evidence | SRE / Security | 🔴 Blocked |
+| WEB-EXT-2 | Staging/production webhook delivery evidence | Staging or production deployment, real subscriber endpoint, real Alertmanager/observability signals, delivery SLO evidence | SRE | 🔴 Blocked |
+| WEB-EXT-3 | External SRE/security review and pen-test evidence | Named independent reviewer sign-off, pen-test report, remediation evidence for any HIGH/CRITICAL findings | User / External Reviewers | 🔴 Blocked |
+
+#### Execution Order
+
+```text
+WEB-LOCAL-1 (SQLx outbox repository + durable writes)
+  └── WEB-LOCAL-2 (default-off worker startup wiring)
+        └── WEB-LOCAL-3 (bounded pipeline integration tests)
+              ├── WEB-DESIGN-1 (subscription CRUD schema/API decision)
+              └── WEB-DESIGN-2 (retry/backoff/DLQ lifecycle design)
+                    └── WEB-EXT-1..3 (secret manager, infra evidence, external review)
+```
+
+#### Current Safe Execution Boundary
+
+- Safe to execute locally now: `WEB-LOCAL-1` through `WEB-LOCAL-3`, one bounded slice at a time.
+- Must remain open until design decision: `WEB-DESIGN-1`, `WEB-DESIGN-2`.
+- Must remain open until real infrastructure/evidence: `WEB-EXT-1` through `WEB-EXT-3`.
+- Forbidden claim remains: webhook delivery is **not production-ready** until all local, design, infrastructure, and external review blockers are closed with evidence.
+
 ---
 
 ## A-13 — Forensic Replay + Immutable Storage Lifecycle
@@ -256,7 +301,7 @@ These completion proposals from `docs/10-delivery/09-completion-proposals-tracke
 | `Load testing passed` | `L1/L2 bounded local evidence; L3-L5 blocked` |
 | `Full RLS enforced` | `RLS policies defined; full wiring pending P1-S5i completion` |
 | `DLQ production-ready` | `Local-dev DLQ gates delivered; full replay worker deferred` |
-| `Webhook delivery production-ready` | `Bounded non-production slice delivered; outbox/worker/HMAC deferred` |
+| `Webhook delivery production-ready` | `Bounded non-production slices delivered; SQLx wiring, startup wiring, CRUD, retry/DLQ, production secrets, real infra evidence, and external review remain open` |
 | `Forensic replay production-ready` | `Bounded replay evidence delivered; full runtime replay deferred` |
 
 ---
