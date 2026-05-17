@@ -70,6 +70,12 @@ pub struct WebhookOutboxRecord {
     pub delivered_at: Option<DateTime<Utc>>,
     /// Last failure reason
     pub last_error: Option<String>,
+    /// Number of DLQ replays performed
+    pub replay_count: i32,
+    /// Timestamp of the most recent DLQ replay
+    pub replayed_at: Option<DateTime<Utc>>,
+    /// Actor identity for the most recent DLQ replay
+    pub replayed_by: Option<String>,
     /// Optimistic locking version
     pub lock_version: i32,
     /// Creation timestamp
@@ -105,6 +111,9 @@ impl WebhookOutboxRecord {
             locked_by: None,
             delivered_at: None,
             last_error: None,
+            replay_count: 0,
+            replayed_at: None,
+            replayed_by: None,
             lock_version: 0,
             created_at: now,
             updated_at: now,
@@ -199,10 +208,13 @@ pub trait WebhookOutboxRepository: Send + Sync {
     ///
     /// Slice 5b: idempotency-bounded replay. Only transitions from Failed.
     /// Returns an error if the record is not in Failed status.
+    ///
+    /// Phase 1.2: increments replay_count, sets replayed_at/replayed_by on successful replay.
     async fn replay_failed(
         &self,
         id: Uuid,
         tenant_id: Uuid,
+        replayed_by: Option<String>,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
 
     /// List failed records older than a cutoff for a tenant.
@@ -428,6 +440,7 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         &self,
         id: Uuid,
         tenant_id: Uuid,
+        replayed_by: Option<String>,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
         let mut records = self.records.write().await;
         let record = records.get_mut(&id).ok_or_else(|| {
@@ -451,6 +464,9 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         record.last_error = None;
         record.locked_at = None;
         record.locked_by = None;
+        record.replay_count += 1;
+        record.replayed_at = Some(Utc::now());
+        record.replayed_by = replayed_by;
         record.lock_version += 1;
         record.updated_at = Utc::now();
         Ok(record.clone())
@@ -580,6 +596,11 @@ fn map_row(row: &sqlx::postgres::PgRow) -> Result<WebhookOutboxRecord, IntentReb
         locked_by: row.try_get("locked_by").ok(),
         delivered_at: row.try_get("delivered_at").ok(),
         last_error: row.try_get("last_error").ok(),
+        replay_count: row
+            .try_get("replay_count")
+            .map_err(|e| map_err_column("replay_count", e))?,
+        replayed_at: row.try_get("replayed_at").ok(),
+        replayed_by: row.try_get("replayed_by").ok(),
         lock_version: row
             .try_get("lock_version")
             .map_err(|e| map_err_column("lock_version", e))?,
@@ -604,12 +625,14 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
                 id, tenant_id, intent_id, subscription_id, event_type, payload,
                 webhook_url, status, attempt_count, max_attempts, scheduled_at,
                 locked_at, locked_by, delivered_at, last_error,
+                replay_count, replayed_at, replayed_by,
                 lock_version, created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9, $10, $11,
                 $12, $13, $14, $15,
-                $16, $17, $18
+                $16, $17, $18,
+                $19, $20, $21
             )
             "#,
         )
@@ -628,6 +651,9 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         .bind(record.locked_by.as_ref())
         .bind(record.delivered_at)
         .bind(record.last_error.as_ref())
+        .bind(record.replay_count)
+        .bind(record.replayed_at)
+        .bind(record.replayed_by.as_ref())
         .bind(record.lock_version)
         .bind(record.created_at)
         .bind(record.updated_at)
@@ -856,6 +882,7 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         &self,
         id: Uuid,
         tenant_id: Uuid,
+        replayed_by: Option<String>,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
         let result = sqlx::query(
             r#"
@@ -866,6 +893,9 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
                 last_error = NULL,
                 locked_at = NULL,
                 locked_by = NULL,
+                replay_count = replay_count + 1,
+                replayed_at = NOW(),
+                replayed_by = $3,
                 lock_version = lock_version + 1,
                 updated_at = NOW()
             WHERE id = $1 AND tenant_id = $2 AND status = 'failed'
@@ -874,6 +904,7 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         )
         .bind(id)
         .bind(tenant_id)
+        .bind(replayed_by.as_ref())
         .fetch_one(&self.pool)
         .await;
 
@@ -1129,12 +1160,15 @@ mod tests {
             .await
             .unwrap();
 
-        let replayed = repo.replay_failed(record.id, tenant).await.unwrap();
+        let replayed = repo.replay_failed(record.id, tenant, None).await.unwrap();
         assert_eq!(replayed.status, WebhookOutboxStatus::Pending);
         assert_eq!(replayed.attempt_count, 0);
         assert_eq!(replayed.last_error, None);
         assert_eq!(replayed.locked_at, None);
         assert_eq!(replayed.locked_by, None);
+        assert_eq!(replayed.replay_count, 1);
+        assert!(replayed.replayed_at.is_some());
+        assert_eq!(replayed.replayed_by, None);
         assert_eq!(replayed.lock_version, 2); // create + mark_failed + replay
     }
 
@@ -1149,10 +1183,13 @@ mod tests {
             .unwrap();
 
         // First replay succeeds
-        let _ = repo.replay_failed(record.id, tenant).await.unwrap();
+        let _ = repo.replay_failed(record.id, tenant, None).await.unwrap();
 
         // Second replay fails because status is no longer Failed
-        let err = repo.replay_failed(record.id, tenant).await.unwrap_err();
+        let err = repo
+            .replay_failed(record.id, tenant, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, IntentRebaseError::StorageError(_)));
     }
 
@@ -1164,7 +1201,72 @@ mod tests {
         repo.create(record.clone()).await.unwrap();
 
         // Record is still Pending, not Failed
-        let err = repo.replay_failed(record.id, tenant).await.unwrap_err();
+        let err = repo
+            .replay_failed(record.id, tenant, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IntentRebaseError::StorageError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_replay_failed_sets_replayed_by() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let replayed = repo
+            .replay_failed(record.id, tenant, Some("operator-42".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(replayed.replay_count, 1);
+        assert!(replayed.replayed_at.is_some());
+        assert_eq!(replayed.replayed_by, Some("operator-42".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_replay_failed_metadata_defaults_when_no_actor() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "boom".to_string())
+            .await
+            .unwrap();
+
+        let replayed = repo.replay_failed(record.id, tenant, None).await.unwrap();
+        assert_eq!(replayed.replay_count, 1);
+        assert!(replayed.replayed_at.is_some());
+        assert_eq!(replayed.replayed_by, None);
+    }
+
+    #[tokio::test]
+    async fn test_replay_failed_clears_previous_metadata_on_replay() {
+        // Idempotency prevents second replay, so we verify the first replay
+        // sets metadata correctly; a subsequent replay would fail.
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "err".to_string())
+            .await
+            .unwrap();
+
+        let first = repo
+            .replay_failed(record.id, tenant, Some("a".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(first.replay_count, 1);
+        assert_eq!(first.replayed_by, Some("a".to_string()));
+
+        // Second replay fails because status is no longer Failed
+        let err = repo
+            .replay_failed(record.id, tenant, Some("b".to_string()))
+            .await
+            .unwrap_err();
         assert!(matches!(err, IntentRebaseError::StorageError(_)));
     }
 
@@ -1438,7 +1540,7 @@ mod tests {
 
         // replay_failed should transition to Pending
         let replayed = repo
-            .replay_failed(created.id, tenant_id)
+            .replay_failed(created.id, tenant_id, None)
             .await
             .expect("replay_failed failed");
         assert_eq!(replayed.status, WebhookOutboxStatus::Pending);

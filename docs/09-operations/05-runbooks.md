@@ -356,19 +356,19 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 - List failed outbox records: `GET /webhooks/outbox/dlq?tenant_id=<uuid>[&limit=<n>]`
   - Returns `WebhookOutboxStatus::Failed` records ordered by `updated_at` desc
   - Empty list when no failures or when `webhook_outbox_repo` is not configured
-- Replay a failed record: `POST /webhooks/outbox/dlq/:id/replay?tenant_id=<uuid>`
+- Replay a failed record: `POST /webhooks/outbox/dlq/:id/replay?tenant_id=<uuid>[&replayed_by=<actor>]`
   - Transitions record from `Failed` to `Pending`, resets `attempt_count=0`, clears `last_error`/`locked_at`/`locked_by`
   - Idempotency-bounded: only `Failed` records can be replayed; second replay returns an error because status is no longer `Failed`
   - After replay, the worker will pick up the record on its next pass if `INTENT_API_WEBHOOK_OUTBOX_WORKER=true`
+  - Phase 1.2 replay metadata: increments `replay_count`, sets `replayed_at=now`, sets `replayed_by` from query param if provided
 - Retention query (Phase 1.1 — query-only, no purge/enforcement):
   - List failed records older than a cutoff via `WebhookOutboxRepository::list_failed_older_than(tenant_id, before, limit)`
   - Query-only local-dev helper; no delete endpoint, no background job, no S3/Object Lock
   - `WEBHOOK_OUTBOX_RETENTION_DAYS` env var is available for documentation only (no enforcement logic)
 - Caveats:
   - No separate DLQ table — uses existing `webhook_outbox` `status='failed'` rows
-  - No replay audit trail, replay count, or retention policy
   - No operator UI or batch replay API
-  - Production retention/operator workflow remains deferred
+  - Production audit trail, operator workflow, and replay UI remain deferred
 
 **Rollback Boundaries:**
 - Webhook delivery is best-effort and does NOT affect rebase apply outcomes

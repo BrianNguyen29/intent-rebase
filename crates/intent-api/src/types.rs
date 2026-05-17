@@ -2146,6 +2146,10 @@ pub struct ListWebhookOutboxDlqResponse {
 #[derive(Debug, Deserialize)]
 pub struct ReplayWebhookOutboxDlqQuery {
     pub tenant_id: Uuid,
+    /// Optional actor identity for replay audit metadata (Phase 1.2).
+    /// If not provided, replay metadata is still updated with replay_count
+    /// and replayed_at, but replayed_by remains null.
+    pub replayed_by: Option<String>,
 }
 
 /// Response for replaying a webhook outbox DLQ record.

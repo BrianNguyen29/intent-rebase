@@ -84,7 +84,10 @@ pub async fn replay_dlq(
         }
     };
 
-    match repo.replay_failed(id, query.tenant_id).await {
+    match repo
+        .replay_failed(id, query.tenant_id, query.replayed_by)
+        .await
+    {
         Ok(record) => Ok((
             StatusCode::OK,
             Json(ReplayWebhookOutboxDlqResponse { record }),
@@ -530,5 +533,65 @@ mod tests {
         assert_eq!(pending[0].id, r.id);
         assert_eq!(pending[0].status, WebhookOutboxStatus::Pending);
         assert_eq!(pending[0].attempt_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_dlq_with_replayed_by() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/{}/replay?tenant_id={}&replayed_by=operator-7",
+                        r.id, tenant
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.record.status, WebhookOutboxStatus::Pending);
+        assert_eq!(parsed.record.replay_count, 1);
+        assert!(parsed.record.replayed_at.is_some());
+        assert_eq!(parsed.record.replayed_by, Some("operator-7".to_string()));
     }
 }
