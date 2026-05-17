@@ -186,7 +186,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Production-grade webhook delivery with outbox pattern, background worker, HMAC signing, key rotation, subscription CRUD API |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P2-6), `docs/10-delivery/19-propagation-status-implementation-plan.md`, `docs/09-operations/10-external-review-packet.md` (G-WEB-1) |
-| **Design/Implementation Status** | 🟡 SLICES 1–3 DELIVERED — outbox schema (migration 019), repository trait, in-memory implementation, bounded tests (Slice 1); env-gated worker with claim/list-pending flow and bounded tests (Slice 2); HMAC signing foundation, dispatch boundary, and worker integration with bounded tests (Slice 3). Slices 4–5 remain deferred. |
+| **Design/Implementation Status** | 🟡 SLICES 1–3 DELIVERED + WEB-LOCAL-1 PARTIAL — outbox schema (migration 019), repository trait, in-memory implementation, bounded tests (Slice 1); `SqlxWebhookOutboxRepository` foundation added (WEB-LOCAL-1 partial); env-gated worker with claim/list-pending flow and bounded tests (Slice 2); HMAC signing foundation, dispatch boundary, and worker integration with bounded tests (Slice 3). Slices 4–5 and propagation-path durable writes remain deferred. |
 | **Dependencies** | Slice 1: local Postgres for migration; Slices 2–5: background worker, secret manager, subscription CRUD API |
 | **Owner** | Backend Lead |
 | **Validation Path** | Slice 1: `cargo test -p intent-api --lib webhook_outbox_repo` passes. Slice 2: `cargo test -p intent-api --lib webhook_outbox_worker` passes. Slice 3: `cargo test -p intent-api --lib webhook_hmac`, `cargo test -p intent-api --lib webhook_dispatcher`, and `cargo test -p intent-api --lib webhook_outbox_worker` pass. Slices 4–5: end-to-end delivery test with real subscriber; key rotation grace window test |
@@ -196,7 +196,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 
 | Slice | Description | Status | Evidence |
 |-------|-------------|--------|----------|
-| **Slice 1** | Outbox schema + repository foundation | 🟡 DELIVERED | Migration `019_create_webhook_outbox.sql`; `crates/intent-api/src/webhook_outbox_repo.rs` (trait + in-memory impl + tests) |
+| **Slice 1** | Outbox schema + repository foundation | 🟡 DELIVERED | Migration `019_create_webhook_outbox.sql`; `crates/intent-api/src/webhook_outbox_repo.rs` (trait + in-memory impl + `SqlxWebhookOutboxRepository` + tests) |
 | **Slice 2** | Background delivery worker lifecycle | 🟡 DELIVERED | `crates/intent-api/src/webhook_outbox_worker.rs` (env-gated `WebhookOutboxWorker` trait, claim/list-pending `process_once`, in-memory tests) |
 | **Slice 3** | HMAC signing + dispatch boundary | 🟡 DELIVERED | `crates/intent-api/src/webhook_hmac.rs` (HMAC-SHA256 sign + canonical string + fixed-vector tests); `crates/intent-api/src/webhook_dispatcher.rs` (`WebhookDispatcher` trait + `WebhookDeliveryDispatcher` with sender/HMAC integration + tests); worker updated to dispatch via boundary and mark delivered/failed. Key rotation remains deferred. |
 | **Slice 4** | Subscription CRUD API | 🔴 DEFERRED | Design documented in `docs/10-delivery/17-production-readiness-backlog.md` (P2-6d) |
@@ -214,7 +214,7 @@ The following list tracks all remaining webhook production blockers after Slices
 
 | ID | Todo | Current State | Execution Notes | Status |
 |----|------|---------------|-----------------|--------|
-| WEB-LOCAL-1 | Add `SqlxWebhookOutboxRepository` and wire durable outbox writes into the dispatch/propagation path | In-memory outbox repository exists; migration `019_create_webhook_outbox.sql` exists; no SQLx implementation yet | Implement SQLx repository without requiring live Postgres in default tests; write outbox records before/alongside current env-gated dispatch path; preserve fallback behavior | ⬜ Pending |
+| WEB-LOCAL-1 | Add `SqlxWebhookOutboxRepository` and wire durable outbox writes into the dispatch/propagation path | `SqlxWebhookOutboxRepository` delivered in `crates/intent-api/src/webhook_outbox_repo.rs` (implements `WebhookOutboxRepository` with `sqlx::query`, no compile-time DB required). Durable outbox writes into `propagation_signals.rs` remain pending. | SQLx repo uses dynamic queries; default tests do not require live Postgres; `webhook_url` is not persisted because migration 019 lacks the column. Propagation-path wiring is next slice. | 🟡 Partial |
 | WEB-LOCAL-2 | Wire `WebhookOutboxWorker` + `WebhookDeliveryDispatcher` into application startup behind `INTENT_API_WEBHOOK_OUTBOX_WORKER` | Worker and dispatcher modules exist; no `tokio::spawn`/startup wiring | Keep default-off; add graceful shutdown only if bounded; do not enable production background delivery by default | ⬜ Pending |
 | WEB-LOCAL-3 | Add bounded pipeline integration tests | Unit tests exist for outbox repo, worker, dispatcher, HMAC, and existing delivery path | Add in-memory/wiremock test for outbox → worker → dispatcher → HMAC → sender behavior; no live DB/network dependency beyond local mocks | ⬜ Pending |
 
