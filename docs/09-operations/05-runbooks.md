@@ -361,6 +361,12 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
   - Idempotency-bounded: only `Failed` records can be replayed; second replay returns an error because status is no longer `Failed`
   - After replay, the worker will pick up the record on its next pass if `INTENT_API_WEBHOOK_OUTBOX_WORKER=true`
   - Phase 1.2 replay metadata: increments `replay_count`, sets `replayed_at=now`, sets `replayed_by` from query param if provided
+- Replay audit query (Phase 1.3 — bounded local-dev):
+  - List replayed records: `GET /webhooks/outbox/dlq/replayed?tenant_id=<uuid>[&limit=<n>][&since=<rfc3339>]`
+  - Returns records with `replay_count > 0` and `replayed_at` present, ordered by `replayed_at` desc
+  - Optional `since` filter returns only records replayed at or after the given RFC 3339 timestamp
+  - Empty list when no replayed records or when `webhook_outbox_repo` is not configured
+  - **No production audit trail claim:** this is a convenience query for local development only; it does not replace a production-grade audit log, SIEM integration, or compliance evidence
 - Retention query (Phase 1.1 — query-only, no purge/enforcement):
   - List failed records older than a cutoff via `WebhookOutboxRepository::list_failed_older_than(tenant_id, before, limit)`
   - Query-only local-dev helper; no delete endpoint, no background job, no S3/Object Lock

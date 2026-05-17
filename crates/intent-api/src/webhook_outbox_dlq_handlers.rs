@@ -17,8 +17,8 @@ use intent_rebase_types::IntentRebaseError;
 use uuid::Uuid;
 
 use crate::types::{
-    ListWebhookOutboxDlqQuery, ListWebhookOutboxDlqResponse, ReplayWebhookOutboxDlqQuery,
-    ReplayWebhookOutboxDlqResponse,
+    ListWebhookOutboxDlqQuery, ListWebhookOutboxDlqResponse, ListWebhookOutboxReplayedQuery,
+    ListWebhookOutboxReplayedResponse, ReplayWebhookOutboxDlqQuery, ReplayWebhookOutboxDlqResponse,
 };
 use crate::{ApiErrorResponse, AppState};
 
@@ -100,6 +100,47 @@ pub async fn replay_dlq(
 }
 
 // =============================================================================
+// GET /webhooks/outbox/dlq/replayed
+// =============================================================================
+
+/// List replayed webhook outbox records for a tenant.
+///
+/// Returns 200 OK with records that have `replay_count > 0` and `replayed_at`
+/// present, ordered by `replayed_at` desc.
+/// If the outbox repository is not configured, returns an empty list.
+///
+/// Phase 1.3: bounded local-dev replay audit query — no production audit trail claim.
+pub async fn list_replayed(
+    State(state): State<AppState>,
+    Query(query): Query<ListWebhookOutboxReplayedQuery>,
+) -> Result<Json<ListWebhookOutboxReplayedResponse>, ApiErrorResponse> {
+    let repo = match &state.webhook_outbox_repo {
+        Some(r) => r,
+        None => {
+            return Ok(Json(ListWebhookOutboxReplayedResponse {
+                records: vec![],
+                total: 0,
+            }));
+        }
+    };
+
+    let limit = query.limit.unwrap_or(100);
+    match repo
+        .list_replayed(query.tenant_id, query.since, limit)
+        .await
+    {
+        Ok(records) => {
+            let total = records.len();
+            Ok(Json(ListWebhookOutboxReplayedResponse { records, total }))
+        }
+        Err(IntentRebaseError::StorageError(msg)) => {
+            Err(ApiErrorResponse(IntentRebaseError::StorageError(msg)))
+        }
+        Err(e) => Err(ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))),
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -113,6 +154,7 @@ mod tests {
     };
     use axum::body::Body;
     use axum::http::Request;
+    use chrono::Utc;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -593,5 +635,388 @@ mod tests {
         assert_eq!(parsed.record.replay_count, 1);
         assert!(parsed.record.replayed_at.is_some());
         assert_eq!(parsed.record.replayed_by, Some("operator-7".to_string()));
+    }
+
+    // =============================================================================
+    // Phase 1.3 — Replayed audit query handler tests
+    // =============================================================================
+
+    #[tokio::test]
+    async fn test_list_replayed_returns_replayed_records() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r.id, tenant, Some("operator-1".to_string()))
+            .await
+            .unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}",
+                        tenant
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 1);
+        assert_eq!(parsed.records[0].id, r.id);
+        assert_eq!(parsed.records[0].replay_count, 1);
+        assert!(parsed.records[0].replayed_at.is_some());
+        assert_eq!(
+            parsed.records[0].replayed_by,
+            Some("operator-1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_empty_when_no_replays() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}",
+                        tenant
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 0);
+        assert!(parsed.records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_tenant_boundary() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant_a, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant_a, "boom".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r.id, tenant_a, None).await.unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}",
+                        tenant_b
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_excludes_unreplayed_failed() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        // Do NOT replay
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}",
+                        tenant
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_with_limit() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant, intent, sub);
+        let r2 = sample_record(tenant, intent, sub);
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "e1".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "e2".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r1.id, tenant, None).await.unwrap();
+        repo.replay_failed(r2.id, tenant, None).await.unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}&limit=1",
+                        tenant
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_with_since() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let before_replay = Utc::now();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        repo.replay_failed(r.id, tenant, None).await.unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        // Since before replay — should include
+        let since_before = before_replay.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}&since={}",
+                        tenant, since_before
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 1);
+
+        // Since after replay — should exclude
+        let after_replay = Utc::now() + chrono::Duration::seconds(1);
+        let since_after = after_replay.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/webhooks/outbox/dlq/replayed?tenant_id={}&since={}",
+                        tenant, since_after
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.total, 0);
     }
 }

@@ -234,6 +234,18 @@ pub trait WebhookOutboxRepository: Send + Sync {
     /// Bounded local-dev helper for background worker tenant discovery.
     /// Production-grade tenant discovery remains future scope.
     async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError>;
+
+    /// List replayed records for a tenant, ordered by `replayed_at` desc then id.
+    ///
+    /// Phase 1.3: returns records with `replay_count > 0` and `replayed_at` present,
+    /// tenant-scoped, with optional `since` cutoff. This is a query-only local-dev
+    /// helper — no production audit trail claim.
+    async fn list_replayed(
+        &self,
+        tenant_id: Uuid,
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError>;
 }
 
 // =============================================================================
@@ -508,6 +520,33 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
             .collect();
         tenants.sort();
         Ok(tenants)
+    }
+
+    async fn list_replayed(
+        &self,
+        tenant_id: Uuid,
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let records = self.records.read().await;
+        let mut replayed: Vec<_> = records
+            .values()
+            .filter(|r| {
+                r.tenant_id == tenant_id
+                    && r.replay_count > 0
+                    && r.replayed_at.is_some()
+                    && since.is_none_or(|s| r.replayed_at.unwrap() >= s)
+            })
+            .cloned()
+            .collect();
+        replayed.sort_by(|a, b| {
+            b.replayed_at
+                .unwrap()
+                .cmp(&a.replayed_at.unwrap())
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        replayed.truncate(limit as usize);
+        Ok(replayed)
     }
 }
 
@@ -968,6 +1007,47 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
             })
             .collect()
     }
+
+    async fn list_replayed(
+        &self,
+        tenant_id: Uuid,
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let rows = if let Some(since) = since {
+            sqlx::query(
+                r#"
+                SELECT * FROM webhook_outbox
+                WHERE tenant_id = $1 AND replay_count > 0 AND replayed_at IS NOT NULL AND replayed_at >= $2
+                ORDER BY replayed_at DESC, id
+                LIMIT $3
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(since)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query(
+                r#"
+                SELECT * FROM webhook_outbox
+                WHERE tenant_id = $1 AND replay_count > 0 AND replayed_at IS NOT NULL
+                ORDER BY replayed_at DESC, id
+                LIMIT $2
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+        }
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list replayed outbox records: {}", e))
+        })?;
+
+        rows.iter().map(map_row).collect()
+    }
 }
 
 // =============================================================================
@@ -1415,6 +1495,134 @@ mod tests {
         let tenants = repo.list_distinct_pending_tenants().await.unwrap();
         assert_eq!(tenants.len(), 1);
         assert!(tenants.contains(&tenant_b));
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_includes_replayed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(record.id, tenant, Some("operator-1".to_string()))
+            .await
+            .unwrap();
+
+        let replayed = repo.list_replayed(tenant, None, 10).await.unwrap();
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].id, record.id);
+        assert_eq!(replayed[0].replay_count, 1);
+        assert!(replayed[0].replayed_at.is_some());
+        assert_eq!(replayed[0].replayed_by, Some("operator-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_excludes_unreplayed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        // Do NOT replay
+
+        let replayed = repo.list_replayed(tenant, None, 10).await.unwrap();
+        assert!(replayed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_tenant_boundary() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let record = sample_record(tenant_a, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant_a, "err".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(record.id, tenant_a, None).await.unwrap();
+
+        let replayed = repo.list_replayed(tenant_b, None, 10).await.unwrap();
+        assert!(replayed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_since_filter() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "err".to_string())
+            .await
+            .unwrap();
+
+        let before_replay = Utc::now();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        repo.replay_failed(record.id, tenant, None).await.unwrap();
+
+        // Since before replay should exclude
+        let replayed = repo
+            .list_replayed(tenant, Some(before_replay), 10)
+            .await
+            .unwrap();
+        assert_eq!(replayed.len(), 1);
+
+        // Since after replay should exclude
+        let after_replay = Utc::now() + chrono::Duration::seconds(1);
+        let replayed = repo
+            .list_replayed(tenant, Some(after_replay), 10)
+            .await
+            .unwrap();
+        assert!(replayed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_limit() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let r1 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        let r2 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "e1".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "e2".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r1.id, tenant, None).await.unwrap();
+        repo.replay_failed(r2.id, tenant, None).await.unwrap();
+
+        let replayed = repo.list_replayed(tenant, None, 1).await.unwrap();
+        assert_eq!(replayed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_replayed_ordering() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let r1 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        let r2 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "e1".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "e2".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r1.id, tenant, None).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        repo.replay_failed(r2.id, tenant, None).await.unwrap();
+
+        let replayed = repo.list_replayed(tenant, None, 10).await.unwrap();
+        assert_eq!(replayed.len(), 2);
+        // Most recent replay first
+        assert_eq!(replayed[0].id, r2.id);
+        assert_eq!(replayed[1].id, r1.id);
     }
 
     #[test]

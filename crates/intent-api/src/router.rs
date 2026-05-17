@@ -390,6 +390,11 @@ pub fn build_router(
             "/webhooks/outbox/dlq/:id/replay",
             post(crate::webhook_outbox_dlq_handlers::replay_dlq),
         )
+        // Webhook outbox replayed audit query endpoint (Phase 1.3 — bounded local-dev)
+        .route(
+            "/webhooks/outbox/dlq/replayed",
+            get(crate::webhook_outbox_dlq_handlers::list_replayed),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         // Trace context middleware must run AFTER request_id_middleware so that

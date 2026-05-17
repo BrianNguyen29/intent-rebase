@@ -2157,3 +2157,23 @@ pub struct ReplayWebhookOutboxDlqQuery {
 pub struct ReplayWebhookOutboxDlqResponse {
     pub record: crate::webhook_outbox_repo::WebhookOutboxRecord,
 }
+
+/// Query parameters for listing replayed webhook outbox records.
+///
+/// Phase 1.3: bounded local-dev replay audit query.
+#[derive(Debug, Deserialize)]
+pub struct ListWebhookOutboxReplayedQuery {
+    pub tenant_id: Uuid,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Optional RFC 3339 timestamp cutoff — only returns records replayed at or after this time.
+    #[serde(default)]
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// Response for listing replayed webhook outbox records.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListWebhookOutboxReplayedResponse {
+    pub records: Vec<crate::webhook_outbox_repo::WebhookOutboxRecord>,
+    pub total: usize,
+}
