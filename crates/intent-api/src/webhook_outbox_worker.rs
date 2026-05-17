@@ -11,6 +11,8 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::webhook_dispatcher::WebhookDispatcher;
@@ -161,6 +163,168 @@ impl<R: WebhookOutboxRepository> WebhookOutboxWorker for WebhookOutboxWorkerImpl
 }
 
 // =============================================================================
+// Background Worker Handle
+// =============================================================================
+
+/// Handle to a running webhook outbox background worker.
+///
+/// Allows graceful shutdown of the worker loop.
+#[derive(Debug)]
+pub struct WebhookOutboxWorkerHandle {
+    /// Task handle for the running worker
+    handle: tokio::task::JoinHandle<()>,
+    /// Shutdown signal sender
+    shutdown_tx: watch::Sender<bool>,
+}
+
+impl WebhookOutboxWorkerHandle {
+    /// Signal the worker to stop gracefully.
+    pub fn shutdown(&self) {
+        tracing::info!("WebhookOutboxWorkerHandle: sending shutdown signal");
+        let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Wait for the worker to finish.
+    pub async fn wait_for_all(self) {
+        tracing::info!("WebhookOutboxWorkerHandle: waiting for worker to finish");
+        match self.handle.await {
+            Ok(()) => {
+                tracing::info!("WebhookOutboxWorkerHandle: worker finished normally");
+            }
+            Err(e) => {
+                tracing::error!("WebhookOutboxWorkerHandle: worker panicked: {:?}", e);
+            }
+        }
+    }
+}
+
+/// Default poll interval for the background worker.
+///
+/// Bounded local-dev value: 30 seconds between discovery/processing passes.
+pub const WEBHOOK_OUTBOX_WORKER_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Default batch size per tenant per processing pass.
+pub const WEBHOOK_OUTBOX_WORKER_BATCH_SIZE: i64 = 100;
+
+/// Start the webhook outbox background worker if the env gate is enabled.
+///
+/// - Checks `INTENT_API_WEBHOOK_OUTBOX_WORKER` env var
+/// - If enabled, spawns a tokio task that loops:
+///   1. Discovers tenants with pending outbox records
+///   2. Calls `process_once` for each tenant
+///   3. Sleeps for `WEBHOOK_OUTBOX_WORKER_POLL_INTERVAL`
+/// - If disabled, returns `None` and does not spawn a task
+///
+/// **Non-production:** This is a bounded local-dev background loop.
+/// It does not implement backpressure, horizontal scaling, or production
+/// worker lease semantics.
+pub fn maybe_start_webhook_outbox_worker<R>(
+    repo: Arc<R>,
+    dispatcher: Arc<dyn WebhookDispatcher>,
+) -> Option<WebhookOutboxWorkerHandle>
+where
+    R: WebhookOutboxRepository + 'static,
+{
+    if !is_webhook_outbox_worker_enabled() {
+        tracing::info!(
+            "INTENT_API_WEBHOOK_OUTBOX_WORKER not enabled — background worker not started"
+        );
+        return None;
+    }
+
+    tracing::info!(
+        "INTENT_API_WEBHOOK_OUTBOX_WORKER=true — starting webhook outbox background worker"
+    );
+
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let worker = WebhookOutboxWorkerImpl::new(repo, dispatcher);
+
+    let handle = tokio::spawn(async move {
+        loop {
+            // Check shutdown signal before each pass
+            if *shutdown_rx.borrow() {
+                tracing::info!("Webhook outbox worker: shutdown signal received, exiting loop");
+                break;
+            }
+
+            // Discover tenants with pending records
+            let tenants = match worker.repo.list_distinct_pending_tenants().await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        "Webhook outbox worker: failed to list pending tenants: {}",
+                        e
+                    );
+                    Vec::new()
+                }
+            };
+
+            if tenants.is_empty() {
+                tracing::debug!("Webhook outbox worker: no pending tenants");
+            } else {
+                tracing::debug!(
+                    "Webhook outbox worker: processing {} tenant(s)",
+                    tenants.len()
+                );
+            }
+
+            for tenant_id in tenants {
+                // Re-check shutdown between tenants for faster stop
+                if *shutdown_rx.borrow() {
+                    tracing::info!(
+                        "Webhook outbox worker: shutdown signal received during tenant pass"
+                    );
+                    break;
+                }
+
+                match worker
+                    .process_once(tenant_id, WEBHOOK_OUTBOX_WORKER_BATCH_SIZE)
+                    .await
+                {
+                    Ok(processed) => {
+                        if processed > 0 {
+                            tracing::info!(
+                                "Webhook outbox worker: processed {} record(s) for tenant {}",
+                                processed,
+                                tenant_id
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Webhook outbox worker: failed to process tenant {}: {}",
+                            tenant_id,
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Sleep with shutdown awareness
+            let sleep = tokio::time::sleep(WEBHOOK_OUTBOX_WORKER_POLL_INTERVAL);
+            tokio::pin!(sleep);
+
+            tokio::select! {
+                _ = &mut sleep => {},
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!("Webhook outbox worker: shutdown signal received during sleep");
+                        break;
+                    }
+                }
+            }
+        }
+
+        tracing::info!("Webhook outbox worker: loop exited");
+    });
+
+    Some(WebhookOutboxWorkerHandle {
+        handle,
+        shutdown_tx,
+    })
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -300,6 +464,64 @@ mod tests {
             assert_eq!(fetched.status, WebhookOutboxStatus::Failed);
             assert_eq!(fetched.last_error, Some("network timeout".to_string()));
             assert_eq!(fetched.lock_version, 2); // claim + failed
+        });
+    }
+
+    #[test]
+    fn test_maybe_start_webhook_outbox_worker_disabled_by_default() {
+        temp_env::with_var_unset(WEBHOOK_OUTBOX_WORKER_ENV_VAR, || {
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let handle = maybe_start_webhook_outbox_worker(repo, dispatcher);
+            assert!(handle.is_none());
+        });
+    }
+
+    #[test]
+    fn test_maybe_start_webhook_outbox_worker_enabled() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let handle = rt.block_on(async {
+                // maybe_start_webhook_outbox_worker calls tokio::spawn, so it
+                // must run inside a tokio runtime context.
+                maybe_start_webhook_outbox_worker(repo, dispatcher)
+            });
+            assert!(handle.is_some());
+
+            let handle = handle.unwrap();
+            handle.shutdown();
+            rt.block_on(handle.wait_for_all());
+        });
+    }
+
+    #[test]
+    fn test_webhook_outbox_worker_background_processes_pending() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let tenant = Uuid::new_v4();
+            let intent = Uuid::new_v4();
+            let sub = Uuid::new_v4();
+            let record = sample_record(tenant, intent, sub);
+
+            rt.block_on(repo.create(record.clone())).unwrap();
+
+            let handle =
+                rt.block_on(async { maybe_start_webhook_outbox_worker(repo.clone(), dispatcher) });
+            assert!(handle.is_some());
+
+            // Give the worker a moment to process
+            std::thread::sleep(std::time::Duration::from_millis(200));
+
+            let handle = handle.unwrap();
+            handle.shutdown();
+            rt.block_on(handle.wait_for_all());
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Delivered);
         });
     }
 }

@@ -17,6 +17,8 @@
 //! - `INTENT_API_NATS_CONSUMER` — Enable NATS consumer lifecycle (default: false, requires NATS_URL)
 //! - `INTENT_API_NATS_FULL_CONSUMER` — Enable full NATS consumer with DLQ publishing and additional consumers (default: false, requires INTENT_API_NATS_CONSUMER=true + NATS_URL)
 //!   - **NON-PRODUCTION**: This is a local-dev bounded path. Not production-ready.
+//! - `INTENT_API_WEBHOOK_OUTBOX_WORKER` — Enable webhook outbox background worker (default: false)
+//!   - **NON-PRODUCTION**: Bounded local-dev only. Not production-ready.
 //! - `INTENT_API_REQUIRE_JWT` — Require JWT authentication (default: false)
 //!   - When true, fails startup if JWT_SECRET is missing or weak
 //!   - When false (default), uses dev fallback secret if JWT_SECRET not set
@@ -43,6 +45,13 @@ use intent_api::{
         ConsumerRegistry, ConsumerRegistryHandle, DlqMetricsWorkerBuilder, DlqMetricsWorkerConfig,
         DlqMetricsWorkerHandle, DlqReplayWorkerBuilder, DlqReplayWorkerConfig,
         DlqReplayWorkerHandle, JetStreamInitializer,
+    },
+    webhook_delivery::build_webhook_client,
+    webhook_dispatcher::WebhookDeliveryDispatcher,
+    webhook_outbox_repo::{InMemoryWebhookOutboxRepository, SqlxWebhookOutboxRepository},
+    webhook_outbox_worker::{
+        is_webhook_outbox_worker_enabled, maybe_start_webhook_outbox_worker,
+        WebhookOutboxWorkerHandle,
     },
     NatsEventPublisher,
 };
@@ -794,6 +803,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // =============================================================================
+    // NON-PRODUCTION: Webhook outbox background worker (WEB-LOCAL-2, bounded local-dev)
+    // =============================================================================
+    // INTENT_API_WEBHOOK_OUTBOX_WORKER enables a background polling loop that
+    // discovers tenants with pending outbox records and drives delivery via
+    // WebhookDeliveryDispatcher. Default-off; local-dev only.
+    //
+    // When DATABASE_URL is set, uses SqlxWebhookOutboxRepository.
+    // When DATABASE_URL is unset, falls back to InMemoryWebhookOutboxRepository.
+    //
+    // This is NOT production-ready: no horizontal scaling, no lease semantics,
+    // no backpressure, and tenant discovery is bounded to the outbox table.
+    let webhook_outbox_worker_enabled = is_webhook_outbox_worker_enabled();
+    if webhook_outbox_worker_enabled {
+        tracing::info!(
+            "INTENT_API_WEBHOOK_OUTBOX_WORKER=true — webhook outbox background worker will be started"
+        );
+    }
+
+    // =============================================================================
     // Phase 2b: JWT Production Guard (bounded auth first slice)
     // =============================================================================
     //
@@ -1016,6 +1044,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // =============================================================================
+    // NON-PRODUCTION: Start webhook outbox background worker (WEB-LOCAL-2)
+    // =============================================================================
+    let webhook_outbox_worker_handle: Option<WebhookOutboxWorkerHandle> =
+        if webhook_outbox_worker_enabled {
+            let sender = Arc::new(build_webhook_client());
+            let dispatcher = Arc::new(WebhookDeliveryDispatcher::new(sender));
+
+            if let Ok(database_url) = std::env::var("DATABASE_URL") {
+                tracing::info!(
+                    "DATABASE_URL set — using SQL-backed webhook outbox repository for worker"
+                );
+                match sqlx::PgPool::connect(&database_url).await {
+                    Ok(pool) => {
+                        let repo = Arc::new(SqlxWebhookOutboxRepository::new(pool));
+                        maybe_start_webhook_outbox_worker(repo, dispatcher)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to connect to database for webhook outbox worker: {} — falling back to in-memory repository",
+                            e
+                        );
+                        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+                        maybe_start_webhook_outbox_worker(repo, dispatcher)
+                    }
+                }
+            } else {
+                tracing::info!(
+                    "DATABASE_URL not set — using in-memory webhook outbox repository for worker"
+                );
+                let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+                maybe_start_webhook_outbox_worker(repo, dispatcher)
+            }
+        } else {
+            None
+        };
+
     tracing::info!("Intent API server starting on {}", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -1045,6 +1110,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle.shutdown();
         handle.wait_for_all().await;
         tracing::info!("NATS consumer shutdown complete");
+    }
+
+    // Wait for webhook outbox worker to finish if it was started
+    if let Some(handle) = webhook_outbox_worker_handle {
+        tracing::info!("Waiting for webhook outbox worker to finish...");
+        handle.shutdown();
+        handle.wait_for_all().await;
+        tracing::info!("Webhook outbox worker shutdown complete");
     }
 
     Ok(())

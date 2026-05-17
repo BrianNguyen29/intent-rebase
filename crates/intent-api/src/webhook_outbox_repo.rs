@@ -171,6 +171,12 @@ pub trait WebhookOutboxRepository: Send + Sync {
         tenant_id: Uuid,
         last_error: String,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
+
+    /// List distinct tenant IDs that have at least one pending outbox record.
+    ///
+    /// Bounded local-dev helper for background worker tenant discovery.
+    /// Production-grade tenant discovery remains future scope.
+    async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError>;
 }
 
 // =============================================================================
@@ -323,6 +329,19 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         record.lock_version += 1;
         record.updated_at = Utc::now();
         Ok(record.clone())
+    }
+
+    async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
+        let records = self.records.read().await;
+        let mut tenants: Vec<Uuid> = records
+            .values()
+            .filter(|r| r.status == WebhookOutboxStatus::Pending)
+            .map(|r| r.tenant_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        tenants.sort();
+        Ok(tenants)
     }
 }
 
@@ -620,6 +639,28 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
 
         map_row(&row)
     }
+
+    async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT tenant_id FROM webhook_outbox
+            WHERE status = 'pending'
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list distinct pending tenants: {}", e))
+        })?;
+
+        rows.iter()
+            .map(|r| {
+                r.try_get("tenant_id").map_err(|e| {
+                    IntentRebaseError::StorageError(format!("Invalid tenant_id column: {}", e))
+                })
+            })
+            .collect()
+    }
 }
 
 // =============================================================================
@@ -762,6 +803,36 @@ mod tests {
             let roundtrip: WebhookOutboxStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, roundtrip);
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_distinct_pending_tenants() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant_a, intent, sub);
+        let r2 = sample_record(tenant_a, intent, sub);
+        let r3 = sample_record(tenant_b, intent, sub);
+
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.create(r3.clone()).await.unwrap();
+
+        let tenants = repo.list_distinct_pending_tenants().await.unwrap();
+        assert_eq!(tenants.len(), 2);
+        assert!(tenants.contains(&tenant_a));
+        assert!(tenants.contains(&tenant_b));
+
+        // Mark one tenant's records as delivered
+        repo.mark_delivered(r1.id, tenant_a).await.unwrap();
+        repo.mark_delivered(r2.id, tenant_a).await.unwrap();
+
+        let tenants = repo.list_distinct_pending_tenants().await.unwrap();
+        assert_eq!(tenants.len(), 1);
+        assert!(tenants.contains(&tenant_b));
     }
 
     #[test]
