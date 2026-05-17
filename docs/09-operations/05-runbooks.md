@@ -399,6 +399,193 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 ---
 
+## RB14. Webhook DLQ / Replay Operator Workflow
+
+> **Status:** Phase 2.1 documentation-only runbook preparation. **NOT externally reviewed, NOT staging/production validated, NOT production readiness evidence by itself.** This runbook describes the intended operator workflow for webhook outbox DLQ and replay operations once production operator tooling, replay UI, and external sign-off are in place. All referenced APIs are local-dev only (see RB13). Production operator workflow validation, replay UI, retention enforcement, and WEB-EXT blockers remain deferred.
+
+**Symptoms:**
+- Downstream systems report missing webhook callbacks
+- `intent_api_webhook_deliveries_retry_exhausted_total` is increasing
+- Failed outbox records are not being retried automatically
+- Worker metrics show elevated claim/lock ages
+
+**Pre-Flight Checks:**
+1. Verify `INTENT_API_WEBHOOK_DELIVERY` is enabled (default is `false`)
+2. Verify `INTENT_API_WEBHOOK_OUTBOX_WORKER` is enabled (default is `false`)
+3. Verify downstream webhook URLs are reachable from the intent-api network
+4. Confirm no deployment or configuration change is in progress
+
+---
+
+### Step 1 — Triage Failed Deliveries
+
+**List failed outbox records:**
+```bash
+GET /webhooks/outbox/dlq?tenant_id=<uuid>&limit=100
+```
+
+**Classify each failure:**
+
+| Failure Pattern | Likely Cause | Action |
+|-----------------|--------------|--------|
+| HTTP 4xx (except 429) | Invalid URL, auth mismatch, bad payload | Fix downstream contract or subscription URL; do NOT replay until fixed |
+| HTTP 429 | Rate limit | Wait for rate-limit window; replay after delay |
+| HTTP 5xx / timeout | Transient downstream error | Safe to replay (see Step 3) |
+| Network unreachable | DNS, firewall, downstream outage | Verify downstream health before replay |
+| `locked_at` very old | Stale worker claim | See Step 2 — Stale Claim Recovery |
+
+**Retention query (query-only, no purge):**
+```bash
+# List failed records older than 7 days (example)
+# There is no dedicated HTTP endpoint for this; use repository helper directly
+# or query the database:
+SELECT id, tenant_id, intent_id, subscription_id, attempt_count, last_error, updated_at
+FROM webhook_outbox
+WHERE status = 'failed' AND updated_at < NOW() - INTERVAL '7 days'
+ORDER BY updated_at DESC
+LIMIT 100;
+```
+
+---
+
+### Step 2 — Stale Claim Recovery
+
+A record in `Claimed` status with an old `locked_at` indicates a worker crashed or was terminated before releasing the claim.
+
+**Diagnosis:**
+```sql
+SELECT id, tenant_id, locked_at, locked_by, attempt_count
+FROM webhook_outbox
+WHERE status = 'claimed' AND locked_at < NOW() - INTERVAL '5 minutes'
+ORDER BY locked_at ASC
+LIMIT 50;
+```
+
+**Recovery (manual DB update — no automation in this slice):**
+```sql
+UPDATE webhook_outbox
+SET status = 'pending',
+    locked_at = NULL,
+    locked_by = NULL,
+    lock_version = lock_version + 1,
+    updated_at = NOW()
+WHERE id = '<record-uuid>' AND tenant_id = '<tenant-uuid>' AND status = 'claimed';
+```
+
+> **Caveat:** There is no automated stale-claim detector or self-healing worker. Manual intervention or a future background reconciliation job is required.
+
+---
+
+### Step 3 — Replay Decision Tree
+
+```text
+Is the failure transient (5xx, timeout, 429 after window)?
+  ├── YES → Is this a single record or multiple records?
+  │           ├── Single → Use single replay API (Step 3a)
+  │           └── Multiple → Batch replay is NOT supported in this slice
+  │                         → Replay records one at a time, or script sequential calls
+  └── NO (4xx, auth error, contract mismatch)
+      → Fix root cause FIRST
+      → Then replay
+```
+
+**3a — Single Replay**
+```bash
+POST /webhooks/outbox/dlq/<record-id>/replay?tenant_id=<uuid>&replayed_by=operator-<id>
+```
+
+- Record transitions from `Failed` → `Pending`
+- `attempt_count` resets to 0
+- `replay_count` increments, `replayed_at` set to now, `replayed_by` set to operator ID
+- Worker will pick up the record on next poll if `INTENT_API_WEBHOOK_OUTBOX_WORKER=true`
+
+**3b — Verify Replay**
+```bash
+GET /webhooks/outbox/dlq/replayed?tenant_id=<uuid>&limit=10&since=<rfc3339>
+```
+
+- Confirms the replay was recorded with metadata
+- Use `since` to narrow to recent replays
+- **No production audit trail claim:** this query is a convenience helper, not a compliance-grade audit log
+
+**3c — Replay Safety Rules**
+- **Do NOT replay** if the downstream URL or payload contract is known to be broken
+- **Do NOT replay** more than once without verifying downstream recovery
+- **Do NOT replay** poison messages (records that consistently fail with non-retryable errors)
+
+---
+
+### Step 4 — Rollback via Environment Gates
+
+If webhook delivery is causing systemic issues (cascading failures, downstream overload, data corruption risk):
+
+**Immediate stop (no code deploy required):**
+```bash
+# Set env var and restart intent-api pods
+INTENT_API_WEBHOOK_DELIVERY=false
+INTENT_API_WEBHOOK_OUTBOX_WORKER=false
+```
+
+**Effect:**
+- New delivery attempts stop immediately
+- Existing worker claims are not automatically released (see Step 2 for manual cleanup)
+- Rebase apply path is NOT affected — webhook delivery is best-effort only
+
+**Rollback boundaries:**
+- Disabling delivery does not modify any outbox record state
+- Records remain in their current status (Pending/Claimed/Failed/Delivered)
+- Re-enabling delivery resumes normal worker polling from current state
+- No data loss on the apply path
+
+---
+
+### Step 5 — Severity / Escalation
+
+| Severity | Criteria | Operator Action | Escalation |
+|----------|----------|-----------------|------------|
+| **Low** | Fewer than 5 failed records, transient errors | Replay after verifying downstream health | None — document in incident tracker |
+| **Medium** | 5–50 failed records, sustained 5xx from one downstream | Stop delivery to that downstream; replay after fix | Notify backend lead if not resolved within 1 hour |
+| **High** | More than 50 failed records, multiple downstreams affected, or data integrity risk | Disable `INTENT_API_WEBHOOK_DELIVERY` globally; open incident | Escalate to backend lead immediately |
+| **Critical** | Webhook delivery causing apply path degradation, or suspected security incident | Disable all webhook and worker gates; preserve logs and outbox state | Open incident, page on-call, involve security if tampering suspected |
+
+---
+
+### Recovery
+
+1. After root cause is fixed, re-enable delivery/worker gates
+2. Replay failed records individually (no bulk replay in this slice)
+3. Monitor `intent_api_webhook_deliveries_succeeded_total` for recovery
+4. Use replay audit query to verify operator actions were recorded:
+   ```bash
+   GET /webhooks/outbox/dlq/replayed?tenant_id=<uuid>&limit=50&since=<start-of-incident-rfc3339>
+   ```
+5. Document all replays and rollbacks in the incident tracker
+
+---
+
+### Prevention
+
+- Monitor `intent_api_webhook_deliveries_failed_total / attempted_total` ratio
+- Alert if `retry_exhausted_total` increases faster than `succeeded_total`
+- Review replay audit query weekly during active webhook operations
+- Maintain accurate downstream system health checks
+- Keep subscription URLs and payload contracts under version control
+
+---
+
+### Caveats and Deferred Items
+
+- **No external review:** this runbook has not been reviewed by an external SRE or operations team
+- **No staging/production validation:** the workflow described has not been executed in a staging or production environment
+- **No replay UI:** all replay actions require direct API calls or database access
+- **No bulk replay:** records must be replayed individually; scripting is the only batch mechanism
+- **No automated stale-claim recovery:** manual SQL or future background job required
+- **No retention enforcement:** `WEBHOOK_OUTBOX_RETENTION_DAYS` is documented but not wired to any purge logic
+- **Production readiness blockers remain open:** WEB-EXT-1 (secret manager), WEB-EXT-2 (staging/prod evidence), WEB-EXT-3 (external review/pen-test) are all still blocked
+- **This runbook is a planning artifact:** it does not constitute production readiness evidence by itself
+
+---
+
 ## On-Call Quick Reference
 
 | Alert | Severity | Immediate Action |
@@ -413,6 +600,7 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 | ApplyPathBurnRate1h/6h/3d | Critical | Open incident, prioritize fix — check which window is firing |
 | PropagationSignalFailureRate | Warning | Check DB connectivity and RLS policy health; see RB12 |
 | WebhookDeliveryFailureRate | Warning | Check downstream URL health and webhook delivery metrics; see RB13 |
+| WebhookDlqReplayNeeded | Warning | Triage failed deliveries, check stale claims, decide single replay; see RB14 |
 | DLQDepthHigh | Warning | Check DLQ subject count and replay messages; see RB11 |
 | DLQMessageStale | Warning | Investigate oldest DLQ message; see RB11 |
 | DLQReplayFailures | Warning | Check replay logs and consumer health; see RB11 |
