@@ -19,6 +19,23 @@ use crate::webhook_hmac::{build_canonical_string, sign_payload, WEBHOOK_HMAC_SEC
 use crate::webhook_outbox_repo::WebhookOutboxRecord;
 
 // =============================================================================
+// Dispatch Failure Classification
+// =============================================================================
+
+/// Classification of a webhook dispatch failure for retry decisions.
+///
+/// Slice 5a: the worker uses this to decide whether to reschedule a retry
+/// (Retryable with attempts remaining) or mark the record as failed
+/// (Terminal or exhausted).
+#[derive(Debug, Clone)]
+pub enum WebhookDispatchFailure {
+    /// Transient failure — the worker may reschedule a retry if attempts remain.
+    Retryable { reason: String },
+    /// Non-retryable failure — the worker should mark the record as failed immediately.
+    Terminal { reason: String },
+}
+
+// =============================================================================
 // Dispatcher Trait
 // =============================================================================
 
@@ -26,10 +43,10 @@ use crate::webhook_outbox_repo::WebhookOutboxRecord;
 pub trait WebhookDispatcher: Send + Sync {
     /// Dispatch a single outbox record.
     ///
-    /// Returns `Ok(())` on successful delivery, or `Err(reason)` on failure.
-    /// The caller (worker) is responsible for marking the record as delivered
-    /// or failed based on this result.
-    async fn dispatch(&self, record: &WebhookOutboxRecord) -> Result<(), String>;
+    /// Returns `Ok(())` on successful delivery, or `Err(failure)` on failure.
+    /// The caller (worker) uses `WebhookDispatchFailure` to decide whether to
+    /// reschedule a retry or mark the record as failed.
+    async fn dispatch(&self, record: &WebhookOutboxRecord) -> Result<(), WebhookDispatchFailure>;
 }
 
 // =============================================================================
@@ -50,11 +67,14 @@ impl WebhookDeliveryDispatcher {
 
 #[async_trait]
 impl WebhookDispatcher for WebhookDeliveryDispatcher {
-    async fn dispatch(&self, record: &WebhookOutboxRecord) -> Result<(), String> {
-        let url = record
-            .webhook_url
-            .as_deref()
-            .ok_or_else(|| "No webhook_url in outbox record".to_string())?;
+    async fn dispatch(&self, record: &WebhookOutboxRecord) -> Result<(), WebhookDispatchFailure> {
+        let url =
+            record
+                .webhook_url
+                .as_deref()
+                .ok_or_else(|| WebhookDispatchFailure::Terminal {
+                    reason: "No webhook_url in outbox record".to_string(),
+                })?;
 
         // TODO(Slice 4+): version info should be stored in the outbox record at creation time.
         let payload = build_webhook_payload(WebhookPayloadInput {
@@ -76,8 +96,11 @@ impl WebhookDispatcher for WebhookDeliveryDispatcher {
         // HMAC signing (local-dev env secret only)
         if let Ok(secret) = std::env::var(WEBHOOK_HMAC_SECRET_ENV_VAR) {
             let canonical = build_canonical_string(&timestamp, &record.id.to_string(), &body);
-            let signature =
-                sign_payload(&secret, &canonical).map_err(|e| format!("HMAC sign error: {}", e))?;
+            let signature = sign_payload(&secret, &canonical).map_err(|e| {
+                WebhookDispatchFailure::Terminal {
+                    reason: format!("HMAC sign error: {}", e),
+                }
+            })?;
             headers = headers.with_signature(signature);
         }
 
@@ -86,15 +109,23 @@ impl WebhookDispatcher for WebhookDeliveryDispatcher {
         match result {
             Ok(WebhookDeliveryResult::Success) => Ok(()),
             Ok(WebhookDeliveryResult::NonRetryableFailure { reason }) => {
-                Err(sanitize_failure_reason(&reason))
+                Err(WebhookDispatchFailure::Terminal {
+                    reason: sanitize_failure_reason(&reason),
+                })
             }
             Ok(WebhookDeliveryResult::RetryableFailure { reason }) => {
-                Err(sanitize_failure_reason(&reason))
+                Err(WebhookDispatchFailure::Retryable {
+                    reason: sanitize_failure_reason(&reason),
+                })
             }
             Ok(WebhookDeliveryResult::RateLimited { retry_after }) => {
-                Err(format!("rate limited: retry_after={:?}", retry_after))
+                Err(WebhookDispatchFailure::Retryable {
+                    reason: format!("rate limited: retry_after={:?}", retry_after),
+                })
             }
-            Err(WebhookSendError::Network(reason)) => Err(sanitize_failure_reason(&reason)),
+            Err(WebhookSendError::Network(reason)) => Err(WebhookDispatchFailure::Retryable {
+                reason: sanitize_failure_reason(&reason),
+            }),
         }
     }
 }
@@ -161,7 +192,12 @@ mod tests {
 
         let result = rt.block_on(dispatcher.dispatch(&record));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No webhook_url"));
+        match result.unwrap_err() {
+            WebhookDispatchFailure::Terminal { reason } => {
+                assert!(reason.contains("No webhook_url"));
+            }
+            other => panic!("expected Terminal failure, got {:?}", other),
+        }
     }
 
     #[test]
@@ -188,7 +224,12 @@ mod tests {
 
         let result = rt.block_on(dispatcher.dispatch(&record));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("404"));
+        match result.unwrap_err() {
+            WebhookDispatchFailure::Terminal { reason } => {
+                assert!(reason.contains("404"));
+            }
+            other => panic!("expected Terminal failure, got {:?}", other),
+        }
     }
 
     #[test]

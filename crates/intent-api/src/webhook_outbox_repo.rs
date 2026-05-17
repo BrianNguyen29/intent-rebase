@@ -171,6 +171,19 @@ pub trait WebhookOutboxRepository: Send + Sync {
         last_error: String,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
 
+    /// Reschedule a record for retry (status → Pending, increment attempt_count,
+    /// set scheduled_at, clear locked_at/locked_by, increment lock_version).
+    ///
+    /// Slice 5a: used by the worker to reschedule a retryable failure without
+    /// blocking the worker loop on a real-time sleep.
+    async fn reschedule_retry(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        last_error: String,
+        scheduled_at: DateTime<Utc>,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
+
     /// List distinct tenant IDs that have at least one pending outbox record.
     ///
     /// Bounded local-dev helper for background worker tenant discovery.
@@ -325,6 +338,34 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         }
         record.status = WebhookOutboxStatus::Failed;
         record.last_error = Some(last_error);
+        record.lock_version += 1;
+        record.updated_at = Utc::now();
+        Ok(record.clone())
+    }
+
+    async fn reschedule_retry(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        last_error: String,
+        scheduled_at: DateTime<Utc>,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
+        let mut records = self.records.write().await;
+        let record = records.get_mut(&id).ok_or_else(|| {
+            IntentRebaseError::StorageError(format!("Outbox record {} not found", id))
+        })?;
+        if record.tenant_id != tenant_id {
+            return Err(IntentRebaseError::StorageError(format!(
+                "Outbox record {} not found for tenant {}",
+                id, tenant_id
+            )));
+        }
+        record.status = WebhookOutboxStatus::Pending;
+        record.attempt_count += 1;
+        record.scheduled_at = scheduled_at;
+        record.last_error = Some(last_error);
+        record.locked_at = None;
+        record.locked_by = None;
         record.lock_version += 1;
         record.updated_at = Utc::now();
         Ok(record.clone())
@@ -638,6 +679,45 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         map_row(&row)
     }
 
+    async fn reschedule_retry(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        last_error: String,
+        scheduled_at: DateTime<Utc>,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE webhook_outbox
+            SET status = 'pending',
+                attempt_count = attempt_count + 1,
+                scheduled_at = $3,
+                last_error = $4,
+                locked_at = NULL,
+                locked_by = NULL,
+                lock_version = lock_version + 1,
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $2
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(scheduled_at)
+        .bind(&last_error)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => IntentRebaseError::StorageError(format!(
+                "Outbox record {} not found for tenant {}",
+                id, tenant_id
+            )),
+            _ => IntentRebaseError::StorageError(format!("reschedule retry: {}", e)),
+        })?;
+
+        map_row(&row)
+    }
+
     async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
@@ -786,6 +866,30 @@ mod tests {
         assert_eq!(failed.status, WebhookOutboxStatus::Failed);
         assert_eq!(failed.last_error, Some("timeout".to_string()));
         assert_eq!(failed.lock_version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reschedule_retry() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.claim(record.id, tenant, "worker-1".to_string())
+            .await
+            .unwrap();
+
+        let future = Utc::now() + chrono::Duration::seconds(60);
+        let rescheduled = repo
+            .reschedule_retry(record.id, tenant, "network timeout".to_string(), future)
+            .await
+            .unwrap();
+        assert_eq!(rescheduled.status, WebhookOutboxStatus::Pending);
+        assert_eq!(rescheduled.attempt_count, 1);
+        assert_eq!(rescheduled.last_error, Some("network timeout".to_string()));
+        assert_eq!(rescheduled.scheduled_at, future);
+        assert_eq!(rescheduled.locked_at, None);
+        assert_eq!(rescheduled.locked_by, None);
+        assert_eq!(rescheduled.lock_version, 2); // claim + reschedule
     }
 
     #[tokio::test]

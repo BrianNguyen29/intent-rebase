@@ -10,12 +10,14 @@
 //! See: docs/10-delivery/22-phase-4-entry-plan.md (A-12 Slice 2–3)
 
 use async_trait::async_trait;
+use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::webhook_dispatcher::WebhookDispatcher;
+use crate::webhook_delivery::compute_backoff_delay;
+use crate::webhook_dispatcher::{WebhookDispatchFailure, WebhookDispatcher};
 use crate::webhook_outbox_repo::WebhookOutboxRepository;
 use intent_rebase_types::IntentRebaseError;
 
@@ -137,9 +139,48 @@ impl<R: WebhookOutboxRepository> WebhookOutboxWorker for WebhookOutboxWorkerImpl
                     }
                     processed += 1;
                 }
-                Err(reason) => {
+                Err(WebhookDispatchFailure::Retryable { reason }) => {
                     tracing::warn!(
-                        "Dispatch failed for outbox record {} for tenant {}: {}",
+                        "Dispatch retryable failure for outbox record {} for tenant {}: {}",
+                        claimed.id,
+                        tenant_id,
+                        reason
+                    );
+                    let exhausted = claimed.attempt_count + 1 >= claimed.max_attempts;
+                    if exhausted {
+                        if let Err(e) = self.repo.mark_failed(claimed.id, tenant_id, reason).await {
+                            tracing::warn!(
+                                "Failed to mark outbox record {} as failed for tenant {}: {}",
+                                claimed.id,
+                                tenant_id,
+                                e
+                            );
+                        }
+                        record_webhook_outbox_worker_item_failed();
+                    } else {
+                        let delay =
+                            compute_backoff_delay((claimed.attempt_count + 1).max(0) as u32);
+                        let scheduled_at = Utc::now()
+                            + chrono::Duration::from_std(delay)
+                                .unwrap_or_else(|_| chrono::Duration::seconds(0));
+                        if let Err(e) = self
+                            .repo
+                            .reschedule_retry(claimed.id, tenant_id, reason, scheduled_at)
+                            .await
+                        {
+                            tracing::warn!(
+                                "Failed to reschedule outbox record {} for tenant {}: {}",
+                                claimed.id,
+                                tenant_id,
+                                e
+                            );
+                            record_webhook_outbox_worker_item_failed();
+                        }
+                    }
+                }
+                Err(WebhookDispatchFailure::Terminal { reason }) => {
+                    tracing::warn!(
+                        "Dispatch terminal failure for outbox record {} for tenant {}: {}",
                         claimed.id,
                         tenant_id,
                         reason
@@ -331,24 +372,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webhook_dispatcher::WebhookDispatcher;
+    use crate::webhook_dispatcher::{WebhookDispatchFailure, WebhookDispatcher};
     use crate::webhook_outbox_repo::{
         InMemoryWebhookOutboxRepository, WebhookOutboxRecord, WebhookOutboxStatus,
     };
 
     struct MockDispatcher {
-        result: Result<(), String>,
+        result: Result<(), WebhookDispatchFailure>,
     }
 
     impl MockDispatcher {
-        fn new(result: Result<(), String>) -> Self {
+        fn new(result: Result<(), WebhookDispatchFailure>) -> Self {
             Self { result }
         }
     }
 
     #[async_trait]
     impl WebhookDispatcher for MockDispatcher {
-        async fn dispatch(&self, _record: &WebhookOutboxRecord) -> Result<(), String> {
+        async fn dispatch(
+            &self,
+            _record: &WebhookOutboxRecord,
+        ) -> Result<(), WebhookDispatchFailure> {
             self.result.clone()
         }
     }
@@ -444,11 +488,13 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_marks_failed_on_dispatch_error() {
+    fn test_worker_marks_failed_on_terminal_dispatch_error() {
         temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
-            let dispatcher = Arc::new(MockDispatcher::new(Err("network timeout".to_string())));
+            let dispatcher = Arc::new(MockDispatcher::new(Err(WebhookDispatchFailure::Terminal {
+                reason: "HTTP 404".to_string(),
+            })));
             let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
             let tenant = Uuid::new_v4();
             let intent = Uuid::new_v4();
@@ -462,8 +508,107 @@ mod tests {
 
             let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
             assert_eq!(fetched.status, WebhookOutboxStatus::Failed);
+            assert_eq!(fetched.last_error, Some("HTTP 404".to_string()));
+            assert_eq!(fetched.lock_version, 2); // claim + failed
+        });
+    }
+
+    #[test]
+    fn test_worker_reschedules_retryable_failure() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Err(
+                WebhookDispatchFailure::Retryable {
+                    reason: "network timeout".to_string(),
+                },
+            )));
+            let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
+            let tenant = Uuid::new_v4();
+            let intent = Uuid::new_v4();
+            let sub = Uuid::new_v4();
+            let record = sample_record(tenant, intent, sub);
+
+            rt.block_on(repo.create(record.clone())).unwrap();
+
+            let result = rt.block_on(worker.process_once(tenant, 10));
+            assert_eq!(result.unwrap(), 0);
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Pending);
+            assert_eq!(fetched.attempt_count, 1);
+            assert_eq!(fetched.last_error, Some("network timeout".to_string()));
+            assert!(fetched.scheduled_at > Utc::now());
+            assert_eq!(fetched.locked_at, None);
+            assert_eq!(fetched.locked_by, None);
+            assert_eq!(fetched.lock_version, 2); // claim + reschedule
+        });
+    }
+
+    #[test]
+    fn test_worker_marks_failed_when_retries_exhausted() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let dispatcher = Arc::new(MockDispatcher::new(Err(
+                WebhookDispatchFailure::Retryable {
+                    reason: "network timeout".to_string(),
+                },
+            )));
+            let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
+            let tenant = Uuid::new_v4();
+            let intent = Uuid::new_v4();
+            let sub = Uuid::new_v4();
+            let mut record = sample_record(tenant, intent, sub);
+            record.attempt_count = 2; // one away from max_attempts=3
+
+            rt.block_on(repo.create(record.clone())).unwrap();
+
+            let result = rt.block_on(worker.process_once(tenant, 10));
+            assert_eq!(result.unwrap(), 0);
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Failed);
             assert_eq!(fetched.last_error, Some("network timeout".to_string()));
             assert_eq!(fetched.lock_version, 2); // claim + failed
+        });
+    }
+
+    #[test]
+    fn test_worker_reschedules_then_delivers_on_retry() {
+        temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+            let tenant = Uuid::new_v4();
+            let intent = Uuid::new_v4();
+            let sub = Uuid::new_v4();
+            let record = sample_record(tenant, intent, sub);
+
+            rt.block_on(repo.create(record.clone())).unwrap();
+
+            // First pass: retryable failure → rescheduled
+            let fail_dispatcher = Arc::new(MockDispatcher::new(Err(
+                WebhookDispatchFailure::Retryable {
+                    reason: "network timeout".to_string(),
+                },
+            )));
+            let fail_worker = WebhookOutboxWorkerImpl::new(repo.clone(), fail_dispatcher);
+            let result = rt.block_on(fail_worker.process_once(tenant, 10));
+            assert_eq!(result.unwrap(), 0);
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Pending);
+            assert_eq!(fetched.attempt_count, 1);
+
+            // Second pass: success → delivered
+            let ok_dispatcher = Arc::new(MockDispatcher::new(Ok(())));
+            let ok_worker = WebhookOutboxWorkerImpl::new(repo.clone(), ok_dispatcher);
+            let result = rt.block_on(ok_worker.process_once(tenant, 10));
+            assert_eq!(result.unwrap(), 1);
+
+            let fetched = rt.block_on(repo.get(record.id, tenant)).unwrap();
+            assert_eq!(fetched.status, WebhookOutboxStatus::Delivered);
+            assert_eq!(fetched.lock_version, 4); // claim + reschedule + claim + delivered
         });
     }
 
