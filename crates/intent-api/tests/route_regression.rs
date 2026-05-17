@@ -82,6 +82,7 @@ fn create_test_router() -> axum::Router {
         forensic_bundle_svc,
         None,
         None,
+        None,
     )
 }
 

@@ -475,6 +475,7 @@ fn bench_http_server(c: &mut Criterion) {
             start_time: std::time::Instant::now(),
             propagation_record_repo: None,
             rls_pool: None,
+            webhook_subscription_repo: None,
         };
 
         let app = intent_api::build_router(
@@ -491,6 +492,7 @@ fn bench_http_server(c: &mut Criterion) {
             state.forensic_service.clone(),
             state.forensic_archive_generator.clone(),
             state.forensic_bundle_service.clone(),
+            None,
             None,
             None,
         );

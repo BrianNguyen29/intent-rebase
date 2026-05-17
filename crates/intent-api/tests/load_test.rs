@@ -284,6 +284,7 @@ fn create_test_router() -> Router {
         forensic_bundle_svc,
         None,
         None,
+        None,
     )
 }
 
@@ -871,6 +872,7 @@ fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
         forensic_svc,
         forensic_archive_gen,
         forensic_bundle_svc,
+        None,
         None,
         None,
     )

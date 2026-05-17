@@ -211,6 +211,7 @@ async fn test_rebase_preview_with_graph_classifies_affected_items() {
         start_time: Instant::now(),
         propagation_record_repo: None,
         rls_pool: None,
+        webhook_subscription_repo: None,
     };
 
     // Create an intent
@@ -381,6 +382,7 @@ async fn test_rebase_preview_fallback_when_graph_node_not_found() {
         start_time: Instant::now(),
         propagation_record_repo: None,
         rls_pool: None,
+        webhook_subscription_repo: None,
     };
 
     // Create a test intent

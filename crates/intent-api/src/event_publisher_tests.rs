@@ -163,6 +163,7 @@ async fn test_build_router_accepts_event_publisher() {
         )),
         None,
         None,
+        None,
     );
     // Router builds successfully - this verifies the signature change works
 }

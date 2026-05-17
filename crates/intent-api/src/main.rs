@@ -377,6 +377,7 @@ fn build_inmemory_router() -> Router {
         forensic_bundle_service,
         None, // propagation_record_repo: None for in-memory mode (Slice 1 bounded)
         None, // rls_pool: None for in-memory mode
+        None, // webhook_subscription_repo: None for in-memory mode (Slice 4b bounded)
     )
 }
 
@@ -556,6 +557,7 @@ async fn build_sql_router_with_consumer_jwt(
         propagation_record_repo,
         Some(rls_pool),
         policy_snapshot_repo.clone(),
+        None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
     );
 
     Ok((
@@ -728,6 +730,7 @@ async fn build_sql_router_with_consumer_impl(
         propagation_record_repo,
         Some(rls_pool),
         policy_snapshot_repo.clone(),
+        None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
     );
 
     Ok((

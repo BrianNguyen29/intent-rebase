@@ -4,7 +4,7 @@
 //! It is extracted from lib.rs as a bounded module decomposition slice.
 
 use axum::{
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use graph_service::GraphService;
@@ -60,6 +60,9 @@ pub fn build_router(
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
+    webhook_subscription_repo: Option<
+        Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    >,
 ) -> Router {
     let state = crate::AppState {
         service,
@@ -78,6 +81,7 @@ pub fn build_router(
         propagation_record_repo,
         start_time: Instant::now(),
         rls_pool,
+        webhook_subscription_repo,
     };
 
     Router::new()
@@ -354,6 +358,27 @@ pub fn build_router(
             "/forensic/bundles/:bundle_id/replay-verify",
             post(crate::forensic_handlers::replay_verify_forensic_bundle),
         )
+        // Webhook subscription CRUD endpoints (Slice 4b — bounded local-dev subscription CRUD)
+        .route(
+            "/webhooks/subscriptions",
+            post(crate::webhook_subscription_handlers::create_subscription),
+        )
+        .route(
+            "/webhooks/subscriptions",
+            get(crate::webhook_subscription_handlers::list_subscriptions),
+        )
+        .route(
+            "/webhooks/subscriptions/:id",
+            get(crate::webhook_subscription_handlers::get_subscription),
+        )
+        .route(
+            "/webhooks/subscriptions/:id",
+            patch(crate::webhook_subscription_handlers::update_subscription),
+        )
+        .route(
+            "/webhooks/subscriptions/:id",
+            delete(crate::webhook_subscription_handlers::delete_subscription),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         // Trace context middleware must run AFTER request_id_middleware so that
@@ -399,6 +424,9 @@ pub fn build_router_with_sql_audit_and_approval(
     propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
+    webhook_subscription_repo: Option<
+        Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    >,
 ) -> Router {
     // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -423,5 +451,6 @@ pub fn build_router_with_sql_audit_and_approval(
         forensic_bundle_service,
         propagation_record_repo,
         rls_pool,
+        webhook_subscription_repo,
     )
 }

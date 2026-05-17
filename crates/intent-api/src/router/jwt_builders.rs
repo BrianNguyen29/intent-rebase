@@ -42,6 +42,9 @@ pub fn build_router_with_jwt_auth(
     forensic_archive_generator: Arc<dyn forensic_service::ForensicArchiveGenerator>,
     forensic_bundle_service: Arc<dyn forensic_service::ForensicBundleServiceTrait>,
     auth_config: crate::auth::AuthConfig,
+    webhook_subscription_repo: Option<
+        Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    >,
 ) -> Router {
     let router = build_router(
         service,
@@ -59,6 +62,7 @@ pub fn build_router_with_jwt_auth(
         forensic_bundle_service,
         None,
         None,
+        webhook_subscription_repo,
     );
 
     // Apply JWT middleware
@@ -91,6 +95,9 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     propagation_record_repo: Option<Arc<dyn intent_service::PropagationRecordRepository>>,
     rls_pool: Option<graph_service::RlsAwarePool>,
     policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository>,
+    webhook_subscription_repo: Option<
+        Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    >,
 ) -> Router {
     // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -115,6 +122,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
         forensic_bundle_service,
         propagation_record_repo,
         rls_pool,
+        webhook_subscription_repo,
     );
 
     // Apply JWT middleware

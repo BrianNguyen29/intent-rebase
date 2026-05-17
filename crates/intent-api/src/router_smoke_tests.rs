@@ -72,6 +72,7 @@ async fn test_forensic_endpoints_are_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -171,6 +172,7 @@ async fn test_impact_report_route_is_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -225,6 +227,7 @@ async fn test_rebase_preview_apply_routes_are_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let intent_id = uuid::Uuid::new_v4();
@@ -301,6 +304,7 @@ async fn test_policy_snapshot_routes_are_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -427,6 +431,7 @@ async fn test_compensation_mutation_routes_are_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let action_id = uuid::Uuid::new_v4();
@@ -517,6 +522,7 @@ async fn test_propagation_status_route_is_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -567,6 +573,7 @@ async fn test_propagation_signal_route_is_registered() {
         state.forensic_bundle_service,
         state.propagation_record_repo.clone(),
         state.rls_pool,
+        state.webhook_subscription_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -585,6 +592,132 @@ async fn test_propagation_signal_route_is_registered() {
     let response = router.clone().oneshot(req).await.unwrap();
 
     // Intent does not exist → handler returns 404, proving the route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+}
+
+// =========================================================================
+// Webhook Subscription Route Contract Tests (Slice 4b — bounded local-dev)
+// =========================================================================
+
+#[tokio::test]
+async fn test_webhook_subscription_routes_are_registered() {
+    use tower::ServiceExt;
+
+    let state = create_test_service();
+    let router = build_router(
+        state.service,
+        state.graph_service,
+        state.side_effect_service,
+        state.compensation_action_service,
+        state.orchestration_runtime,
+        state.orchestrator,
+        state.audit_service,
+        state.approval_request_repo,
+        state.policy_snapshot_repo,
+        state.event_publisher,
+        state.forensic_service,
+        state.forensic_archive_generator,
+        state.forensic_bundle_service,
+        state.propagation_record_repo.clone(),
+        state.rls_pool,
+        state.webhook_subscription_repo.clone(),
+    );
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let intent_id = uuid::Uuid::new_v4();
+    let subscription_id = uuid::Uuid::new_v4();
+
+    // POST /webhooks/subscriptions
+    let body = serde_json::to_vec(&serde_json::json!({
+        "tenant_id": tenant_id,
+        "intent_id": intent_id,
+        "subscription_id": subscription_id,
+        "webhook_url": "https://example.com/webhook"
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/webhooks/subscriptions")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+
+    // GET /webhooks/subscriptions?intent_id=...&tenant_id=...
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/webhooks/subscriptions?intent_id={}&tenant_id={}",
+            intent_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // GET /webhooks/subscriptions/{id}?tenant_id=...
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/webhooks/subscriptions/{}?tenant_id={}",
+            subscription_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Subscription not found → 404, proving route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // PATCH /webhooks/subscriptions/{id}?tenant_id=...
+    let body = serde_json::to_vec(&serde_json::json!({
+        "webhook_url": "https://new.example.com/webhook"
+    }))
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("PATCH")
+        .uri(format!(
+            "/webhooks/subscriptions/{}?tenant_id={}",
+            subscription_id, tenant_id
+        ))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Subscription not found → 404, proving route is wired
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(content_type, Some("application/json"));
+
+    // DELETE /webhooks/subscriptions/{id}?tenant_id=...
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/webhooks/subscriptions/{}?tenant_id={}",
+            subscription_id, tenant_id
+        ))
+        .body(axum::body::Body::from(""))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    // Subscription not found → 404, proving route is wired
     assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     let content_type = response
         .headers()

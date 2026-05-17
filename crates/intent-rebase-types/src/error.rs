@@ -153,4 +153,8 @@ pub enum IntentRebaseError {
         to_status: String,
         reason: String,
     },
+
+    /// Slice 4b (bounded local-dev): Webhook subscription not found
+    #[error("webhook subscription not found: {0}")]
+    WebhookSubscriptionNotFound(Uuid),
 }

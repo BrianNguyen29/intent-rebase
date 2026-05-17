@@ -1935,6 +1935,94 @@ impl From<forensic_service::ForensicVerificationResponse> for ForensicVerificati
 }
 
 // =============================================================================
+// Webhook Subscription Types (Slice 4b — bounded local-dev subscription CRUD)
+// =============================================================================
+
+/// Request body for creating a webhook subscription.
+///
+/// Bounded local-dev: no secret manager, no production readiness claims.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWebhookSubscriptionRequest {
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+    pub subscription_id: Uuid,
+    pub webhook_url: String,
+    #[serde(default)]
+    pub downstream_system_id: Option<String>,
+    #[serde(default)]
+    pub max_attempts: Option<i32>,
+    #[serde(default)]
+    pub event_types: Option<Vec<String>>,
+}
+
+/// Request body for updating a webhook subscription.
+///
+/// All fields are optional; only provided fields are updated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateWebhookSubscriptionRequest {
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    #[serde(default)]
+    pub downstream_system_id: Option<Option<String>>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub max_attempts: Option<i32>,
+    #[serde(default)]
+    pub event_types: Option<Vec<String>>,
+}
+
+/// Response for a single webhook subscription.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookSubscriptionResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+    pub subscription_id: Uuid,
+    pub webhook_url: String,
+    pub downstream_system_id: Option<String>,
+    pub status: String,
+    pub max_attempts: i32,
+    pub event_types: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<crate::webhook_subscription_repo::WebhookSubscriptionRecord>
+    for WebhookSubscriptionResponse
+{
+    fn from(r: crate::webhook_subscription_repo::WebhookSubscriptionRecord) -> Self {
+        Self {
+            id: r.id,
+            tenant_id: r.tenant_id,
+            intent_id: r.intent_id,
+            subscription_id: r.subscription_id,
+            webhook_url: r.webhook_url,
+            downstream_system_id: r.downstream_system_id,
+            status: r.status,
+            max_attempts: r.max_attempts,
+            event_types: r.event_types,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+/// Response for listing webhook subscriptions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListWebhookSubscriptionsResponse {
+    pub subscriptions: Vec<WebhookSubscriptionResponse>,
+    pub total: usize,
+}
+
+/// Query parameters for listing webhook subscriptions.
+#[derive(Debug, Deserialize)]
+pub struct ListWebhookSubscriptionsQuery {
+    pub tenant_id: Uuid,
+    pub intent_id: Uuid,
+}
+
+// =============================================================================
 // Health and Request ID Types (Phase 2 bounded extraction)
 // =============================================================================
 

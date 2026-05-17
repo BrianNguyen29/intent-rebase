@@ -128,6 +128,9 @@ pub fn create_test_service() -> AppState {
     let propagation_record_repo =
         Arc::new(intent_service::InMemoryPropagationRecordRepository::new())
             as Arc<dyn intent_service::PropagationRecordRepository>;
+    let webhook_subscription_repo =
+        Arc::new(crate::webhook_subscription_repo::InMemoryWebhookSubscriptionRepository::new())
+            as Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>;
     AppState {
         service,
         graph_service: graph_svc,
@@ -145,6 +148,7 @@ pub fn create_test_service() -> AppState {
         propagation_record_repo: Some(propagation_record_repo),
         start_time: Instant::now(),
         rls_pool: None,
+        webhook_subscription_repo: Some(webhook_subscription_repo),
     }
 }
 
@@ -210,6 +214,9 @@ pub fn create_test_service_with_forensic_config() -> AppState {
     let propagation_record_repo =
         Arc::new(intent_service::InMemoryPropagationRecordRepository::new())
             as Arc<dyn intent_service::PropagationRecordRepository>;
+    let webhook_subscription_repo =
+        Arc::new(crate::webhook_subscription_repo::InMemoryWebhookSubscriptionRepository::new())
+            as Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>;
     AppState {
         service,
         graph_service: graph_svc,
@@ -227,6 +234,7 @@ pub fn create_test_service_with_forensic_config() -> AppState {
         propagation_record_repo: Some(propagation_record_repo),
         start_time: Instant::now(),
         rls_pool: None,
+        webhook_subscription_repo: Some(webhook_subscription_repo),
     }
 }
 

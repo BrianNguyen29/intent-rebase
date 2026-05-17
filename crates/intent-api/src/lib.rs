@@ -64,6 +64,10 @@ pub mod webhook_delivery;
 /// Webhook outbox repository (Phase 4a Slice 1 — bounded local-dev foundation)
 pub mod webhook_outbox_repo;
 
+/// Webhook subscription repository and handlers (Slice 4b — bounded local-dev subscription CRUD)
+pub mod webhook_subscription_handlers;
+pub mod webhook_subscription_repo;
+
 /// Webhook outbox worker (Phase 4a Slice 2 — bounded local-dev worker)
 pub mod webhook_outbox_worker;
 
@@ -174,11 +178,12 @@ pub use types::{
     CompensationActionResponse, CompensationActionStatusCounts, CompensationActionSummary,
     CompensationPolicyGateQuery, CompensationPolicyGateResponse, CompensationSimulationRequest,
     CoordinationRecordResponse, CoordinationSummaryResponse, CreateOrchestrationRunRequest,
-    DiffResponse, DownstreamSystemStatus, ErrorClassificationResponse, ErrorDetails,
-    ExecuteCompensationActionBody, ExpireApprovalRequestBody, FeasibilityCounts,
-    ForensicArtifactCoverage, ForensicAuditEventCoverage, ForensicBundleContentsSummary,
-    ForensicBundleIntegrityInfo, ForensicBundleReplayRequest, ForensicBundleReplayResponse,
-    ForensicBundleRequest, ForensicBundleResponse, ForensicBundleSummary, ForensicBundleTimeRange,
+    CreateWebhookSubscriptionRequest, DiffResponse, DownstreamSystemStatus,
+    ErrorClassificationResponse, ErrorDetails, ExecuteCompensationActionBody,
+    ExpireApprovalRequestBody, FeasibilityCounts, ForensicArtifactCoverage,
+    ForensicAuditEventCoverage, ForensicBundleContentsSummary, ForensicBundleIntegrityInfo,
+    ForensicBundleReplayRequest, ForensicBundleReplayResponse, ForensicBundleRequest,
+    ForensicBundleResponse, ForensicBundleSummary, ForensicBundleTimeRange,
     ForensicExportContentsSummary, ForensicExportRequest, ForensicExportResponse,
     ForensicExportTimeRange, ForensicIntentVersionCoverage, ForensicPolicySnapshotCoverage,
     ForensicVerificationRequest, ForensicVerificationResponse, ForensicVerificationTimeRange,
@@ -190,17 +195,19 @@ pub use types::{
     ListForensicBundlesQuery, ListForensicBundlesResponse, ListGraphEdgesQuery,
     ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
-    ListSideEffectsResponse, OrchestrationCoordinationQuery, OrchestrationCoordinationResponse,
-    OrchestrationDashboardQuery, OrchestrationDashboardResponse,
-    OrchestrationDryRunProposalResponse, OrchestrationDryRunRequest, OrchestrationDryRunResponse,
-    OrchestrationDryRunSummaryResponse, OrchestrationQuery, OrchestrationRunQuery,
-    OrchestrationRunResponse, PlanCompensationActionsRequest, PlanCompensationActionsResponse,
-    PolicyGateEvaluationResponse, PolicyGateMetadataResponse, PolicyGateSummaryResponse,
-    PolicySnapshotResponse, PropagationStatusQuery, PropagationStatusResponse, PropagationSummary,
+    ListSideEffectsResponse, ListWebhookSubscriptionsQuery, ListWebhookSubscriptionsResponse,
+    OrchestrationCoordinationQuery, OrchestrationCoordinationResponse, OrchestrationDashboardQuery,
+    OrchestrationDashboardResponse, OrchestrationDryRunProposalResponse,
+    OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationDryRunSummaryResponse,
+    OrchestrationQuery, OrchestrationRunQuery, OrchestrationRunResponse,
+    PlanCompensationActionsRequest, PlanCompensationActionsResponse, PolicyGateEvaluationResponse,
+    PolicyGateMetadataResponse, PolicyGateSummaryResponse, PolicySnapshotResponse,
+    PropagationStatusQuery, PropagationStatusResponse, PropagationSummary,
     ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
     RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse, RequestId,
     RiskMetadataResponse, RunItemResultResponse, SideEffectSummary, TriggerReapprovalRequest,
-    TriggerReapprovalResponse, WaiveCompensationActionBody,
+    TriggerReapprovalResponse, UpdateWebhookSubscriptionRequest, WaiveCompensationActionBody,
+    WebhookSubscriptionResponse,
 };
 
 // Re-export approval invalidation helpers for backward compatibility
@@ -294,6 +301,11 @@ pub struct AppState {
     /// transaction wrapping. When Some, create_graph_node uses this to wrap node
     /// creation in RLS-set transactions. When None, falls back to non-RLS path.
     pub rls_pool: Option<graph_service::RlsAwarePool>,
+    /// Slice 4b (bounded local-dev): Webhook subscription repository for
+    /// per-intent subscription CRUD. When None, subscription endpoints return
+    /// 503 or empty list as appropriate. NOT production-ready.
+    pub webhook_subscription_repo:
+        Option<Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>>,
     pub start_time: Instant,
 }
 
@@ -387,3 +399,6 @@ mod panic_hardening_tests;
 
 #[cfg(test)]
 mod webhook_delivery_tests;
+
+#[cfg(test)]
+mod webhook_subscription_handler_tests;

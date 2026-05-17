@@ -155,6 +155,11 @@ impl IntoResponse for ApiErrorResponse {
                 "INVALID_BUNDLE_STATUS_TRANSITION",
                 false,
             ),
+            IntentRebaseError::WebhookSubscriptionNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "WEBHOOK_SUBSCRIPTION_NOT_FOUND",
+                false,
+            ),
         };
 
         let body = ApiError {
