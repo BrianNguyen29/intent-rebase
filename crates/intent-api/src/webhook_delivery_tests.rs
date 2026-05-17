@@ -1592,3 +1592,83 @@ fn test_would_exceed_max_duration() {
         Duration::from_secs(1)
     ));
 }
+
+// =============================================================================
+// WEB-LOCAL-3 Pipeline Integration Tests (outbox → worker → dispatcher → HMAC → sender)
+// =============================================================================
+
+use crate::webhook_dispatcher::WebhookDeliveryDispatcher;
+use crate::webhook_hmac::WEBHOOK_HMAC_SECRET_ENV_VAR;
+use crate::webhook_outbox_repo::{
+    InMemoryWebhookOutboxRepository, WebhookOutboxRecord, WebhookOutboxRepository,
+    WebhookOutboxStatus,
+};
+use crate::webhook_outbox_worker::{
+    WebhookOutboxWorker, WebhookOutboxWorkerImpl, WEBHOOK_OUTBOX_WORKER_ENV_VAR,
+};
+
+#[test]
+fn test_webhook_local_3_pipeline_success_with_hmac() {
+    temp_env::with_var(WEBHOOK_OUTBOX_WORKER_ENV_VAR, Some("true"), || {
+        temp_env::with_var(
+            WEBHOOK_HMAC_SECRET_ENV_VAR,
+            Some("test_secret_pipeline"),
+            || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let mock_server = MockServer::start().await;
+                    Mock::given(method("POST"))
+                        .and(path("/webhook"))
+                        .respond_with(ResponseTemplate::new(200))
+                        .expect(1)
+                        .mount(&mock_server)
+                        .await;
+
+                    let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+                    let tenant_id = Uuid::new_v4();
+                    let intent_id = Uuid::new_v4();
+                    let subscription_id = Uuid::new_v4();
+
+                    let record = WebhookOutboxRecord::new(
+                        tenant_id,
+                        intent_id,
+                        subscription_id,
+                        "intent_changed".to_string(),
+                        serde_json::json!({"foo": "bar"}),
+                        None,
+                    )
+                    .with_webhook_url(format!("{}/webhook", mock_server.uri()));
+
+                    repo.create(record.clone()).await.unwrap();
+
+                    let client = build_webhook_client();
+                    let dispatcher = Arc::new(WebhookDeliveryDispatcher::new(Arc::new(client)));
+                    let worker = WebhookOutboxWorkerImpl::new(repo.clone(), dispatcher);
+
+                    let processed = worker.process_once(tenant_id, 10).await.unwrap();
+                    assert_eq!(processed, 1);
+
+                    let fetched = repo.get(record.id, tenant_id).await.unwrap();
+                    assert_eq!(fetched.status, WebhookOutboxStatus::Delivered);
+                    assert_eq!(fetched.lock_version, 2); // claim + delivered
+
+                    // Verify HMAC header was sent via wiremock request capture
+                    let requests = mock_server.received_requests().await.unwrap();
+                    assert_eq!(requests.len(), 1);
+                    let req = &requests[0];
+                    let signature = req.headers.get("X-Webhook-Signature");
+                    assert!(
+                        signature.is_some(),
+                        "X-Webhook-Signature header should be present when HMAC secret is set"
+                    );
+                    let sig = signature.unwrap().to_str().unwrap();
+                    assert_eq!(sig.len(), 64, "HMAC signature should be 64 hex chars");
+                    assert!(
+                        sig.chars().all(|c| c.is_ascii_hexdigit()),
+                        "HMAC signature should be hex-encoded"
+                    );
+                });
+            },
+        );
+    });
+}
