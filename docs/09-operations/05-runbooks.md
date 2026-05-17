@@ -419,6 +419,15 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 ### Step 1 — Triage Failed Deliveries
 
+**Quick stats snapshot (Phase 2.3 — bounded local-dev):**
+```bash
+GET /webhooks/outbox/dlq/stats?tenant_id=<uuid>
+```
+
+- Returns `total_failed`, `oldest_failed_age_seconds`, `replayed_count`, and `by_error_summary`
+- Use this as a first-line triage gauge before drilling into individual records
+- **Not a production dashboard:** no UI, no staging/production validation, no automatic remediation
+
 **List failed outbox records:**
 ```bash
 GET /webhooks/outbox/dlq?tenant_id=<uuid>&limit=100
@@ -598,6 +607,7 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 - **No staging/production validation:** the workflow described has not been executed in a staging or production environment
 - **No replay UI:** all replay actions require direct API calls or database access
 - **Bulk replay is bounded local-dev only:** `POST /webhooks/outbox/dlq/bulk-replay` has a hard cap of 100 records per call, no UI, no staging/production validation, and no automatic scheduling. It is a convenience API, not a production batch operator tool
+- **DLQ stats is bounded local-dev only:** `GET /webhooks/outbox/dlq/stats` is a convenience query for operator triage, not a production dashboard or automated remediation trigger. No staging/production validation
 - **No automated stale-claim recovery:** manual SQL or future background job required
 - **No retention enforcement:** `WEBHOOK_OUTBOX_RETENTION_DAYS` is documented but not wired to any purge logic
 - **Production readiness blockers remain open:** WEB-EXT-1 (secret manager), WEB-EXT-2 (staging/prod evidence), WEB-EXT-3 (external review/pen-test) are all still blocked

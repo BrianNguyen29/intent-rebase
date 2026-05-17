@@ -2206,3 +2206,17 @@ pub struct BulkReplayWebhookOutboxDlqResponse {
     /// The records that were successfully replayed.
     pub records: Vec<crate::webhook_outbox_repo::WebhookOutboxRecord>,
 }
+
+/// Query parameters for webhook outbox DLQ stats.
+///
+/// Phase 2.3: bounded local-dev stats query.
+#[derive(Debug, Deserialize)]
+pub struct WebhookOutboxDlqStatsQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for webhook outbox DLQ stats.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WebhookOutboxDlqStatsResponse {
+    pub stats: crate::webhook_outbox_repo::WebhookOutboxDlqStats,
+}

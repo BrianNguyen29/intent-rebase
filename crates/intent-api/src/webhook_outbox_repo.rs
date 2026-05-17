@@ -84,6 +84,26 @@ pub struct WebhookOutboxRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Error summary for DLQ stats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookOutboxDlqErrorSummary {
+    pub error_pattern: String,
+    pub count: i64,
+}
+
+/// DLQ stats for a tenant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookOutboxDlqStats {
+    /// Number of failed records for this tenant.
+    pub total_failed: i64,
+    /// Age in seconds of the oldest failed record (based on updated_at).
+    pub oldest_failed_age_seconds: Option<i64>,
+    /// Number of records that have been replayed at least once.
+    pub replayed_count: i64,
+    /// Grouped error summary for failed records.
+    pub by_error_summary: Vec<WebhookOutboxDlqErrorSummary>,
+}
+
 impl WebhookOutboxRecord {
     /// Create a new pending outbox record.
     pub fn new(
@@ -246,6 +266,13 @@ pub trait WebhookOutboxRepository: Send + Sync {
         since: Option<DateTime<Utc>>,
         limit: i64,
     ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError>;
+
+    /// Compute DLQ stats for a tenant.
+    ///
+    /// Phase 2.3: bounded local-dev stats query — returns counts and age summary
+    /// for failed/replayed records, plus a grouped error summary. No production
+    /// dashboard or automated remediation claim.
+    async fn dlq_stats(&self, tenant_id: Uuid) -> Result<WebhookOutboxDlqStats, IntentRebaseError>;
 }
 
 // =============================================================================
@@ -547,6 +574,58 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         });
         replayed.truncate(limit as usize);
         Ok(replayed)
+    }
+
+    async fn dlq_stats(&self, tenant_id: Uuid) -> Result<WebhookOutboxDlqStats, IntentRebaseError> {
+        let records = self.records.read().await;
+        let now = Utc::now();
+
+        let failed_records: Vec<_> = records
+            .values()
+            .filter(|r| r.tenant_id == tenant_id && r.status == WebhookOutboxStatus::Failed)
+            .collect();
+
+        let total_failed = failed_records.len() as i64;
+
+        let oldest_failed_age_seconds = failed_records
+            .iter()
+            .map(|r| r.updated_at)
+            .min()
+            .map(|oldest| (now - oldest).num_seconds().max(0));
+
+        let replayed_count = records
+            .values()
+            .filter(|r| r.tenant_id == tenant_id && r.replay_count > 0)
+            .count() as i64;
+
+        let mut error_counts: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for r in &failed_records {
+            let key = r
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            *error_counts.entry(key).or_insert(0) += 1;
+        }
+        let mut by_error_summary: Vec<WebhookOutboxDlqErrorSummary> = error_counts
+            .into_iter()
+            .map(|(error_pattern, count)| WebhookOutboxDlqErrorSummary {
+                error_pattern,
+                count,
+            })
+            .collect();
+        by_error_summary.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.error_pattern.cmp(&b.error_pattern))
+        });
+
+        Ok(WebhookOutboxDlqStats {
+            total_failed,
+            oldest_failed_age_seconds,
+            replayed_count,
+            by_error_summary,
+        })
     }
 }
 
@@ -1047,6 +1126,71 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         })?;
 
         rows.iter().map(map_row).collect()
+    }
+
+    async fn dlq_stats(&self, tenant_id: Uuid) -> Result<WebhookOutboxDlqStats, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'failed') as total_failed,
+                MIN(updated_at) FILTER (WHERE status = 'failed') as oldest_failed_at,
+                COUNT(*) FILTER (WHERE replay_count > 0) as replayed_count
+            FROM webhook_outbox
+            WHERE tenant_id = $1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("dlq stats aggregate: {}", e)))?;
+
+        let total_failed: i64 = row
+            .try_get("total_failed")
+            .map_err(|e| map_err_column("total_failed", e))?;
+        let oldest_failed_at: Option<DateTime<Utc>> = row
+            .try_get("oldest_failed_at")
+            .map_err(|e| map_err_column("oldest_failed_at", e))?;
+        let replayed_count: i64 = row
+            .try_get("replayed_count")
+            .map_err(|e| map_err_column("replayed_count", e))?;
+
+        let oldest_failed_age_seconds = oldest_failed_at.map(|dt| {
+            let age = (Utc::now() - dt).num_seconds();
+            age.max(0)
+        });
+
+        let error_rows = sqlx::query(
+            r#"
+            SELECT COALESCE(last_error, 'unknown') as error_pattern, COUNT(*) as count
+            FROM webhook_outbox
+            WHERE tenant_id = $1 AND status = 'failed'
+            GROUP BY last_error
+            ORDER BY count DESC, error_pattern ASC
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("dlq stats error summary: {}", e)))?;
+
+        let by_error_summary = error_rows
+            .iter()
+            .map(|r| {
+                Ok(WebhookOutboxDlqErrorSummary {
+                    error_pattern: r
+                        .try_get("error_pattern")
+                        .map_err(|e| map_err_column("error_pattern", e))?,
+                    count: r.try_get("count").map_err(|e| map_err_column("count", e))?,
+                })
+            })
+            .collect::<Result<Vec<_>, IntentRebaseError>>()?;
+
+        Ok(WebhookOutboxDlqStats {
+            total_failed,
+            oldest_failed_age_seconds,
+            replayed_count,
+            by_error_summary,
+        })
     }
 }
 
@@ -1623,6 +1767,111 @@ mod tests {
         // Most recent replay first
         assert_eq!(replayed[0].id, r2.id);
         assert_eq!(replayed[1].id, r1.id);
+    }
+
+    #[tokio::test]
+    async fn test_dlq_stats_empty() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+
+        let stats = repo.dlq_stats(tenant).await.unwrap();
+        assert_eq!(stats.total_failed, 0);
+        assert_eq!(stats.oldest_failed_age_seconds, None);
+        assert_eq!(stats.replayed_count, 0);
+        assert!(stats.by_error_summary.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dlq_stats_failed_and_replayed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant, intent, sub);
+        let r2 = sample_record(tenant, intent, sub);
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.replay_failed(r1.id, tenant, None).await.unwrap();
+
+        let stats = repo.dlq_stats(tenant).await.unwrap();
+        assert_eq!(stats.total_failed, 1); // r2 still failed
+        assert_eq!(stats.replayed_count, 1); // r1 replayed
+        assert_eq!(stats.by_error_summary.len(), 1);
+        assert_eq!(stats.by_error_summary[0].error_pattern, "timeout");
+        assert_eq!(stats.by_error_summary[0].count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_dlq_stats_tenant_boundary() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let record = sample_record(tenant_a, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant_a, "err".to_string())
+            .await
+            .unwrap();
+
+        let stats = repo.dlq_stats(tenant_b).await.unwrap();
+        assert_eq!(stats.total_failed, 0);
+        assert_eq!(stats.replayed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_dlq_stats_oldest_age() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "boom".to_string())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let stats = repo.dlq_stats(tenant).await.unwrap();
+        assert_eq!(stats.total_failed, 1);
+        assert!(stats.oldest_failed_age_seconds.unwrap_or(0) >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_dlq_stats_by_error_summary_groups() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant, intent, sub);
+        let r2 = sample_record(tenant, intent, sub);
+        let r3 = sample_record(tenant, intent, sub);
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.create(r3.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r3.id, tenant, "conn_reset".to_string())
+            .await
+            .unwrap();
+
+        let stats = repo.dlq_stats(tenant).await.unwrap();
+        assert_eq!(stats.total_failed, 3);
+        assert_eq!(stats.by_error_summary.len(), 2);
+        // Sorted by count desc
+        assert_eq!(stats.by_error_summary[0].error_pattern, "timeout");
+        assert_eq!(stats.by_error_summary[0].count, 2);
+        assert_eq!(stats.by_error_summary[1].error_pattern, "conn_reset");
+        assert_eq!(stats.by_error_summary[1].count, 1);
     }
 
     #[test]
