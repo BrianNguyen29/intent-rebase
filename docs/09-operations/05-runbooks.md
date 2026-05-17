@@ -337,18 +337,34 @@ This creates a new `pending` propagation record. Subsequent rebase apply operati
 
 **Mitigation:**
 1. If transient downstream error (5xx, timeout):
-   - Retry-exhausted records remain in `Failed` status; no automatic retry queue exists in this slice
-   - Manual re-trigger requires updating the propagation record status to `Pending` and running a new rebase apply (if webhook delivery is enabled)
+    - Retry-exhausted records remain in `Failed` status; no automatic retry queue exists in this slice
+    - Manual re-trigger requires updating the propagation record status to `Pending` and running a new rebase apply (if webhook delivery is enabled)
 2. If non-retryable error (4xx except 429):
-   - Fix the downstream webhook URL or payload contract
-   - Update the subscription URL in `webhook_subscriptions` if incorrect (manual DB update — no CRUD API in this slice)
+    - Fix the downstream webhook URL or payload contract
+    - Update the subscription URL in `webhook_subscriptions` if incorrect (manual DB update — no CRUD API in this slice)
 3. If webhook delivery is disabled (default):
-   - Set `INTENT_API_WEBHOOK_DELIVERY=true` in the environment
-   - Restart intent-api pods to pick up the change
-   - This is an opt-in gate — do not enable in production without SRE review
+    - Set `INTENT_API_WEBHOOK_DELIVERY=true` in the environment
+    - Restart intent-api pods to pick up the change
+    - This is an opt-in gate — do not enable in production without SRE review
 4. If RLS context issues:
-   - Verify `SET LOCAL app.current_tenant_id` is set correctly in transactions
-   - Check `webhook_subscriptions` rows are visible under the tenant's RLS context
+    - Verify `SET LOCAL app.current_tenant_id` is set correctly in transactions
+    - Check `webhook_subscriptions` rows are visible under the tenant's RLS context
+
+**Local-Dev DLQ List/Replay (Slice 5b — bounded, non-production):**
+> These endpoints are local-dev only and NOT wired for production. No production retention, operator workflow, or replay UI exists.
+
+- List failed outbox records: `GET /webhooks/outbox/dlq?tenant_id=<uuid>[&limit=<n>]`
+  - Returns `WebhookOutboxStatus::Failed` records ordered by `updated_at` desc
+  - Empty list when no failures or when `webhook_outbox_repo` is not configured
+- Replay a failed record: `POST /webhooks/outbox/dlq/:id/replay?tenant_id=<uuid>`
+  - Transitions record from `Failed` to `Pending`, resets `attempt_count=0`, clears `last_error`/`locked_at`/`locked_by`
+  - Idempotency-bounded: only `Failed` records can be replayed; second replay returns an error because status is no longer `Failed`
+  - After replay, the worker will pick up the record on its next pass if `INTENT_API_WEBHOOK_OUTBOX_WORKER=true`
+- Caveats:
+  - No separate DLQ table — uses existing `webhook_outbox` `status='failed'` rows
+  - No replay audit trail, replay count, or retention policy
+  - No operator UI or batch replay API
+  - Production retention/operator workflow remains deferred
 
 **Rollback Boundaries:**
 - Webhook delivery is best-effort and does NOT affect rebase apply outcomes

@@ -1224,4 +1224,67 @@ mod tests {
             .expect("list_pending failed");
         assert!(pending.is_empty());
     }
+
+    /// Smoke test for `SqlxWebhookOutboxRepository` DLQ list and replay.
+    ///
+    /// Ignored by default so `cargo test` does not require live Postgres.
+    /// Run manually with:
+    ///   DATABASE_URL=postgres://... cargo test -p intent-api --lib webhook_outbox_repo -- --ignored
+    #[tokio::test]
+    #[ignore = "requires live Postgres (set DATABASE_URL to run)"]
+    async fn test_sqlx_repo_dlq_smoke() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping SQLx DLQ smoke test: DATABASE_URL not set");
+                return;
+            }
+        };
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("connect failed");
+        let repo = SqlxWebhookOutboxRepository::new(pool);
+        let tenant_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let subscription_id = Uuid::new_v4();
+
+        // Seed a record and mark it failed
+        let record = WebhookOutboxRecord::new(
+            tenant_id,
+            intent_id,
+            subscription_id,
+            "intent_changed".to_string(),
+            serde_json::json!({"foo": "bar"}),
+            None,
+        );
+        let created = repo.create(record.clone()).await.expect("create failed");
+        repo.mark_failed(created.id, tenant_id, "timeout".to_string())
+            .await
+            .expect("mark_failed failed");
+
+        // list_failed should return the record
+        let failed = repo
+            .list_failed(tenant_id, 10)
+            .await
+            .expect("list_failed failed");
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].id, created.id);
+        assert_eq!(failed[0].status, WebhookOutboxStatus::Failed);
+
+        // replay_failed should transition to Pending
+        let replayed = repo
+            .replay_failed(created.id, tenant_id)
+            .await
+            .expect("replay_failed failed");
+        assert_eq!(replayed.status, WebhookOutboxStatus::Pending);
+        assert_eq!(replayed.attempt_count, 0);
+        assert_eq!(replayed.last_error, None);
+
+        // list_failed should now be empty
+        let failed = repo
+            .list_failed(tenant_id, 10)
+            .await
+            .expect("list_failed failed");
+        assert!(failed.is_empty());
+    }
 }
