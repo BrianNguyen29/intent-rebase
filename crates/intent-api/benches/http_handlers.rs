@@ -476,6 +476,7 @@ fn bench_http_server(c: &mut Criterion) {
             propagation_record_repo: None,
             rls_pool: None,
             webhook_subscription_repo: None,
+            webhook_outbox_repo: None,
         };
 
         let app = intent_api::build_router(
@@ -495,6 +496,7 @@ fn bench_http_server(c: &mut Criterion) {
             None,
             None,
             None,
+            None, // webhook_outbox_repo
         );
 
         // Bind to ephemeral port using tokio

@@ -205,6 +205,18 @@ pub trait WebhookOutboxRepository: Send + Sync {
         tenant_id: Uuid,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
 
+    /// List failed records older than a cutoff for a tenant.
+    ///
+    /// Phase 1.1 retention query foundation: returns tenant-scoped failed records
+    /// with `updated_at < before`, ordered by `updated_at` desc then id.
+    /// This is a query-only local-dev helper — no purge, no enforcement.
+    async fn list_failed_older_than(
+        &self,
+        tenant_id: Uuid,
+        before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError>;
+
     /// List distinct tenant IDs that have at least one pending outbox record.
     ///
     /// Bounded local-dev helper for background worker tenant discovery.
@@ -442,6 +454,31 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         record.lock_version += 1;
         record.updated_at = Utc::now();
         Ok(record.clone())
+    }
+
+    async fn list_failed_older_than(
+        &self,
+        tenant_id: Uuid,
+        before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let records = self.records.read().await;
+        let mut failed: Vec<_> = records
+            .values()
+            .filter(|r| {
+                r.tenant_id == tenant_id
+                    && r.status == WebhookOutboxStatus::Failed
+                    && r.updated_at < before
+            })
+            .cloned()
+            .collect();
+        failed.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        failed.truncate(limit as usize);
+        Ok(failed)
     }
 
     async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
@@ -853,6 +890,32 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         }
     }
 
+    async fn list_failed_older_than(
+        &self,
+        tenant_id: Uuid,
+        before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM webhook_outbox
+            WHERE tenant_id = $1 AND status = 'failed' AND updated_at < $2
+            ORDER BY updated_at DESC, id
+            LIMIT $3
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(before)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list failed outbox records older than: {}", e))
+        })?;
+
+        rows.iter().map(map_row).collect()
+    }
+
     async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
@@ -1103,6 +1166,108 @@ mod tests {
         // Record is still Pending, not Failed
         let err = repo.replay_failed(record.id, tenant).await.unwrap_err();
         assert!(matches!(err, IntentRebaseError::StorageError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_list_failed_older_than_includes_stale() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let before = Utc::now() + chrono::Duration::seconds(1);
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        let results = repo
+            .list_failed_older_than(tenant, before, 10)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, record.id);
+    }
+
+    #[tokio::test]
+    async fn test_list_failed_older_than_excludes_recent() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "boom".to_string())
+            .await
+            .unwrap();
+
+        let before = Utc::now() - chrono::Duration::seconds(1);
+        let results = repo
+            .list_failed_older_than(tenant, before, 10)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_failed_older_than_excludes_non_failed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+
+        let before = Utc::now() + chrono::Duration::seconds(1);
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        let results = repo
+            .list_failed_older_than(tenant, before, 10)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_failed_older_than_tenant_boundary() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let record = sample_record(tenant_a, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant_a, "err".to_string())
+            .await
+            .unwrap();
+
+        let before = Utc::now() + chrono::Duration::seconds(1);
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        let results = repo
+            .list_failed_older_than(tenant_b, before, 10)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_failed_older_than_limit() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let r1 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        let r2 = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "e1".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "e2".to_string())
+            .await
+            .unwrap();
+
+        let before = Utc::now() + chrono::Duration::seconds(1);
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        let results = repo
+            .list_failed_older_than(tenant, before, 1)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
     }
 
     #[tokio::test]

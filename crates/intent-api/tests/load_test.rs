@@ -285,6 +285,7 @@ fn create_test_router() -> Router {
         None,
         None,
         None,
+        None, // webhook_outbox_repo
     )
 }
 
@@ -875,6 +876,7 @@ fn create_sqlx_test_router(pool: sqlx::PgPool) -> Router {
         None,
         None,
         None,
+        None, // webhook_outbox_repo
     )
 }
 

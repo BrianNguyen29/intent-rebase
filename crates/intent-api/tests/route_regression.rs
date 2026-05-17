@@ -83,6 +83,7 @@ fn create_test_router() -> axum::Router {
         None,
         None,
         None,
+        None, // webhook_outbox_repo
     )
 }
 
