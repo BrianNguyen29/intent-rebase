@@ -28,6 +28,7 @@ fn build_test_router() -> axum::Router {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     )
 }
 

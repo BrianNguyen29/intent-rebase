@@ -73,6 +73,7 @@ async fn test_forensic_endpoints_are_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -173,6 +174,7 @@ async fn test_impact_report_route_is_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -228,6 +230,7 @@ async fn test_rebase_preview_apply_routes_are_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let intent_id = uuid::Uuid::new_v4();
@@ -305,6 +308,7 @@ async fn test_policy_snapshot_routes_are_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -432,6 +436,7 @@ async fn test_compensation_mutation_routes_are_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let action_id = uuid::Uuid::new_v4();
@@ -523,6 +528,7 @@ async fn test_propagation_status_route_is_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -574,6 +580,7 @@ async fn test_propagation_signal_route_is_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();
@@ -626,6 +633,7 @@ async fn test_webhook_subscription_routes_are_registered() {
         state.propagation_record_repo.clone(),
         state.rls_pool,
         state.webhook_subscription_repo.clone(),
+        state.webhook_outbox_repo.clone(),
     );
 
     let tenant_id = uuid::Uuid::new_v4();

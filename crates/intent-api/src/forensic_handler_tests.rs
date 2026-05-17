@@ -407,6 +407,7 @@ async fn test_export_forensic_archive_empty_counts() {
         propagation_record_repo: None,
         rls_pool: None,
         webhook_subscription_repo: None,
+        webhook_outbox_repo: None,
     };
 
     let request = ForensicExportRequest {

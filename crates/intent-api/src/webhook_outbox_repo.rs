@@ -184,6 +184,27 @@ pub trait WebhookOutboxRepository: Send + Sync {
         scheduled_at: DateTime<Utc>,
     ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
 
+    /// List failed records for a tenant, ordered by updated_at desc then id.
+    ///
+    /// Slice 5b: local-dev DLQ view — no separate DLQ table, just failed-status
+    /// records from the outbox.
+    async fn list_failed(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError>;
+
+    /// Replay a failed record (status → Pending, reset attempt_count,
+    /// scheduled_at=now, clear last_error/locked_at/locked_by, increment lock_version).
+    ///
+    /// Slice 5b: idempotency-bounded replay. Only transitions from Failed.
+    /// Returns an error if the record is not in Failed status.
+    async fn replay_failed(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError>;
+
     /// List distinct tenant IDs that have at least one pending outbox record.
     ///
     /// Bounded local-dev helper for background worker tenant discovery.
@@ -364,6 +385,58 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
         record.attempt_count += 1;
         record.scheduled_at = scheduled_at;
         record.last_error = Some(last_error);
+        record.locked_at = None;
+        record.locked_by = None;
+        record.lock_version += 1;
+        record.updated_at = Utc::now();
+        Ok(record.clone())
+    }
+
+    async fn list_failed(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let records = self.records.read().await;
+        let mut failed: Vec<_> = records
+            .values()
+            .filter(|r| r.tenant_id == tenant_id && r.status == WebhookOutboxStatus::Failed)
+            .cloned()
+            .collect();
+        failed.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        failed.truncate(limit as usize);
+        Ok(failed)
+    }
+
+    async fn replay_failed(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
+        let mut records = self.records.write().await;
+        let record = records.get_mut(&id).ok_or_else(|| {
+            IntentRebaseError::StorageError(format!("Outbox record {} not found", id))
+        })?;
+        if record.tenant_id != tenant_id {
+            return Err(IntentRebaseError::StorageError(format!(
+                "Outbox record {} not found for tenant {}",
+                id, tenant_id
+            )));
+        }
+        if record.status != WebhookOutboxStatus::Failed {
+            return Err(IntentRebaseError::StorageError(format!(
+                "Outbox record {} is not failed (status: {:?})",
+                id, record.status
+            )));
+        }
+        record.status = WebhookOutboxStatus::Pending;
+        record.attempt_count = 0;
+        record.scheduled_at = Utc::now();
+        record.last_error = None;
         record.locked_at = None;
         record.locked_by = None;
         record.lock_version += 1;
@@ -718,6 +791,68 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         map_row(&row)
     }
 
+    async fn list_failed(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<WebhookOutboxRecord>, IntentRebaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM webhook_outbox
+            WHERE tenant_id = $1 AND status = 'failed'
+            ORDER BY updated_at DESC, id
+            LIMIT $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!("list failed outbox records: {}", e))
+        })?;
+
+        rows.iter().map(map_row).collect()
+    }
+
+    async fn replay_failed(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<WebhookOutboxRecord, IntentRebaseError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE webhook_outbox
+            SET status = 'pending',
+                attempt_count = 0,
+                scheduled_at = NOW(),
+                last_error = NULL,
+                locked_at = NULL,
+                locked_by = NULL,
+                lock_version = lock_version + 1,
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $2 AND status = 'failed'
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok(row) => map_row(&row),
+            Err(sqlx::Error::RowNotFound) => Err(IntentRebaseError::StorageError(format!(
+                "Outbox record {} is not failed or not found for tenant {}",
+                id, tenant_id
+            ))),
+            Err(e) => Err(IntentRebaseError::StorageError(format!(
+                "replay failed outbox record: {}",
+                e
+            ))),
+        }
+    }
+
     async fn list_distinct_pending_tenants(&self) -> Result<Vec<Uuid>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
@@ -890,6 +1025,84 @@ mod tests {
         assert_eq!(rescheduled.locked_at, None);
         assert_eq!(rescheduled.locked_by, None);
         assert_eq!(rescheduled.lock_version, 2); // claim + reschedule
+    }
+
+    #[tokio::test]
+    async fn test_list_failed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let other_tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant, intent, sub);
+        let r2 = sample_record(tenant, intent, sub);
+        let r3 = sample_record(other_tenant, intent, sub);
+
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.create(r3.clone()).await.unwrap();
+
+        repo.mark_failed(r1.id, tenant, "boom".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r3.id, other_tenant, "bang".to_string())
+            .await
+            .unwrap();
+
+        let failed = repo.list_failed(tenant, 10).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].id, r1.id);
+        assert_eq!(failed[0].status, WebhookOutboxStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_replay_failed() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let replayed = repo.replay_failed(record.id, tenant).await.unwrap();
+        assert_eq!(replayed.status, WebhookOutboxStatus::Pending);
+        assert_eq!(replayed.attempt_count, 0);
+        assert_eq!(replayed.last_error, None);
+        assert_eq!(replayed.locked_at, None);
+        assert_eq!(replayed.locked_by, None);
+        assert_eq!(replayed.lock_version, 2); // create + mark_failed + replay
+    }
+
+    #[tokio::test]
+    async fn test_replay_failed_idempotency() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+        repo.mark_failed(record.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        // First replay succeeds
+        let _ = repo.replay_failed(record.id, tenant).await.unwrap();
+
+        // Second replay fails because status is no longer Failed
+        let err = repo.replay_failed(record.id, tenant).await.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::StorageError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_replay_non_failed_fails() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let record = sample_record(tenant, Uuid::new_v4(), Uuid::new_v4());
+        repo.create(record.clone()).await.unwrap();
+
+        // Record is still Pending, not Failed
+        let err = repo.replay_failed(record.id, tenant).await.unwrap_err();
+        assert!(matches!(err, IntentRebaseError::StorageError(_)));
     }
 
     #[tokio::test]

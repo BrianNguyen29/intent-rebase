@@ -45,6 +45,7 @@ pub fn build_router_with_jwt_auth(
     webhook_subscription_repo: Option<
         Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
     >,
+    webhook_outbox_repo: Option<Arc<dyn crate::webhook_outbox_repo::WebhookOutboxRepository>>,
 ) -> Router {
     let router = build_router(
         service,
@@ -63,6 +64,7 @@ pub fn build_router_with_jwt_auth(
         None,
         None,
         webhook_subscription_repo,
+        webhook_outbox_repo,
     );
 
     // Apply JWT middleware
@@ -98,6 +100,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
     webhook_subscription_repo: Option<
         Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
     >,
+    webhook_outbox_repo: Option<Arc<dyn crate::webhook_outbox_repo::WebhookOutboxRepository>>,
 ) -> Router {
     // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -123,6 +126,7 @@ pub fn build_router_with_sql_audit_and_approval_jwt(
         propagation_record_repo,
         rls_pool,
         webhook_subscription_repo,
+        webhook_outbox_repo,
     );
 
     // Apply JWT middleware

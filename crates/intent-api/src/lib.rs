@@ -71,6 +71,9 @@ pub mod webhook_subscription_repo;
 /// Webhook outbox worker (Phase 4a Slice 2 — bounded local-dev worker)
 pub mod webhook_outbox_worker;
 
+/// Webhook outbox DLQ handlers (Slice 5b — bounded local-dev failed-status DLQ)
+pub mod webhook_outbox_dlq_handlers;
+
 /// Webhook HMAC signing (Phase 4a Slice 3 — bounded local-dev signing)
 pub mod webhook_hmac;
 
@@ -195,7 +198,8 @@ pub use types::{
     ListForensicBundlesQuery, ListForensicBundlesResponse, ListGraphEdgesQuery,
     ListGraphNodesQuery, ListPendingApprovalRequestsQuery, ListPendingApprovalRequestsResponse,
     ListPolicySnapshotsQuery, ListPolicySnapshotsResponse, ListSideEffectsQuery,
-    ListSideEffectsResponse, ListWebhookSubscriptionsQuery, ListWebhookSubscriptionsResponse,
+    ListSideEffectsResponse, ListWebhookOutboxDlqQuery, ListWebhookOutboxDlqResponse,
+    ListWebhookSubscriptionsQuery, ListWebhookSubscriptionsResponse,
     OrchestrationCoordinationQuery, OrchestrationCoordinationResponse, OrchestrationDashboardQuery,
     OrchestrationDashboardResponse, OrchestrationDryRunProposalResponse,
     OrchestrationDryRunRequest, OrchestrationDryRunResponse, OrchestrationDryRunSummaryResponse,
@@ -204,10 +208,10 @@ pub use types::{
     PolicyGateMetadataResponse, PolicyGateSummaryResponse, PolicySnapshotResponse,
     PropagationStatusQuery, PropagationStatusResponse, PropagationSummary,
     ReapproveCompensationActionBody, RebaseApplyResponse, RebasePreviewResponse,
-    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse, RequestId,
-    RiskMetadataResponse, RunItemResultResponse, SideEffectSummary, TriggerReapprovalRequest,
-    TriggerReapprovalResponse, UpdateWebhookSubscriptionRequest, WaiveCompensationActionBody,
-    WebhookSubscriptionResponse,
+    RebaseSimulationQuery, RejectApprovalRequestBody, ReplayRequest, ReplayResponse,
+    ReplayWebhookOutboxDlqQuery, ReplayWebhookOutboxDlqResponse, RequestId, RiskMetadataResponse,
+    RunItemResultResponse, SideEffectSummary, TriggerReapprovalRequest, TriggerReapprovalResponse,
+    UpdateWebhookSubscriptionRequest, WaiveCompensationActionBody, WebhookSubscriptionResponse,
 };
 
 // Re-export approval invalidation helpers for backward compatibility
@@ -306,6 +310,9 @@ pub struct AppState {
     /// 503 or empty list as appropriate. NOT production-ready.
     pub webhook_subscription_repo:
         Option<Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>>,
+    /// Slice 5b (bounded local-dev): Webhook outbox repository for DLQ
+    /// listing and replay. When None, DLQ endpoints return empty list or 503.
+    pub webhook_outbox_repo: Option<Arc<dyn crate::webhook_outbox_repo::WebhookOutboxRepository>>,
     pub start_time: Instant,
 }
 

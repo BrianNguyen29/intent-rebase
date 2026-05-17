@@ -378,6 +378,7 @@ fn build_inmemory_router() -> Router {
         None, // propagation_record_repo: None for in-memory mode (Slice 1 bounded)
         None, // rls_pool: None for in-memory mode
         None, // webhook_subscription_repo: None for in-memory mode (Slice 4b bounded)
+        None, // webhook_outbox_repo: None for in-memory mode (Slice 5b bounded)
     )
 }
 
@@ -558,6 +559,7 @@ async fn build_sql_router_with_consumer_jwt(
         Some(rls_pool),
         policy_snapshot_repo.clone(),
         None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
+        None, // webhook_outbox_repo: local-dev only, not wired in main.rs yet
     );
 
     Ok((
@@ -731,6 +733,7 @@ async fn build_sql_router_with_consumer_impl(
         Some(rls_pool),
         policy_snapshot_repo.clone(),
         None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
+        None, // webhook_outbox_repo: local-dev only, not wired in main.rs yet
     );
 
     Ok((

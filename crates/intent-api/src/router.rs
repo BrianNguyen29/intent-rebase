@@ -63,6 +63,7 @@ pub fn build_router(
     webhook_subscription_repo: Option<
         Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
     >,
+    webhook_outbox_repo: Option<Arc<dyn crate::webhook_outbox_repo::WebhookOutboxRepository>>,
 ) -> Router {
     let state = crate::AppState {
         service,
@@ -82,6 +83,7 @@ pub fn build_router(
         start_time: Instant::now(),
         rls_pool,
         webhook_subscription_repo,
+        webhook_outbox_repo,
     };
 
     Router::new()
@@ -379,6 +381,15 @@ pub fn build_router(
             "/webhooks/subscriptions/:id",
             delete(crate::webhook_subscription_handlers::delete_subscription),
         )
+        // Webhook outbox DLQ endpoints (Slice 5b — bounded local-dev failed-status DLQ)
+        .route(
+            "/webhooks/outbox/dlq",
+            get(crate::webhook_outbox_dlq_handlers::list_dlq),
+        )
+        .route(
+            "/webhooks/outbox/dlq/:id/replay",
+            post(crate::webhook_outbox_dlq_handlers::replay_dlq),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         // Trace context middleware must run AFTER request_id_middleware so that
@@ -427,6 +438,7 @@ pub fn build_router_with_sql_audit_and_approval(
     webhook_subscription_repo: Option<
         Arc<dyn crate::webhook_subscription_repo::WebhookSubscriptionRepository>,
     >,
+    webhook_outbox_repo: Option<Arc<dyn crate::webhook_outbox_repo::WebhookOutboxRepository>>,
 ) -> Router {
     // Construct SQL-backed audit and approval repositories from the pool
     let audit_service: Arc<dyn intent_rebase_types::AuditRepository> =
@@ -452,5 +464,6 @@ pub fn build_router_with_sql_audit_and_approval(
         propagation_record_repo,
         rls_pool,
         webhook_subscription_repo,
+        webhook_outbox_repo,
     )
 }

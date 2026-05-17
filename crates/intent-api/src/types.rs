@@ -2122,3 +2122,34 @@ fn format_action_decision(d: &OrchestrationActionDecision) -> String {
         OrchestrationActionDecision::NotFound => "not_found".to_string(),
     }
 }
+
+// =============================================================================
+// Webhook Outbox DLQ Types (Slice 5b — bounded local-dev failed-status DLQ)
+// =============================================================================
+
+/// Query parameters for listing webhook outbox DLQ (failed) records.
+#[derive(Debug, Deserialize)]
+pub struct ListWebhookOutboxDlqQuery {
+    pub tenant_id: Uuid,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+/// Response for listing webhook outbox DLQ records.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListWebhookOutboxDlqResponse {
+    pub records: Vec<crate::webhook_outbox_repo::WebhookOutboxRecord>,
+    pub total: usize,
+}
+
+/// Query parameters for replaying a webhook outbox DLQ record.
+#[derive(Debug, Deserialize)]
+pub struct ReplayWebhookOutboxDlqQuery {
+    pub tenant_id: Uuid,
+}
+
+/// Response for replaying a webhook outbox DLQ record.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReplayWebhookOutboxDlqResponse {
+    pub record: crate::webhook_outbox_repo::WebhookOutboxRecord,
+}
