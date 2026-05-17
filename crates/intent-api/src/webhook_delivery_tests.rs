@@ -496,6 +496,9 @@ async fn test_dispatch_records_attempt_and_acknowledged_outcome() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -536,6 +539,9 @@ async fn test_dispatch_records_attempt_and_failed_outcome() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -579,6 +585,9 @@ async fn test_dispatch_records_network_error_as_failed() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -618,6 +627,9 @@ async fn test_dispatch_no_matching_record_skips_subscription() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -656,6 +668,9 @@ async fn test_dispatch_wrong_tenant_no_attempt() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -941,6 +956,9 @@ async fn test_dispatch_rate_limited_outcome() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -990,6 +1008,9 @@ async fn test_dispatch_multiple_subscriptions() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/a".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let sub_b = WebhookSubscription {
         id: Uuid::new_v4(),
@@ -998,6 +1019,9 @@ async fn test_dispatch_multiple_subscriptions() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/b".to_string(),
         downstream_system_id: Some("system-b".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub_a);
@@ -1045,6 +1069,9 @@ async fn test_dispatch_retry_transient_success() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -1089,6 +1116,9 @@ async fn test_dispatch_retry_exhaustion() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);
@@ -1143,6 +1173,9 @@ async fn test_dispatch_no_retry_4xx() {
         subscription_id: Uuid::new_v4(),
         webhook_url: "http://localhost:59999/callback".to_string(),
         downstream_system_id: Some("system-a".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(sub);

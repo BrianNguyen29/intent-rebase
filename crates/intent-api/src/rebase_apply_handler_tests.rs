@@ -659,6 +659,9 @@ async fn test_create_propagation_signals_webhook_enabled_wiremock_dispatch() {
         subscription_id: Uuid::new_v4(),
         webhook_url: format!("{}/webhook", mock_server.uri()),
         downstream_system_id: Some("workflow-runner-wiremock".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(subscription);
@@ -755,6 +758,9 @@ async fn test_create_propagation_signals_webhook_enabled_wiremock_500_failure() 
         subscription_id: Uuid::new_v4(),
         webhook_url: format!("{}/webhook", mock_server.uri()),
         downstream_system_id: Some("workflow-runner-wiremock-500".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(subscription);
@@ -862,6 +868,9 @@ async fn test_create_propagation_signals_with_outbox_repo() {
         subscription_id: Uuid::new_v4(),
         webhook_url: format!("{}/webhook", mock_server.uri()),
         downstream_system_id: Some("workflow-runner-outbox".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(subscription);
@@ -969,6 +978,9 @@ async fn test_create_propagation_signals_without_outbox_repo_unchanged() {
         subscription_id: Uuid::new_v4(),
         webhook_url: format!("{}/webhook", mock_server.uri()),
         downstream_system_id: Some("workflow-runner-no-outbox".to_string()),
+        status: "active".to_string(),
+        max_attempts: 3,
+        event_types: vec!["intent_changed".to_string()],
     };
     let resolver = InMemoryWebhookSubscriptionResolver::new();
     resolver.add(subscription);

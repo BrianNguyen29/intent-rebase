@@ -474,7 +474,7 @@ pub async fn send_webhook_with_retries(
 // Subscription Resolver (minimal scaffolding)
 // =============================================================================
 
-/// Minimal webhook subscription record (B1 schema mirror).
+/// Minimal webhook subscription record (B1 schema mirror + Slice 4a alignment).
 #[derive(Debug, Clone)]
 pub struct WebhookSubscription {
     pub id: Uuid,
@@ -483,6 +483,12 @@ pub struct WebhookSubscription {
     pub subscription_id: Uuid,
     pub webhook_url: String,
     pub downstream_system_id: Option<String>,
+    /// Subscription lifecycle status: active, paused, disabled (Slice 4a).
+    pub status: String,
+    /// Max delivery attempts for this subscription (Slice 4a).
+    pub max_attempts: i32,
+    /// Event types this subscription receives (Slice 4a).
+    pub event_types: Vec<String>,
 }
 
 /// Resolver for webhook subscriptions by intent.
@@ -577,7 +583,8 @@ impl WebhookSubscriptionResolver for SqlxWebhookSubscriptionResolver {
     ) -> Result<Vec<WebhookSubscription>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, tenant_id, intent_id, subscription_id, webhook_url, downstream_system_id
+            SELECT id, tenant_id, intent_id, subscription_id, webhook_url, downstream_system_id,
+                   status, max_attempts, event_types
             FROM webhook_subscriptions
             WHERE tenant_id = $1 AND intent_id = $2
             "#,
@@ -615,6 +622,14 @@ impl WebhookSubscriptionResolver for SqlxWebhookSubscriptionResolver {
                     IntentRebaseError::StorageError(format!("Invalid webhook_url column: {}", e))
                 })?,
                 downstream_system_id: row.try_get("downstream_system_id").ok(),
+                // Slice 4a columns: fallback to local-dev-safe defaults if not present
+                status: row
+                    .try_get("status")
+                    .unwrap_or_else(|_| "active".to_string()),
+                max_attempts: row.try_get("max_attempts").unwrap_or(3),
+                event_types: row
+                    .try_get("event_types")
+                    .unwrap_or_else(|_| vec!["intent_changed".to_string()]),
             });
         }
 

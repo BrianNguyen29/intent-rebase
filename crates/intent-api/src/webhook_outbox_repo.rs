@@ -114,9 +114,8 @@ impl WebhookOutboxRecord {
     /// Builder-style helper to set the webhook URL.
     ///
     /// Useful when constructing records before the subscription CRUD API
-    /// provides URL resolution. The URL is **not** persisted by the SQLx
-    /// repository because migration 019 does not include a `webhook_url`
-    /// column; it is kept in-memory only.
+    /// provides URL resolution. As of migration 020, `webhook_url` is
+    /// persisted by the SQLx repository when present.
     pub fn with_webhook_url(mut self, url: impl Into<String>) -> Self {
         self.webhook_url = Some(url.into());
         self
@@ -354,10 +353,9 @@ impl WebhookOutboxRepository for InMemoryWebhookOutboxRepository {
 /// Bounded local-dev foundation: uses `sqlx::query` (not `query!`) so no
 /// compile-time DB or offline macros are required.
 ///
-/// **Non-production caveat:** migration 019 does not include a `webhook_url`
-/// column, so `webhook_url` on returned records is always `None`. This
-/// repository is not production-ready and requires subscription CRUD + retry
-/// design before being wired into the propagation path.
+/// **Non-production caveat:** `webhook_url` is persisted as of migration 020,
+/// but this repository remains local-dev only and requires subscription CRUD +
+/// retry design before being wired into the production propagation path.
 pub struct SqlxWebhookOutboxRepository {
     pool: sqlx::PgPool,
 }
@@ -412,8 +410,7 @@ fn map_row(row: &sqlx::postgres::PgRow) -> Result<WebhookOutboxRecord, IntentReb
         payload: row
             .try_get::<serde_json::Value, _>("payload")
             .map_err(|e| map_err_column("payload", e))?,
-        // Migration 019 does not include webhook_url; adapt repository to current schema.
-        webhook_url: None,
+        webhook_url: row.try_get("webhook_url").ok(),
         status: status_from_str(
             row.try_get::<String, _>("status")
                 .map_err(|e| map_err_column("status", e))?
@@ -454,14 +451,14 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
             r#"
             INSERT INTO webhook_outbox (
                 id, tenant_id, intent_id, subscription_id, event_type, payload,
-                status, attempt_count, max_attempts, scheduled_at,
+                webhook_url, status, attempt_count, max_attempts, scheduled_at,
                 locked_at, locked_by, delivered_at, last_error,
                 lock_version, created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10,
-                $11, $12, $13, $14,
-                $15, $16, $17
+                $7, $8, $9, $10, $11,
+                $12, $13, $14, $15,
+                $16, $17, $18
             )
             "#,
         )
@@ -471,6 +468,7 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         .bind(record.subscription_id)
         .bind(&record.event_type)
         .bind(&record.payload)
+        .bind(record.webhook_url.as_ref())
         .bind(status_to_str(&record.status))
         .bind(record.attempt_count)
         .bind(record.max_attempts)
@@ -851,6 +849,34 @@ mod tests {
         .with_webhook_url("https://example.com/hook");
         assert_eq!(
             record.webhook_url,
+            Some("https://example.com/hook".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_repo_preserves_webhook_url() {
+        let repo = InMemoryWebhookOutboxRepository::new();
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+        let record = WebhookOutboxRecord::new(
+            tenant,
+            intent,
+            sub,
+            "intent_changed".to_string(),
+            serde_json::json!({"foo": "bar"}),
+            Some("https://example.com/hook".to_string()),
+        );
+
+        let created = repo.create(record.clone()).await.unwrap();
+        assert_eq!(
+            created.webhook_url,
+            Some("https://example.com/hook".to_string())
+        );
+
+        let fetched = repo.get(record.id, tenant).await.unwrap();
+        assert_eq!(
+            fetched.webhook_url,
             Some("https://example.com/hook".to_string())
         );
     }
