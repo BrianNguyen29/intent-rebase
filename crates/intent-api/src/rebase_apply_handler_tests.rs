@@ -9,6 +9,10 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
+// WEB-LOCAL-1b: Import outbox trait so test seam methods are in scope.
+#[cfg(test)]
+use crate::webhook_outbox_repo::WebhookOutboxRepository;
+
 #[cfg(feature = "jwt-auth")]
 use crate::test_helpers::create_test_optional_rls_claims;
 use crate::test_helpers::create_test_payload;
@@ -784,6 +788,203 @@ async fn test_create_propagation_signals_webhook_enabled_wiremock_500_failure() 
             .contains("retry exhausted"),
         "failure_reason should indicate retry exhaustion, got: {:?}",
         updated.failure_reason
+    );
+
+    // env var cleaned up when lock is dropped at end of scope
+}
+
+/// WEB-LOCAL-1b: Verify outbox records are created alongside direct dispatch
+/// when an outbox repository is provided via the test seam.
+#[tokio::test]
+async fn test_create_propagation_signals_with_outbox_repo() {
+    use crate::webhook_delivery::{InMemoryWebhookSubscriptionResolver, WebhookSubscription};
+    use crate::webhook_outbox_repo::{InMemoryWebhookOutboxRepository, WebhookOutboxStatus};
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let _guard = WEBHOOK_ENV_LOCK.lock().await;
+    std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-outbox".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // In-memory outbox repo (no live DB required)
+    let outbox_repo = InMemoryWebhookOutboxRepository::new();
+
+    // Create a subscription pointing to the wiremock server
+    let subscription = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: format!("{}/webhook", mock_server.uri()),
+        downstream_system_id: Some("workflow-runner-outbox".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(subscription);
+
+    // Call with injected outbox repo through the test seam
+    crate::propagation_signals::create_propagation_signals_after_apply_with_resolver_and_outbox(
+        &state,
+        intent_id,
+        tenant_id,
+        2,
+        &resolver,
+        Some(&outbox_repo),
+    )
+    .await;
+
+    // Verify propagation record was updated to acknowledged (direct dispatch still works)
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Acknowledged,
+        "Propagation record should be acknowledged after successful webhook delivery"
+    );
+
+    // Verify outbox record was created
+    let pending = outbox_repo.list_pending(tenant_id, 10).await.unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "Exactly one outbox record should be created for the subscription"
+    );
+    let outbox_record = &pending[0];
+    assert_eq!(outbox_record.event_type, "intent_changed");
+    assert_eq!(
+        outbox_record.webhook_url,
+        Some(format!("{}/webhook", mock_server.uri()))
+    );
+    assert_eq!(outbox_record.status, WebhookOutboxStatus::Pending);
+    assert_eq!(outbox_record.tenant_id, tenant_id);
+    assert_eq!(outbox_record.intent_id, intent_id);
+
+    // env var cleaned up when lock is dropped at end of scope
+}
+
+/// WEB-LOCAL-1b: Verify existing behavior is unchanged when no outbox repo is supplied.
+#[tokio::test]
+async fn test_create_propagation_signals_without_outbox_repo_unchanged() {
+    use crate::webhook_delivery::{InMemoryWebhookSubscriptionResolver, WebhookSubscription};
+    use intent_rebase_types::{ActorRef, CreateIntentRequest, SourceRef};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let _guard = WEBHOOK_ENV_LOCK.lock().await;
+    std::env::set_var(crate::webhook_delivery::WEBHOOK_DELIVERY_ENV_VAR, "true");
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webhook"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let state = create_test_service();
+    let tenant_id = Uuid::new_v4();
+    let create_request = CreateIntentRequest {
+        tenant_id: Some(tenant_id),
+        workflow_id: Uuid::new_v4(),
+        source_refs: vec![SourceRef {
+            ref_type: "spec".to_string(),
+            id: "spec://test".to_string(),
+        }],
+        payload: create_test_payload(),
+        created_by: ActorRef {
+            actor_type: "user".to_string(),
+            actor_id: "test-user".to_string(),
+        },
+        tags: vec!["test".to_string()],
+    };
+
+    let intent_id = state
+        .service
+        .create_intent(create_request)
+        .await
+        .unwrap()
+        .intent_id;
+
+    // Pre-seed a propagation record
+    let repo = state.propagation_record_repo.as_ref().unwrap();
+    let record = intent_rebase_types::PropagationRecord::new(
+        tenant_id,
+        intent_id,
+        "workflow-runner-no-outbox".to_string(),
+    );
+    let record_id = record.id;
+    repo.create_record(record).await.unwrap();
+
+    // Create a subscription pointing to the wiremock server
+    let subscription = WebhookSubscription {
+        id: Uuid::new_v4(),
+        tenant_id,
+        intent_id,
+        subscription_id: Uuid::new_v4(),
+        webhook_url: format!("{}/webhook", mock_server.uri()),
+        downstream_system_id: Some("workflow-runner-no-outbox".to_string()),
+    };
+    let resolver = InMemoryWebhookSubscriptionResolver::new();
+    resolver.add(subscription);
+
+    // Call WITHOUT outbox repo (existing test seam)
+    crate::propagation_signals::create_propagation_signals_after_apply_with_resolver(
+        &state, intent_id, tenant_id, 2, &resolver,
+    )
+    .await;
+
+    // Verify propagation record was updated to acknowledged
+    let updated = repo.get_record(record_id, tenant_id).await.unwrap();
+    assert_eq!(
+        updated.status,
+        intent_rebase_types::PropagationStatus::Acknowledged,
+        "Propagation record should be acknowledged when no outbox repo is supplied"
     );
 
     // env var cleaned up when lock is dropped at end of scope

@@ -644,6 +644,31 @@ pub async fn dispatch_webhooks_for_intent(
     version: i32,
     sleeper: &dyn Sleeper,
 ) {
+    dispatch_webhooks_for_intent_with_outbox(
+        repo, sender, resolver, tenant_id, intent_id, version, sleeper, None,
+    )
+    .await;
+}
+
+/// Dispatch webhooks with optional outbox record creation.
+///
+/// When `outbox_repo` is `Some`, creates a `WebhookOutboxRecord` for each
+/// subscription before attempting delivery. This provides a durable trace of
+/// pending deliveries without changing direct-dispatch behavior.
+///
+/// **Non-production caveat:** outbox creation is best-effort and logged only on
+/// failure. Full outbox-worker coordination (claim/deliver/mark) is future scope.
+#[allow(clippy::too_many_arguments)]
+pub async fn dispatch_webhooks_for_intent_with_outbox(
+    repo: &Arc<dyn PropagationRecordRepository>,
+    sender: &dyn WebhookSender,
+    resolver: &dyn WebhookSubscriptionResolver,
+    tenant_id: Uuid,
+    intent_id: Uuid,
+    version: i32,
+    sleeper: &dyn Sleeper,
+    outbox_repo: Option<&dyn crate::webhook_outbox_repo::WebhookOutboxRepository>,
+) {
     let records = match repo.list_by_intent(intent_id, tenant_id).await {
         Ok(recs) => recs,
         Err(e) => {
@@ -702,6 +727,29 @@ pub async fn dispatch_webhooks_for_intent(
             subscription_id: sub.subscription_id,
         });
         let headers = WebhookHeaders::new(payload.delivery_id);
+
+        // WEB-LOCAL-1b: Best-effort outbox record creation alongside direct dispatch.
+        if let Some(outbox) = outbox_repo {
+            let payload_value = serde_json::to_value(&payload).unwrap_or_else(|e| {
+                tracing::warn!("Failed to serialize payload for outbox: {}", e);
+                serde_json::json!({})
+            });
+            let outbox_record = crate::webhook_outbox_repo::WebhookOutboxRecord::new(
+                tenant_id,
+                intent_id,
+                sub.subscription_id,
+                payload.event_type.clone(),
+                payload_value,
+                Some(sub.webhook_url.clone()),
+            );
+            if let Err(e) = outbox.create(outbox_record).await {
+                tracing::warn!(
+                    "Failed to create outbox record for subscription {}: {}",
+                    sub.subscription_id,
+                    e
+                );
+            }
+        }
 
         let result =
             send_webhook_with_retries(sender, &sub.webhook_url, &payload, &headers, sleeper).await;

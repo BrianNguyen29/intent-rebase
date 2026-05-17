@@ -55,6 +55,7 @@ pub(crate) async fn create_propagation_signals_after_apply(
         tenant_id,
         to_version,
         resolver.as_ref(),
+        None,
     )
     .await;
 }
@@ -70,8 +71,34 @@ pub(crate) async fn create_propagation_signals_after_apply_with_resolver(
     to_version: i32,
     resolver: &dyn crate::webhook_delivery::WebhookSubscriptionResolver,
 ) {
-    create_propagation_signals_after_apply_inner(state, intent_id, tenant_id, to_version, resolver)
-        .await;
+    create_propagation_signals_after_apply_inner(
+        state, intent_id, tenant_id, to_version, resolver, None,
+    )
+    .await;
+}
+
+/// Test-only seam that also injects an optional `WebhookOutboxRepository`.
+///
+/// WEB-LOCAL-1b: allows tests to verify outbox record creation alongside the
+/// existing dispatch path without modifying `AppState` or `main.rs`.
+#[cfg(test)]
+pub(crate) async fn create_propagation_signals_after_apply_with_resolver_and_outbox(
+    state: &AppState,
+    intent_id: Uuid,
+    tenant_id: Uuid,
+    to_version: i32,
+    resolver: &dyn crate::webhook_delivery::WebhookSubscriptionResolver,
+    outbox_repo: Option<&dyn crate::webhook_outbox_repo::WebhookOutboxRepository>,
+) {
+    create_propagation_signals_after_apply_inner(
+        state,
+        intent_id,
+        tenant_id,
+        to_version,
+        resolver,
+        outbox_repo,
+    )
+    .await;
 }
 
 async fn create_propagation_signals_after_apply_inner(
@@ -80,6 +107,7 @@ async fn create_propagation_signals_after_apply_inner(
     tenant_id: Uuid,
     to_version: i32,
     resolver: &dyn crate::webhook_delivery::WebhookSubscriptionResolver,
+    outbox_repo: Option<&dyn crate::webhook_outbox_repo::WebhookOutboxRepository>,
 ) {
     let repo = match &state.propagation_record_repo {
         Some(repo) => repo,
@@ -150,7 +178,7 @@ async fn create_propagation_signals_after_apply_inner(
     // When disabled (default), this block is skipped and no delivery attempts are recorded.
     if crate::webhook_delivery::is_webhook_delivery_enabled() {
         let client = crate::webhook_delivery::build_webhook_client();
-        crate::webhook_delivery::dispatch_webhooks_for_intent(
+        crate::webhook_delivery::dispatch_webhooks_for_intent_with_outbox(
             repo,
             &client,
             resolver,
@@ -158,6 +186,7 @@ async fn create_propagation_signals_after_apply_inner(
             intent_id,
             to_version,
             &crate::webhook_delivery::TokioSleeper,
+            outbox_repo,
         )
         .await;
     }
