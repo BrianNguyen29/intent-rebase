@@ -482,8 +482,8 @@ WHERE id = '<record-uuid>' AND tenant_id = '<tenant-uuid>' AND status = 'claimed
 Is the failure transient (5xx, timeout, 429 after window)?
   ├── YES → Is this a single record or multiple records?
   │           ├── Single → Use single replay API (Step 3a)
-  │           └── Multiple → Batch replay is NOT supported in this slice
-  │                         → Replay records one at a time, or script sequential calls
+  │           └── Multiple → Use bounded bulk replay API (Step 3b)
+  │                         → Hard cap of 100 records per call; no UI
   └── NO (4xx, auth error, contract mismatch)
       → Fix root cause FIRST
       → Then replay
@@ -499,7 +499,25 @@ POST /webhooks/outbox/dlq/<record-id>/replay?tenant_id=<uuid>&replayed_by=operat
 - `replay_count` increments, `replayed_at` set to now, `replayed_by` set to operator ID
 - Worker will pick up the record on next poll if `INTENT_API_WEBHOOK_OUTBOX_WORKER=true`
 
-**3b — Verify Replay**
+**3b — Bulk Replay (Phase 2.2 — bounded local-dev)**
+```bash
+POST /webhooks/outbox/dlq/bulk-replay
+Content-Type: application/json
+
+{
+  "tenant_id": "<uuid>",
+  "max_records": 50,
+  "replayed_by": "operator-<id>"
+}
+```
+
+- Replays up to `max_records` failed records (hard cap of 100 enforced server-side regardless of request value)
+- Uses existing `replay_failed` per-record guard; only `Failed` records are replayed
+- Returns `replayed`, `skipped`, and `errors` counts plus the list of successfully replayed records
+- Records no longer in `Failed` status when replay is attempted are counted as `skipped` (race condition)
+- **Not a production batch operator tool:** no UI, no staging/production validation, no automatic scheduling
+
+**3c — Verify Replay**
 ```bash
 GET /webhooks/outbox/dlq/replayed?tenant_id=<uuid>&limit=10&since=<rfc3339>
 ```
@@ -508,10 +526,11 @@ GET /webhooks/outbox/dlq/replayed?tenant_id=<uuid>&limit=10&since=<rfc3339>
 - Use `since` to narrow to recent replays
 - **No production audit trail claim:** this query is a convenience helper, not a compliance-grade audit log
 
-**3c — Replay Safety Rules**
+**3d — Replay Safety Rules**
 - **Do NOT replay** if the downstream URL or payload contract is known to be broken
 - **Do NOT replay** more than once without verifying downstream recovery
 - **Do NOT replay** poison messages (records that consistently fail with non-retryable errors)
+- **Do NOT use bulk replay** as an automatic retry mechanism — it is a manual operator action
 
 ---
 
@@ -578,7 +597,7 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 - **No external review:** this runbook has not been reviewed by an external SRE or operations team
 - **No staging/production validation:** the workflow described has not been executed in a staging or production environment
 - **No replay UI:** all replay actions require direct API calls or database access
-- **No bulk replay:** records must be replayed individually; scripting is the only batch mechanism
+- **Bulk replay is bounded local-dev only:** `POST /webhooks/outbox/dlq/bulk-replay` has a hard cap of 100 records per call, no UI, no staging/production validation, and no automatic scheduling. It is a convenience API, not a production batch operator tool
 - **No automated stale-claim recovery:** manual SQL or future background job required
 - **No retention enforcement:** `WEBHOOK_OUTBOX_RETENTION_DAYS` is documented but not wired to any purge logic
 - **Production readiness blockers remain open:** WEB-EXT-1 (secret manager), WEB-EXT-2 (staging/prod evidence), WEB-EXT-3 (external review/pen-test) are all still blocked

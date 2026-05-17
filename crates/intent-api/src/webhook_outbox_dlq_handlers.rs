@@ -17,6 +17,7 @@ use intent_rebase_types::IntentRebaseError;
 use uuid::Uuid;
 
 use crate::types::{
+    BulkReplayWebhookOutboxDlqRequest, BulkReplayWebhookOutboxDlqResponse,
     ListWebhookOutboxDlqQuery, ListWebhookOutboxDlqResponse, ListWebhookOutboxReplayedQuery,
     ListWebhookOutboxReplayedResponse, ReplayWebhookOutboxDlqQuery, ReplayWebhookOutboxDlqResponse,
 };
@@ -138,6 +139,81 @@ pub async fn list_replayed(
         }
         Err(e) => Err(ApiErrorResponse(IntentRebaseError::Internal(e.to_string()))),
     }
+}
+
+// =============================================================================
+// POST /webhooks/outbox/dlq/bulk-replay
+// =============================================================================
+
+/// Hard cap on the number of records that can be replayed in a single bulk replay call.
+const BULK_REPLAY_HARD_CAP: i64 = 100;
+
+/// Bulk replay failed webhook outbox records for a tenant.
+///
+/// Phase 2.2: bounded local-dev bulk replay. Lists failed records for the tenant
+/// (up to `max_records` or a hard cap of 100), then replays each one individually
+/// using the existing `replay_failed` repository method. Only `Failed` records are
+/// replayed; records that are no longer `Failed` when the replay is attempted are
+/// counted as skipped (race condition).
+///
+/// Returns 200 OK with replayed/skipped/error counts and the list of successfully
+/// replayed records. If the outbox repository is not configured, returns an error.
+pub async fn bulk_replay_dlq(
+    State(state): State<AppState>,
+    Json(body): Json<BulkReplayWebhookOutboxDlqRequest>,
+) -> Result<(StatusCode, Json<BulkReplayWebhookOutboxDlqResponse>), ApiErrorResponse> {
+    let repo = match &state.webhook_outbox_repo {
+        Some(r) => r,
+        None => {
+            return Err(ApiErrorResponse(IntentRebaseError::Internal(
+                "Webhook outbox repository is not configured".to_string(),
+            )));
+        }
+    };
+
+    let limit = body.max_records.unwrap_or(50).min(BULK_REPLAY_HARD_CAP);
+    let failed = match repo.list_failed(body.tenant_id, limit).await {
+        Ok(records) => records,
+        Err(IntentRebaseError::StorageError(msg)) => {
+            return Err(ApiErrorResponse(IntentRebaseError::StorageError(msg)));
+        }
+        Err(e) => {
+            return Err(ApiErrorResponse(IntentRebaseError::Internal(e.to_string())));
+        }
+    };
+
+    let mut replayed_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut error_count = 0usize;
+    let mut replayed_records = Vec::new();
+
+    for record in failed {
+        match repo
+            .replay_failed(record.id, body.tenant_id, body.replayed_by.clone())
+            .await
+        {
+            Ok(replayed) => {
+                replayed_count += 1;
+                replayed_records.push(replayed);
+            }
+            Err(IntentRebaseError::StorageError(ref msg)) if msg.contains("is not failed") => {
+                skipped_count += 1;
+            }
+            Err(_) => {
+                error_count += 1;
+            }
+        }
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(BulkReplayWebhookOutboxDlqResponse {
+            replayed: replayed_count,
+            skipped: skipped_count,
+            errors: error_count,
+            records: replayed_records,
+        }),
+    ))
 }
 
 // =============================================================================
@@ -1018,5 +1094,448 @@ mod tests {
             .unwrap();
         let parsed: ListWebhookOutboxReplayedResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed.total, 0);
+    }
+
+    // =============================================================================
+    // Phase 2.2 — Bulk replay handler tests
+    // =============================================================================
+
+    #[tokio::test]
+    async fn test_bulk_replay_replays_multiple_failed_records() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r1 = sample_record(tenant, intent, sub);
+        let r2 = sample_record(tenant, intent, sub);
+        repo.create(r1.clone()).await.unwrap();
+        repo.create(r2.clone()).await.unwrap();
+        repo.mark_failed(r1.id, tenant, "e1".to_string())
+            .await
+            .unwrap();
+        repo.mark_failed(r2.id, tenant, "e2".to_string())
+            .await
+            .unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: None,
+            replayed_by: Some("operator-bulk".to_string()),
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 2);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+        assert_eq!(parsed.records.len(), 2);
+        assert_eq!(parsed.records[0].status, WebhookOutboxStatus::Pending);
+        assert_eq!(parsed.records[1].status, WebhookOutboxStatus::Pending);
+
+        // Verify replay metadata
+        for record in &parsed.records {
+            assert_eq!(record.replay_count, 1);
+            assert!(record.replayed_at.is_some());
+            assert_eq!(record.replayed_by, Some("operator-bulk".to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bulk_replay_empty_when_no_failures() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: None,
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 0);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+        assert!(parsed.records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_bulk_replay_tenant_boundary() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant_a, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant_a, "boom".to_string())
+            .await
+            .unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant_b,
+            max_records: None,
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 0);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bulk_replay_cap_enforcement() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        // Create 5 failed records
+        for _ in 0..5 {
+            let r = sample_record(tenant, intent, sub);
+            repo.create(r.clone()).await.unwrap();
+            repo.mark_failed(r.id, tenant, "err".to_string())
+                .await
+                .unwrap();
+        }
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        // Request max 2 — should only replay 2
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: Some(2),
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 2);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+
+        // Verify 3 remain failed
+        let remaining = repo.list_failed(tenant, 10).await.unwrap();
+        assert_eq!(remaining.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_bulk_replay_idempotency_second_call_skips() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let r = sample_record(tenant, intent, sub);
+        repo.create(r.clone()).await.unwrap();
+        repo.mark_failed(r.id, tenant, "timeout".to_string())
+            .await
+            .unwrap();
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        // First bulk replay
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: None,
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 1);
+        assert_eq!(parsed.skipped, 0);
+
+        // Second bulk replay — record is no longer Failed, so list_failed returns empty
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: None,
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 0);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bulk_replay_mixed_status_only_replays_failed() {
+        let mut state = create_test_service();
+        let repo = Arc::new(InMemoryWebhookOutboxRepository::new());
+        state.webhook_outbox_repo = Some(repo.clone());
+        let tenant = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        let sub = Uuid::new_v4();
+
+        let failed = sample_record(tenant, intent, sub);
+        let pending = sample_record(tenant, intent, sub);
+        let delivered = sample_record(tenant, intent, sub);
+        repo.create(failed.clone()).await.unwrap();
+        repo.create(pending.clone()).await.unwrap();
+        repo.create(delivered.clone()).await.unwrap();
+        repo.mark_failed(failed.id, tenant, "err".to_string())
+            .await
+            .unwrap();
+        repo.mark_delivered(delivered.id, tenant).await.unwrap();
+        // pending stays pending
+
+        let app = crate::router::build_router(
+            state.service,
+            state.graph_service,
+            state.side_effect_service,
+            state.compensation_action_service,
+            state.orchestration_runtime,
+            state.orchestrator,
+            state.audit_service,
+            state.approval_request_repo,
+            state.policy_snapshot_repo,
+            state.event_publisher,
+            state.forensic_service,
+            state.forensic_archive_generator,
+            state.forensic_bundle_service,
+            state.propagation_record_repo.clone(),
+            state.rls_pool,
+            state.webhook_subscription_repo.clone(),
+            Some(repo.clone()),
+        );
+
+        let body = serde_json::to_vec(&BulkReplayWebhookOutboxDlqRequest {
+            tenant_id: tenant,
+            max_records: None,
+            replayed_by: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/outbox/dlq/bulk-replay")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: BulkReplayWebhookOutboxDlqResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.replayed, 1);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.errors, 0);
+        assert_eq!(parsed.records[0].id, failed.id);
+        assert_eq!(parsed.records[0].status, WebhookOutboxStatus::Pending);
     }
 }

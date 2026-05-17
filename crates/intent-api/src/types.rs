@@ -2177,3 +2177,32 @@ pub struct ListWebhookOutboxReplayedResponse {
     pub records: Vec<crate::webhook_outbox_repo::WebhookOutboxRecord>,
     pub total: usize,
 }
+
+/// Request body for bulk replaying failed webhook outbox records.
+///
+/// Phase 2.2: bounded local-dev bulk replay — hard cap enforced server-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkReplayWebhookOutboxDlqRequest {
+    pub tenant_id: Uuid,
+    /// Optional maximum records to replay in this call. Hard cap of 100 is enforced
+    /// regardless of the value provided.
+    #[serde(default)]
+    pub max_records: Option<i64>,
+    /// Optional actor identity for replay audit metadata.
+    #[serde(default)]
+    pub replayed_by: Option<String>,
+}
+
+/// Response for bulk replaying failed webhook outbox records.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BulkReplayWebhookOutboxDlqResponse {
+    /// Number of records successfully replayed (Failed → Pending).
+    pub replayed: usize,
+    /// Number of records skipped because they were no longer in Failed status
+    /// when the replay was attempted (race condition or already replayed).
+    pub skipped: usize,
+    /// Number of records that encountered an unexpected error during replay.
+    pub errors: usize,
+    /// The records that were successfully replayed.
+    pub records: Vec<crate::webhook_outbox_repo::WebhookOutboxRecord>,
+}
