@@ -188,10 +188,144 @@ filter subject: audit.events.v1.{tenant_id}.>
   - These tests validate `with_tenant_scope` through the real JetStream `process_one` path but do NOT claim production topology, ACLs, or certification
 
 **Out of scope / remains pending:**
-- Per-tenant JetStream streams (server-side subject isolation)
-- NATS user/subject ACLs
-- Production NATS topology changes
-- External security/SRE sign-off for NATS isolation
+- Per-tenant JetStream streams — 🟡 MIGRATION PATH DOCUMENTED (see below); server-side rollout pending and requires shared-stream replacement, not augmentation
+- NATS user/subject ACLs — 🔴 PENDING
+- Production NATS topology changes — 🔴 PENDING (blocked on A-03..A-05 external gates)
+- External security/SRE sign-off for NATS isolation — 🔴 PENDING
+
+---
+
+## Per-Tenant Stream Migration Path
+
+> **Status:** RUNBOOK DOCUMENTED — no code changes; not executed; not production-ready
+
+This section documents the path from the current **shared-stream architecture** to per-tenant JetStream streams. It is a planning and local-prep runbook only. No server-side rollout has been performed, and no production claim is made.
+
+### Current Architecture
+
+- **Shared stream:** `audit_events` with subject filter `audit.events.v1.>`
+- **Publisher subjects:** `audit.events.v1.<tenant_id>.<event_type>` (see `crates/intent-api/src/nats_event_publisher.rs`)
+- **Consumer guard:** `NatsPullConsumerAdapter::tenant_scope` rejects cross-tenant events before domain side effects (`process_one`)
+- **Stream initializer:** `JetStreamInitializer` creates the shared stream idempotently (see `crates/intent-api/src/nats_jetstream/stream.rs`)
+
+The shared stream stores all audit events for all tenants. The consumer-side guard provides bounded tenant isolation at the application layer, but it does **not** provide server-side subject isolation.
+
+### Subject-Filter Overlap / Duplication Risk
+
+JetStream stores a copy of every message in **each stream whose subject filter matches**. This means:
+
+- Shared stream filter: `audit.events.v1.>` — matches **all** tenant-scoped events
+- Per-tenant stream filter: `audit.events.v1.{tenant_id}.>` — matches **one** tenant's events
+
+If a per-tenant stream is added **alongside** the shared stream, every message will be stored in **both** streams. This is:
+
+- **Duplicate storage** with no retention benefit
+- **NOT additive isolation** — the shared stream still contains all tenant data
+- **A migration hazard** if operators assume per-tenant streams can be created incrementally without removing the shared stream
+
+> **Rule:** Per-tenant streams must **replace** or **narrow** the shared stream, not augment it.
+
+### Staged Migration Sequence
+
+#### Stage 1 — Local-Executable Prep (no running server changes)
+
+1. **Inventory:** List all active tenants and their `tenant_id` UUIDs.
+2. **Subject mapping:** For each tenant, define the per-tenant subject filter: `audit.events.v1.{tenant_id}.>`.
+3. **Stream config templates:** Prepare JetStream `Config` JSON files (or `nats stream add` commands) for each tenant stream.
+4. **Local validation:** Spin up a local NATS container (e.g., `docker compose -f infrastructure/local/docker-compose.yml up nats`) and validate configs with `nats-box`.
+5. **Consumer audit:** Identify all consumer groups that bind to `audit_events` and plan their migration to per-tenant streams.
+
+#### Stage 2 — Server-Side Rollout (requires coordination)
+
+Choose **one** of the following strategies:
+
+**Strategy A — Narrow then Add:**
+1. Narrow the shared `audit_events` stream filter to exclude tenant-scoped subjects (e.g., remove `audit.events.v1.>` and replace with non-tenant subjects only, if any exist).
+2. Create per-tenant streams with `audit.events.v1.{tenant}.>`.
+3. Migrate consumers.
+
+**Strategy B — Replace (recommended if no non-tenant subjects exist):**
+1. Create per-tenant streams with replica configs matching the shared stream.
+2. Start new consumer groups on per-tenant streams (dual-consume window).
+3. Verify message continuity on per-tenant streams.
+4. Stop and delete old consumer groups bound to `audit_events`.
+5. Delete the shared `audit_events` stream once confirmed empty / no active consumers.
+
+> **Caveat:** Both strategies require a coordinated rollout. There is no zero-downtime path without a dual-consume window and careful sequencing.
+
+#### Stage 3 — Consumer Migration
+
+1. Update consumer definitions to bind to the tenant-specific stream name (e.g., `audit_events_{tenant_id}`).
+2. Preserve `tenant_scope` as defense-in-depth: even with per-tenant streams, the consumer guard should still reject events where the embedded tenant claim does not match the expected tenant.
+3. Validate with local live integration tests: `cargo test -p intent-api --lib -- nats_jetstream::tests_live_integration --ignored -- --test-threads=1`
+
+#### Stage 4 — Shared Stream Removal & Verification
+
+1. Confirm no active consumers reference `audit_events`.
+2. Check stream info for pending messages; drain or ack as needed.
+3. Delete `audit_events` shared stream.
+4. Verify per-tenant stream info shows expected message counts.
+
+### External Blockers (cannot be closed locally)
+
+| Blocker | Why It Blocks Migration | Owner |
+|---------|------------------------|-------|
+| NATS ACL design for per-tenant service accounts | Per-tenant streams without ACLs do not prevent a compromised service from subscribing to another tenant's stream | Security / Platform |
+| External SRE sign-off for topology change | Stream deletion and consumer migration affect durability guarantees and observability baselines | SRE |
+| Staging environment with real multi-tenant load | Migration must be validated under load to prove no message loss or ordering violations | SRE / Backend Lead |
+| External security review | Per-tenant stream topology is part of the tenant isolation evidence packet | Security |
+
+### Illustrative Local-Dev Commands (not executed evidence)
+
+The commands below are illustrative examples for local development with `nats-box`. They are **not** evidence of a completed migration.
+
+```bash
+# 1. Inspect the current shared stream
+ docker run --rm --network local_default natsio/nats-box:latest \
+   nats stream info audit_events -s nats://nats:4222
+
+# 2. List current consumers on the shared stream
+ docker run --rm --network local_default natsio/nats-box:latest \
+   nats consumer ls audit_events -s nats://nats:4222
+
+# 3. Create a per-tenant stream (illustrative — DO NOT run alongside shared stream)
+ docker run --rm --network local_default natsio/nats-box:latest \
+   nats stream add audit_events_tenant_a \
+     --subjects="audit.events.v1.550e8400-e29b-41d4-a716-446655440000.>" \
+     --storage=file \
+     --retention=limits \
+     -s nats://nats:4222
+
+# 4. Verify per-tenant stream info
+ docker run --rm --network local_default natsio/nats-box:latest \
+   nats stream info audit_events_tenant_a -s nats://nats:4222
+
+# 5. Create a tenant-scoped consumer on the per-tenant stream
+ docker run --rm --network local_default natsio/nats-box:latest \
+   nats consumer add audit_events_tenant_a tenant-a-audit-consumer \
+     --filter="audit.events.v1.550e8400-e29b-41d4-a716-446655440000.>" \
+     --pull \
+     --ack=explicit \
+     --max-deliver=3 \
+     -s nats://nats:4222
+```
+
+> **Warning:** Running the per-tenant stream creation (step 3) while the shared `audit_events` stream still has filter `audit.events.v1.>` will cause **duplicate storage** of every matching message. Only execute after the shared stream filter has been narrowed or the shared stream has been removed.
+
+### What Is Preserved During Migration
+
+- `NatsPullConsumerAdapter::tenant_scope` remains active as a defense-in-depth layer.
+- Existing live integration tests (`tests_live_integration.rs`) continue to validate consumer-side behavior; they do not claim server-side isolation.
+- The `NatsEventPublisher` tenant-scoped subject pattern (`audit.events.v1.<tenant_id>.<event_type>`) does not need to change.
+
+### Related Documents
+
+- `docs/08-security/02-authn-authz.md` — NATS tenant isolation pending items
+- `docs/10-delivery/22-phase-4-entry-plan.md` — A-02 (RLS/NATS completion) and A-10 (DLQ/NATS lifecycle)
+- `crates/intent-api/src/nats_jetstream/stream.rs` — shared stream initializer
+- `crates/intent-api/src/nats_event_publisher.rs` — tenant-scoped subject publishing
+
+---
 
 ### Layer 7: Audit Query API Isolation (P3-S4 bounded slice)
 

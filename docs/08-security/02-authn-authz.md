@@ -96,7 +96,8 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
 - RLC-4..RLC-9: Cross-tenant isolation test expansion — ✅ BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`)
 - NATS tenant isolation — 🟡 BOUNDED DELIVERED (consumer-side guard only)
   - `NatsPullConsumerAdapter::tenant_scope` rejects cross-tenant events before side effects
-  - Per-tenant streams/ACLs and production topology remain pending
+  - Per-tenant stream migration path documented in `docs/14-governance/08-tenant-isolation.md` (staged plan with explicit duplication-risk warning)
+  - Server-side rollout of per-tenant streams, NATS ACLs, and production topology remain pending
 - Production certification — 🔴 PENDING
 
 ## Authentication
