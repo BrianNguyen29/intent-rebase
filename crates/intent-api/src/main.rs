@@ -745,6 +745,31 @@ async fn build_sql_router_with_consumer_impl(
     ))
 }
 
+/// Wait for OS shutdown signals to trigger graceful shutdown.
+///
+/// On Unix, waits for either SIGINT or SIGTERM.
+/// On non-Unix, waits for Ctrl-C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received SIGINT, starting graceful shutdown");
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Received SIGTERM, starting graceful shutdown");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Received Ctrl-C, starting graceful shutdown");
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize panic hook for observability (Phase 2b bounded slice)
@@ -1090,7 +1115,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Intent API server starting on {}", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     // Wait for DLQ metrics worker to finish if it was started
     if let Some(dlq_handle) = sql_dlq_handle {

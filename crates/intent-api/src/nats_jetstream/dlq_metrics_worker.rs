@@ -371,7 +371,10 @@ impl DlqMetricsWorkerHandle {
                 tracing::error!("DlqMetricsWorkerHandle: worker failed: {:?}", e);
             }
             Err(e) => {
-                tracing::error!("DlqMetricsWorkerHandle: worker panicked: {:?}", e);
+                tracing::error!(
+                    "{}",
+                    crate::panic_hardening::format_join_error("DlqMetricsWorkerHandle", e)
+                );
             }
         }
     }

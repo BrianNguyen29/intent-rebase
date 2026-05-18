@@ -601,7 +601,13 @@ impl ConsumerRegistryHandle {
                     tracing::debug!("ConsumerRegistryHandle: consumer {} finished", i);
                 }
                 Err(e) => {
-                    tracing::error!("ConsumerRegistryHandle: consumer {} panicked: {:?}", i, e);
+                    tracing::error!(
+                        "{}",
+                        crate::panic_hardening::format_join_error(
+                            &format!("ConsumerRegistryHandle consumer {}", i),
+                            e
+                        )
+                    );
                 }
             }
         }

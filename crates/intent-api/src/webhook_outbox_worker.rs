@@ -233,7 +233,10 @@ impl WebhookOutboxWorkerHandle {
                 tracing::info!("WebhookOutboxWorkerHandle: worker finished normally");
             }
             Err(e) => {
-                tracing::error!("WebhookOutboxWorkerHandle: worker panicked: {:?}", e);
+                tracing::error!(
+                    "{}",
+                    crate::panic_hardening::format_join_error("WebhookOutboxWorkerHandle", e)
+                );
             }
         }
     }

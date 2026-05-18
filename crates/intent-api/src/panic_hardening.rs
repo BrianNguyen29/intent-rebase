@@ -142,6 +142,28 @@ fn panic_hook(info: &std::panic::PanicHookInfo) {
     );
 }
 
+/// Format a tokio task join error with sanitized payload for safe logging.
+///
+/// Uses `sanitize_panic_payload` on the panic message (extracted via
+/// `JoinError::into_panic`) to avoid leaking secrets that may be present
+/// in panic messages.
+pub fn format_join_error(worker_name: &str, err: tokio::task::JoinError) -> String {
+    let raw = if err.is_panic() {
+        let payload = err.into_panic();
+        match payload.downcast::<String>() {
+            Ok(s) => *s,
+            Err(payload) => match payload.downcast::<&str>() {
+                Ok(s) => (*s).to_string(),
+                Err(_) => "<non-string panic payload>".to_string(),
+            },
+        }
+    } else {
+        err.to_string()
+    };
+    let sanitized = sanitize_panic_payload(&raw);
+    format!("{} worker task panicked: {}", worker_name, sanitized)
+}
+
 /// Initialize the panic hook for observability.
 ///
 /// Call this at startup before any async tasks are spawned.

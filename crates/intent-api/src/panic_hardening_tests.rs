@@ -1,4 +1,4 @@
-use crate::panic_hardening::{init_panic_hook, sanitize_panic_payload};
+use crate::panic_hardening::{format_join_error, init_panic_hook, sanitize_panic_payload};
 
 #[test]
 fn test_sanitize_panic_payload_jwt_token() {
@@ -54,4 +54,33 @@ fn test_init_panic_hook_does_not_panic() {
     // init_panic_hook should not panic - just register the hook
     init_panic_hook();
     // If we get here, the test passes
+}
+
+#[tokio::test]
+async fn test_format_join_error_sanitizes_panic_message() {
+    let handle = tokio::spawn(async {
+        panic!(
+            "panic with secret eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c token"
+        );
+    });
+    let result = handle.await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let formatted = format_join_error("test_worker", err);
+    assert!(formatted.contains("test_worker worker task panicked:"));
+    assert!(formatted.contains("<JWT_REDACTED>"));
+    assert!(!formatted.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+}
+
+#[tokio::test]
+async fn test_format_join_error_on_aborted_task() {
+    let handle = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    });
+    handle.abort();
+    let result = handle.await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let formatted = format_join_error("aborted_worker", err);
+    assert!(formatted.contains("aborted_worker worker task panicked:"));
 }

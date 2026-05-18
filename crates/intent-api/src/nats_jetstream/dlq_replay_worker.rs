@@ -294,7 +294,10 @@ impl DlqReplayWorkerHandle {
                 tracing::error!("DlqReplayWorkerHandle: worker failed: {:?}", e);
             }
             Err(e) => {
-                tracing::error!("DlqReplayWorkerHandle: worker panicked: {:?}", e);
+                tracing::error!(
+                    "{}",
+                    crate::panic_hardening::format_join_error("DlqReplayWorkerHandle", e)
+                );
             }
         }
     }
