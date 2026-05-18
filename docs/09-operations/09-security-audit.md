@@ -1,5 +1,7 @@
 # 09 — Public Repo Security Audit
 
+> **Note:** The `09-` prefix in this filename is a legacy sequence number. It overlaps with `09-observability-evidence-checklist.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 **Status:** `DOCUMENTED`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)

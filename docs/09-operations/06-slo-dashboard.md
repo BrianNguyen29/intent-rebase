@@ -1,5 +1,7 @@
 # SLO Dashboard — Grafana Scaffold
 
+> **Note:** The `06-` prefix in this filename is a legacy sequence number. It overlaps with `06-tenant-onboarding.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 > **Status (Batch 2 Slice 1 + Slice 5 + Slice 7):** Dashboard scaffold (Slice 1). Slice 5 adds an error-budget tracking row (preview + apply 1h burn-rate stat panels) backed by the metrics emitted in Slice 3 (intent_api_rebase_preview_requests_total, intent_api_rebase_apply_requests_total with status label). Slice 7 adds 6h and 3d burn-rate panels and multi-window burn-rate alerting rules.
 > Panel queries reference metric names that require instrumentation to exist before they can return data.
 > Alerting rules and distributed tracing are out of scope for this slice.

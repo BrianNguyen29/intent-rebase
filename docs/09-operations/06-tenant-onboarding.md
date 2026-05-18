@@ -1,5 +1,7 @@
 # Tenant Onboarding Runbook
 
+> **Note:** The `06-` prefix in this filename is a legacy sequence number. It overlaps with `06-slo-dashboard.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 **Phase:** Phase 3 P3-S5 (scaffold/baseline only)  
 **Status:** IN PROGRESS — full automation and API endpoints are future phase scope  
 **Owner:** Platform Team

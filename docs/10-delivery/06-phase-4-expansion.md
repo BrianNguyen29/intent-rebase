@@ -1,5 +1,7 @@
 # Phase 4 — Expansion
 
+> **Note:** The `06-` prefix in this filename is a legacy sequence number. It overlaps with `06-phase-3-batch-0-execution.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 ## Scope options
 - policy simulation / digital twin
 - memory trust linkage

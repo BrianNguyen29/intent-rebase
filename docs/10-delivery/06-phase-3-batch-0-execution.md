@@ -1,5 +1,7 @@
 # Phase 3 Batch 0 — Execution Plan
 
+> **Note:** The `06-` prefix in this filename is a legacy sequence number. It overlaps with `06-phase-4-expansion.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 ## Goal
 
 Complete the remaining Phase 3 Batch 0 preparation work without overclaiming Batch 1+ implementation.

@@ -1,5 +1,7 @@
 # Staffing and Roles
 
+> **Note:** The `07-` prefix in this filename is a legacy sequence number. It overlaps with `07-phase-3-dependency-audit.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 ## Minimum core team
 - 1 product/tech lead
 - 2 backend engineers (Rust)

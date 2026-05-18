@@ -1,8 +1,9 @@
 # Checklist Phase 4
 
-> **⚠️ DEPRECATED — This is a stub.**
-> The canonical, detailed checklist is [here](./checklists/checklist-phase-4.md).
-> All exit-gate evidence must be captured in the detailed checklist.
+> **⚠️ SUPERSEDED / PLANNING — This stub predates the current Phase 4 entry plan.**
+> The canonical, detailed checklist is [./checklists/checklist-phase-4.md](./checklists/checklist-phase-4.md).
+> The current Phase 4 entry plan is [./22-phase-4-entry-plan.md](./22-phase-4-entry-plan.md).
+> All exit-gate evidence must be captured in the detailed checklist. No implementation or production readiness is claimed.
 
 - [ ] Customer feedback loop established
 - [ ] Policy simulation prototype validated

@@ -1,5 +1,7 @@
 # 09 — Observability Evidence Collection Checklist
 
+> **Note:** The `09-` prefix in this filename is a legacy sequence number. It overlaps with `09-security-audit.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 **Status:** `DOCUMENTED — Evidence Collection Checklist Templates Only`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)

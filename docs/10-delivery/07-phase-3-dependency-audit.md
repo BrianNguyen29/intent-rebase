@@ -1,5 +1,7 @@
 # Phase 3 Dependency Audit
 
+> **Note:** The `07-` prefix in this filename is a legacy sequence number. It overlaps with `07-staffing-and-roles.md` in the same directory; the numbering is non-semantic and does not indicate ordering or dependency.
+
 **Status:** Prepared during Batch 0  
 **Purpose:** Record the cross-service assumptions that Phase 3 implementation depends on, so Batch 1+ work does not silently rely on Phase 2 bounded placeholders.
 
