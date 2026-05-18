@@ -77,7 +77,8 @@ info:
     - Compensation planner: full risk scoring, strategy selection (Batch 1+ scope)
     - Compensation executor: real rollback/counter-action logic (Batch 1+ scope; stub executor implemented)
     - Compensation retry logic: max retries, backoff (Batch 1+ scope)
-    - Webhook subscription CRUD API (`POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}`) — Phase 4+ deferred; see P2-6d design in production readiness backlog
+    - Webhook subscription CRUD API (`POST /webhooks/subscriptions`, `GET /webhooks/subscriptions`, `PATCH /webhooks/subscriptions/{id}`, `DELETE /webhooks/subscriptions/{id}`) — Phase 4+ deferred; LOCAL-DEV DELIVERED (see A-12 in docs/10-delivery/22-phase-4-entry-plan.md); production hardening pending
+    - Webhook outbox DLQ API (`GET /webhooks/outbox/dlq`, `POST /webhooks/outbox/dlq/{id}/replay`, `GET /webhooks/outbox/dlq/replayed`, `POST /webhooks/outbox/dlq/bulk-replay`, `GET /webhooks/outbox/dlq/stats`) — Phase 4+ deferred; LOCAL-DEV DELIVERED (see A-12 in docs/10-delivery/22-phase-4-entry-plan.md); production hardening pending
   version: 0.1.0
   contact:
     name: Intent Rebase Engine Team
@@ -116,6 +117,8 @@ tags:
     description: Policy snapshot read-only queries (Phase 2 bounded slice)
   - name: propagation-status
     description: Propagation status read-only stub (Phase 4+ design-only; bounded stub endpoint)
+  - name: webhooks
+    description: Webhook subscription CRUD and outbox DLQ operations (bounded local-dev slice; production hardening pending)
 
 paths:
   /intents:
@@ -3020,6 +3023,433 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Intent not found or propagation repository not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/subscriptions:
+    post:
+      tags:
+        - webhooks
+      summary: Create a webhook subscription
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Creates a new webhook subscription for an intent.
+      operationId: createWebhookSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookSubscriptionRequest'
+      responses:
+        '201':
+          description: Webhook subscription created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - webhooks
+      summary: List webhook subscriptions
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Returns all webhook subscriptions for a given intent and tenant.
+      operationId: listWebhookSubscriptions
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: intent_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Intent ID to filter subscriptions
+      responses:
+        '200':
+          description: Webhook subscriptions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWebhookSubscriptionsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/subscriptions/{id}:
+    get:
+      tags:
+        - webhooks
+      summary: Get a webhook subscription
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Returns a single webhook subscription by ID.
+      operationId: getWebhookSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Subscription ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Webhook subscription found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionResponse'
+        '404':
+          description: Webhook subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      tags:
+        - webhooks
+      summary: Update a webhook subscription
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Updates an existing webhook subscription. Only provided fields are updated.
+      operationId: updateWebhookSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Subscription ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWebhookSubscriptionRequest'
+      responses:
+        '200':
+          description: Webhook subscription updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Webhook subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      tags:
+        - webhooks
+      summary: Delete a webhook subscription
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Soft-deletes a webhook subscription by setting its status to `deleted`.
+      operationId: deleteWebhookSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Subscription ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: Webhook subscription deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionResponse'
+        '404':
+          description: Webhook subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/outbox/dlq:
+    get:
+      tags:
+        - webhooks
+      summary: List DLQ (failed) webhook outbox records
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Returns all failed webhook outbox records for a tenant, ordered by `updated_at` descending.
+      operationId: listWebhookOutboxDlq
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Maximum number of records to return
+      responses:
+        '200':
+          description: DLQ records retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWebhookOutboxDlqResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/outbox/dlq/{id}/replay:
+    post:
+      tags:
+        - webhooks
+      summary: Replay a failed webhook outbox record
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Transitions a failed webhook outbox record back to `Pending` status, resetting `attempt_count` and clearing error/lock state.
+      operationId: replayWebhookOutboxDlq
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Outbox record ID
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: replayed_by
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional actor identity for replay audit metadata
+      responses:
+        '200':
+          description: Record replayed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayWebhookOutboxDlqResponse'
+        '400':
+          description: Record is not in Failed status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/outbox/dlq/replayed:
+    get:
+      tags:
+        - webhooks
+      summary: List replayed webhook outbox records
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Returns all replayed webhook outbox records for a tenant, ordered by `replayed_at` descending.
+      operationId: listWebhookOutboxReplayed
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Maximum number of records to return
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only return records replayed at or after this timestamp
+      responses:
+        '200':
+          description: Replayed records retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWebhookOutboxReplayedResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/outbox/dlq/bulk-replay:
+    post:
+      tags:
+        - webhooks
+      summary: Bulk replay failed webhook outbox records
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Bulk replays failed webhook outbox records for a tenant. Hard cap of 100 records enforced server-side.
+      operationId: bulkReplayWebhookOutboxDlq
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkReplayWebhookOutboxDlqRequest'
+      responses:
+        '200':
+          description: Bulk replay completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkReplayWebhookOutboxDlqResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/outbox/dlq/stats:
+    get:
+      tags:
+        - webhooks
+      summary: Get webhook outbox DLQ stats
+      description: |
+        Bounded local-dev slice — NOT production-ready. Production hardening remains deferred (see WEB-EXT blockers in Phase 4 entry plan).
+
+        Returns DLQ statistics for a tenant, including failed counts, oldest failure age, and grouped error summaries.
+      operationId: getWebhookOutboxDlqStats
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant ID to scope the query
+      responses:
+        '200':
+          description: DLQ stats retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookOutboxDlqStatsResponse'
+        '500':
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -6574,6 +7004,277 @@ components:
             $ref: '#/components/schemas/PolicySnapshotResponse'
         total:
           type: integer
+
+    # ----- Webhook Schemas (bounded local-dev slice) -----
+    WebhookSubscriptionResponse:
+      type: object
+      required: [id, tenant_id, intent_id, subscription_id, webhook_url, status, max_attempts, event_types, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        subscription_id:
+          type: string
+          format: uuid
+        webhook_url:
+          type: string
+        downstream_system_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+        max_attempts:
+          type: integer
+        event_types:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateWebhookSubscriptionRequest:
+      type: object
+      required: [tenant_id, intent_id, subscription_id, webhook_url]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        subscription_id:
+          type: string
+          format: uuid
+        webhook_url:
+          type: string
+        downstream_system_id:
+          type: string
+          nullable: true
+        max_attempts:
+          type: integer
+          nullable: true
+        event_types:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    UpdateWebhookSubscriptionRequest:
+      type: object
+      properties:
+        webhook_url:
+          type: string
+          nullable: true
+        downstream_system_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+          description: Allowed values - active, paused, disabled, deleted
+        max_attempts:
+          type: integer
+          nullable: true
+        event_types:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    ListWebhookSubscriptionsResponse:
+      type: object
+      required: [subscriptions, total]
+      properties:
+        subscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookSubscriptionResponse'
+        total:
+          type: integer
+
+    WebhookOutboxStatus:
+      type: string
+      enum: [pending, claimed, delivered, failed]
+      description: Current delivery status of a webhook outbox record
+
+    WebhookOutboxRecord:
+      type: object
+      required: [id, tenant_id, intent_id, subscription_id, event_type, payload, status, attempt_count, max_attempts, scheduled_at, lock_version, replay_count, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        intent_id:
+          type: string
+          format: uuid
+        subscription_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        webhook_url:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/WebhookOutboxStatus'
+        attempt_count:
+          type: integer
+        max_attempts:
+          type: integer
+        scheduled_at:
+          type: string
+          format: date-time
+        locked_at:
+          type: string
+          format: date-time
+          nullable: true
+        locked_by:
+          type: string
+          nullable: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        replay_count:
+          type: integer
+        replayed_at:
+          type: string
+          format: date-time
+          nullable: true
+        replayed_by:
+          type: string
+          nullable: true
+        lock_version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ListWebhookOutboxDlqResponse:
+      type: object
+      required: [records, total]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookOutboxRecord'
+        total:
+          type: integer
+
+    ReplayWebhookOutboxDlqResponse:
+      type: object
+      required: [record]
+      properties:
+        record:
+          $ref: '#/components/schemas/WebhookOutboxRecord'
+
+    ListWebhookOutboxReplayedResponse:
+      type: object
+      required: [records, total]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookOutboxRecord'
+        total:
+          type: integer
+
+    BulkReplayWebhookOutboxDlqRequest:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        max_records:
+          type: integer
+          nullable: true
+          description: Optional maximum records to replay (hard cap of 100 enforced server-side)
+        replayed_by:
+          type: string
+          nullable: true
+          description: Optional actor identity for replay audit metadata
+
+    BulkReplayWebhookOutboxDlqResponse:
+      type: object
+      required: [replayed, skipped, errors, records]
+      properties:
+        replayed:
+          type: integer
+          description: Number of records successfully replayed
+        skipped:
+          type: integer
+          description: Number of records skipped (no longer Failed)
+        errors:
+          type: integer
+          description: Number of records that encountered an unexpected error
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookOutboxRecord'
+          description: The records that were successfully replayed
+
+    WebhookOutboxDlqErrorSummary:
+      type: object
+      required: [error_pattern, count]
+      properties:
+        error_pattern:
+          type: string
+        count:
+          type: integer
+          format: int64
+
+    WebhookOutboxDlqStats:
+      type: object
+      required: [total_failed, replayed_count, by_error_summary]
+      properties:
+        total_failed:
+          type: integer
+          format: int64
+          description: Number of failed records for this tenant
+        oldest_failed_age_seconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: Age in seconds of the oldest failed record
+        replayed_count:
+          type: integer
+          format: int64
+          description: Number of records that have been replayed at least once
+        by_error_summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookOutboxDlqErrorSummary'
+          description: Grouped error summary for failed records
+
+    WebhookOutboxDlqStatsResponse:
+      type: object
+      required: [stats]
+      properties:
+        stats:
+          $ref: '#/components/schemas/WebhookOutboxDlqStats'
 
     Error:
       type: object
