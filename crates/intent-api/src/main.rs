@@ -498,8 +498,7 @@ async fn build_sql_router_with_consumer_jwt(
     let (dlq_handle, replay_handle): (
         Option<DlqMetricsWorkerHandle>,
         Option<DlqReplayWorkerHandle>,
-    ) = if std::env::var("NATS_URL").is_ok() {
-        let nats_url = std::env::var("NATS_URL").unwrap();
+    ) = if let Ok(nats_url) = std::env::var("NATS_URL") {
         let jetstream_initializer = JetStreamInitializer::new();
         match jetstream_initializer.ensure_stream(&nats_url).await {
             Ok(jetstream_ctx) => {
@@ -673,8 +672,7 @@ async fn build_sql_router_with_consumer_impl(
     let (dlq_handle, replay_handle): (
         Option<DlqMetricsWorkerHandle>,
         Option<DlqReplayWorkerHandle>,
-    ) = if std::env::var("NATS_URL").is_ok() {
-        let nats_url = std::env::var("NATS_URL").unwrap();
+    ) = if let Ok(nats_url) = std::env::var("NATS_URL") {
         let jetstream_initializer = JetStreamInitializer::new();
         match jetstream_initializer.ensure_stream(&nats_url).await {
             Ok(jetstream_ctx) => {
@@ -802,6 +800,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(
             "INTENT_API_NATS_CONSUMER=true — NATS consumer lifecycle enabled (bounded Phase 4 first slice)"
         );
+        if std::env::var("NATS_URL").is_err() {
+            return Err("INTENT_API_NATS_CONSUMER=true but NATS_URL is not set. \
+                 Set NATS_URL to enable NATS consumer lifecycle."
+                .into());
+        }
     }
 
     // =============================================================================
@@ -817,20 +820,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if full_consumer_enabled {
         if !nats_consumer_enabled {
-            tracing::warn!(
-                "INTENT_API_NATS_FULL_CONSUMER=true but INTENT_API_NATS_CONSUMER is not true — full consumer requires NATS consumer"
+            return Err(
+                "INTENT_API_NATS_FULL_CONSUMER=true but INTENT_API_NATS_CONSUMER is not true. \
+                 Full consumer requires INTENT_API_NATS_CONSUMER=true."
+                    .into(),
             );
         }
         if std::env::var("NATS_URL").is_err() {
-            tracing::warn!(
-                "INTENT_API_NATS_FULL_CONSUMER=true but NATS_URL is not set — full consumer requires NATS"
+            return Err(
+                "INTENT_API_NATS_FULL_CONSUMER=true but NATS_URL is not set. \
+                 Set NATS_URL to enable the full NATS consumer path."
+                    .into(),
             );
         }
-        if nats_consumer_enabled && std::env::var("NATS_URL").is_ok() {
-            tracing::info!(
-                "INTENT_API_NATS_FULL_CONSUMER=true — full consumer path enabled (NON-PRODUCTION local-dev only)"
-            );
-        }
+        tracing::info!(
+            "INTENT_API_NATS_FULL_CONSUMER=true — full consumer path enabled (NON-PRODUCTION local-dev only)"
+        );
     }
 
     // =============================================================================
@@ -970,10 +975,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn NATS consumer registry if enabled and NATS_URL is configured
     // **Phase 4 bounded slice:** Only CheckpointCreatorConsumer is registered.
     // SnapshotCreatorConsumer and DLQ worker are NOT enabled (Phase 4+ future scope).
-    let nats_consumer_handle: Option<ConsumerRegistryHandle> = if nats_consumer_enabled
-        && std::env::var("NATS_URL").is_ok()
-    {
-        let nats_url = std::env::var("NATS_URL").unwrap();
+    let nats_consumer_handle: Option<ConsumerRegistryHandle> = if nats_consumer_enabled {
+        let nats_url = match std::env::var("NATS_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                // This path is unreachable because of the early validation above,
+                // but we keep it defensively to avoid any unwrap.
+                return Err("INTENT_API_NATS_CONSUMER=true but NATS_URL is not set. \
+                     Set NATS_URL to enable NATS consumer lifecycle."
+                    .into());
+            }
+        };
 
         // Get checkpoint service (required for CheckpointCreatorConsumer)
         let checkpoint_service = match checkpoint_service {
@@ -1067,11 +1079,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        if nats_consumer_enabled {
-            tracing::info!(
-                "INTENT_API_NATS_CONSUMER=true but NATS_URL not set — consumer not started"
-            );
-        }
         None
     };
 

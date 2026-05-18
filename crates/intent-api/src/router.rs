@@ -3,17 +3,55 @@
 //! This module contains the canonical router builders used to wire up the HTTP transport layer.
 //! It is extracted from lib.rs as a bounded module decomposition slice.
 
+use axum::http::{header, Method};
 use axum::Router;
 use graph_service::GraphService;
 use intent_service::IntentService;
 use rebase_orchestrator::RebaseOrchestrator;
 use std::sync::Arc;
 use std::time::Instant;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::health_routes;
 use crate::routes;
+
+/// Build a CORS layer from the `INTENT_API_CORS_ALLOWED_ORIGINS` env var.
+///
+/// Defaults to safe localhost origins for local-dev use.
+/// Origins are comma-separated (e.g. `http://localhost:3000,http://127.0.0.1:3000`).
+/// Unparseable origins are silently ignored.
+pub fn build_cors_layer() -> CorsLayer {
+    let raw = std::env::var("INTENT_API_CORS_ALLOWED_ORIGINS").unwrap_or_default();
+    let origins: Vec<axum::http::HeaderValue> = if raw.trim().is_empty() {
+        vec![
+            "http://localhost:3000".parse().unwrap(),
+            "http://127.0.0.1:3000".parse().unwrap(),
+        ]
+    } else {
+        raw.split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect()
+    };
+
+    let allow_origin = if origins.len() == 1 {
+        AllowOrigin::exact(origins[0].clone())
+    } else {
+        AllowOrigin::list(origins)
+    };
+
+    CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+}
 
 /// Build the Phase 1 router with CORS enabled
 ///
@@ -75,7 +113,7 @@ pub fn build_router(
 
     router
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         // Trace context middleware must run AFTER request_id_middleware so that
         // the span created here is a child of any extracted trace context.
         .layer(axum::middleware::from_fn(
@@ -150,4 +188,36 @@ pub fn build_router_with_sql_audit_and_approval(
         webhook_subscription_repo,
         webhook_outbox_repo,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cors_layer;
+
+    #[test]
+    fn test_build_cors_layer_default_does_not_panic() {
+        let _layer = build_cors_layer();
+    }
+
+    #[test]
+    fn test_build_cors_layer_custom_origins() {
+        temp_env::with_var(
+            "INTENT_API_CORS_ALLOWED_ORIGINS",
+            Some("http://example.com,http://example.org"),
+            || {
+                let _layer = build_cors_layer();
+            },
+        );
+    }
+
+    #[test]
+    fn test_build_cors_layer_invalid_origins_ignored() {
+        temp_env::with_var(
+            "INTENT_API_CORS_ALLOWED_ORIGINS",
+            Some("not-a-valid-origin,http://valid.com"),
+            || {
+                let _layer = build_cors_layer();
+            },
+        );
+    }
 }
