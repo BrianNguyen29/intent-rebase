@@ -69,12 +69,17 @@
 | `/policy-snapshots/:snapshot_id/impact-report` | `/policy-snapshots/{snapshot_id}/impact-report` | GET | policy-snapshots, impact-report | `policy_snapshot_handlers` | ✅ Implemented |
 | `/intents/:intent_id/propagation-status` | `/intents/{intent_id}/propagation-status` | GET | propagation-status, intents | `query_handlers` | ✅ Implemented (Slices 1-2 bounded MVP) |
 | `/intents/:intent_id/propagation-signals` | `/intents/{intent_id}/propagation-signals` | POST | propagation-status, intents | `query_handlers` | ✅ Implemented (Slice 2 bounded signal ingestion) |
-| *(internal)* | *(none)* | — | — | `rebase_apply_handlers` → `webhook_delivery` | 🟡 Internal dispatch only (env-gated, default disabled). No public webhook subscription CRUD route exists yet. |
-| `/webhooks/subscriptions` | `/webhooks/subscriptions` | POST | webhooks | `subscription_handlers` | 🔴 Deferred — design only (P2-6d) |
-| `/webhooks/subscriptions` | `/webhooks/subscriptions` | GET | webhooks | `subscription_handlers` | 🔴 Deferred — design only (P2-6d) |
-| `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | GET | webhooks | `subscription_handlers` | 🔴 Deferred — design only (P2-6d) |
-| `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | PATCH | webhooks | `subscription_handlers` | 🔴 Deferred — design only (P2-6d) |
-| `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | DELETE | webhooks | `subscription_handlers` | 🔴 Deferred — design only (P2-6d) |
+ | *(internal)* | *(none)* | — | — | `rebase_apply_handlers` → `webhook_delivery` | 🟡 Internal dispatch only (env-gated, default disabled). No public webhook subscription CRUD route exists yet. |
+ | `/webhooks/subscriptions` | `/webhooks/subscriptions` | POST | webhooks | `subscription_handlers` | ✅ Implemented (Slice 4b — bounded local-dev subscription CRUD; production hardening pending) |
+ | `/webhooks/subscriptions` | `/webhooks/subscriptions` | GET | webhooks | `subscription_handlers` | ✅ Implemented (Slice 4b — bounded local-dev subscription CRUD; production hardening pending) |
+ | `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | GET | webhooks | `subscription_handlers` | ✅ Implemented (Slice 4b — bounded local-dev subscription CRUD; production hardening pending) |
+ | `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | PATCH | webhooks | `subscription_handlers` | ✅ Implemented (Slice 4b — bounded local-dev subscription CRUD; production hardening pending) |
+ | `/webhooks/subscriptions/:subscription_id` | `/webhooks/subscriptions/{subscription_id}` | DELETE | webhooks | `subscription_handlers` | ✅ Implemented (Slice 4b — bounded local-dev subscription CRUD; production hardening pending) |
+ | `/webhooks/outbox/dlq` | `/webhooks/outbox/dlq` | GET | webhooks | `webhook_outbox_dlq_handlers` | ✅ Implemented (Slice 5b — bounded local-dev failed-status DLQ) |
+ | `/webhooks/outbox/dlq/:id/replay` | `/webhooks/outbox/dlq/{id}/replay` | POST | webhooks | `webhook_outbox_dlq_handlers` | ✅ Implemented (Slice 5b — bounded local-dev failed-status DLQ; replay RLS tx fix fd2add9) |
+ | `/webhooks/outbox/dlq/replayed` | `/webhooks/outbox/dlq/replayed` | GET | webhooks | `webhook_outbox_dlq_handlers` | ✅ Implemented (Phase 1.3 — bounded local-dev replayed audit query) |
+ | `/webhooks/outbox/dlq/bulk-replay` | `/webhooks/outbox/dlq/bulk-replay` | POST | webhooks | `webhook_outbox_dlq_handlers` | ✅ Implemented (Phase 2.2 — bounded local-dev bulk replay) |
+ | `/webhooks/outbox/dlq/stats` | `/webhooks/outbox/dlq/stats` | GET | webhooks | `webhook_outbox_dlq_handlers` | ✅ Implemented (Phase 2.3 — bounded local-dev DLQ stats) |
 | `/forensic/verify` | `/forensic/verify` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/export` | `/forensic/export` | POST | forensic | `forensic_handlers` | ✅ Implemented |
 | `/forensic/bundle` | `/forensic/bundle` | POST | forensic | `forensic_handlers` | ✅ Implemented |

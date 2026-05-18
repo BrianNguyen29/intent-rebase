@@ -766,6 +766,13 @@ fn test_key_routes_are_documented_in_openapi() {
         "/policy-snapshots/{snapshot_id}",
         "/policy-snapshots/intent/{intent_id}/latest",
         "/policy-snapshots/{snapshot_id}/impact-report",
+        "/webhooks/subscriptions",
+        "/webhooks/subscriptions/{id}",
+        "/webhooks/outbox/dlq",
+        "/webhooks/outbox/dlq/{id}/replay",
+        "/webhooks/outbox/dlq/replayed",
+        "/webhooks/outbox/dlq/bulk-replay",
+        "/webhooks/outbox/dlq/stats",
     ];
 
     for path in &required_paths {
