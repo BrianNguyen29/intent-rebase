@@ -143,6 +143,9 @@ pub mod approval_invalidation;
 /// Router building and authentication middleware (Phase 3 bounded router extraction slice)
 pub mod router;
 
+/// Domain-grouped route registration modules (A-09 router route-group decomposition)
+pub mod routes;
+
 /// DLQ metric helper functions (Phase 3 DLQ design — extracted helper decomposition)
 pub mod dlq_metrics;
 
