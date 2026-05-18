@@ -37,7 +37,7 @@ This packet should be used when:
 - RLS integration tests pass locally (RLC-3: migration_integration 1/1, rls_integration --ignored 4/4).
 - Load testing: L1/L2 bounded local evidence collected; L3-L5 deferred.
 - Penetration testing: threat model v2 and pen test scope accepted as internal planning artifacts; no external pen test executed.
-- Webhook delivery Phase 4 design baseline (P2-6a..P2-6f) complete as design-only documentation.
+- Webhook delivery local-dev foundation delivered (outbox schema, env-gated worker, HMAC signing, subscription CRUD API, retry/DLQ list-replay-stats/bulk-replay, replay audit, operator runbook) — production hardening pending. Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation.
 - **No external sign-off obtained.** All external gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
 
 ---
@@ -460,7 +460,7 @@ This checklist enumerates the gates that must close before any production-readin
 | G-CI-1 | Remote CI / automated checks (GitHub Actions or equivalent) | DISABLED BY DESIGN | Backend Lead | Decision to enable remote CI or documented acceptance of local gates as SOQ (source of truth) |
 | G-RLS-1 | Full RLS transaction wrapping across all SQL paths | BOUNDED PARTIAL | Backend Lead | Pending: NATS tenant isolation, forensic/orchestration full RLS tx (P1-S5i residual), production certification |
 | G-DLQ-1 | DLQ full consumer lifecycle + replay worker | LOCAL-DEV GATE ONLY | Backend Lead | External SRE sign-off before production; full replay worker implementation |
-| G-WEB-1 | Webhook delivery production hardening (outbox, worker, HMAC, key rotation) | DESIGN ONLY | Backend Lead | Outbox schema migration, background worker, subscription CRUD API, HMAC implementation |
+| G-WEB-1 | Webhook delivery production hardening (outbox, worker, HMAC, key rotation, retry/DLQ, replay, retention, operator workflow) | LOCAL-DEV DELIVERED — production hardening pending (WAIVED-SOLO for Phase 3) | Backend Lead | Local-dev slices delivered: outbox schema + SQLx repo, env-gated background worker, HMAC signing, subscription CRUD API, retry/backoff, DLQ list/replay/stats/bulk-replay, replay audit query, operator runbook (RB14). Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation. Must be revisited with named external evidence before production readiness claim. |
 
 ---
 
