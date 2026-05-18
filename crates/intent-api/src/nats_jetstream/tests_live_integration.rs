@@ -740,3 +740,376 @@ async fn live_jetstream_dlq_replay_worker_replays_message() {
 
     tracing::info!("Live integration test passed: DLQ replay worker replays message correctly");
 }
+
+// =============================================================================
+// Bounded Tenant Scope Live Integration Tests
+// =============================================================================
+// These tests verify `NatsPullConsumerAdapter::with_tenant_scope` through the
+// real JetStream `process_one` path. They require a live NATS server and are
+// marked `#[ignore]` so they do not run in CI or default test suites.
+//
+// **NON-PRODUCTION:** These tests do NOT claim production readiness,
+// per-tenant streams, NATS ACLs, or external sign-off. They are bounded
+// local-dev manual evidence only.
+//
+// Subject format: test.tenant.<unique_id>.<tenant_uuid>.<event_type>
+// Tenant UUID is at index 3 for `extract_tenant_id_from_subject`.
+//
+// Run with:
+//   cargo test -p intent-api --lib -- nats_jetstream::tests_live_integration::live_jetstream_tenant_scope --ignored -- --test-threads=1
+
+/// Live test: Matching tenant scope allows consumption
+///
+/// Requires: NATS with JetStream enabled
+/// Verifies:
+/// - `process_one` returns `Ok(())` when subject tenant_id matches `tenant_scope`
+/// - Event is dispatched to the consumer
+#[tokio::test]
+#[ignore]
+async fn live_jetstream_tenant_scope_matching_tenant_consumes() {
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let tenant_id = uuid::Uuid::new_v4();
+    let stream_name: &'static str =
+        Box::leak(format!("test_tenant_match_{}", unique_id).into_boxed_str());
+    let subject_filter: &'static str =
+        Box::leak(format!("test.tenant.{}.>", unique_id).into_boxed_str());
+    let subject: &'static str = Box::leak(
+        format!("test.tenant.{}.{}.RebaseApplied", unique_id, tenant_id).into_boxed_str(),
+    );
+
+    let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+    let jetstream = initializer
+        .ensure_stream(&nats_url)
+        .await
+        .expect("Failed to create/verify JetStream stream");
+
+    let payload = serde_json::json!({"test": "tenant_match"})
+        .to_string()
+        .into_bytes();
+    jetstream
+        .publish(subject, payload.into())
+        .await
+        .expect("Failed to publish message");
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let consumer_config = async_nats::jetstream::consumer::pull::Config {
+        durable_name: Some(format!("test_tenant_match_consumer_{}", unique_id)),
+        filter_subject: subject.to_string(),
+        ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+    let pull_consumer = jetstream
+        .create_consumer_on_stream(consumer_config, stream_name)
+        .await
+        .expect("Failed to create pull consumer");
+
+    let mut msg_stream = pull_consumer
+        .messages()
+        .await
+        .expect("Failed to get message stream");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_stream.next())
+        .await
+        .expect("Timeout waiting for message")
+        .expect("Message stream ended")
+        .expect("Message error");
+
+    let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), stream_name)
+        .with_tenant_scope(Some(tenant_id));
+    let consumer = Arc::new(TestConsumer::new());
+
+    let result = adapter.process_one(msg, consumer.as_ref()).await;
+    assert!(
+        result.is_ok(),
+        "process_one should succeed for matching tenant"
+    );
+
+    let consumed = consumer.get_consumed().await;
+    assert_eq!(
+        consumed.len(),
+        1,
+        "TestConsumer should have received 1 event"
+    );
+    assert_eq!(consumed[0].subject, subject);
+
+    tracing::info!("Live integration test passed: matching tenant consumes");
+}
+
+/// Live test: Mismatched tenant scope rejects and acks
+///
+/// Requires: NATS with JetStream enabled
+/// Verifies:
+/// - `process_one` returns `Err` when subject tenant_id does not match `tenant_scope`
+/// - Event is NOT dispatched to the consumer
+/// - Message is acked to prevent infinite redelivery
+#[tokio::test]
+#[ignore]
+async fn live_jetstream_tenant_scope_mismatched_tenant_rejects_and_acks() {
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expected_tenant = uuid::Uuid::new_v4();
+    let actual_tenant = uuid::Uuid::new_v4();
+    let stream_name: &'static str =
+        Box::leak(format!("test_tenant_mismatch_{}", unique_id).into_boxed_str());
+    let subject_filter: &'static str =
+        Box::leak(format!("test.tenant.{}.>", unique_id).into_boxed_str());
+    let subject: &'static str = Box::leak(
+        format!("test.tenant.{}.{}.RebaseApplied", unique_id, actual_tenant).into_boxed_str(),
+    );
+
+    let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+    let jetstream = initializer
+        .ensure_stream(&nats_url)
+        .await
+        .expect("Failed to create/verify JetStream stream");
+
+    let payload = serde_json::json!({"test": "tenant_mismatch"})
+        .to_string()
+        .into_bytes();
+    jetstream
+        .publish(subject, payload.into())
+        .await
+        .expect("Failed to publish message");
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let consumer_config = async_nats::jetstream::consumer::pull::Config {
+        durable_name: Some(format!("test_tenant_mismatch_consumer_{}", unique_id)),
+        filter_subject: subject.to_string(),
+        ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+    let pull_consumer = jetstream
+        .create_consumer_on_stream(consumer_config, stream_name)
+        .await
+        .expect("Failed to create pull consumer");
+
+    let mut msg_stream = pull_consumer
+        .messages()
+        .await
+        .expect("Failed to get message stream");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_stream.next())
+        .await
+        .expect("Timeout waiting for message")
+        .expect("Message stream ended")
+        .expect("Message error");
+
+    let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), stream_name)
+        .with_tenant_scope(Some(expected_tenant));
+    let consumer = Arc::new(TestConsumer::new());
+
+    let result = adapter.process_one(msg, consumer.as_ref()).await;
+    assert!(
+        result.is_err(),
+        "process_one should fail for mismatched tenant"
+    );
+    let err = result.unwrap_err();
+    assert!(err.contains("tenant scope mismatch"));
+    assert!(err.contains(&expected_tenant.to_string()));
+    assert!(err.contains(&actual_tenant.to_string()));
+
+    let consumed = consumer.get_consumed().await;
+    assert_eq!(
+        consumed.len(),
+        0,
+        "TestConsumer should not have received any events"
+    );
+
+    // Bounded/best-effort: after process_one acks the rejected message,
+    // the same consumer should not see immediate redelivery.
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    let no_redelivery =
+        tokio::time::timeout(std::time::Duration::from_secs(2), msg_stream.next()).await;
+    assert!(
+        no_redelivery.is_err(),
+        "Same consumer should not see immediate redelivery after ack"
+    );
+
+    tracing::info!("Live integration test passed: mismatched tenant rejected and acked");
+}
+
+/// Live test: Unscoped consumer consumes all events
+///
+/// Requires: NATS with JetStream enabled
+/// Verifies:
+/// - `process_one` returns `Ok(())` when `tenant_scope` is `None`
+/// - Event is dispatched regardless of subject tenant_id
+#[tokio::test]
+#[ignore]
+async fn live_jetstream_tenant_scope_unscoped_consumes_all() {
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let some_tenant = uuid::Uuid::new_v4();
+    let stream_name: &'static str =
+        Box::leak(format!("test_tenant_unscoped_{}", unique_id).into_boxed_str());
+    let subject_filter: &'static str =
+        Box::leak(format!("test.tenant.{}.>", unique_id).into_boxed_str());
+    let subject: &'static str = Box::leak(
+        format!("test.tenant.{}.{}.RebaseApplied", unique_id, some_tenant).into_boxed_str(),
+    );
+
+    let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+    let jetstream = initializer
+        .ensure_stream(&nats_url)
+        .await
+        .expect("Failed to create/verify JetStream stream");
+
+    let payload = serde_json::json!({"test": "tenant_unscoped"})
+        .to_string()
+        .into_bytes();
+    jetstream
+        .publish(subject, payload.into())
+        .await
+        .expect("Failed to publish message");
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let consumer_config = async_nats::jetstream::consumer::pull::Config {
+        durable_name: Some(format!("test_tenant_unscoped_consumer_{}", unique_id)),
+        filter_subject: subject.to_string(),
+        ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+    let pull_consumer = jetstream
+        .create_consumer_on_stream(consumer_config, stream_name)
+        .await
+        .expect("Failed to create pull consumer");
+
+    let mut msg_stream = pull_consumer
+        .messages()
+        .await
+        .expect("Failed to get message stream");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_stream.next())
+        .await
+        .expect("Timeout waiting for message")
+        .expect("Message stream ended")
+        .expect("Message error");
+
+    let adapter =
+        NatsPullConsumerAdapter::new(jetstream.clone(), stream_name).with_tenant_scope(None);
+    let consumer = Arc::new(TestConsumer::new());
+
+    let result = adapter.process_one(msg, consumer.as_ref()).await;
+    assert!(
+        result.is_ok(),
+        "process_one should succeed for unscoped consumer"
+    );
+
+    let consumed = consumer.get_consumed().await;
+    assert_eq!(
+        consumed.len(),
+        1,
+        "TestConsumer should have received 1 event"
+    );
+
+    tracing::info!("Live integration test passed: unscoped consumer consumes all");
+}
+
+/// Live test: Missing tenant_id in subject rejects and acks
+///
+/// Requires: NATS with JetStream enabled
+/// Verifies:
+/// - `process_one` returns `Err` when subject has no valid tenant_id at index 3
+/// - Event is NOT dispatched to the consumer
+/// - Message is acked to prevent infinite redelivery
+#[tokio::test]
+#[ignore]
+async fn live_jetstream_tenant_scope_missing_tenant_rejects() {
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expected_tenant = uuid::Uuid::new_v4();
+    let stream_name: &'static str =
+        Box::leak(format!("test_tenant_missing_{}", unique_id).into_boxed_str());
+    let subject_filter: &'static str =
+        Box::leak(format!("test.tenant.{}.>", unique_id).into_boxed_str());
+    // Subject missing tenant UUID at index 3 — only 3 tokens after test.tenant.<unique_id>
+    let subject: &'static str =
+        Box::leak(format!("test.tenant.{}.events", unique_id).into_boxed_str());
+
+    let initializer = JetStreamInitializer::with_settings(stream_name, subject_filter);
+    let jetstream = initializer
+        .ensure_stream(&nats_url)
+        .await
+        .expect("Failed to create/verify JetStream stream");
+
+    let payload = serde_json::json!({"test": "tenant_missing"})
+        .to_string()
+        .into_bytes();
+    jetstream
+        .publish(subject, payload.into())
+        .await
+        .expect("Failed to publish message");
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let consumer_config = async_nats::jetstream::consumer::pull::Config {
+        durable_name: Some(format!("test_tenant_missing_consumer_{}", unique_id)),
+        filter_subject: subject.to_string(),
+        ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+    let pull_consumer = jetstream
+        .create_consumer_on_stream(consumer_config, stream_name)
+        .await
+        .expect("Failed to create pull consumer");
+
+    let mut msg_stream = pull_consumer
+        .messages()
+        .await
+        .expect("Failed to get message stream");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_stream.next())
+        .await
+        .expect("Timeout waiting for message")
+        .expect("Message stream ended")
+        .expect("Message error");
+
+    let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), stream_name)
+        .with_tenant_scope(Some(expected_tenant));
+    let consumer = Arc::new(TestConsumer::new());
+
+    let result = adapter.process_one(msg, consumer.as_ref()).await;
+    assert!(
+        result.is_err(),
+        "process_one should fail for missing tenant_id"
+    );
+    let err = result.unwrap_err();
+    assert!(err.contains("tenant scope mismatch"));
+    assert!(err.contains(&expected_tenant.to_string()));
+    assert!(err.contains("no tenant_id"));
+
+    let consumed = consumer.get_consumed().await;
+    assert_eq!(
+        consumed.len(),
+        0,
+        "TestConsumer should not have received any events"
+    );
+
+    // Bounded/best-effort: after process_one acks the rejected message,
+    // the same consumer should not see immediate redelivery.
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    let no_redelivery =
+        tokio::time::timeout(std::time::Duration::from_secs(2), msg_stream.next()).await;
+    assert!(
+        no_redelivery.is_err(),
+        "Same consumer should not see immediate redelivery after ack"
+    );
+
+    tracing::info!("Live integration test passed: missing tenant rejected and acked");
+}

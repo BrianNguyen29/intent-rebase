@@ -178,11 +178,19 @@ filter subject: audit.events.v1.{tenant_id}.>
 - Unit tests cover: matching tenant, mismatched tenant, unscoped behavior
 - **Preserves current shared-consumer behavior when `tenant_scope` is `None`**
 
+**Bounded delivered / manual local-dev evidence:**
+- Live NATS integration tests for tenant isolation (4 `#[ignore]` tests in `crates/intent-api/src/nats_jetstream/tests_live_integration.rs`)
+  - `live_jetstream_tenant_scope_matching_tenant_consumes`
+  - `live_jetstream_tenant_scope_mismatched_tenant_rejects_and_acks`
+  - `live_jetstream_tenant_scope_unscoped_consumes_all`
+  - `live_jetstream_tenant_scope_missing_tenant_rejects`
+  - Run: `cargo test -p intent-api --lib -- nats_jetstream::tests_live_integration::live_jetstream_tenant_scope --ignored -- --test-threads=1`
+  - These tests validate `with_tenant_scope` through the real JetStream `process_one` path but do NOT claim production topology, ACLs, or certification
+
 **Out of scope / remains pending:**
 - Per-tenant JetStream streams (server-side subject isolation)
 - NATS user/subject ACLs
 - Production NATS topology changes
-- Live NATS integration tests for tenant isolation
 - External security/SRE sign-off for NATS isolation
 
 ### Layer 7: Audit Query API Isolation (P3-S4 bounded slice)
