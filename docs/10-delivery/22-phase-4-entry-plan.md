@@ -46,7 +46,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Complete RLS-aware transaction wrapping across all SQL query paths (remaining P1-S5i, NATS tenant isolation, production certification) |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P1-0), `docs/08-security/02-authn-authz.md` |
-| **Design/Implementation Status** | 🟡 BOUNDED PARTIAL — P1-S1..S5i delivered; handler-level tenant guards present in all scoped forensic/orchestration/artifact/replay handlers (`OptionalRlsTenantClaims` + mismatch rejection + `begin_with_tenant` where applicable); NATS tenant isolation pending; production certification pending |
+| **Design/Implementation Status** | 🟡 BOUNDED PARTIAL — P1-S1..S5i delivered; handler-level tenant guards present in all scoped forensic/orchestration/artifact/replay handlers (`OptionalRlsTenantClaims` + mismatch rejection + `begin_with_tenant` where applicable); NATS consumer-side tenant guard bounded delivered (`NatsPullConsumerAdapter::tenant_scope`); per-tenant JetStream streams/ACLs and production NATS topology remain pending; production certification pending |
 | **Dependencies** | Local PostgreSQL, RLC test suite, oracle-ordered P1 slices |
 | **Owner** | Backend Lead |
 | **Validation Path** | `cargo test --test rls_integration -- --ignored` passes; all handlers use `begin_with_tenant` |

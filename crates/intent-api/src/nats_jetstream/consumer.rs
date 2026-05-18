@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 use super::DlqHelper;
 use intent_rebase_types::TraceContext;
@@ -52,6 +53,9 @@ pub struct NatsPullConsumerAdapter {
     poll_interval: Duration,
     /// NON-PRODUCTION: Optional DLQ helper for app-level DLQ publishing on Failed/Retryable
     dlq_helper: Option<Arc<DlqHelper>>,
+    /// Optional tenant scope: when set, the consumer rejects events whose subject
+    /// tenant_id does not match. Preserves shared-consumer behavior when None.
+    tenant_scope: Option<Uuid>,
 }
 
 impl NatsPullConsumerAdapter {
@@ -76,7 +80,19 @@ impl NatsPullConsumerAdapter {
             message_timeout: Duration::from_secs(60),
             poll_interval: Duration::from_millis(500),
             dlq_helper: None,
+            tenant_scope: None,
         }
+    }
+
+    /// Set an optional tenant scope for this consumer.
+    ///
+    /// When `tenant_scope` is `Some(tenant_id)`, the consumer will reject
+    /// events whose NATS subject does not contain a matching tenant_id.
+    /// When `None` (default), the consumer processes all events (shared mode).
+    #[allow(dead_code)]
+    pub fn with_tenant_scope(mut self, tenant_scope: Option<Uuid>) -> Self {
+        self.tenant_scope = tenant_scope;
+        self
     }
 
     /// Create with custom message timeout.
@@ -115,6 +131,53 @@ impl NatsPullConsumerAdapter {
             .unwrap_or_default()
     }
 
+    /// Extract tenant_id from a NATS subject.
+    ///
+    /// Expected format: `audit.events.v1.<tenant_id>.<event_type>`
+    /// Returns `None` if the subject does not contain a valid UUID at position 3.
+    #[allow(dead_code)]
+    pub(crate) fn extract_tenant_id_from_subject(subject: &str) -> Option<Uuid> {
+        let parts: Vec<&str> = subject.split('.').collect();
+        if parts.len() >= 4 {
+            Uuid::parse_str(parts[3]).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Check whether the message subject matches the consumer's tenant scope.
+    ///
+    /// - If `tenant_scope` is `None`, always returns `Ok(())`.
+    /// - If `tenant_scope` is `Some(expected)`, returns `Ok(())` only when the
+    ///   subject contains a matching tenant_id; otherwise returns `Err`.
+    #[allow(dead_code)]
+    pub(crate) fn check_tenant_scope(&self, subject: &str) -> Result<(), String> {
+        Self::check_tenant_scope_static(self.tenant_scope, subject)
+    }
+
+    /// Static version of `check_tenant_scope` for easier unit testing.
+    #[allow(dead_code)]
+    pub(crate) fn check_tenant_scope_static(
+        tenant_scope: Option<Uuid>,
+        subject: &str,
+    ) -> Result<(), String> {
+        if let Some(expected) = tenant_scope {
+            match Self::extract_tenant_id_from_subject(subject) {
+                Some(actual) if actual == expected => Ok(()),
+                Some(actual) => Err(format!(
+                    "tenant scope mismatch: expected {}, got {} (subject: {})",
+                    expected, actual, subject
+                )),
+                None => Err(format!(
+                    "tenant scope mismatch: expected {}, but subject has no tenant_id (subject: {})",
+                    expected, subject
+                )),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     /// Process a single JetStream message: dispatch to consumer and ack on success.
     ///
     /// **Bounded behavior:**
@@ -124,6 +187,10 @@ impl NatsPullConsumerAdapter {
     /// - On `Consumed`: acknowledges the message (JetStream won't redeliver)
     /// - On `Failed`: acks the message to prevent infinite redelivery (bounded ack)
     /// - On `Retryable`: acks the message to prevent infinite redelivery (bounded ack)
+    ///
+    /// **Tenant guard (bounded slice):**
+    /// - When `tenant_scope` is set, rejects cross-tenant events before dispatch.
+    /// - Rejected events are acked to prevent infinite redelivery.
     ///
     /// **NON-PRODUCTION full-consumer path:**
     /// - When `dlq_helper` is Some, Failed/Retryable outcomes trigger `publish_to_dlq()`
@@ -146,6 +213,17 @@ impl NatsPullConsumerAdapter {
     ) -> Result<(), String> {
         // Extract subject from message
         let subject = message.subject.to_string();
+
+        // Bounded tenant guard: reject cross-tenant events before side effects
+        if let Err(reason) = self.check_tenant_scope(&subject) {
+            tracing::warn!(
+                "NatsPullConsumerAdapter: tenant guard rejected message on '{}': {}",
+                subject,
+                reason
+            );
+            let _ = message.ack().await;
+            return Err(reason);
+        }
 
         // Parse payload into serde_json::Value
         let payload: serde_json::Value = match serde_json::from_slice(&message.payload) {

@@ -170,6 +170,21 @@ consumer: {tenant_id}-audit-consumer
 filter subject: audit.events.v1.{tenant_id}.>
 ```
 
+**Bounded consumer-side guard delivered (first slice):**
+- `crates/intent-api/src/nats_jetstream/consumer.rs` — `NatsPullConsumerAdapter` with optional `tenant_scope: Option<Uuid>`
+- `with_tenant_scope` builder method added; no breaking changes to call sites
+- Cross-tenant events are rejected **before** domain side effects (`process_one`)
+- Rejected events are acked to prevent infinite redelivery
+- Unit tests cover: matching tenant, mismatched tenant, unscoped behavior
+- **Preserves current shared-consumer behavior when `tenant_scope` is `None`**
+
+**Out of scope / remains pending:**
+- Per-tenant JetStream streams (server-side subject isolation)
+- NATS user/subject ACLs
+- Production NATS topology changes
+- Live NATS integration tests for tenant isolation
+- External security/SRE sign-off for NATS isolation
+
 ### Layer 7: Audit Query API Isolation (P3-S4 bounded slice)
 
 ```rust

@@ -452,3 +452,75 @@ fn test_dlq_helper_debug() {
     fn _check_debug<T: std::fmt::Debug>() {}
     _check_debug::<DlqHelper>();
 }
+
+// =============================================================================
+// Bounded Tenant Guard Tests (Consumer-Side NATS Isolation)
+// =============================================================================
+// These tests verify the first slice of NATS tenant isolation:
+// - Consumer-side rejection of cross-tenant events when tenant_scope is set
+// - Unscoped consumer behavior is unchanged (shared mode)
+// - No live NATS required; no per-tenant streams or ACLs
+
+#[test]
+fn test_extract_tenant_id_from_subject_valid() {
+    let tenant_id = uuid::Uuid::new_v4();
+    let subject = format!("audit.events.v1.{}.RebaseApplied", tenant_id);
+    let extracted = NatsPullConsumerAdapter::extract_tenant_id_from_subject(&subject);
+    assert_eq!(extracted, Some(tenant_id));
+}
+
+#[test]
+fn test_extract_tenant_id_from_subject_too_few_tokens() {
+    let extracted = NatsPullConsumerAdapter::extract_tenant_id_from_subject("audit.events.v1");
+    assert_eq!(extracted, None);
+}
+
+#[test]
+fn test_extract_tenant_id_from_subject_invalid_uuid() {
+    let extracted = NatsPullConsumerAdapter::extract_tenant_id_from_subject(
+        "audit.events.v1.not-a-uuid.RebaseApplied",
+    );
+    assert_eq!(extracted, None);
+}
+
+#[test]
+fn test_check_tenant_scope_unscoped_allows_all() {
+    // Unscoped consumer (None) should allow any subject
+    let result = NatsPullConsumerAdapter::check_tenant_scope_static(
+        None,
+        "audit.events.v1.any.RebaseApplied",
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_check_tenant_scope_matching_tenant_allows() {
+    let tenant_id = uuid::Uuid::new_v4();
+    let subject = format!("audit.events.v1.{}.RebaseApplied", tenant_id);
+    let result = NatsPullConsumerAdapter::check_tenant_scope_static(Some(tenant_id), &subject);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_check_tenant_scope_mismatched_tenant_rejects() {
+    let expected = uuid::Uuid::new_v4();
+    let actual = uuid::Uuid::new_v4();
+    let subject = format!("audit.events.v1.{}.RebaseApplied", actual);
+    let result = NatsPullConsumerAdapter::check_tenant_scope_static(Some(expected), &subject);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("tenant scope mismatch"));
+    assert!(err.contains(&expected.to_string()));
+    assert!(err.contains(&actual.to_string()));
+}
+
+#[test]
+fn test_check_tenant_scope_missing_tenant_rejects() {
+    let expected = uuid::Uuid::new_v4();
+    let result =
+        NatsPullConsumerAdapter::check_tenant_scope_static(Some(expected), "audit.events.v1");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("tenant scope mismatch"));
+    assert!(err.contains(&expected.to_string()));
+}
