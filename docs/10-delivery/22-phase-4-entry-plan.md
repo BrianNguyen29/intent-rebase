@@ -46,7 +46,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Complete RLS-aware transaction wrapping across all SQL query paths (remaining P1-S5i, NATS tenant isolation, production certification) |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P1-0), `docs/08-security/02-authn-authz.md` |
-| **Design/Implementation Status** | 🟡 BOUNDED PARTIAL — P1-S1..S5h delivered; P1-S5i (forensic/orchestration/artifact full RLS tx) partial; NATS tenant isolation pending; production certification pending |
+| **Design/Implementation Status** | 🟡 BOUNDED PARTIAL — P1-S1..S5h delivered; P1-S5i (forensic/orchestration/artifact full RLS tx) partial; replay intent RLS transaction fix delivered (`fd2add9`); NATS tenant isolation pending; production certification pending |
 | **Dependencies** | Local PostgreSQL, RLC test suite, oracle-ordered P1 slices |
 | **Owner** | Backend Lead |
 | **Validation Path** | `cargo test --test rls_integration -- --ignored` passes; all handlers use `begin_with_tenant` |
@@ -130,7 +130,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Panic handler registration, graceful degradation on unexpected panics, production alerting integration |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P2-1), `docs/10-delivery/05-phase-3-hardening.md` |
-| **Design/Implementation Status** | 🟡 BOUNDED SLICE DELIVERED — panic hook registered at startup, sanitized logging; full hardening (worker lifecycle, alerting, graceful shutdown) remains Phase 4 scope |
+| **Design/Implementation Status** | 🟡 BOUNDED SLICES DELIVERED — panic hook registered at startup, sanitized logging; worker shutdown and panic logging hardening delivered (`c8996a1`); full hardening (alerting integration) remains Phase 4 scope |
 | **Dependencies** | None (local-executable) |
 | **Owner** | Backend Lead |
 | **Validation Path** | `cargo test --workspace --lib --all-features` passes; panic hook test verifies sanitized output |
@@ -144,7 +144,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 |-------|-------|
 | **Description** | Large module decomposition for maintainability (router route-group split, remaining handler extractions) |
 | **Source Refs** | `docs/10-delivery/17-production-readiness-backlog.md` (P2-2), `docs/10-delivery/20-project-completion-roadmap.md` (P1/P2) |
-| **Design/Implementation Status** | 🟡 BOUNDED SLICES DELIVERED — many modules decomposed; broader router route grouping/split remains Phase 4 |
+| **Design/Implementation Status** | 🟡 BOUNDED SLICES DELIVERED — many modules decomposed; router route-group decomposition delivered (`30191e5`); remaining handler extractions remain Phase 4 |
 | **Dependencies** | None (local-executable) |
 | **Owner** | Backend Lead |
 | **Validation Path** | `cargo check --workspace --all-features` and `cargo test --workspace --lib --all-features` pass after each decomposition |
@@ -222,7 +222,7 @@ The following list tracks all remaining webhook production blockers after Slices
 
 | ID | Todo | Current State | Execution Notes | Status |
 |----|------|---------------|-----------------|--------|
-| WEB-LOCAL-1 | Add `SqlxWebhookOutboxRepository` and wire durable outbox writes into the dispatch/propagation path | `SqlxWebhookOutboxRepository` delivered (WEB-LOCAL-1a). Durable outbox writes wired into `propagation_signals.rs` via `dispatch_webhooks_for_intent_with_outbox` (WEB-LOCAL-1b). Outbox records are created best-effort before direct dispatch when an outbox repo is supplied; behavior is unchanged when no repo is supplied. | SQLx repo uses dynamic queries; default tests do not require live Postgres; `webhook_url` is persisted as of migration 020. Propagation-path wiring is behind optional parameter and does not alter default-off env gate semantics. | 🟡 Delivered |
+| WEB-LOCAL-1 | Add `SqlxWebhookOutboxRepository` and wire durable outbox writes into the dispatch/propagation path | `SqlxWebhookOutboxRepository` delivered (WEB-LOCAL-1a). Durable outbox writes wired into `propagation_signals.rs` via `dispatch_webhooks_for_intent_with_outbox` (WEB-LOCAL-1b). Outbox records are created best-effort before direct dispatch when an outbox repo is supplied; behavior is unchanged when no repo is supplied. Outbox repository module decomposed (`3b11c7a`). | SQLx repo uses dynamic queries; default tests do not require live Postgres; `webhook_url` is persisted as of migration 020. Propagation-path wiring is behind optional parameter and does not alter default-off env gate semantics. | 🟡 Delivered |
 | WEB-LOCAL-2 | Wire `WebhookOutboxWorker` + `WebhookDeliveryDispatcher` into application startup behind `INTENT_API_WEBHOOK_OUTBOX_WORKER` | `maybe_start_webhook_outbox_worker` in `crates/intent-api/src/webhook_outbox_worker.rs` spawns a tokio task with shutdown-aware polling loop; `main.rs` wires startup after router build, uses `SqlxWebhookOutboxRepository` when `DATABASE_URL` is set or `InMemoryWebhookOutboxRepository` otherwise; graceful shutdown via `WebhookOutboxWorkerHandle` in main.rs shutdown sequence; env-gate and background-processing unit tests added. | Keep default-off; add graceful shutdown only if bounded; do not enable production background delivery by default | 🟡 Delivered |
 | WEB-LOCAL-3 | Add bounded pipeline integration tests | `crates/intent-api/src/webhook_delivery_tests.rs` contains `test_webhook_local_3_pipeline_success_with_hmac`: in-memory outbox record → `WebhookOutboxWorkerImpl` → `WebhookDeliveryDispatcher` (real `reqwest::Client` sender) → wiremock mock; asserts record marked `Delivered`, asserts `X-Webhook-Signature` header present and hex-encoded via wiremock request capture. No live DB or server startup. | 🟡 Delivered |
 
@@ -337,3 +337,4 @@ These completion proposals from `docs/10-delivery/09-completion-proposals-tracke
 | 2026-05-17 | BrianNguyen (via authorized assistant fixer) | Phase 2.1 delivered — RB14 operator workflow runbook (documentation-only) covering stale-claim recovery, failed delivery triage, replay decision tree, rollback/env gates, severity/escalation, retention query, replay audit query, and explicit caveats. Updated A-12 Phase 2.1 status. Not externally reviewed, not staging/production validated, not production readiness evidence by itself. |
 | 2026-05-17 | BrianNguyen (via authorized assistant fixer) | Phase 2.2 delivered — bulk replay endpoint (`POST /webhooks/outbox/dlq/bulk-replay`), request/response DTOs, hard cap of 100, per-record `replay_failed` guard, replayed/skipped/errors counts. DB-free handler tests. Updated RB14 runbook and A-12 Phase 2.2 status. No production UI, no staging/production validation claim, no automatic replay claim. |
 | 2026-05-17 | BrianNguyen (via authorized assistant fixer) | Phase 2.3 delivered — DLQ stats endpoint (`GET /webhooks/outbox/dlq/stats`), stats DTOs, `dlq_stats` repo method (InMemory + SQLx), total_failed/oldest_failed_age_seconds/replayed_count/by_error_summary. DB-free handler and repo tests. Updated RB14 runbook and A-12 Phase 2.3 status. No production dashboard or automated remediation claim. |
+| 2026-05-18 | BrianNguyen (via authorized assistant fixer) | Session local slices recorded — A-09 router route-group decomposition (`30191e5`), A-08 worker panic/shutdown hardening (`c8996a1`), A-02 replay RLS transaction fix (`fd2add9`), webhook outbox repository module split (`3b11c7a`). External production gates (SRE, security, pen-test, staging/prod evidence, secret manager, retention/operator validation) remain explicitly blocked pending named external evidence. No production-ready claim. |

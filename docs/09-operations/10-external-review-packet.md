@@ -3,7 +3,7 @@
 **Status:** `DOCUMENTED — Template Only; No External Review Conducted`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** May 2026
+**Last Updated:** 2026-05-18
 
 ---
 
@@ -37,7 +37,8 @@ This packet should be used when:
 - RLS integration tests pass locally (RLC-3: migration_integration 1/1, rls_integration --ignored 4/4).
 - Load testing: L1/L2 bounded local evidence collected; L3-L5 deferred.
 - Penetration testing: threat model v2 and pen test scope accepted as internal planning artifacts; no external pen test executed.
-- Webhook delivery local-dev foundation delivered (outbox schema, env-gated worker, HMAC signing, subscription CRUD API, retry/DLQ list-replay-stats/bulk-replay, replay audit, operator runbook) — production hardening pending. Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation.
+- Webhook delivery local-dev foundation delivered (outbox schema, env-gated worker, HMAC signing, subscription CRUD API, retry/DLQ list-replay-stats/bulk-replay, replay audit, operator runbook, outbox repo decomposition `3b11c7a`) — production hardening pending. Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation.
+- Recent local slices delivered in this session: router route-group decomposition (`30191e5`), worker panic/shutdown hardening (`c8996a1`), replay RLS transaction fix (`fd2add9`), webhook outbox repository module split (`3b11c7a`). All are local-dev only; external gates remain blocked.
 - **No external sign-off obtained.** All external gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
 
 ---
@@ -495,6 +496,7 @@ This checklist enumerates the gates that must close before any production-readin
 | Date | Updated By | Changes |
 |------|------------|---------|
 | 2026-05-16 | BrianNguyen (via authorized assistant fixer) | Signed Internal Acknowledgment (Section H) as solo practitioner attestation for non-production Phase 3 close-out. External reviewer fields remain blank. No production readiness or external signoff claimed. |
+| 2026-05-18 | BrianNguyen (via authorized assistant fixer) | Added recent local session slices: router route-group decomposition (`30191e5`), worker panic/shutdown hardening (`c8996a1`), replay RLS transaction fix (`fd2add9`), webhook outbox repository module split (`3b11c7a`). External gates remain blocked. No production readiness claim. |
 | May 2026 | (fixer) | Populated Section D with specific citations/statuses; added Appendix A readiness gate checklist; marked threat model v2 and pen test scope as internal planning artifacts only. No production readiness or external signoff claimed. |
 | May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external sign-off claimed. |
 | April 2026 | (fixer) | Initial creation — external SRE/security review packet template with sections for request header, system overview, review scope, evidence package, SRE areas, security areas, findings tracker, and sign-off |

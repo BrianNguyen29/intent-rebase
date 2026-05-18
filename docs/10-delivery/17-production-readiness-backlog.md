@@ -67,7 +67,7 @@ P1 items address the full RLS transaction wrapping plan from oracle design. Thes
 | **P1-S5f** | Trigger full-tx create+cancel | ✅ BOUNDED VERIFIED LOCALLY | `begin_with_tenant → insert_request_with_tx → cancel_approved_by_intent_with_tx → commit`; handler-level guards delivered; full RLS tx deferred |
 | **P1-S5g** | Compensation approve/waive/reapprove + batch approve/reapprove | ✅ BOUNDED VERIFIED LOCALLY | Handler-level guards for approve/waive/reapprove/batch status transitions; execute RLS tx covered separately by P1-S5h |
 | **P1-S5h** | Compensation execute single + batch RLS tx | ✅ BOUNDED DONE (pushed 7167223) | Single execute RLS tx: `begin_with_tenant → executor (read-only) → record_result_with_tx + create_with_tx → commit`; non-JWT/non-RLS fallback calls `service.execute_action`; batch execute RLS tx: per-item `begin_with_tenant → executor → record_result_with_tx + create_with_tx → commit` with partial-success aggregation |
-| **P1-S5i** | Forensic/orchestration/artifact full RLS tx | 🟡 PARTIAL — bounded orchestration/replay guard slices + artifact RLS tx + forensic bundle app-level RLS tx delivered | Migration 015 creates `orchestration_runs` table with RLS policy; `create_run_with_tx` method added to `SqlxOrchestrationRunRepository`; RLS path wired in `create_orchestration_run` handler; RLC-12 test added; `replay_intent` JWT tenant guard delivered with fail-closed mismatch check; `ingest_artifact` RLS tx wiring delivered (`begin_with_tenant → ingest_artifact_with_tx → commit`); forensic bundle app-level RLS tx bounded delivered for create/list/download handlers; in-memory/non-RLS fallback preserved |
+| **P1-S5i** | Forensic/orchestration/artifact full RLS tx | 🟡 PARTIAL — bounded orchestration/replay guard slices + artifact RLS tx + forensic bundle app-level RLS tx delivered; replay intent RLS transaction fix delivered (`fd2add9`) | Migration 015 creates `orchestration_runs` table with RLS policy; `create_run_with_tx` method added to `SqlxOrchestrationRunRepository`; RLS path wired in `create_orchestration_run` handler; RLC-12 test added; `replay_intent` JWT tenant guard delivered with fail-closed mismatch check; `replay_intent` RLS transaction fix delivered at `fd2add9` (runs replay under tenant RLS tx); `ingest_artifact` RLS tx wiring delivered (`begin_with_tenant → ingest_artifact_with_tx → commit`); forensic bundle app-level RLS tx bounded delivered for create/list/download handlers; in-memory/non-RLS fallback preserved |
 
 **No overclaim:** S1-S4 are BOUNDED DONE (pushed commits). S5a..S5e are BOUNDED DONE (pushed). S5f (trigger full-tx) BOUNDED VERIFIED LOCALLY. S5g (approve/waive/reapprove + batch) BOUNDED VERIFIED LOCALLY. S5h (execute single + batch RLS tx) BOUNDED DONE (pushed 7167223) — `side_effect_repo()` accessor added, single execute uses `begin_with_tenant → executor → record_result_with_tx + create_with_tx → commit`; batch execute uses per-item sequential RLS tx with partial-success aggregation. S5i (orchestration_runs bounded slice + `replay_intent` handler guard) BOUNDED VERIFIED LOCALLY; `ingest_artifact` graph RLS tx BOUNDED DONE (pushed ee5510b) — `SqlxGraphRepository::ingest_artifact_with_tx` added; side-effect recording remains out-of-tx/best-effort for this bounded slice; `SqlxBundleRepository` exists (migration 016 with RLS); forensic bundle app-level RLS tx bounded delivered for create/list/download handlers; in-memory/non-RLS fallback preserved; full forensic replay/S3 Object Lock remain Phase 4+. RLC-4..RLC-12 are BOUNDED DONE (local — 13 tests passed via `cargo test --test rls_integration -- --ignored`). Full RLS enforcement is not complete until all slices pass. Remote CI not confirmed green.
 
@@ -223,9 +223,9 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Panic handler registration, graceful degradation on unexpected panics |
-| **Current State** | Bounded local-executable slice delivered — panic hook registered at startup, sanitized logging, no production alerting claims |
+| **Current State** | Bounded local-executable slices delivered — panic hook registered at startup, sanitized logging; worker shutdown and panic logging hardening delivered (`c8996a1`); no production alerting claims |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 IN PROGRESS (bounded local slice) — Phase 4 full hardening deferred |
+| **Status** | 🟡 BOUNDED SLICES DELIVERED — panic hook registered at startup, sanitized logging; worker shutdown and panic logging hardening delivered (`c8996a1`); full hardening (alerting integration) remains Phase 4 scope |
 | **Dependencies** | None (local code only) |
 | **Implementation** | `init_panic_hook()` in `intent_api::panic_hardening` module (extracted from lib.rs as first file decomposition slice); re-exported from crate root for backward compatibility; called before `init_tracing()` in `main.rs`; sanitizes JWT/DB/creds/bearer tokens in panic payloads |
 | **No overclaim** | Bounded local panic hook is not production alerting. Full panic hardening (worker lifecycle, alerting, graceful shutdown) remains Phase 4 scope. |
@@ -237,9 +237,9 @@ These items can be started without waiting for external dependencies.
 | Field | Value |
 |-------|-------|
 | **Description** | Large module decomposition for maintainability |
-| **Current State** | Bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, handler test-module extractions complete (rebase simulation, approval invalidation, compensation simulation, rebase preview), and `build_router_with_jwt_auth` deduplication (`commit dbd8758`); `build_router_with_jwt_auth` now delegates to canonical `build_router` with `rls_pool: None` and layers JWT middleware, eliminating duplicate route registration; `handler_tests.rs` reduced to router smoke/residual wiring test; remaining higher-risk work is broader router route grouping/split |
+| **Current State** | Bounded slices delivered — `panic_hardening.rs`, DTO/type extraction, handler decomposition through intent read/validation/diff/error/approval helper/mutation/rebase-preview slices, handler test-module extractions complete (rebase simulation, approval invalidation, compensation simulation, rebase preview), and `build_router_with_jwt_auth` deduplication (`commit dbd8758`); router route-group decomposition delivered (`30191e5`); `build_router_with_jwt_auth` now delegates to canonical `build_router` with `rls_pool: None` and layers JWT middleware, eliminating duplicate route registration; `handler_tests.rs` reduced to router smoke/residual wiring test; remaining handler extractions remain Phase 4 |
 | **Owner** | Backend Lead |
-| **Status** | 🟡 IN PROGRESS (bounded decomposition slices delivered) — Phase 4 continues with broader router decomposition and additional bounded slices |
+| **Status** | 🟡 BOUNDED SLICES DELIVERED — Phase 4 continues with remaining handler extractions and additional bounded slices |
 | **Dependencies** | None (local code only) |
 | **Implementation** | `panic_hardening.rs` created; `init_panic_hook()` re-exported from `intent_api` crate root for backward compatibility; DTOs/types and many API handlers moved into focused modules; handler test groups extracted to `rebase_simulation_tests.rs`, `approval_invalidation_tests.rs`, `compensation_simulation_tests.rs`, and `rebase_preview_tests.rs`; `handler_tests.rs` now contains only the router smoke test and trace-context comment. Router JWT builder deduplication (`dbd8758`) removes duplicated route/state/middleware body from `build_router_with_jwt_auth` by delegating to `build_router(..., None)` and layering JWT middleware using the same pattern as `build_router_with_sql_audit_and_approval_jwt`. Broader router route grouping or file split remains a higher-risk production refactor deferred to Phase 4. No production-readiness claim is implied by this maintainability work. |
 
@@ -295,9 +295,9 @@ These items cannot proceed until specific external conditions are met.
 | Field | Value |
 |-------|-------|
 | **Description** | Production-grade webhook delivery with outbox pattern, HMAC signing, key rotation, subscription CRUD API, and dedicated delivery worker |
-| **Current State** | Bounded non-production slice delivered (B3-B18): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup. Commits 5dcdd36 (apply-level wiremock 200-success/500-failure) and 2ab1c4b (verified bounded baseline) complete the locally verified baseline: `cargo test -p intent-api --lib webhook_delivery_tests` 57/57 passed; `cargo test -p intent-api --lib rebase_apply_handler_tests` 9/9 passed. No outbox guarantees, no HMAC, no key rotation, no subscription management API, no background worker |
+| **Current State** | Bounded non-production slices delivered (B3-B18 + subsequent local-dev slices): payload/header builders, env-gated dispatcher (`INTENT_API_WEBHOOK_DELIVERY`, default disabled), in-process sequential retry loop, metrics counters, RB13 runbook, local alert rule, RLS test/helpers, docs sync, dead_code cleanup. Outbox schema (migration 019), `SqlxWebhookOutboxRepository`, env-gated background worker (`INTENT_API_WEBHOOK_OUTBOX_WORKER`), HMAC signing foundation, subscription CRUD API, retry/backoff, DLQ list/replay/stats/bulk-replay, replay audit metadata/query, operator runbook (RB14), retention query foundation all delivered as bounded local-dev slices. Outbox repository module decomposed (`3b11c7a`). Production secret manager, key rotation, staging/production delivery evidence, and external review remain blocked. |
 | **Owner** | Backend Lead |
-| **Status** | 🔴 DEFERRED — production delivery guarantees require outbox + worker infrastructure |
+| **Status** | 🟡 BOUNDED LOCAL-DEV DELIVERED — production hardening pending (WAIVED-SOLO for Phase 3). Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation. |
 | **External Dependency** | None for local implementation; production deployment requires infrastructure for background workers and secret management |
 
 **No overclaim:** The current webhook delivery is a bounded non-production slice. It runs in-process with best-effort dispatch and no delivery guarantee. Production hardening requires an outbox table, a background delivery worker, HMAC signature generation with per-subscription secrets, key rotation, and a subscription CRUD API. All of these remain Phase 4+ scope.
@@ -1055,7 +1055,7 @@ Two independent env gates control webhook delivery:
 | **P2** | DLQ/NATS lifecycle | 🔴 DEFERRED | G1 solo self-review closed, G3 local-dev closed (promtool validated), G5 bounded pass; full DLQ replay worker remains Phase 4+ |
 | **P2** | Cross-process trace propagation | 🔴 DEFERRED | SDK support required |
 | **P2** | Forensic replay + immutable storage lifecycle | 🟡 BOUNDED DELIVERED — replay evidence slice complete; full runtime replay + Object Lock Phase 4+ | Phase 4+ scope |
-| **P2** | Webhook delivery production hardening | 🔴 DEFERRED — outbox, HMAC, key rotation, subscription CRUD, background worker | Phase 4+ scope; bounded B3-B18 + 5dcdd36 + 2ab1c4b form the locally verified non-production baseline; P2-6a..P2-6f design baseline complete (design-only, no implementation) |
+| **P2** | Webhook delivery production hardening | 🟡 BOUNDED LOCAL-DEV DELIVERED — WAIVED-SOLO for Phase 3 | Local-dev slices delivered: outbox schema + SQLx repo, env-gated background worker, HMAC signing foundation, subscription CRUD API, retry/backoff, DLQ list/replay/stats/bulk-replay, replay audit query, operator runbook (RB14), retention query foundation, outbox repo decomposition (`3b11c7a`). Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation. P2-6a..P2-6f design baseline preserved. No production-ready claim. |
 
 ---
 
@@ -1108,6 +1108,12 @@ The following must NOT appear in any documentation:
 | `staging environment` (when referring to docker-compose) | `docker-compose local (staging-like)` |
 
 ---
+
+## Update Log
+
+| Date | Updated By | Changes |
+|------|------------|---------|
+| 2026-05-18 | BrianNguyen (via authorized assistant fixer) | Session local slices recorded — P2-1 panic hardening updated with `c8996a1` worker shutdown/panic logging; P2-2 file decomposition updated with `30191e5` router route-group split; P1-S5i updated with `fd2add9` replay RLS transaction fix; P2-6 webhook status updated from 🔴 DEFERRED to 🟡 BOUNDED LOCAL-DEV DELIVERED reflecting all local slices including `3b11c7a` outbox repo decomposition; Production Readiness Summary P2 row updated; external production gates remain explicitly blocked. |
 
 ## Related Documents
 
