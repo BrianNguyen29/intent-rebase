@@ -92,7 +92,7 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
   - **P1-S5f:** Trigger full-tx create+cancel — ✅ BOUNDED VERIFIED LOCALLY — handler-level guards delivered; full RLS tx deferred
   - **P1-S5g:** Compensation approve/waive/reapprove + batch approve/reapprove — ✅ BOUNDED VERIFIED LOCALLY — handler-level guards delivered; execute RLS tx covered separately by P1-S5h
   - **P1-S5h:** Compensation execute single/batch — ✅ BOUNDED DONE (pushed 7167223) — single execute and batch execute use bounded RLS transaction wrapping for `record_result_with_tx + create_with_tx` with executor read-only phase outside the write transaction
-   - **P1-S5i:** Forensic/orchestration/artifact/replay full RLS tx — 🟡 PARTIAL — bounded slices delivered; replay RLS tx fix pushed (fd2add9); forensic/orchestration/artifact handler-level checks remain pending
+   - **P1-S5i:** Forensic/orchestration/artifact/replay full RLS tx — ✅ BOUNDED DONE — handler-level tenant guards present in all scoped handlers (`create_forensic_bundle`, `list_forensic_bundles`, `download_forensic_bundle`, `replay_verify_forensic_bundle`, `verify_forensic_bundle`, `export_forensic_archive`, `create_orchestration_run`, `get_orchestration_run`, `ingest_artifact`, `replay_intent`); each uses `OptionalRlsTenantClaims` + request/path tenant mismatch rejection + `begin_with_tenant` RLS tx where applicable; non-JWT/non-RLS fallback preserved; replay RLS tx fix delivered (`fd2add9`)
 - RLC-4..RLC-9: Cross-tenant isolation test expansion — ✅ BOUNDED DONE (local — 12 tests passed via `cargo test --test rls_integration -- --ignored`)
 - NATS tenant isolation — 🔴 PENDING
 - Production certification — 🔴 PENDING
