@@ -339,6 +339,36 @@ impl SqlxCheckpointRepository {
             .map(|r| self.row_to_checkpoint(r))
             .collect()
     }
+
+    /// Get a checkpoint by its ID within an existing transaction.
+    ///
+    /// Phase 4 D1: Transaction-aware read for RLS-wrapped checkpoint retrieval.
+    pub async fn get_checkpoint_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        checkpoint_id: Uuid,
+    ) -> Result<Checkpoint, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            SELECT checkpoint_id, intent_id, intent_version, workflow_id, tenant_id,
+                workflow_state, checkpoint_type, created_at, expires_at, status, metadata
+            FROM checkpoints
+            WHERE checkpoint_id = $1
+            "#,
+        )
+        .bind(checkpoint_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| IntentRebaseError::StorageError(format!("fetch checkpoint: {}", e)))?;
+
+        match row {
+            Some(r) => self.row_to_checkpoint(r),
+            None => Err(IntentRebaseError::Internal(format!(
+                "checkpoint not found: {}",
+                checkpoint_id
+            ))),
+        }
+    }
 }
 
 #[async_trait]

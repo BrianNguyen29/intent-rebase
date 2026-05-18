@@ -175,6 +175,26 @@ use rebase_engine::{AffectedItemsPreview, DecisionClass, RebasePlan, RiskTier};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Parameters for a bounded replay operation.
+///
+/// Groups the common replay inputs so that `replay` and `replay_with_tx`
+/// stay below the clippy `too_many_arguments` threshold.
+#[derive(Debug, Clone)]
+pub struct ReplayParams {
+    /// Intent ID being replayed
+    pub intent_id: Uuid,
+    /// Tenant ID for tenant isolation
+    pub tenant_id: Uuid,
+    /// Workflow ID the intent belongs to
+    pub workflow_id: Uuid,
+    /// Source version for replay
+    pub from_version: i32,
+    /// Target version for replay
+    pub to_version: i32,
+    /// Specific checkpoint ID to use (optional)
+    pub checkpoint_id: Option<Uuid>,
+}
+
 /// Result of a bounded replay operation.
 ///
 /// Phase 2b bounded replay slice: Returns cooperative signal-based replay outcome
@@ -744,18 +764,10 @@ impl RebaseOrchestrator {
     /// - Otherwise, use the most recent active checkpoint for the workflow
     ///
     /// Returns a result indicating replay outcome without implying full Phase 2 replay compatibility.
-    pub async fn replay(
-        &self,
-        intent_id: Uuid,
-        tenant_id: Uuid,
-        workflow_id: Uuid,
-        from_version: i32,
-        to_version: i32,
-        checkpoint_id: Option<Uuid>,
-    ) -> Result<ReplayResult, IntentRebaseError> {
+    pub async fn replay(&self, params: ReplayParams) -> Result<ReplayResult, IntentRebaseError> {
         // Phase 2b: Bounded replay uses existing checkpoint alignment seam
         let checkpoint_repo = self.checkpoint_aligner.checkpoint_service();
-        let aligned = if let Some(cp_id) = checkpoint_id {
+        let aligned = if let Some(cp_id) = params.checkpoint_id {
             // Use specific checkpoint if provided
             let checkpoint = checkpoint_repo.get_checkpoint(cp_id).await;
 
@@ -774,7 +786,7 @@ impl RebaseOrchestrator {
         } else {
             // Use most recent active checkpoint (best-effort alignment)
             let checkpoints = checkpoint_repo
-                .list_by_workflow(workflow_id, tenant_id)
+                .list_by_workflow(params.workflow_id, params.tenant_id)
                 .await?;
 
             let most_recent = checkpoints
@@ -822,19 +834,19 @@ impl RebaseOrchestrator {
                     let cp = aligned.checkpoint.as_ref().unwrap();
                     let runtime_cp = runtime_adapter::Checkpoint {
                         id: cp.checkpoint_id.to_string(),
-                        label: format!("Replay checkpoint for intent {}", intent_id),
+                        label: format!("Replay checkpoint for intent {}", params.intent_id),
                         description: format!(
                             "Replay from intent {} v{} to v{}",
-                            intent_id, from_version, to_version
+                            params.intent_id, params.from_version, params.to_version
                         ),
                         timestamp: cp.created_at,
                         validated: true,
                     };
 
                     let intent_ref = runtime_adapter::IntentRef::new(
-                        intent_id.to_string(),
-                        tenant_id.to_string(),
-                        workflow_id.to_string(),
+                        params.intent_id.to_string(),
+                        params.tenant_id.to_string(),
+                        params.workflow_id.to_string(),
                         "active".to_string(),
                     );
 
@@ -859,9 +871,133 @@ impl RebaseOrchestrator {
         };
 
         Ok(ReplayResult {
-            intent_id,
-            from_version,
-            to_version,
+            intent_id: params.intent_id,
+            from_version: params.from_version,
+            to_version: params.to_version,
+            aligned_checkpoint_id,
+            checkpoint_selection_outcome,
+            runtime_execution_result: runtime_result,
+        })
+    }
+
+    /// Execute a bounded replay operation for an intent within an existing RLS transaction.
+    ///
+    /// Phase 4 D1: Transaction-aware replay for RLS-wrapped checkpoint reads.
+    /// Mirrors the non-transactional `replay` behavior but reads through the
+    /// provided transaction for defense-in-depth tenant isolation.
+    pub async fn replay_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        params: ReplayParams,
+    ) -> Result<ReplayResult, IntentRebaseError> {
+        let checkpoint_service = self.checkpoint_aligner.checkpoint_service();
+        let sql_repo = checkpoint_service.as_sqlx_repo().ok_or_else(|| {
+            IntentRebaseError::Internal(
+                "replay_with_tx requires SQL checkpoint repository".to_string(),
+            )
+        })?;
+
+        let aligned = if let Some(cp_id) = params.checkpoint_id {
+            let checkpoint = sql_repo.get_checkpoint_with_tx(tx, cp_id).await;
+
+            match checkpoint {
+                Ok(cp) => AlignedCheckpoint {
+                    checkpoint_id: Some(cp.checkpoint_id),
+                    checkpoint: Some(cp),
+                    outcome: CheckpointAlignmentOutcome::Aligned,
+                    rationale: format!("Replay using specified checkpoint {}", cp_id),
+                },
+                Err(_) => {
+                    return Err(IntentRebaseError::CheckpointNotFound(cp_id));
+                }
+            }
+        } else {
+            let checkpoints = sql_repo
+                .list_by_workflow_with_tx(tx, params.workflow_id, params.tenant_id)
+                .await?;
+
+            let most_recent = checkpoints
+                .iter()
+                .filter(|c| c.status == intent_rebase_types::CheckpointStatus::Active)
+                .max_by_key(|c| c.created_at);
+
+            match most_recent {
+                Some(cp) => AlignedCheckpoint {
+                    checkpoint_id: Some(cp.checkpoint_id),
+                    checkpoint: Some(cp.clone()),
+                    outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                    rationale: "Replay using most recent active checkpoint".to_string(),
+                },
+                None => {
+                    let any_cp = checkpoints.first();
+                    match any_cp {
+                        Some(cp) => AlignedCheckpoint {
+                            checkpoint_id: Some(cp.checkpoint_id),
+                            checkpoint: Some(cp.clone()),
+                            outcome: CheckpointAlignmentOutcome::ClosestMatch,
+                            rationale: "Replay using most recent checkpoint (no active)"
+                                .to_string(),
+                        },
+                        None => AlignedCheckpoint {
+                            checkpoint_id: None,
+                            checkpoint: None,
+                            outcome: CheckpointAlignmentOutcome::NoCheckpointFound,
+                            rationale: "Replay skipped: no checkpoints available".to_string(),
+                        },
+                    }
+                }
+            }
+        };
+
+        let checkpoint_selection_outcome = format!("{:?}", aligned.outcome);
+        let aligned_checkpoint_id = aligned.checkpoint_id;
+
+        let runtime_result = if aligned.checkpoint_id.is_some() {
+            match self.runtime_adapter.is_adapter_ready().await {
+                Ok(runtime_adapter::AdapterStatus::Ready) => {
+                    let cp = aligned.checkpoint.as_ref().unwrap();
+                    let runtime_cp = runtime_adapter::Checkpoint {
+                        id: cp.checkpoint_id.to_string(),
+                        label: format!("Replay checkpoint for intent {}", params.intent_id),
+                        description: format!(
+                            "Replay from intent {} v{} to v{}",
+                            params.intent_id, params.from_version, params.to_version
+                        ),
+                        timestamp: cp.created_at,
+                        validated: true,
+                    };
+
+                    let intent_ref = runtime_adapter::IntentRef::new(
+                        params.intent_id.to_string(),
+                        params.tenant_id.to_string(),
+                        params.workflow_id.to_string(),
+                        "active".to_string(),
+                    );
+
+                    match self
+                        .runtime_adapter
+                        .replay_from_checkpoint(runtime_cp, intent_ref)
+                        .await
+                    {
+                        Ok(()) => RuntimeExecutionResult::replay_succeeded(),
+                        Err(e) => RuntimeExecutionResult::degraded(
+                            false,
+                            true,
+                            &format!("Replay failed: {}", e),
+                        ),
+                    }
+                }
+                Ok(_) => RuntimeExecutionResult::skipped_not_ready(),
+                Err(_e) => RuntimeExecutionResult::skipped_not_ready(),
+            }
+        } else {
+            RuntimeExecutionResult::skipped_not_ready()
+        };
+
+        Ok(ReplayResult {
+            intent_id: params.intent_id,
+            from_version: params.from_version,
+            to_version: params.to_version,
             aligned_checkpoint_id,
             checkpoint_selection_outcome,
             runtime_execution_result: runtime_result,

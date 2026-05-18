@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::types::{ReplayRequest, ReplayResponse};
 use crate::{runtime_execution_status_label, ApiErrorResponse, AppState};
+use rebase_orchestrator::ReplayParams;
 
 /// POST /intents/{intent_id}/replay - Initiate a bounded replay operation
 ///
@@ -63,19 +64,61 @@ pub(crate) async fn replay_intent(
             .unwrap_or(intent_head.version.version_number);
         let to_version = request.to_version;
 
-        // Execute bounded replay via orchestrator
-        let replay_result = state
-            .orchestrator
-            .replay(
-                intent_id,
-                intent_head.intent.tenant_id,
-                intent_head.intent.workflow_id,
-                from_version,
-                to_version,
-                request.checkpoint_id,
-            )
-            .await
-            .map_err(ApiErrorResponse)?;
+        // P1-S5i: Use RLS-aware transaction path when pool is available
+        let replay_result = if let Some(rls_pool) = &state.rls_pool {
+            let mut tx = match rls_pool.begin_with_tenant(rls_claims.tenant_id).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                        "failed to begin RLS transaction: {}",
+                        e
+                    ))));
+                }
+            };
+
+            let replay_result = state
+                .orchestrator
+                .replay_with_tx(
+                    &mut tx,
+                    ReplayParams {
+                        intent_id,
+                        tenant_id: intent_head.intent.tenant_id,
+                        workflow_id: intent_head.intent.workflow_id,
+                        from_version,
+                        to_version,
+                        checkpoint_id: request.checkpoint_id,
+                    },
+                )
+                .await;
+
+            let replay_result = match replay_result {
+                Ok(r) => r,
+                Err(e) => return Err(ApiErrorResponse(e)),
+            };
+
+            if let Err(e) = tx.commit().await {
+                return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                    "failed to commit RLS transaction: {}",
+                    e
+                ))));
+            }
+
+            replay_result
+        } else {
+            // Non-RLS fallback
+            state
+                .orchestrator
+                .replay(ReplayParams {
+                    intent_id,
+                    tenant_id: intent_head.intent.tenant_id,
+                    workflow_id: intent_head.intent.workflow_id,
+                    from_version,
+                    to_version,
+                    checkpoint_id: request.checkpoint_id,
+                })
+                .await
+                .map_err(ApiErrorResponse)?
+        };
 
         // Record ReplayInitiated audit event (best-effort)
         let actor_id = "external-api/replay";
@@ -162,14 +205,14 @@ pub(crate) async fn replay_intent(
     // Execute bounded replay via orchestrator
     let replay_result = state
         .orchestrator
-        .replay(
+        .replay(ReplayParams {
             intent_id,
-            intent_head.intent.tenant_id,
-            intent_head.intent.workflow_id,
+            tenant_id: intent_head.intent.tenant_id,
+            workflow_id: intent_head.intent.workflow_id,
             from_version,
             to_version,
-            request.checkpoint_id,
-        )
+            checkpoint_id: request.checkpoint_id,
+        })
         .await
         .map_err(ApiErrorResponse)?;
 
@@ -274,14 +317,14 @@ pub(crate) async fn replay_intent(
     // Execute bounded replay via orchestrator
     let replay_result = state
         .orchestrator
-        .replay(
+        .replay(ReplayParams {
             intent_id,
-            intent_head.intent.tenant_id,
-            intent_head.intent.workflow_id,
+            tenant_id: intent_head.intent.tenant_id,
+            workflow_id: intent_head.intent.workflow_id,
             from_version,
             to_version,
-            request.checkpoint_id,
-        )
+            checkpoint_id: request.checkpoint_id,
+        })
         .await
         .map_err(ApiErrorResponse)?;
 
