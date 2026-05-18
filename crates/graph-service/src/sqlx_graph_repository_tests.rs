@@ -1,4 +1,5 @@
 use super::*;
+use crate::type_mappings::*;
 use intent_rebase_types::{EdgeType, ExternalRef, ExternalRefType};
 
 fn create_test_node_request() -> CreateGraphNodeRequest {
