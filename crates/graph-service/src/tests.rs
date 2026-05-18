@@ -1,5 +1,7 @@
 use super::*;
-use intent_rebase_types::{EdgeDirection, EdgeType, ExternalRef, ExternalRefType};
+use intent_rebase_types::{
+    ClassificationImpact, EdgeDirection, EdgeType, ExternalRef, ExternalRefType, PropagationConfig,
+};
 
 fn create_test_node_request() -> CreateGraphNodeRequest {
     CreateGraphNodeRequest {
