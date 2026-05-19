@@ -16,6 +16,9 @@ pub mod compensation_action_types;
 pub mod compensation_executor;
 pub mod compensation_planner;
 pub mod compensation_simulator;
+
+#[cfg(test)]
+mod compensation_simulator_tests;
 pub mod counter_action_executor;
 pub mod escalation_executor;
 pub mod followup_notice_executor;
