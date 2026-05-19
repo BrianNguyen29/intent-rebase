@@ -18,6 +18,9 @@ pub mod sqlx_repository;
 #[cfg(test)]
 mod approval_request_repo_tests;
 
+#[cfg(test)]
+mod event_consumer_tests;
+
 use async_trait::async_trait;
 use intent_rebase_types::{
     CreateIntentRequest, CreateIntentResponse, CreateVersionRequest, CreateVersionResponse, Intent,
