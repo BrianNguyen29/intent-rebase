@@ -10,6 +10,7 @@
 pub mod compensation_action;
 pub mod compensation_action_repo;
 pub mod compensation_action_service;
+pub mod compensation_action_types;
 pub mod compensation_executor;
 pub mod compensation_planner;
 pub mod compensation_simulator;
@@ -33,10 +34,11 @@ pub use compensation_action_repo::{
     CompensationActionRepository, InMemoryCompensationActionRepository,
     SqlxCompensationActionRepository,
 };
-pub use compensation_action_service::{
+pub use compensation_action_service::CompensationActionService;
+pub use compensation_action_types::{
     BatchCandidates, BatchItemOutcome, BatchOrchestrationResult, BatchOrchestrationSummary,
-    CompensationActionService, CoordinationRecord, CoordinationResult, CoordinationStatus,
-    CoordinationSummary, ErrorClassification, ErrorSeverity, FeasibilityRisk, OrchestrationAction,
+    CoordinationRecord, CoordinationResult, CoordinationStatus, CoordinationSummary,
+    ErrorClassification, ErrorSeverity, FeasibilityRisk, OrchestrationAction,
     OrchestrationActionProposal, OrchestrationDryRunResult, OrchestrationDryRunSummary,
     PolicyGateEvaluation, PolicyGateEvaluationResult, PolicyGateMetadata, PolicyGateStatus,
     PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
