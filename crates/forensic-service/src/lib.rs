@@ -55,3 +55,6 @@ pub use export::*;
 pub use real_collector::*;
 pub use s3_bundle_storage::*;
 pub use verification::*;
+
+#[cfg(test)]
+mod bundle_replay_tests;
