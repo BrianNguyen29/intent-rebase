@@ -551,22 +551,22 @@ impl CompensationActionService {
         let executor_result = if let Some(ref side_effect_repo) = self.side_effect_repo {
             match (action.strategy_type, action.feasibility) {
                 (StrategyType::Rollback, CompensationFeasibility::Automatic) => {
-                    use crate::compensation_executor::RollbackExecutor;
+                    use crate::RollbackExecutor;
                     let executor = RollbackExecutor::new(side_effect_repo.clone());
                     executor.execute(&action).await?
                 }
                 (StrategyType::CounterAction, CompensationFeasibility::SemiAutomatic) => {
-                    use crate::compensation_executor::CounterActionExecutor;
+                    use crate::CounterActionExecutor;
                     let executor = CounterActionExecutor::new(side_effect_repo.clone());
                     executor.execute(&action).await?
                 }
                 (StrategyType::FollowupNotice, CompensationFeasibility::ManualOnly) => {
-                    use crate::compensation_executor::FollowupNoticeExecutor;
+                    use crate::FollowupNoticeExecutor;
                     let executor = FollowupNoticeExecutor::new(side_effect_repo.clone());
                     executor.execute(&action).await?
                 }
                 (StrategyType::Escalation, CompensationFeasibility::NotPossible) => {
-                    use crate::compensation_executor::EscalationExecutor;
+                    use crate::EscalationExecutor;
                     let executor = EscalationExecutor::new(side_effect_repo.clone());
                     executor.execute(&action).await?
                 }

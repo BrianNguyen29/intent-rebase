@@ -16,14 +16,19 @@ pub mod compensation_action_types;
 pub mod compensation_executor;
 pub mod compensation_planner;
 pub mod compensation_simulator;
+pub mod counter_action_executor;
+pub mod escalation_executor;
+pub mod followup_notice_executor;
 pub mod orchestration_run;
 pub mod orchestration_run_repo;
 pub mod orchestration_runtime;
+pub mod rollback_executor;
 pub mod rollback_record;
 pub mod rollback_record_repo;
 pub mod side_effect;
 pub mod side_effect_repo;
 pub mod side_effect_service;
+pub mod stub_executor;
 
 pub use compensation_action::*;
 pub use rollback_record::*;
@@ -45,10 +50,7 @@ pub use compensation_action_types::{
     PolicyGateEvaluation, PolicyGateEvaluationResult, PolicyGateMetadata, PolicyGateStatus,
     PolicyGateSummary, RetryExhaustionRisk, RiskMetadata, StrategySeverity,
 };
-pub use compensation_executor::{
-    CompensationExecutor, CounterActionExecutor, EscalationExecutor, FollowupNoticeExecutor,
-    RollbackExecutor, StubCompensationExecutor,
-};
+pub use compensation_executor::CompensationExecutor;
 pub use compensation_planner::{
     BoundedCompensationPlanner, CompensationPlanner, InMemoryCompensationPlanner,
 };
@@ -58,6 +60,9 @@ pub use compensation_simulator::{
     ResidualRiskLevel, SimulationConfig, SimulationMode, SimulationOutcome,
     SimulationProbabilities, SimulationRecommendation, SimulationReport,
 };
+pub use counter_action_executor::CounterActionExecutor;
+pub use escalation_executor::EscalationExecutor;
+pub use followup_notice_executor::FollowupNoticeExecutor;
 pub use orchestration_run::{
     OrchestrationActionDecision, OrchestrationRun, RunItemResult, RunStatus,
 };
@@ -65,4 +70,6 @@ pub use orchestration_run_repo::{
     InMemoryOrchestrationRunRepository, OrchestrationRunRepository, SqlxOrchestrationRunRepository,
 };
 pub use orchestration_runtime::OrchestrationRuntime;
+pub use rollback_executor::RollbackExecutor;
+pub use stub_executor::StubCompensationExecutor;
 // RollbackRecordRepository is used via explicit re-exports below
