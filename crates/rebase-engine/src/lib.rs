@@ -17,6 +17,9 @@ pub mod rules;
 #[cfg(test)]
 mod planner_tests;
 
+#[cfg(test)]
+mod rules_tests;
+
 use intent_rebase_types::{IntentRebaseError, IntentVersion};
 
 pub use approval_revalidation::{classify_approvals, ApprovalRevalidationResult};
