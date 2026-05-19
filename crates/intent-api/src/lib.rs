@@ -74,6 +74,9 @@ pub mod webhook_outbox_worker;
 /// Webhook outbox DLQ handlers (Slice 5b — bounded local-dev failed-status DLQ)
 pub mod webhook_outbox_dlq_handlers;
 
+#[cfg(test)]
+mod webhook_outbox_dlq_handler_tests;
+
 /// Webhook HMAC signing (Phase 4a Slice 3 — bounded local-dev signing)
 pub mod webhook_hmac;
 
