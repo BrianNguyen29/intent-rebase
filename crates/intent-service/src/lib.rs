@@ -9,6 +9,7 @@ pub mod event_consumer;
 pub mod policy_snapshot_repo;
 pub mod propagation_record_repo;
 pub mod s3_snapshot_storage;
+pub mod sqlx_approval_request_repo;
 pub mod sqlx_repository;
 
 use async_trait::async_trait;
@@ -27,7 +28,7 @@ use uuid::Uuid;
 
 pub use approval_request_repo::{
     ApprovalRequest, ApprovalRequestRepository, ApprovalRequestStatus,
-    InMemoryApprovalRequestRepository, SqlxApprovalRequestRepository,
+    InMemoryApprovalRequestRepository,
 };
 pub use checkpoint_repo::{
     CheckpointRepository, InMemoryCheckpointRepository, SqlxCheckpointRepository,
@@ -42,6 +43,7 @@ pub use propagation_record_repo::{
 pub use s3_snapshot_storage::{
     InMemorySnapshotStorage, S3SnapshotStorage, SnapshotStorage, SnapshotStorageError,
 };
+pub use sqlx_approval_request_repo::SqlxApprovalRequestRepository;
 pub use sqlx_repository::SqlxIntentRepository;
 
 // Re-export tenant extraction for internal use
