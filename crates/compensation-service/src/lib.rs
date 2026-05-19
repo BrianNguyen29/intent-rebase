@@ -8,6 +8,8 @@
 //!     **Batch 1+ scope:** Full planner logic, executor logic, runtime adapter, API (not yet implemented).
 
 pub mod compensation_action;
+pub mod compensation_action_orchestration;
+pub mod compensation_action_policy;
 pub mod compensation_action_repo;
 pub mod compensation_action_service;
 pub mod compensation_action_types;
