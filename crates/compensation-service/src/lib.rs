@@ -28,6 +28,7 @@ pub mod rollback_record_repo;
 pub mod side_effect;
 pub mod side_effect_repo;
 pub mod side_effect_service;
+pub mod sqlx_compensation_action_repo;
 pub mod stub_executor;
 
 pub use compensation_action::*;
@@ -39,7 +40,6 @@ pub use side_effect_service::*;
 // Explicitly re-export traits to avoid ambiguous glob re-exports
 pub use compensation_action_repo::{
     CompensationActionRepository, InMemoryCompensationActionRepository,
-    SqlxCompensationActionRepository,
 };
 pub use compensation_action_service::CompensationActionService;
 pub use compensation_action_types::{
@@ -71,5 +71,6 @@ pub use orchestration_run_repo::{
 };
 pub use orchestration_runtime::OrchestrationRuntime;
 pub use rollback_executor::RollbackExecutor;
+pub use sqlx_compensation_action_repo::SqlxCompensationActionRepository;
 pub use stub_executor::StubCompensationExecutor;
 // RollbackRecordRepository is used via explicit re-exports below
