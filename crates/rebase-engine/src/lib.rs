@@ -15,6 +15,9 @@ pub mod rule_pack_registry;
 pub mod rules;
 
 #[cfg(test)]
+mod diff_tests;
+
+#[cfg(test)]
 mod planner_tests;
 
 #[cfg(test)]
