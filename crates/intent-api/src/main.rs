@@ -909,6 +909,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into(),
             );
         }
+    } else {
+        tracing::warn!(
+            "INTENT_API_REQUIRE_JWT=false/unset — using dev JWT fallback (NOT for staging/production). \
+             Set INTENT_API_REQUIRE_JWT=true and provide a strong JWT_SECRET for any non-local environment."
+        );
     }
 
     // Load auth_config for SQL router when jwt-auth feature is enabled
