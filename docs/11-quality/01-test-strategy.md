@@ -68,12 +68,46 @@ The `nats_jetstream.rs` module was decomposed into submodules (`dlq.rs`, `stream
 Tests that require external services (NATS with JetStream, Postgres, etc.) are marked `#[ignore]` and are NOT run by default. Run them explicitly when the service is available:
 
 ```bash
-# Run ignored NATS live integration tests
+# Run ignored NATS live integration tests (requires live NATS with JetStream)
+export NATS_URL=nats://localhost:4222
 cargo test -p intent-api --lib nats_jetstream -- --ignored
 
-# Run ignored tests that require Postgres
+# Run ignored RLS integration tests (requires local Postgres via docker-compose)
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
+cargo test --test rls_integration -- --ignored
+
+# Run ignored SQLx repository smoke tests (requires local Postgres)
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
+cargo test -p intent-api --lib sqlx_repo_smoke -- --ignored
+
+# Run ignored tests that require Postgres (broad filter)
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
 cargo test -p intent-api -- --ignored
 ```
+
+**Prerequisites for ignored tests:**
+1. Start local services: `docker compose -f infrastructure/local/docker-compose.yml up -d`
+2. Verify Postgres is healthy: `docker compose -f infrastructure/local/docker-compose.yml ps`
+3. Verify NATS is healthy (for NATS tests): check `NATS_URL` is set and NATS JetStream is available
+4. Set `DATABASE_URL` and/or `NATS_URL` as shown above
+
+**Current environment caveat (2026-05-20):** `scripts/verify-fast.sh` completes fmt/check/clippy but may time out during the test phase (~10 min). Running `cargo test --workspace --lib --all-features` separately passes. Ignored live tests (RLS, NATS, SQLx smoke) pass when the above prerequisites are met and environment variables are set, but they remain **local-dev/manual evidence only** and are **not production evidence**.
+
+### Known local caveats and blockers (Phase 1 execution results)
+
+The following issues were discovered by actually running the ignored suites against a local docker-compose stack (Postgres, NATS, MinIO). They are recorded here so future runs are not surprised and so blockers are not hidden.
+
+| Suite | Symptom | Status | Likely Cause | Workaround / Next Step |
+|-------|---------|--------|--------------|------------------------|
+| RLS integration (fresh DB) | 22 passed | 🟢 FIXED | RLS harness fixed; fresh DB migrations apply cleanly | Use fresh DB (`intent_rebase_phase1_fix`) for canonical RLS integration evidence |
+| Migration integration (fresh DB) | 1 passed | 🟢 FIXED | Migration 19 syntax fixed in `infrastructure/migrations/019_create_webhook_outbox.sql` | Fresh DB path is now the canonical migration evidence source |
+| Audit SQLx smoke (fresh DB) | 1 passed | 🟢 FIXED | Audit enum insert/read alignment fixed in `crates/intent-rebase-types/src/audit_repo.rs` | Fresh DB audit smoke is green |
+| NATS JetStream ignored suite | 14 passed | 🟢 FIXED | NATS uniqueness fix in `crates/intent-api/src/nats_jetstream/tests_live_integration.rs` | All live NATS tests pass after code fix |
+| RLS integration (existing DB) | 3 passed, 19 failed | 🔴 OPEN | Missing relations `propagation_records`, `webhook_subscriptions`; RLS not enabled → `RowNotFound`; tenant isolation assertions fail | Existing DB is stale relative to migration sequence; fresh DB is the canonical source |
+| RLS integration (existing DB, `RLS_TEST_RUN_MIGRATIONS=true`) | 1 passed, 21 failed | 🔴 OPEN | Migration 9 checksum mismatch: "previously applied but has been modified" | Existing DB has a modified migration 9; fresh DB path avoids this |
+| Load tests (L1-L3) | 2 passed | 🟡 LOCAL ONLY | L1 1000/1000, L2 5000/5000, L3 10000/10000; sustained 90s 4505/4505, 50.05 req/s, p95 3ms, p99 8ms | **Local load-test harness only**; not production/staging evidence. L4-L5 remain blocked until staging/production infra exists. |
+
+> **Ground truth rule:** The pass/fail counts above are the ground truth from the most recent execution. Update this table after each re-run. Fixed items are kept in the table with their resolution status so historical baseline (Phase 1 failures) is preserved.
 
 This policy keeps `cargo test --workspace --lib --all-features` fast and free of external-service dependencies.
 

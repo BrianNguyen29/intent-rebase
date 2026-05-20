@@ -2,7 +2,7 @@
 
 > **Status:** Non-production — Phase 3 closed (2026-05-11)
 > **Scope:** Production readiness items only; feature delivery tracked separately
-> **Last Updated:** 2026-05-11
+> **Last Updated:** 2026-05-20
 
 ---
 
@@ -52,7 +52,7 @@ P1 items address the full RLS transaction wrapping plan from oracle design. Thes
 | **P1-S2** | Wire `IntentService.rls_pool` | ✅ BOUNDED DONE (pushed) | IntentService.rls_pool wired; cargo fmt/check/test with/without jwt-auth passed (221 tests) |
 | **P1-S3** | Add `RlsTransactionExt` trait | ✅ BOUNDED DONE (pushed f055dc5) | RlsTransactionExt trait enables `begin_with_tenant` on any sqlx::Transaction |
 | **P1-S4** | Wrap `create_graph_edge` handler | ✅ BOUNDED DONE (pushed 02de885) | `begin_with_tenant → create_edge_with_tx → commit` wired; tenant mismatch rejection |
-| **P1-S5** | Wrap compensation, forensic, orchestration, approval, artifact handlers | 🔴 PARTIAL — approval sub-slices delivered | See sub-slice breakdown below |
+| **P1-S5** | Wrap compensation, forensic, orchestration, approval, artifact handlers | 🟡 BOUNDED PARTIAL — P1-S5a..S5i delivered; NATS tenant isolation and production certification remain open | See sub-slice breakdown below |
 | **RLC-4..RLC-9** | RLC test expansion (cross-tenant isolation) | ✅ BOUNDED VERIFIED LOCALLY | 12 rls_integration --ignored tests passed locally; full RLS enforcement pending all slices |
 
 ##### P1-S5 Sub-Slice Breakdown (Approval Handlers)
@@ -302,16 +302,25 @@ These items cannot proceed until specific external conditions are met.
 
 **No overclaim:** The current webhook delivery is a bounded non-production slice. It runs in-process with best-effort dispatch and no delivery guarantee. Production hardening requires an outbox table, a background delivery worker, HMAC signature generation with per-subscription secrets, key rotation, and a subscription CRUD API. All of these remain Phase 4+ scope.
 
-**Phase 4 Planning Slices (Deferred — Planning Only)**
+**Phase 4 Planning Slices — Status Update**
 
-| Slice | Description | Status |
-|-------|-------------|--------|
-| **P2-6a** | Outbox schema — detailed design below | 🔴 Deferred — schema design only; no migration or code |
-| **P2-6b** | Background delivery worker lifecycle — detailed design below | 🔴 Deferred — design only |
-| **P2-6c** | HMAC signing + key rotation — detailed design below | 🔴 Deferred — design only |
-| **P2-6d** | Subscription CRUD API — detailed design below | 🔴 Deferred — design only |
-| **P2-6e** | Retry / dead-letter semantics — detailed design below | 🔴 Deferred — design only |
-| **P2-6f** | Rollback plan — detailed design below | 🔴 Deferred — design only |
+> **Note:** The table below was originally "Deferred — Planning Only." Many slices have since been implemented as bounded local-dev deliveries. This table now reflects the current split between **delivered local-dev** and **remaining production-deferred** items.
+
+| Slice | Description | Current Status |
+|-------|-------------|----------------|
+| **P2-6a** | Outbox schema | 🟡 DELIVERED — migration 019 + `SqlxWebhookOutboxRepository` + DB-free tests; production durability not claimed |
+| **P2-6b** | Background delivery worker lifecycle | 🟡 DELIVERED — env-gated `WebhookOutboxWorker` with claim/poll loop + graceful shutdown + DB-free tests; production background delivery not claimed |
+| **P2-6c** | HMAC signing + key rotation | 🟡 PARTIAL — HMAC-SHA256 signing foundation + canonical string + `WebhookDeliveryDispatcher` delivered; key rotation grace window and production secret manager remain deferred |
+| **P2-6d** | Subscription CRUD API | 🟡 DELIVERED — POST/GET/PATCH/DELETE handlers under `/webhooks/subscriptions`, in-memory + SQLx skeleton, DB-free tests; production secret manager and tenant-scoped pattern matching remain deferred |
+| **P2-6e** | Retry / dead-letter semantics | 🟡 DELIVERED — bounded worker retry/backoff (retryable/terminal classification, `reschedule_retry`), DLQ list/replay/stats/bulk-replay endpoints, replay audit metadata/query; production retention enforcement and operator workflow validation remain deferred |
+| **P2-6f** | Rollback plan / operator workflow | 🟡 DELIVERED — RB14 operator runbook (stale-claim recovery, failed delivery triage, replay decision tree, rollback via env gates, severity/escalation matrix); not externally reviewed, not staging/production validated |
+
+**Remaining Production Blockers (unchanged from P2-6 status above):**
+- Production secret manager + HMAC key rotation
+- Staging/production webhook delivery SLO evidence
+- External SRE/security review + pen-test closure
+- Production retention enforcement
+- Operator workflow validation in production environment
 
 #### P2-6a: Outbox Schema Design
 

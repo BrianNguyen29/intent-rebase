@@ -218,9 +218,9 @@ cargo test -p graph-service --all-features
 
 ## Local Verification Matrix
 
-**Remote GitHub Actions CI is intentionally disabled** — no automatic runs on push or pull_request. This is a deliberate choice to avoid CI costs on a personal project with no collaborators.
+**Heavy CI (`ci.yml`) is intentionally manual-only** — requires explicit `workflow_dispatch` trigger; no automatic runs on push or pull_request. **Lightweight smoke (`smoke.yml`) runs on `pull_request` and `workflow_dispatch`** — performs fmt, check, clippy, and in-memory lib tests. This split avoids heavy CI costs on a personal project with no collaborators while keeping PRs gated by lightweight checks.
 
-Local verification is the source of truth:
+Local verification remains the primary source of truth:
 
 | Check | Command | Expected |
 |-------|---------|----------|

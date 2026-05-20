@@ -79,7 +79,7 @@ ALTER TABLE webhook_outbox FORCE ROW LEVEL SECURITY;
 -- RLS POLICY FOR TENANT ISOLATION
 -- =============================================================================
 
-CREATE POLICY IF NOT EXISTS tenant_isolation ON webhook_outbox
+CREATE POLICY tenant_isolation ON webhook_outbox
     USING (current_tenant_id() IS NULL OR tenant_id = current_tenant_id());
 
 -- =============================================================================

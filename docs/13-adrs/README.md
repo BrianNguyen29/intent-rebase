@@ -32,7 +32,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 - **Roadmap:** `../10-delivery/01-roadmap.md`
 - **Agent Guide:** `../12-agents/01-agent-implementation-guide.md`
 - **Architecture:** `../02-architecture/01-system-overview.md`
-- **Threat Model:** `../08-security/01-threat-model.md`
+- **Threat Model:** `../14-governance/06-threat-model-v2.md` (current) — see also `../08-security/01-threat-model.md` (baseline/legacy)
 - **Governance Pack:** `../14-governance/README.md`
 
 ## Hướng dẫn đóng góp ADR mới

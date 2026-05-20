@@ -770,10 +770,7 @@ async fn live_jetstream_tenant_scope_matching_tenant_consumes() {
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
 
-    let unique_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let unique_id = uuid::Uuid::new_v4().to_string();
     let tenant_id = uuid::Uuid::new_v4();
     let stream_name: &'static str =
         Box::leak(format!("test_tenant_match_{}", unique_id).into_boxed_str());
@@ -853,10 +850,7 @@ async fn live_jetstream_tenant_scope_mismatched_tenant_rejects_and_acks() {
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
 
-    let unique_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let unique_id = uuid::Uuid::new_v4().to_string();
     let expected_tenant = uuid::Uuid::new_v4();
     let actual_tenant = uuid::Uuid::new_v4();
     let stream_name: &'static str =
@@ -949,10 +943,7 @@ async fn live_jetstream_tenant_scope_unscoped_consumes_all() {
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
 
-    let unique_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let unique_id = uuid::Uuid::new_v4().to_string();
     let some_tenant = uuid::Uuid::new_v4();
     let stream_name: &'static str =
         Box::leak(format!("test_tenant_unscoped_{}", unique_id).into_boxed_str());
@@ -1031,10 +1022,7 @@ async fn live_jetstream_tenant_scope_missing_tenant_rejects() {
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
 
-    let unique_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let unique_id = uuid::Uuid::new_v4().to_string();
     let expected_tenant = uuid::Uuid::new_v4();
     let stream_name: &'static str =
         Box::leak(format!("test_tenant_missing_{}", unique_id).into_boxed_str());

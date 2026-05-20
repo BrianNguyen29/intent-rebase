@@ -93,7 +93,7 @@ Bộ tài liệu cung cấp **procedure templates và plans** cho production-har
 7. `03-spec/04-rebase-engine.md`
 8. `04-api/01-rest-api.md`
 9. `05-data/01-schema.md`
-10. `08-security/01-threat-model.md`
+10. `08-security/01-threat-model.md` (baseline/legacy) → current: `14-governance/06-threat-model-v2.md`
 11. `10-delivery/01-roadmap.md`
 12. `12-agents/01-agent-implementation-guide.md`
 

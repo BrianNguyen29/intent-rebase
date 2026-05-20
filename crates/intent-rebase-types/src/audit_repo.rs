@@ -739,7 +739,7 @@ impl SqlxAuditRepository {
                 id, tenant_id, event_type, actor_id, intent_id, artifact_id,
                 payload, trace_id, span_id, occurred_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3::audit_event_type, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(event.id)
@@ -773,7 +773,7 @@ impl AuditRepository for SqlxAuditRepository {
     ) -> Result<AuditEvent, IntentRebaseError> {
         let row = sqlx::query(
             r#"
-            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+            SELECT id, tenant_id, event_type::TEXT as event_type, actor_id, intent_id, artifact_id,
                 payload, trace_id, span_id, occurred_at
             FROM audit_events
             WHERE id = $1 AND tenant_id = $2
@@ -798,7 +798,7 @@ impl AuditRepository for SqlxAuditRepository {
     ) -> Result<Vec<AuditEvent>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+            SELECT id, tenant_id, event_type::TEXT as event_type, actor_id, intent_id, artifact_id,
                 payload, trace_id, span_id, occurred_at
             FROM audit_events
             WHERE intent_id = $1 AND tenant_id = $2
@@ -823,7 +823,7 @@ impl AuditRepository for SqlxAuditRepository {
     ) -> Result<Vec<AuditEvent>, IntentRebaseError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, tenant_id, event_type, actor_id, intent_id, artifact_id,
+            SELECT id, tenant_id, event_type::TEXT as event_type, actor_id, intent_id, artifact_id,
                 payload, trace_id, span_id, occurred_at
             FROM audit_events
             WHERE tenant_id = $1

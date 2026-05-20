@@ -576,7 +576,7 @@ async fn create_test_compensation_action_for_current_tenant(
         INSERT INTO compensation_actions (id, tenant_id, side_effect_id, intent_id,
                                         trigger_context, execution_result_payload,
                                         feasibility, strategy_type, rationale, status)
-        VALUES ($1, $2, $3, $4, '{"intent_id": $4}', NULL,
+        VALUES ($1, $2, $3, $4, jsonb_build_object('intent_id', $4::text), NULL,
                 'semi_automatic', 'rollback', 'RLS integration test', 'pending')
         "#,
     )
@@ -799,7 +799,7 @@ async fn create_test_forensic_bundle_for_current_tenant(
         VALUES ($1, $2, 'v1', NOW(), 'rls-test', NOW(), NOW(),
                 'incident_investigation', 'pending',
                 '{"intent_versions":0,"artifacts":0,"approvals":0,"audit_events":0,"policy_snapshots":0}',
-                '{"manifest_hash":"test","chain_verified":false,"verification_timestamp":"2024-01-01T00:00:00Z"}',
+                '{"manifest_hash":"test","chain_verified":false,"verification_timestamp":"2024-01-01T00:00:00Z","intent_versions_hash":"","artifacts_hash":"","approvals_hash":"","audit_events_hash":"","policy_snapshots_hash":""}',
                 NULL)
         "#,
     )
@@ -1035,18 +1035,40 @@ async fn check_current_role_is_bypass(pool: &sqlx::PgPool) -> TestResult<(bool, 
 /// so RLS policies will be enforced. Returns the connection string for
 /// the new role.
 async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
-    // First check if role already exists and drop it
-    drop_test_role(pool).await?;
+    // Check if role already exists; reuse instead of drop/create to avoid
+    // cross-database dependency failures.
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(TEST_ROLE_NAME)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to check if test role exists: {}", e))?;
 
-    // Create the test role with a password
-    // Use $ quoting for password to avoid escaping issues
-    sqlx::query(&format!(
-        "CREATE ROLE {} LOGIN PASSWORD $${}$$",
-        TEST_ROLE_NAME, TEST_ROLE_PASSWORD
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create test role {}: {}", TEST_ROLE_NAME, e))?;
+    if exists {
+        // Reuse existing role: reset password in case it changed
+        sqlx::query(&format!(
+            "ALTER ROLE {} LOGIN PASSWORD $${}$$",
+            TEST_ROLE_NAME, TEST_ROLE_PASSWORD
+        ))
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to alter test role {}: {}", TEST_ROLE_NAME, e))?;
+        println!("Reusing existing test role '{}'", TEST_ROLE_NAME);
+    } else {
+        // Create the test role with a password
+        // Use $ quoting for password to avoid escaping issues
+        sqlx::query(&format!(
+            "CREATE ROLE {} LOGIN PASSWORD $${}$$",
+            TEST_ROLE_NAME, TEST_ROLE_PASSWORD
+        ))
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create test role {}: {}", TEST_ROLE_NAME, e))?;
+        println!(
+            "Created test role '{}' for RLS isolation testing",
+            TEST_ROLE_NAME
+        );
+    }
 
     // Grant schema usage and table privileges
     // The test role needs to be able to insert/select from tenant tables
@@ -1062,7 +1084,9 @@ async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
         "GRANT INSERT, SELECT ON compensation_actions TO",
         "GRANT INSERT, SELECT ON side_effect_rollback_records TO",
         "GRANT INSERT, SELECT ON policy_snapshot TO",
+        "GRANT INSERT, SELECT ON orchestration_runs TO",
         "GRANT INSERT, SELECT ON forensic_bundles TO",
+        "GRANT INSERT, SELECT ON propagation_records TO",
         "GRANT INSERT, SELECT ON webhook_subscriptions TO",
     ];
 
@@ -1093,10 +1117,6 @@ async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
         return Err("Invalid DATABASE_URL format - no @ found".into());
     };
 
-    println!(
-        "Created test role '{}' for RLS isolation testing",
-        TEST_ROLE_NAME
-    );
     Ok(test_url)
 }
 
@@ -1125,14 +1145,74 @@ async fn drop_test_role(pool: &sqlx::PgPool) -> TestResult<()> {
             .await
             .ok(); // Ignore errors if no owned objects
 
-        // Now drop the role (should succeed since dependencies are cleared)
-        sqlx::query(&format!("DROP ROLE IF EXISTS {}", TEST_ROLE_NAME))
+        // Best-effort drop: don't fail if cross-database dependencies remain
+        match sqlx::query(&format!("DROP ROLE IF EXISTS {}", TEST_ROLE_NAME))
             .execute(pool)
             .await
-            .map_err(|e| format!("Failed to drop test role: {}", e))?;
-        println!("Dropped test role '{}'", TEST_ROLE_NAME);
+        {
+            Ok(_) => println!("Dropped test role '{}'", TEST_ROLE_NAME),
+            Err(e) => println!(
+                "WARNING: Could not drop test role '{}': {}. \
+                 This is expected if the role has cross-database dependencies. \
+                 The role will be reused in subsequent tests.",
+                TEST_ROLE_NAME, e
+            ),
+        }
     }
     Ok(())
+}
+
+/// Prepare an RLS-enforcing connection pool for integration tests.
+///
+/// Connects to the database as the admin role, ensures migrations are applied,
+/// and checks whether the current role bypasses RLS. If it does, creates or
+/// reuses the dedicated non-bypass test role and returns a pool connected as
+/// that role.
+///
+/// Returns `(admin_pool, test_pool, is_bypass)`.
+async fn prepare_rls_test_pool(
+    database_url: &str,
+    test_max_connections: u32,
+) -> TestResult<(sqlx::PgPool, sqlx::PgPool, bool)> {
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(15))
+        .connect(database_url)
+        .await
+        .map_err(|e| format!("Failed to connect to database: {}", e))?;
+
+    ensure_migrations(&admin_pool).await?;
+
+    let (is_bypass, current_role) = check_current_role_is_bypass(&admin_pool)
+        .await
+        .map_err(|e| format!("Failed to check current role bypass status: {}", e))?;
+
+    let test_pool = if is_bypass {
+        println!(
+            "WARNING: Current role '{}' is superuser/bypass - creating non-bypass test role...",
+            current_role
+        );
+        let test_url = create_test_role(&admin_pool).await?;
+        let pool = PgPoolOptions::new()
+            .max_connections(test_max_connections)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect(&test_url)
+            .await
+            .map_err(|e| format!("Failed to connect with non-bypass test role: {}", e))?;
+        println!(
+            "Using non-bypass role '{}' for RLS isolation test",
+            TEST_ROLE_NAME
+        );
+        pool
+    } else {
+        println!(
+            "Using current role '{}' for RLS isolation test (not a bypass role)",
+            current_role
+        );
+        admin_pool.clone()
+    };
+
+    Ok((admin_pool, test_pool, is_bypass))
 }
 
 // =============================================================================
@@ -1501,10 +1581,11 @@ async fn test_tenant_isolation_under_rls() {
     // Cleanup: Drop test role if we created one
     // ===========================================================================
     if is_bypass {
-        println!("Cleaning up test role '{}'...", TEST_ROLE_NAME);
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        println!(
+            "Cleaning up test role '{}' (best-effort)...",
+            TEST_ROLE_NAME
+        );
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -1628,21 +1709,14 @@ async fn test_rlc4_tenant_isolation_approval_requests() {
     let tenant_a_intent_id = Uuid::new_v4();
     let tenant_b_intent_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create test data for Tenant A
     let tenant_a_request_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -1675,7 +1749,7 @@ async fn test_rlc4_tenant_isolation_approval_requests() {
     // Create test data for Tenant B
     let tenant_b_request_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -1707,7 +1781,7 @@ async fn test_rlc4_tenant_isolation_approval_requests() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -1742,7 +1816,7 @@ async fn test_rlc4_tenant_isolation_approval_requests() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -1775,7 +1849,15 @@ async fn test_rlc4_tenant_isolation_approval_requests() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc4_tenant_isolation_approval_requests PASSED");
 }
 
@@ -1796,21 +1878,14 @@ async fn test_rlc5_tenant_isolation_graph_nodes() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create test data for Tenant A
     let tenant_a_node_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -1832,7 +1907,7 @@ async fn test_rlc5_tenant_isolation_graph_nodes() {
     // Create test data for Tenant B
     let tenant_b_node_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -1853,7 +1928,7 @@ async fn test_rlc5_tenant_isolation_graph_nodes() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -1883,7 +1958,7 @@ async fn test_rlc5_tenant_isolation_graph_nodes() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -1911,7 +1986,15 @@ async fn test_rlc5_tenant_isolation_graph_nodes() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc5_tenant_isolation_graph_nodes PASSED");
 }
 
@@ -1933,16 +2016,9 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create graph_nodes first (prerequisite for graph_edges)
     let tenant_a_from_node = Uuid::new_v4();
@@ -1952,7 +2028,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
 
     // Tenant A nodes
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -1974,7 +2050,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
 
     // Tenant B nodes
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -1997,7 +2073,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
     // Create test edges for Tenant A
     let tenant_a_edge_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A edge");
@@ -2023,7 +2099,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
     // Create test edges for Tenant B
     let tenant_b_edge_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B edge");
@@ -2048,7 +2124,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -2078,7 +2154,7 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -2106,7 +2182,15 @@ async fn test_rlc6_tenant_isolation_graph_edges() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc6_tenant_isolation_graph_edges PASSED");
 }
 
@@ -2129,21 +2213,14 @@ async fn test_rlc7_tenant_isolation_side_effects() {
     let tenant_a_intent_id = Uuid::new_v4();
     let tenant_b_intent_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create test data for Tenant A
     let tenant_a_side_effect_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -2174,7 +2251,7 @@ async fn test_rlc7_tenant_isolation_side_effects() {
     // Create test data for Tenant B
     let tenant_b_side_effect_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -2204,7 +2281,7 @@ async fn test_rlc7_tenant_isolation_side_effects() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -2236,7 +2313,7 @@ async fn test_rlc7_tenant_isolation_side_effects() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -2266,7 +2343,15 @@ async fn test_rlc7_tenant_isolation_side_effects() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc7_tenant_isolation_side_effects PASSED");
 }
 
@@ -2291,20 +2376,13 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
     let tenant_a_side_effect_id = Uuid::new_v4();
     let tenant_b_side_effect_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create prerequisites: intents and side_effects for both tenants
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A prerequisites");
@@ -2332,7 +2410,7 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
     }
 
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B prerequisites");
@@ -2362,7 +2440,7 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
     // Create test data for Tenant A
     let tenant_a_compensation_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A compensation");
@@ -2390,7 +2468,7 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
     // Create test data for Tenant B
     let tenant_b_compensation_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B compensation");
@@ -2417,7 +2495,7 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -2456,7 +2534,7 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -2493,7 +2571,15 @@ async fn test_rlc8_tenant_isolation_compensation_actions() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc8_tenant_isolation_compensation_actions PASSED");
 }
 
@@ -2520,20 +2606,13 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
     let tenant_a_compensation_id = Uuid::new_v4();
     let tenant_b_compensation_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create all prerequisites for both tenants
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A prerequisites");
@@ -2570,7 +2649,7 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
     }
 
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B prerequisites");
@@ -2609,7 +2688,7 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
     // Create test data for Tenant A
     let tenant_a_rollback_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A rollback");
@@ -2638,7 +2717,7 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
     // Create test data for Tenant B
     let tenant_b_rollback_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B rollback");
@@ -2666,7 +2745,7 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -2705,7 +2784,7 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -2742,7 +2821,15 @@ async fn test_rlc9_tenant_isolation_side_effect_rollback_records() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc9_tenant_isolation_side_effect_rollback_records PASSED");
 }
 
@@ -2765,21 +2852,14 @@ async fn test_rlc10_tenant_isolation_policy_snapshot() {
     let tenant_a_intent_id = Uuid::new_v4();
     let tenant_b_intent_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create test data for Tenant A
     let tenant_a_snapshot_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -2812,7 +2892,7 @@ async fn test_rlc10_tenant_isolation_policy_snapshot() {
     // Create test data for Tenant B
     let tenant_b_snapshot_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -2844,7 +2924,7 @@ async fn test_rlc10_tenant_isolation_policy_snapshot() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -2879,7 +2959,7 @@ async fn test_rlc10_tenant_isolation_policy_snapshot() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -2912,7 +2992,15 @@ async fn test_rlc10_tenant_isolation_policy_snapshot() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc10_tenant_isolation_policy_snapshot PASSED");
 }
 
@@ -2935,16 +3023,9 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
     let tenant_a_intent_id = Uuid::new_v4();
     let tenant_b_intent_id = Uuid::new_v4();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create multiple checkpoints for each tenant
     let tenant_a_checkpoint_ids = [Uuid::new_v4(), Uuid::new_v4()];
@@ -2952,7 +3033,7 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
 
     // Tenant A checkpoints
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -2984,7 +3065,7 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
 
     // Tenant B checkpoints
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -3016,7 +3097,7 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
 
     // Verify Tenant A sees only their checkpoints
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -3054,7 +3135,7 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
 
     // Verify Tenant B sees only their checkpoints
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -3090,7 +3171,15 @@ async fn test_rlc11_deeper_checkpoints_isolation() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc11_deeper_checkpoints_isolation PASSED");
 }
 
@@ -3111,21 +3200,14 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     // Create test data for Tenant A
     let tenant_a_run_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A");
@@ -3147,7 +3229,7 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
     // Create test data for Tenant B
     let tenant_b_run_id = Uuid::new_v4();
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B");
@@ -3168,7 +3250,7 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
 
     // Verify Tenant A isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant A verification");
@@ -3203,7 +3285,7 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
 
     // Verify Tenant B isolation
     {
-        let mut tx = pool
+        let mut tx = test_pool
             .begin()
             .await
             .expect("Failed to begin transaction for Tenant B verification");
@@ -3236,7 +3318,15 @@ async fn test_rlc12_tenant_isolation_orchestration_runs() {
             .expect("Failed to commit Tenant B verification");
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_rlc12_tenant_isolation_orchestration_runs PASSED");
 }
 
@@ -3469,10 +3559,11 @@ async fn test_rlc13_tenant_isolation_forensic_bundles() {
     // Cleanup: Drop test role if we created one
     // ===========================================================================
     if is_bypass {
-        println!("Cleaning up test role '{}'...", TEST_ROLE_NAME);
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        println!(
+            "Cleaning up test role '{}' (best-effort)...",
+            TEST_ROLE_NAME
+        );
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -3651,10 +3742,11 @@ async fn test_rlc14_rebase_apply_graph_update_with_rls_tx() {
     // Cleanup: Drop test role if we created one
     // ===========================================================================
     if is_bypass {
-        println!("Cleaning up test role '{}'...", TEST_ROLE_NAME);
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        println!(
+            "Cleaning up test role '{}' (best-effort)...",
+            TEST_ROLE_NAME
+        );
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -3818,9 +3910,7 @@ async fn test_d6_primary_rls_graph_update_isolation() {
 
     // Cleanup
     if is_bypass {
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -3874,6 +3964,15 @@ async fn test_rlc_forensic_bundle_app_level_rls() {
     verify_force_rls_enabled_on_tables(&admin_pool)
         .await
         .expect("FORCE RLS not enabled - cannot run forensic bundle RLS test");
+
+    // Clean up old forensic bundles for the test tenants to avoid deserialization
+    // issues from rows inserted before the integrity JSON included intent_versions_hash.
+    sqlx::query("DELETE FROM forensic_bundles WHERE tenant_id = $1 OR tenant_id = $2")
+        .bind(tenant_a_id)
+        .bind(tenant_b_id)
+        .execute(&admin_pool)
+        .await
+        .ok();
 
     // ===========================================================================
     // Step 2: Check if we need a non-bypass role for testing
@@ -4068,9 +4167,7 @@ async fn test_rlc_forensic_bundle_app_level_rls() {
     // Cleanup
     // ===========================================================================
     if is_bypass {
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -4325,9 +4422,7 @@ async fn test_rlc_forensic_bundle_replay_integrity() {
     // Cleanup
     // ===========================================================================
     if is_bypass {
-        drop_test_role(&admin_pool)
-            .await
-            .expect("Failed to drop test role");
+        let _ = drop_test_role(&admin_pool).await;
     }
 
     admin_pool.close().await;
@@ -4578,16 +4673,9 @@ async fn test_propagation_records_tenant_isolation() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(3)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 3)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     let intent_id = Uuid::new_v4();
     let record_a_id = Uuid::new_v4();
@@ -4595,7 +4683,10 @@ async fn test_propagation_records_tenant_isolation() {
 
     // Create intent row first (required by FK, but propagation_records has no FK)
     {
-        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
@@ -4606,7 +4697,10 @@ async fn test_propagation_records_tenant_isolation() {
 
     // Create propagation record for Tenant A
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant A");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin tx for Tenant A");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_propagation_record_for_current_tenant(
@@ -4622,7 +4716,10 @@ async fn test_propagation_records_tenant_isolation() {
 
     // Create propagation record for Tenant B (same intent_id, different tenant)
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant B");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin tx for Tenant B");
         let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_propagation_record_for_current_tenant(
@@ -4638,7 +4735,10 @@ async fn test_propagation_records_tenant_isolation() {
 
     // Verify Tenant A can only see their own record
     {
-        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin verification tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
 
@@ -4664,7 +4764,10 @@ async fn test_propagation_records_tenant_isolation() {
 
     // Verify Tenant B can only see their own record
     {
-        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin verification tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
 
@@ -4688,7 +4791,15 @@ async fn test_propagation_records_tenant_isolation() {
         tx.commit().await.unwrap();
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_propagation_records_tenant_isolation PASSED");
 }
 
@@ -4710,23 +4821,19 @@ async fn test_propagation_records_tenant_mismatch_fail_closed() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 2)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     let intent_id = Uuid::new_v4();
     let record_id = Uuid::new_v4();
 
     // Create intent row first
     {
-        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
@@ -4737,7 +4844,7 @@ async fn test_propagation_records_tenant_mismatch_fail_closed() {
 
     // Create propagation record for Tenant A
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx");
+        let mut tx = test_pool.begin().await.expect("Failed to begin tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_propagation_record_for_current_tenant(
@@ -4753,7 +4860,7 @@ async fn test_propagation_records_tenant_mismatch_fail_closed() {
 
     // Attempt to access/update record as Tenant B (should fail - record not found)
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx");
+        let mut tx = test_pool.begin().await.expect("Failed to begin tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
 
@@ -4768,7 +4875,15 @@ async fn test_propagation_records_tenant_mismatch_fail_closed() {
         tx.commit().await.unwrap();
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_propagation_records_tenant_mismatch_fail_closed PASSED");
 }
 
@@ -4794,16 +4909,9 @@ async fn test_webhook_subscriptions_tenant_isolation() {
     let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
     let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(3)
-        .acquire_timeout(Duration::from_secs(15))
-        .connect(&database_url)
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 3)
         .await
-        .expect("Failed to connect to database");
-
-    ensure_migrations(&pool)
-        .await
-        .expect("Failed to ensure migrations");
+        .expect("Failed to prepare RLS test pool");
 
     let intent_id = Uuid::new_v4();
     let sub_a_id = Uuid::new_v4();
@@ -4813,7 +4921,10 @@ async fn test_webhook_subscriptions_tenant_isolation() {
 
     // Create intent row first (required by FK)
     {
-        let mut tx = pool.begin().await.expect("Failed to begin transaction");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_intent_for_current_tenant(&mut tx, tenant_a_id, intent_id)
@@ -4824,7 +4935,10 @@ async fn test_webhook_subscriptions_tenant_isolation() {
 
     // Create webhook subscription for Tenant A
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant A");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin tx for Tenant A");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_webhook_subscription_for_current_tenant(
@@ -4841,7 +4955,10 @@ async fn test_webhook_subscriptions_tenant_isolation() {
 
     // Create webhook subscription for Tenant B (same intent_id, different tenant)
     {
-        let mut tx = pool.begin().await.expect("Failed to begin tx for Tenant B");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin tx for Tenant B");
         let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
         create_test_webhook_subscription_for_current_tenant(
@@ -4858,7 +4975,10 @@ async fn test_webhook_subscriptions_tenant_isolation() {
 
     // Verify Tenant A can only see their own subscription
     {
-        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin verification tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
 
@@ -4883,7 +5003,10 @@ async fn test_webhook_subscriptions_tenant_isolation() {
 
     // Verify Tenant B can only see their own subscription
     {
-        let mut tx = pool.begin().await.expect("Failed to begin verification tx");
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin verification tx");
         let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
         sqlx::query(&rls_sql).execute(&mut *tx).await.unwrap();
 
@@ -4906,6 +5029,14 @@ async fn test_webhook_subscriptions_tenant_isolation() {
         tx.commit().await.unwrap();
     }
 
-    pool.close().await;
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
     println!("test_webhook_subscriptions_tenant_isolation PASSED");
 }

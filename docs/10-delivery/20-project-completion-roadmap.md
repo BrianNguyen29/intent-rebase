@@ -138,4 +138,5 @@ This codebase delivers **bounded non-production features** per phase. The follow
 - [Phase 2b Residual Risk & Deferral Register](./10-phase-2b-residual-risk-deferral-register.md)
 - [Production Readiness Backlog](./17-production-readiness-backlog.md)
 - [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md)
-- [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) — detailed A-01..A-13 todo-list and execution roadmap
+- [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) — detailed A-01..A-13 todo-list and execution roadmap; includes evidence packet plan and decomposition progress
+- [Project Assessment and Execution Tracker](./23-project-assessment-and-execution-tracker.md) — consolidated contradiction register, risk register, phase execution plan, and validation matrix
