@@ -84,6 +84,10 @@ cargo test -p intent-api --lib sqlx_repo_smoke -- --ignored
 export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_phase1_fix
 cargo test -p intent-api --test webhook_integration -- --ignored
 
+# Run ignored I3 JWT→RLS→DML integration test (requires local Postgres + jwt-auth feature)
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_phase1_fix
+cargo test -p intent-api --test rls_integration test_i3 -- --ignored --test-threads=1 --nocapture
+
 # Run ignored tests that require Postgres (broad filter)
 export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
 cargo test -p intent-api -- --ignored

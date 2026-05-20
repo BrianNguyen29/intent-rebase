@@ -89,6 +89,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 | RLS integration (existing DB) | `cargo test --test rls_integration -- --ignored` 3 passed, 19 failed on existing DB; 1 passed, 21 failed on existing DB with `RLS_TEST_RUN_MIGRATIONS=true` | Weak — schema drift on existing DB | Missing relations (`propagation_records`, `webhook_subscriptions`); migration 9 checksum mismatch when `RLS_TEST_RUN_MIGRATIONS=true`. Existing DB is stale relative to migration sequence. |
 | Webhook delivery | `cargo test -p intent-api --lib webhook_delivery_tests` 57/57 pass | Strong for bounded slice | In-memory + wiremock; no production guarantees |
 | Webhook integration (S4) | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test webhook_integration -- --ignored` **1 passed** | Strong for local-dev integration | SQLx-backed outbox + subscription pipeline with in-process HTTP receiver and real `reqwest` dispatch. Fresh DB only; local-dev evidence, not production. |
+| I3 JWT→RLS→DML integration | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test rls_integration test_i3 -- --ignored --test-threads=1` **1 passed** | Strong for local-dev integration | Authenticated handler path: JWT Bearer → auth middleware → `create_intent` → `IntentService::create_intent_with_rls` → `RlsAwarePool::begin_with_tenant` → SQLx DML. Fresh DB only; local-dev evidence, not production. |
 | Decomposition | `cargo check --workspace --all-features` + `cargo test --workspace --lib --all-features` pass | Strong for maintainability | Post-refactor verification only |
 | Panic hardening | Panic hook test verifies sanitized output | Bounded | Local hook only; no production alerting |
 
@@ -279,7 +280,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 |----|--------|-------------|-------|--------------|
 | **I1** | L3 staged load test (full stack: NATS + Postgres + MinIO in docker-compose) | Load test results doc | Backend Lead | S4; docker-compose stack |
 | **I2** | 30min sustained load test (L4 precursor) with all alert types firing | Alert firing evidence | Backend Lead | Local stack; alert rules |
-| **I3** | JWT→RLS→DML integration test (end-to-end tenant isolation validation) | Test pass evidence | Backend Lead | S2; local Postgres |
+| **I3** | ✅ DONE — JWT→RLS→DML integration test (`test_i3_jwt_create_intent_rls_dml_isolation`) | Test pass evidence | Backend Lead | S2; local Postgres |
 | **I4** | NATS per-tenant stream migration path validation (staged plan execution) | Migration doc / test evidence | Backend Lead | S1; local NATS |
 | **I5** | Webhook end-to-end delivery test with SQLx outbox + real subscriber in docker-compose | Test pass evidence | Backend Lead | S4; local stack |
 | **I6** | Backup/restore procedure execution against local docker-compose stack | Execution log | Backend Lead | `docs/09-operations/07-backup-restore.md` |
@@ -381,7 +382,7 @@ Phase 0 (Docs Sync)
 | **P1** | ✅ DONE — Execute S2: RLS enforcement audit tool | Backend Lead | 2026-05-20 |
 | **P1** | ✅ DONE — Execute S4: Webhook docker-compose integration test | Backend Lead | 2026-05-20 |
 | **P2** | Execute I1: L3 full-stack load test in docker-compose | Backend Lead | After S1-S4 |
-| **P2** | Execute I3: JWT→RLS→DML integration test | Backend Lead | After S2 |
+| **P2** | ✅ DONE — Execute I3: JWT→RLS→DML integration test | Backend Lead | 2026-05-20 |
 
 ---
 

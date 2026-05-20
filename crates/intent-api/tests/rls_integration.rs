@@ -83,6 +83,9 @@ use std::time::Duration;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
+#[cfg(feature = "jwt-auth")]
+use tower::ServiceExt;
+
 /// Name of the dedicated non-bypass test role for RLS isolation testing.
 /// This role is created at test start and dropped at test end to ensure
 /// RLS policies are actually enforced (intent_rebase is superuser/bypass).
@@ -1075,6 +1078,7 @@ async fn create_test_role(pool: &sqlx::PgPool) -> TestResult<String> {
     let grants = [
         "GRANT USAGE ON SCHEMA public TO",
         "GRANT INSERT, SELECT ON intents TO",
+        "GRANT INSERT, SELECT ON intent_versions TO",
         "GRANT INSERT, SELECT ON audit_events TO",
         "GRANT INSERT, SELECT ON checkpoints TO",
         "GRANT INSERT, SELECT ON approval_requests TO",
@@ -5039,4 +5043,367 @@ async fn test_webhook_subscriptions_tenant_isolation() {
     }
 
     println!("test_webhook_subscriptions_tenant_isolation PASSED");
+}
+
+// ============================================================================
+// I3 — JWT→RLS→DML Integration Test (Phase 3 Evidence)
+// ============================================================================
+
+/// Test: I3 — JWT→RLS→DML integration test.
+///
+/// Exercises the full authenticated handler path:
+/// JWT Bearer token → auth middleware → create_intent handler →
+/// IntentService::create_intent_with_rls → RlsAwarePool::begin_with_tenant → SQLx DML.
+///
+/// Validates that:
+/// - A valid JWT for Tenant A can create an intent via POST /intents (201 CREATED)
+/// - The created DB row has Tenant A's tenant_id
+/// - Tenant B's RLS context cannot see Tenant A's row
+/// - Tenant mismatch (JWT tenant != request tenant) is rejected with 403
+///
+/// ## Running
+///
+/// ```bash
+/// DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_phase1_fix \
+///   cargo test -p intent-api --test rls_integration test_i3 -- --ignored --test-threads=1 --nocapture
+/// ```
+///
+/// ## Caveats
+/// - Local-dev / docker-compose evidence only; not production-ready validation
+/// - Requires `jwt-auth` feature (enabled by default)
+/// - Uses live Postgres; ignored by default
+#[cfg(feature = "jwt-auth")]
+#[tokio::test]
+#[ignore = "requires live Postgres (set DATABASE_URL to run)"]
+async fn test_i3_jwt_create_intent_rls_dml_isolation() {
+    let database_url = match get_database_url() {
+        Some(url) => url,
+        None => {
+            eprintln!("{}", SKIP_REASON_NO_DATABASE);
+            return;
+        }
+    };
+
+    let tenant_a_id = parse_test_uuid(TENANT_A_UUID);
+    let tenant_b_id = parse_test_uuid(TENANT_B_UUID);
+    let workflow_id = Uuid::new_v4();
+
+    // =========================================================================
+    // Step 1: Prepare pools and verify RLS configuration
+    // =========================================================================
+    let (admin_pool, test_pool, is_bypass) = prepare_rls_test_pool(&database_url, 3)
+        .await
+        .expect("Failed to prepare RLS test pool");
+
+    verify_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("RLS not enabled - cannot run I3 test");
+    verify_force_rls_enabled_on_tables(&admin_pool)
+        .await
+        .expect("FORCE RLS not enabled - cannot run I3 test");
+    verify_rls_policies_exist(&admin_pool)
+        .await
+        .expect("RLS policies missing - cannot run I3 test");
+
+    // =========================================================================
+    // Step 2: Build SQL-backed services and JWT-gated router
+    // =========================================================================
+    let rls_pool = graph_service::RlsAwarePool::new(test_pool.clone());
+    let intent_repo = Arc::new(intent_service::SqlxIntentRepository::new(
+        admin_pool.clone(),
+    ));
+    let intent_service = Arc::new(
+        intent_service::IntentService::new(intent_repo.clone()).with_rls_pool(rls_pool.clone()),
+    );
+
+    let graph_repo = Arc::new(graph_service::InMemoryGraphRepository::new());
+    let checkpoint_repo = Arc::new(intent_service::SqlxCheckpointRepository::new(
+        admin_pool.clone(),
+    ));
+    let graph_svc = Arc::new(graph_service::GraphService::new(graph_repo));
+    let orchestrator = Arc::new(rebase_orchestrator::RebaseOrchestrator::new(
+        checkpoint_repo,
+        graph_svc.clone(),
+        Arc::new(runtime_adapter::MockAdapter::ready()),
+    ));
+    let _audit_repo: Arc<dyn intent_rebase_types::AuditRepository> = Arc::new(
+        intent_rebase_types::SqlxAuditRepository::new(admin_pool.clone()),
+    );
+    let _approval_repo = intent_service::SqlxApprovalRequestRepository::new(admin_pool.clone());
+    let policy_snapshot_repo: Arc<dyn intent_service::PolicySnapshotRepository> = Arc::new(
+        intent_service::SqlxPolicySnapshotRepository::new(admin_pool.clone()),
+    );
+    let side_effect_repo = compensation_service::SqlxSideEffectRepository::new(admin_pool.clone());
+    let side_effect_svc = Arc::new(compensation_service::SideEffectService::new(Arc::new(
+        side_effect_repo,
+    )));
+    let compensation_action_repo = Arc::new(
+        compensation_service::SqlxCompensationActionRepository::new(admin_pool.clone()),
+    );
+    let compensation_action_svc = Arc::new(compensation_service::CompensationActionService::new(
+        compensation_action_repo,
+    ));
+    let orchestration_run_repo = Arc::new(
+        compensation_service::SqlxOrchestrationRunRepository::new(admin_pool.clone()),
+    );
+    let orchestration_runtime = Arc::new(compensation_service::OrchestrationRuntime::new(
+        compensation_action_svc.clone(),
+        orchestration_run_repo,
+    ));
+    let forensic_svc = Arc::new(forensic_service::InMemoryForensicVerificationService::new());
+    let forensic_archive_gen = Arc::new(forensic_service::InMemoryForensicArchiveGenerator::new());
+    let forensic_bundle_repo = Arc::new(forensic_service::InMemoryBundleRepository::new());
+    let forensic_bundle_storage =
+        Arc::new(forensic_service::InMemoryBundleStorage::new("test-bucket"));
+    let forensic_bundle_collector: Arc<dyn forensic_service::ForensicDataCollector> =
+        Arc::new(forensic_service::InMemoryForensicDataCollector::new());
+    let forensic_bundle_svc: Arc<dyn forensic_service::ForensicBundleServiceTrait> =
+        Arc::new(forensic_service::ForensicBundleService::new(
+            forensic_bundle_repo,
+            forensic_bundle_storage,
+            forensic_bundle_collector,
+        ));
+
+    let auth_config = intent_api::auth::AuthConfig {
+        jwt_secret: "test-secret-key-that-is-at-least-32-bytes-long-for-hs256".to_string(),
+        algorithm: jsonwebtoken::Algorithm::HS256,
+    };
+
+    let router = intent_api::build_router_with_sql_audit_and_approval_jwt(
+        admin_pool.clone(),
+        intent_service,
+        graph_svc,
+        side_effect_svc,
+        compensation_action_svc,
+        orchestration_runtime,
+        orchestrator,
+        None, // event_publisher
+        forensic_svc,
+        forensic_archive_gen,
+        forensic_bundle_svc,
+        auth_config.clone(),
+        None, // propagation_record_repo
+        Some(rls_pool.clone()),
+        policy_snapshot_repo,
+        None, // webhook_subscription_repo
+        None, // webhook_outbox_repo
+    );
+
+    // =========================================================================
+    // Step 3: Generate JWT tokens
+    // =========================================================================
+    let token_a = intent_api::auth::generate_test_token(
+        &auth_config.jwt_secret,
+        "test-user-a",
+        &tenant_a_id.to_string(),
+        &["admin"],
+    );
+    let _token_b = intent_api::auth::generate_test_token(
+        &auth_config.jwt_secret,
+        "test-user-b",
+        &tenant_b_id.to_string(),
+        &["admin"],
+    );
+
+    // =========================================================================
+    // Step 4: Create intent via HTTP with Tenant A token
+    // =========================================================================
+    let request_body = serde_json::json!({
+        "workflow_id": workflow_id,
+        "source_refs": [],
+        "payload": {
+            "objective": {
+                "summary": "I3 test intent",
+                "success_statement": "I3 test success",
+                "domain": "testing"
+            },
+            "scope": {"in_scope": ["i3-item"], "out_of_scope": []},
+            "constraints": {"functional": [], "non_functional": [], "policy": [], "budget": [], "time": []},
+            "acceptance_criteria": {"required": [], "optional": []},
+            "authority": {"allowed_actions": [], "forbidden_actions": [], "approval_requirements": []},
+            "preferences": {"tradeoffs": []},
+            "references": {"specs": [], "tickets": [], "repos": [], "policies": []},
+            "assumptions": {"explicit": []},
+            "metadata": {"risk_tier": "medium", "urgency": "medium", "confidence": 0.9}
+        },
+        "created_by": {"actor_type": "user", "actor_id": "i3-test"},
+        "tags": ["i3"]
+    });
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/intents")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token_a))
+        .body(axum::body::Body::from(request_body.to_string()))
+        .unwrap();
+
+    let response = router.clone().oneshot(req).await.unwrap();
+    let status = response.status();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    if status != axum::http::StatusCode::CREATED {
+        let err_text = String::from_utf8_lossy(&body_bytes);
+        eprintln!("I3: Unexpected status {} — body: {}", status, err_text);
+    }
+    assert_eq!(
+        status,
+        axum::http::StatusCode::CREATED,
+        "Tenant A JWT should create intent successfully via authenticated handler path"
+    );
+
+    let create_response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let intent_id_str = create_response["intent_id"]
+        .as_str()
+        .expect("intent_id missing in response");
+    let intent_id = Uuid::parse_str(intent_id_str).unwrap();
+
+    println!(
+        "I3: Created intent {} for Tenant A via POST /intents",
+        intent_id
+    );
+
+    // =========================================================================
+    // Step 5: Verify DB row exists with correct tenant_id under Tenant A RLS
+    // =========================================================================
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant A verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_a_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant A");
+
+        let row: (Uuid, String, Uuid) =
+            sqlx::query_as("SELECT intent_id, status, tenant_id FROM intents WHERE intent_id = $1")
+                .bind(intent_id)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("Tenant A should see their own intent via RLS context");
+
+        assert_eq!(row.0, intent_id, "intent_id mismatch");
+        assert_eq!(row.1, "active", "status should be active");
+        assert_eq!(
+            row.2, tenant_a_id,
+            "DB row tenant_id should match JWT tenant_id"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant A verification");
+    }
+
+    // =========================================================================
+    // Step 6: Verify Tenant B RLS context CANNOT see the row
+    // =========================================================================
+    {
+        let mut tx = test_pool
+            .begin()
+            .await
+            .expect("Failed to begin transaction for Tenant B verification");
+        let rls_sql = rls_set_tenant_context_sql(tenant_b_id);
+        sqlx::query(&rls_sql)
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to set RLS context for Tenant B");
+
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT intent_id FROM intents WHERE intent_id = $1")
+                .bind(intent_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .expect("Query should not fail");
+
+        assert!(
+            row.is_none(),
+            "Tenant B should NOT see Tenant A's intent under RLS isolation"
+        );
+
+        tx.commit()
+            .await
+            .expect("Failed to commit Tenant B verification");
+    }
+
+    // =========================================================================
+    // Step 7: Verify tenant mismatch is rejected (JWT Tenant A, request Tenant B)
+    // =========================================================================
+    let mismatch_body = serde_json::json!({
+        "tenant_id": tenant_b_id,
+        "workflow_id": workflow_id,
+        "source_refs": [],
+        "payload": {
+            "objective": {
+                "summary": "I3 mismatch test",
+                "success_statement": "I3 mismatch success",
+                "domain": "testing"
+            },
+            "scope": {"in_scope": [], "out_of_scope": []},
+            "constraints": {"functional": [], "non_functional": [], "policy": [], "budget": [], "time": []},
+            "acceptance_criteria": {"required": [], "optional": []},
+            "authority": {"allowed_actions": [], "forbidden_actions": [], "approval_requirements": []},
+            "preferences": {"tradeoffs": []},
+            "references": {"specs": [], "tickets": [], "repos": [], "policies": []},
+            "assumptions": {"explicit": []},
+            "metadata": {"risk_tier": "medium", "urgency": "medium", "confidence": 0.9}
+        },
+        "created_by": {"actor_type": "user", "actor_id": "i3-test"},
+        "tags": ["i3-mismatch"]
+    });
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/intents")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token_a))
+        .body(axum::body::Body::from(mismatch_body.to_string()))
+        .unwrap();
+
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "Tenant mismatch (JWT tenant != request tenant) should be rejected with 401"
+    );
+
+    // =========================================================================
+    // Step 8: Verify invalid JWT is rejected
+    // =========================================================================
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/intents")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer invalid-token")
+        .body(axum::body::Body::from(request_body.to_string()))
+        .unwrap();
+
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "Invalid JWT should be rejected with 401"
+    );
+
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+    if is_bypass {
+        let _ = drop_test_role(&admin_pool).await;
+    }
+
+    admin_pool.close().await;
+    if is_bypass {
+        test_pool.close().await;
+    }
+
+    println!("test_i3_jwt_create_intent_rls_dml_isolation PASSED");
+    println!("  - JWT Bearer token → auth middleware: validated");
+    println!("  - create_intent handler → create_intent_with_rls: executed");
+    println!("  - RlsAwarePool::begin_with_tenant → SQLx DML: committed");
+    println!("  - DB row tenant-scoped and invisible to other tenants: verified");
+    println!("  - Tenant mismatch rejection: verified");
+    println!("  - Invalid JWT rejection: verified");
 }
