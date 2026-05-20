@@ -251,3 +251,119 @@ async fn test_nats_publisher_is_ready_with_url() {
         assert!(publisher.is_ready());
     });
 }
+
+// =========================================================================
+// S1 NATS Publisher Tenant Guard Tests (bounded — no live NATS required)
+// =========================================================================
+
+#[tokio::test]
+async fn test_nats_publisher_unscoped_allows() {
+    // Unscoped publisher should NOT skip due to tenant mismatch.
+    // Without NATS_URL it still skips for connection, but reason must not be tenant-related.
+    let original = std::env::var("NATS_URL").ok();
+    std::env::remove_var("NATS_URL");
+
+    let publisher = NatsEventPublisher::new();
+    let subject = EventSubject::from_audit_event(uuid::Uuid::new_v4(), "RebaseApplied");
+    let payload = serde_json::json!({ "test": true });
+
+    let result = publisher
+        .publish(&subject, &payload, TraceContext::default())
+        .await;
+
+    // Restore original
+    match original {
+        Some(v) => std::env::set_var("NATS_URL", v),
+        None => std::env::remove_var("NATS_URL"),
+    }
+
+    match result {
+        PublishResult::Skipped { reason } => {
+            assert!(
+                !reason.contains("tenant scope mismatch"),
+                "Unscoped publisher should not reject events based on tenant: {}",
+                reason
+            );
+        }
+        _ => panic!("Expected Skipped result due to missing NATS_URL"),
+    }
+}
+
+#[tokio::test]
+async fn test_nats_publisher_scoped_matching_allows() {
+    // Scoped publisher with matching tenant should NOT skip due to tenant mismatch.
+    // Without NATS_URL it still skips for connection, but reason must not be tenant-related.
+    let original = std::env::var("NATS_URL").ok();
+    std::env::remove_var("NATS_URL");
+
+    let tenant_id = uuid::Uuid::new_v4();
+    let publisher = NatsEventPublisher::new().with_tenant_scope(Some(tenant_id));
+    let subject = EventSubject::from_audit_event(tenant_id, "RebaseApplied");
+    let payload = serde_json::json!({ "test": true });
+
+    let result = publisher
+        .publish(&subject, &payload, TraceContext::default())
+        .await;
+
+    // Restore original
+    match original {
+        Some(v) => std::env::set_var("NATS_URL", v),
+        None => std::env::remove_var("NATS_URL"),
+    }
+
+    match result {
+        PublishResult::Skipped { reason } => {
+            assert!(
+                !reason.contains("tenant scope mismatch"),
+                "Scoped matching publisher should not reject events based on tenant: {}",
+                reason
+            );
+        }
+        _ => panic!("Expected Skipped result due to missing NATS_URL"),
+    }
+}
+
+#[tokio::test]
+async fn test_nats_publisher_scoped_mismatched_skips() {
+    // Scoped publisher with mismatched tenant should skip BEFORE connection attempt.
+    // No NATS_URL needed because the guard fires first.
+    let original = std::env::var("NATS_URL").ok();
+    std::env::remove_var("NATS_URL");
+
+    let expected = uuid::Uuid::new_v4();
+    let actual = uuid::Uuid::new_v4();
+    let publisher = NatsEventPublisher::new().with_tenant_scope(Some(expected));
+    let subject = EventSubject::from_audit_event(actual, "RebaseApplied");
+    let payload = serde_json::json!({ "test": true });
+
+    let result = publisher
+        .publish(&subject, &payload, TraceContext::default())
+        .await;
+
+    // Restore original
+    match original {
+        Some(v) => std::env::set_var("NATS_URL", v),
+        None => std::env::remove_var("NATS_URL"),
+    }
+
+    match result {
+        PublishResult::Skipped { reason } => {
+            assert!(
+                reason.contains("tenant scope mismatch"),
+                "Expected tenant scope mismatch in reason: {}",
+                reason
+            );
+            assert!(
+                reason.contains(&expected.to_string()),
+                "Skip reason should contain expected tenant id: {}",
+                reason
+            );
+            assert!(
+                reason.contains(&actual.to_string()),
+                "Skip reason should contain actual tenant id: {}",
+                reason
+            );
+        }
+        _ => panic!("Expected Skipped result with tenant scope mismatch"),
+    }
+}

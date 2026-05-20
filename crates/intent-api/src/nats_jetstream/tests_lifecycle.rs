@@ -605,6 +605,16 @@ fn test_registry_with_full_consumer_builder() {
     assert!(debug_str.contains("ConsumerRegistry"));
 }
 
+/// Test: Verify ConsumerRegistry::with_tenant_scope builder exists and propagates to Debug
+#[test]
+fn test_registry_with_tenant_scope_builder() {
+    let tenant_id = uuid::Uuid::new_v4();
+    let registry = ConsumerRegistry::new().with_tenant_scope(Some(tenant_id));
+    let debug_str = format!("{:?}", registry);
+    assert!(debug_str.contains("tenant_scope"));
+    assert!(debug_str.contains(&tenant_id.to_string()));
+}
+
 /// Test: Verify NatsPullConsumerAdapter::with_dlq_helper builder exists and compiles
 #[test]
 fn test_adapter_with_dlq_helper_builder() {

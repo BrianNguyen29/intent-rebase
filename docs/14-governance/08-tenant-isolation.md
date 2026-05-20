@@ -178,6 +178,20 @@ filter subject: audit.events.v1.{tenant_id}.>
 - Unit tests cover: matching tenant, mismatched tenant, unscoped behavior
 - **Preserves current shared-consumer behavior when `tenant_scope` is `None`**
 
+**Bounded publisher-side guard delivered (S1):**
+- `crates/intent-api/src/nats_event_publisher.rs` — `NatsEventPublisher` with optional `tenant_scope: Option<Uuid>`
+- `with_tenant_scope` builder method added; no breaking changes to call sites
+- Cross-tenant publish attempts return `PublishResult::Skipped { reason }` with expected/actual tenant IDs
+- Guard fires **before** NATS connection attempt, so mismatched publishes are rejected without network side effects
+- Unit tests cover: unscoped allows, scoped matching allows, scoped mismatched skips with tenant IDs in reason
+- **Preserves current shared-publisher behavior when `tenant_scope` is `None`**
+
+**Bounded registry propagation delivered (S1):**
+- `crates/intent-api/src/nats_jetstream/consumer.rs` — `ConsumerRegistry` with optional `tenant_scope: Option<Uuid>`
+- `with_tenant_scope` builder method added
+- `start_all` propagates the scope to every `NatsPullConsumerAdapter` it creates
+- **No per-tenant streams are created; this is application-layer defense in depth only**
+
 **Bounded delivered / manual local-dev evidence:**
 - Live NATS integration tests for tenant isolation (4 `#[ignore]` tests in `crates/intent-api/src/nats_jetstream/tests_live_integration.rs`)
   - `live_jetstream_tenant_scope_matching_tenant_consumes`

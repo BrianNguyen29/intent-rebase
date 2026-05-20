@@ -66,6 +66,9 @@ pub struct NatsEventPublisher {
     base_backoff: Duration,
     /// Max backoff duration for retry
     max_backoff: Duration,
+    /// Optional tenant scope: when set, the publisher rejects events whose subject
+    /// tenant_id does not match. Preserves shared-publisher behavior when None.
+    tenant_scope: Option<uuid::Uuid>,
 }
 
 impl NatsEventPublisher {
@@ -82,7 +85,18 @@ impl NatsEventPublisher {
             publish_timeout: Duration::from_secs(1),
             base_backoff: Duration::from_millis(100),
             max_backoff: Duration::from_millis(500),
+            tenant_scope: None,
         }
+    }
+
+    /// Set an optional tenant scope for this publisher.
+    ///
+    /// When `tenant_scope` is `Some(tenant_id)`, the publisher will reject
+    /// events whose `EventSubject` does not contain a matching tenant_id.
+    /// When `None` (default), the publisher processes all events (shared mode).
+    pub fn with_tenant_scope(mut self, tenant_scope: Option<uuid::Uuid>) -> Self {
+        self.tenant_scope = tenant_scope;
+        self
     }
 
     /// Create a NatsEventPublisher with custom timeouts.
@@ -99,6 +113,7 @@ impl NatsEventPublisher {
             publish_timeout,
             base_backoff,
             max_backoff,
+            tenant_scope: None,
         }
     }
 
@@ -248,6 +263,18 @@ impl EventPublisher for NatsEventPublisher {
         payload: &serde_json::Value,
         trace_context: TraceContext,
     ) -> PublishResult {
+        // Bounded tenant guard: reject cross-tenant events before side effects or connection
+        if let Some(expected) = self.tenant_scope {
+            if subject.tenant_id != expected {
+                let reason = format!(
+                    "tenant scope mismatch: expected {}, got {} (subject: {})",
+                    expected, subject.tenant_id, subject.subject
+                );
+                tracing::warn!("NatsEventPublisher: {}", reason);
+                return PublishResult::Skipped { reason };
+            }
+        }
+
         // Get or create connection
         let client = match self.get_client().await {
             Ok(c) => c,

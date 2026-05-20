@@ -480,6 +480,9 @@ pub struct ConsumerRegistry {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// NON-PRODUCTION: Enable full-consumer path with DLQ publishing and additional consumers
     full_consumer: bool,
+    /// Optional tenant scope: when set, all registered consumers reject events
+    /// whose subject tenant_id does not match. Preserves shared-consumer behavior when None.
+    tenant_scope: Option<Uuid>,
 }
 
 impl ConsumerRegistry {
@@ -489,7 +492,19 @@ impl ConsumerRegistry {
             consumers: HashMap::new(),
             shutdown_tx: None,
             full_consumer: false,
+            tenant_scope: None,
         }
+    }
+
+    /// Set an optional tenant scope for all consumers in this registry.
+    ///
+    /// When `tenant_scope` is `Some(tenant_id)`, every `NatsPullConsumerAdapter`
+    /// created by `start_all` will reject events whose NATS subject does not
+    /// contain a matching tenant_id. When `None` (default), all consumers
+    /// process all events (shared mode).
+    pub fn with_tenant_scope(mut self, tenant_scope: Option<Uuid>) -> Self {
+        self.tenant_scope = tenant_scope;
+        self
     }
 
     /// Register a consumer with the registry.
@@ -596,6 +611,7 @@ impl ConsumerRegistry {
 
             // Create adapter for this consumer
             let adapter = NatsPullConsumerAdapter::new(jetstream.clone(), &stream_name)
+                .with_tenant_scope(self.tenant_scope)
                 .with_dlq_helper(dlq_helper.clone());
 
             let handle = tokio::spawn(async move {
@@ -634,6 +650,7 @@ impl std::fmt::Debug for ConsumerRegistry {
             .field("consumers", &self.consumers.keys().collect::<Vec<_>>())
             .field("shutdown_tx", &self.shutdown_tx.is_some())
             .field("full_consumer", &self.full_consumer)
+            .field("tenant_scope", &self.tenant_scope)
             .finish()
     }
 }
