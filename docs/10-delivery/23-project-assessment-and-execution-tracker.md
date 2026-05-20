@@ -71,6 +71,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 | RLS integration tests (live) | 22 | 22 passed on fresh DB; 3 passed, 19 failed on existing DB; 1 passed, 21 failed on existing DB with `RLS_TEST_RUN_MIGRATIONS=true` (migration 9 checksum mismatch). |
 | NATS live integration tests | ~14 | 14 passed |
 | SQLx repository smoke tests | ~7 | 7 passed (bundle 1, graph repo 5, audit 1) |
+| Webhook integration test (S4) | 1 | 1 passed on fresh DB — SQLx outbox + subscription pipeline with real HTTP receiver |
 | Migration integration tests | 2 | 2 passed (1 existing DB, 1 fresh DB) |
 | Load tests (L1-L3) | Bounded harness | 2 passed locally; L1-L3 all green; sustained 90s 4505/4505, 50.05 req/s, p95 3ms, p99 8ms |
 | Load tests (L4-L5) | 0 | Blocked — no staging/production infra |
@@ -87,6 +88,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 | RLS integration (fresh DB) | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test rls_integration -- --ignored --test-threads=1` **22 passed** | Strong for local-dev integration | Fresh DB path now unblocked after B-3 migration 19 fix and RLS harness fix. Existing DB path still shows schema mismatch (B-1/B-2). |
 | RLS integration (existing DB) | `cargo test --test rls_integration -- --ignored` 3 passed, 19 failed on existing DB; 1 passed, 21 failed on existing DB with `RLS_TEST_RUN_MIGRATIONS=true` | Weak — schema drift on existing DB | Missing relations (`propagation_records`, `webhook_subscriptions`); migration 9 checksum mismatch when `RLS_TEST_RUN_MIGRATIONS=true`. Existing DB is stale relative to migration sequence. |
 | Webhook delivery | `cargo test -p intent-api --lib webhook_delivery_tests` 57/57 pass | Strong for bounded slice | In-memory + wiremock; no production guarantees |
+| Webhook integration (S4) | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test webhook_integration -- --ignored` **1 passed** | Strong for local-dev integration | SQLx-backed outbox + subscription pipeline with in-process HTTP receiver and real `reqwest` dispatch. Fresh DB only; local-dev evidence, not production. |
 | Decomposition | `cargo check --workspace --all-features` + `cargo test --workspace --lib --all-features` pass | Strong for maintainability | Post-refactor verification only |
 | Panic hardening | Panic hook test verifies sanitized output | Bounded | Local hook only; no production alerting |
 
@@ -256,7 +258,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 | **S1** | ✅ DONE — NATS tenant isolation: consumer registry propagation + publisher guard + unit tests + docs | Oracle recommendation; `docs/14-governance/08-tenant-isolation.md` | Backend Lead | None |
 | **S2** | ✅ DONE — RLS enforcement audit tool (`scripts/audit-rls-dml.sh`) + docs (`docs/11-quality/03-rls-audit.md`) | Oracle recommendation | Backend Lead | None |
 | **S3** | ✅ DONE — NATS publisher with W3C traceparent injection, tenant scope guard, fail-open retry, and unit coverage | Oracle recommendation | Backend Lead | None |
-| **S4** | Webhook docker-compose integration test (end-to-end with real subscriber in local stack) | Oracle recommendation | Backend Lead | Local docker-compose |
+| **S4** | ✅ DONE — Webhook docker-compose integration test: `crates/intent-api/tests/webhook_integration.rs` with SQLx outbox/subscription repos, in-process HTTP receiver, real `reqwest` dispatch, and DB status verification | Oracle recommendation | Backend Lead | Local docker-compose |
 | **S5** | ✅ DONE — Add startup warning when `INTENT_API_REQUIRE_JWT=false` | Risk R-6 mitigation | Backend Lead | None |
 | **S6** | Continue file decomposition (remaining handler extractions, cross-crate consolidation) | `22-phase-4-entry-plan.md` A-09 | Backend Lead | None |
 | **S7** | Panic hardening — alerting integration design (not implementation; requires staging) | `22-phase-4-entry-plan.md` A-08 | Backend Lead | None |
@@ -335,6 +337,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 | In-memory tests | `cargo test --workspace --lib --all-features` | All pass | Every commit |
 | RLS live tests (fresh DB) | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test rls_integration -- --ignored --test-threads=1` | All pass (22/22 on fresh DB; existing DB still 3/22 due stale schema) | Before claiming RLS complete |
 | NATS live tests | `NATS_URL=nats://localhost:4222 cargo test -p intent-api --lib nats_jetstream -- --ignored` | All pass (14/14) | Before claiming NATS complete |
+| Webhook integration (fresh DB) | `DATABASE_URL=...intent_rebase_phase1_fix cargo test -p intent-api --test webhook_integration -- --ignored` | All pass (1/1) | Before claiming webhook pipeline complete |
 | OpenAPI spec | `npx @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error` | No errors | Before API changes merge |
 | Git check | `git diff --check` | No conflicts | Before push |
 | Doc sync | Cross-reference this tracker with changed docs | No contradictions | After every Phase 0 item |
@@ -374,8 +377,9 @@ Phase 0 (Docs Sync)
 | **P1** | ✅ DONE — RLS harness fixed; fresh DB RLS 22/22 pass | Backend Lead | 2026-05-20 |
 | **P1** | ✅ DONE — B-5 fixed: NATS JetStream live suite 14/14 pass | Backend Lead | 2026-05-20 |
 | **P1** | Re-run full ignored suite after B-3/B-4/RLS/B-5 fixed | Backend Lead | ✅ DONE 2026-05-20 |
-| **P1** | Execute S1: NATS tenant isolation design/implementation | Backend Lead | Next slice |
-| **P1** | Execute S2: RLS enforcement audit tool | Backend Lead | Next slice |
+| **P1** | ✅ DONE — Execute S1: NATS tenant isolation design/implementation | Backend Lead | 2026-05-20 |
+| **P1** | ✅ DONE — Execute S2: RLS enforcement audit tool | Backend Lead | 2026-05-20 |
+| **P1** | ✅ DONE — Execute S4: Webhook docker-compose integration test | Backend Lead | 2026-05-20 |
 | **P2** | Execute I1: L3 full-stack load test in docker-compose | Backend Lead | After S1-S4 |
 | **P2** | Execute I3: JWT→RLS→DML integration test | Backend Lead | After S2 |
 
@@ -409,3 +413,4 @@ Phase 0 (Docs Sync)
 | 2026-05-20 | BrianNguyen (via authorized assistant fixer) | Phase 2 S1 executed — `ConsumerRegistry` gained `tenant_scope` field/builder/wiring to propagate scope to all `NatsPullConsumerAdapter` instances in `start_all`. `NatsEventPublisher` gained `tenant_scope` field/builder and tenant guard in `publish()` that returns `PublishResult::Skipped { reason }` with expected/actual UUIDs before NATS connection. Unit tests added in `event_publisher_tests.rs` (unscoped allows, scoped matching allows, scoped mismatched skips). `ConsumerRegistry` tenant scope builder test added in `tests_lifecycle.rs`. `docs/14-governance/08-tenant-isolation.md` updated with publisher guard and registry propagation sections. Tracker Phase 2 table updated: S1 marked ✅ DONE. Explicit local-only caveat preserved: no per-tenant streams created, no NATS ACLs/topology changes, no production-readiness claim. |
 | 2026-05-20 | BrianNguyen (via authorized assistant explorer) | Phase 2 S3 reconciled — existing `NatsEventPublisher` implementation verified as already delivered: lazy NATS connection, W3C traceparent injection, fail-open retry/skip behavior, tenant scope guard from S1, unit coverage, and SQL router wiring behind `NATS_URL`. Tracker Phase 2 table updated: S3 marked ✅ DONE. This is bounded local-dev evidence only; no production NATS topology, ACLs, or production-readiness claim. |
 | 2026-05-20 | BrianNguyen (via authorized assistant fixer) | Phase 2 S8 executed — added `create_record_with_tx` to `PropagationRecordRepository` trait with in-memory delegation and SQLx transaction execution. `query_handlers.rs::ingest_propagation_signal` JWT path now uses `begin_with_tenant` + `create_record_with_tx` when `rls_pool` and claims are present; fallback non-RLS path remains for in-memory/no-claims contexts. Updated `scripts/audit-rls-dml.sh` to move `query_handlers.rs` from known residual to RLS-wrapped. Updated `docs/11-quality/03-rls-audit.md` to mark residual resolved. Tracker Phase 2 table updated: S8 marked ✅ DONE. Webhook residuals (R2-R6) remain deferred Phase 4+ warnings. No production-readiness claim; local-dev caveat preserved. |
+| 2026-05-20 | BrianNguyen (via authorized assistant fixer) | Phase 2 S4 executed — created `crates/intent-api/tests/webhook_integration.rs`: ignored integration test exercising `SqlxWebhookOutboxRepository` + `SqlxWebhookSubscriptionRepository` against live Postgres, with in-process axum HTTP receiver and real `reqwest` dispatch via `WebhookDeliveryDispatcher`. Test seeds subscription + pending outbox row, runs `WebhookOutboxWorkerImpl::process_once`, asserts HTTP POST received with correct payload shape and DB outbox status transitions to `Delivered`. Passed against fresh DB (`intent_rebase_phase1_fix`). Updated `docs/11-quality/01-test-strategy.md` with webhook integration test command and result. Tracker Phase 2 table updated: S4 marked ✅ DONE. Test inventory, evidence inventory, validation matrix, and next actions updated. No production-readiness claim; local-dev/docker-compose evidence only. |

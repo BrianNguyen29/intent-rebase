@@ -80,6 +80,10 @@ cargo test --test rls_integration -- --ignored
 export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
 cargo test -p intent-api --lib sqlx_repo_smoke -- --ignored
 
+# Run ignored webhook integration test (requires local Postgres + in-process HTTP receiver)
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_phase1_fix
+cargo test -p intent-api --test webhook_integration -- --ignored
+
 # Run ignored tests that require Postgres (broad filter)
 export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase
 cargo test -p intent-api -- --ignored
@@ -105,6 +109,7 @@ The following issues were discovered by actually running the ignored suites agai
 | NATS JetStream ignored suite | 14 passed | 🟢 FIXED | NATS uniqueness fix in `crates/intent-api/src/nats_jetstream/tests_live_integration.rs` | All live NATS tests pass after code fix |
 | RLS integration (existing DB) | 3 passed, 19 failed | 🔴 OPEN | Missing relations `propagation_records`, `webhook_subscriptions`; RLS not enabled → `RowNotFound`; tenant isolation assertions fail | Existing DB is stale relative to migration sequence; fresh DB is the canonical source |
 | RLS integration (existing DB, `RLS_TEST_RUN_MIGRATIONS=true`) | 1 passed, 21 failed | 🔴 OPEN | Migration 9 checksum mismatch: "previously applied but has been modified" | Existing DB has a modified migration 9; fresh DB path avoids this |
+| Webhook integration (fresh DB) | 1 passed | 🟢 FIXED | S4 delivered: SQLx outbox repo + subscription repo + real HTTP receiver + DB status verification | Fresh DB (`intent_rebase_phase1_fix`) required for clean schema |
 | Load tests (L1-L3) | 2 passed | 🟡 LOCAL ONLY | L1 1000/1000, L2 5000/5000, L3 10000/10000; sustained 90s 4505/4505, 50.05 req/s, p95 3ms, p99 8ms | **Local load-test harness only**; not production/staging evidence. L4-L5 remain blocked until staging/production infra exists. |
 
 > **Ground truth rule:** The pass/fail counts above are the ground truth from the most recent execution. Update this table after each re-run. Fixed items are kept in the table with their resolution status so historical baseline (Phase 1 failures) is preserved.
