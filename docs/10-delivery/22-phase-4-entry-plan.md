@@ -275,6 +275,32 @@ WEB-LOCAL-1 (SQLx outbox repository + durable writes)
 
 ---
 
+## Phase 4 External/Production Evidence Packet Plan
+
+> **Purpose:** This checklist tracks the external and production evidence required to close Phase 4 gates. It is a **planning tracker only** — no gate is claimed complete, no production-readiness assertion is made, and no named external reviewer is invented.
+
+> **⚠️ No Self-Signed External Evidence**
+>
+> External gates (A-03, A-04, A-07) require **named, independent third-party evidence**. Solo self-review, internal attestation, or assistant-generated sign-off are explicitly forbidden as substitutes. BrianNguyen is authorized for internal/solo attestations only.
+
+| Gate ID | Item | Status | Owner | Evidence Required to Close | Self-Sign Permitted? |
+|---------|------|--------|-------|---------------------------|---------------------|
+| A-03 | External SRE Sign-Off | 🔴 BLOCKED / PENDING | External SRE (to be named) | Named external SRE reviewer; date; signed Section H of `docs/09-operations/10-external-review-packet.md`; SLO/alerting/runbook assessment completed | ❌ NO — solo self-review is insufficient |
+| A-04 | External Security Review Sign-Off | 🔴 BLOCKED / PENDING | External Security Reviewer (to be named) | Named external security reviewer; date; signed Section H of external review packet; authn/authz/RLS/threat-model v2 assessment completed | ❌ NO — solo self-review is insufficient |
+| A-07 | Penetration Testing | 🔴 BLOCKED / PENDING | External Pen Test Team / Security | External pen test report (PDF + JSON); HIGH/CRITICAL findings remediated with evidence; staging environment used for testing | ❌ NO — threat model/scope documents are not pen test execution |
+| A-05 | Production Infrastructure | 🔴 BLOCKED / PENDING | SRE | Production environment verified operational (Postgres with pooling, NATS JetStream, S3, monitoring stack); deployment runbook executed against production; IaC committed and reviewed | N/A — infrastructure evidence, not sign-off |
+| A-06 | Load Testing (L3–L5) | 🔴 BLOCKED / PENDING | Backend Lead / SRE | L3: staged k6/Artillery results against full stack; L4: 30min sustained load + all alert types triggered + real Alertmanager receivers validated; L5: production load test results | N/A — infrastructure evidence, not sign-off |
+| A-10 | DLQ/NATS Lifecycle (Production-Grade) | 🔴 BLOCKED / PENDING | Backend Lead / SRE | External SRE sign-off (A-03); production NATS/JetStream topology deployed; full DLQ replay worker validated in staging/production; G1-G5 pass in production-like environment | N/A — requires A-03 + infra |
+| A-12 | Webhook Delivery Production Hardening | 🔴 BLOCKED / PENDING | SRE / Security / Backend Lead | Production secret manager + HMAC key rotation evidence; staging/production delivery SLO evidence; external SRE/security review (A-03/A-04) + pen-test closure (A-07); operator workflow validated in production | N/A — requires A-03/A-04/A-07 + infra |
+| A-13 | Forensic Replay + Immutable Storage | 🔴 BLOCKED / PENDING | Backend Lead / Security | S3 Object Lock infrastructure deployed and validated; chain-hash implementation; retention policy enforced; tamper-evidence validated in staging/production | N/A — infrastructure evidence |
+| A-11 | Cross-Process Trace Propagation | 🔴 DEFERRED / SDK-BLOCKED | Backend Lead / SRE | Temporal SDK safe per-request gRPC metadata injection; sqlx per-query context propagation feature; NATS publisher implementation. Revisit when upstream SDK support improves. | N/A — blocked by upstream SDK |
+
+**Local-Dev / WAIVED-SOLO Caveat Preservation**
+
+All local-dev and WAIVED-SOLO evidence from Phase 3 (e.g., L1/L2 load tests, bounded DLQ local gates, webhook local-dev slices, solo self-review) remain **non-production** and do **not** satisfy the evidence requirements above. They may be referenced as prior bounded work, but they do not close any external or production gate.
+
+---
+
 ## P8–P10 — Enterprise Expansion (Planning Only)
 
 These completion proposals from `docs/10-delivery/09-completion-proposals-tracker.md` are tracked for Phase 4+ but are **not in scope for Phase 4 entry**:
@@ -340,3 +366,4 @@ These completion proposals from `docs/10-delivery/09-completion-proposals-tracke
 | 2026-05-18 | BrianNguyen (via authorized assistant fixer) | P1-S5i RLS parity audit completed — code review confirms handler-level tenant guards are present in all scoped forensic/orchestration/artifact/replay handlers (`OptionalRlsTenantClaims` + request/path tenant mismatch rejection + `begin_with_tenant` RLS tx where applicable); no code gaps found; docs-only status update performed (`02-authn-authz.md`, `17-production-readiness-backlog.md`, `22-phase-4-entry-plan.md`). Non-JWT/non-RLS fallback preserved. External production gates remain blocked. No production-ready claim. |
 | 2026-05-19 | BrianNguyen (via authorized assistant fixer) | A-09 decomposition progress updated — bounded module/file extraction commits landed: router route groups (`30191e5`), webhook outbox repo module (`3b11c7a`), `graph-service` crate extraction (`6070871`, `2ac97ae`, `d6b8229`, `31af914`, `aad7b42`, `6d91079`, `98c9099`), `compensation-service` crate extraction (`3d7747b`, `ab86518`, `76732b3`), and `intent-service` crate extraction (`8a68a3b`, `c42a0d0`, `5561d08`). Local targeted tests plus workspace check/clippy evidence cover the latest decomposition slices; broader workspace library tests remain local-verification evidence only when they complete within the local environment. Remaining handler extractions and cross-crate consolidation remain Phase 4 scope. No production-readiness claim. |
 | 2026-05-20 | BrianNguyen (via authorized assistant fixer) | A-09 decomposition progress updated — added `forensic-service` bundle repository tests extraction into `bundle_repo_tests.rs` (`389d15f`), `intent-rebase-types` audit repository tests extraction into `audit_repo_tests.rs` (`30d7277`), and optional ignored SQLx smoke tests for audit and bundle repositories (`4b4691e`). Explicitly noted smoke tests are manual/`DATABASE_URL`-gated, not executed by default, and do not constitute local production evidence. All production-readiness/external-gate caveats preserved. No production-readiness claim. |
+| 2026-05-20 | BrianNguyen (via authorized assistant fixer) | Added "Phase 4 External/Production Evidence Packet Plan" section — consolidated checklist for A-03/A-04/A-07 external review/pen-test packets and A-05/A-06/A-10/A-12/A-13 infra/evidence blockers; A-11 explicitly deferred/SDK-blocked. Wording enforces blocked/pending status, forbids self-signing external gates, preserves WAIVED-SOLO/local-dev caveats, and invents no named external reviewer. No production-readiness claim introduced. |
