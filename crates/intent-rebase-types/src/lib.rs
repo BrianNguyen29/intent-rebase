@@ -6,6 +6,8 @@
 pub mod artifact;
 pub mod audit;
 pub mod audit_repo;
+#[cfg(test)]
+mod audit_repo_tests;
 pub mod checkpoint;
 pub mod error;
 pub mod event_publisher;
