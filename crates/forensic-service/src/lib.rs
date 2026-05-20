@@ -61,3 +61,6 @@ mod bundle_repo_tests;
 
 #[cfg(test)]
 mod bundle_replay_tests;
+
+#[cfg(test)]
+mod bundle_service_tests;
