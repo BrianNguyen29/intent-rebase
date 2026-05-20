@@ -111,9 +111,20 @@ The following issues were discovered by actually running the ignored suites agai
 
 This policy keeps `cargo test --workspace --lib --all-features` fast and free of external-service dependencies.
 
+## RLS Structural Audit (S2)
+
+Run the local structural audit script to verify handler-level RLS wrapping invariants:
+
+```bash
+bash scripts/audit-rls-dml.sh
+```
+
+This script checks that all mutation handlers in `crates/intent-api/src` use `begin_with_tenant` or delegated `_with_rls` methods, and documents known gaps (webhook handlers, query handler residuals). See `docs/11-quality/03-rls-audit.md` for full details, limitations, and expected warnings.
+
 ## Completed audits (P2)
 - Module-level documentation (`//!` headers) for extracted modules and all handler modules — completed
 - Cross-link consistency between test strategy and delivery docs — completed
+- RLS DML structural audit (`scripts/audit-rls-dml.sh`) — completed (S2)
 
 ## Deferred audits (P2 / future)
 - Benchmark integration (`cargo bench` in `verify-fast.sh` or CI) — no benchmarks exist yet
