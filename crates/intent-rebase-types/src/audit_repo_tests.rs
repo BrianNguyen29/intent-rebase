@@ -426,3 +426,67 @@ mod sqlx_audit_tests {
         );
     }
 }
+
+// =============================================================================
+// SQLx Audit Repository smoke tests
+// These require a live Postgres database with migrations applied.
+// Preconditions:
+//   - Docker Postgres running (e.g. via docker compose -f infrastructure/local/docker-compose.yml up -d)
+//   - Migrations applied
+//   - DATABASE_URL environment variable set
+// Run manually with:
+//   DATABASE_URL=postgres://... cargo test -p intent-rebase-types --lib sqlx_smoke -- --ignored
+// =============================================================================
+
+#[cfg(test)]
+mod sqlx_smoke_tests {
+    use crate::*;
+    use uuid::Uuid;
+
+    /// Minimal smoke test for SqlxAuditRepository create+get round-trip.
+    ///
+    /// Uses AuditEventType::RebaseApplied because the DB enum currently lacks newer variants.
+    #[tokio::test]
+    #[ignore = "requires live Postgres (set DATABASE_URL to run)"]
+    async fn test_sqlx_audit_repo_smoke() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping SQLx smoke test: DATABASE_URL not set");
+                return;
+            }
+        };
+
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("connect failed");
+        let repo = SqlxAuditRepository::new(pool);
+
+        let tenant_id = Uuid::new_v4();
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            tenant_id,
+            event_type: AuditEventType::RebaseApplied,
+            actor_id: "smoke-test".to_string(),
+            intent_id: Some(Uuid::new_v4()),
+            artifact_id: None,
+            payload: serde_json::json!({"smoke": true}),
+            trace_id: None,
+            span_id: None,
+            occurred_at: chrono::Utc::now(),
+        };
+
+        repo.create_audit_event(event.clone())
+            .await
+            .expect("create_audit_event failed");
+
+        let fetched = repo
+            .get_audit_event(event.id, tenant_id)
+            .await
+            .expect("get_audit_event failed");
+
+        assert_eq!(fetched.id, event.id);
+        assert_eq!(fetched.tenant_id, event.tenant_id);
+        assert!(matches!(fetched.event_type, AuditEventType::RebaseApplied));
+    }
+}

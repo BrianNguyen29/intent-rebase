@@ -498,3 +498,55 @@ async fn test_status_index_maintained_across_transitions() {
     assert_eq!(generating.len(), 0);
     assert_eq!(ready.len(), 1);
 }
+
+// =============================================================================
+// SQLx Bundle Repository smoke tests
+// These require a live Postgres database with migrations applied.
+// Preconditions:
+//   - Docker Postgres running (e.g. via docker compose -f infrastructure/local/docker-compose.yml up -d)
+//   - Migrations applied
+//   - DATABASE_URL environment variable set
+// Run manually with:
+//   DATABASE_URL=postgres://... cargo test -p forensic-service --lib sqlx_smoke -- --ignored
+// =============================================================================
+
+/// Minimal smoke test for SqlxBundleRepository create+get round-trip.
+#[tokio::test]
+#[ignore = "requires live Postgres (set DATABASE_URL to run)"]
+async fn test_sqlx_bundle_repo_smoke() {
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("Skipping SQLx smoke test: DATABASE_URL not set");
+            return;
+        }
+    };
+
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connect failed");
+    let repo = SqlxBundleRepository::new(pool);
+
+    let tenant_id = Uuid::new_v4();
+    let bundle = ForensicBundle::new(
+        tenant_id,
+        BundleTimeRange {
+            start: Utc::now(),
+            end: Utc::now(),
+        },
+        BundlePurpose::IncidentInvestigation,
+        BundleContents::default(),
+        "smoke-test",
+        None,
+    );
+
+    let created = repo.create(bundle.clone()).await.expect("create failed");
+    let fetched = repo.get(created.bundle_id).await.expect("get failed");
+
+    assert_eq!(fetched.bundle_id, created.bundle_id);
+    assert_eq!(fetched.tenant_id, tenant_id);
+    assert!(matches!(
+        fetched.purpose,
+        BundlePurpose::IncidentInvestigation
+    ));
+}
