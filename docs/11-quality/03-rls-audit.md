@@ -42,7 +42,12 @@ The script `scripts/audit-rls-dml.sh` inspects `crates/intent-api/src/*handlers.
 | `webhook_subscription_handlers.rs` | No RLS wrapping | Webhook Slice 4b is local-dev only; no production readiness claim |
 | `webhook_outbox_dlq_handlers.rs` | No RLS wrapping | Webhook Slice 5b is local-dev only; no production readiness claim |
 | `webhook_delivery.rs` | SQLx DML without RLS | Dispatcher scaffolding uses `sqlx::query` directly; not wired into production flow |
-| `query_handlers.rs` | `OptionalRlsTenantClaims` but no `begin_with_tenant` | `ingest_propagation_signal` uses application-layer tenant scoping; DB-level RLS tx wrapping is deferred (S8) |
+
+## Resolved residuals
+
+| Module | Resolution | Date |
+|--------|------------|------|
+| `query_handlers.rs` | `ingest_propagation_signal` now uses `begin_with_tenant` + `create_record_with_tx` when JWT claims and `rls_pool` are present. Fallback non-RLS path remains for in-memory and no-claims contexts. | 2026-05-20 |
 
 ## Verification commands
 

@@ -66,6 +66,7 @@ graph_handlers.rs
 ingest_handlers.rs
 intent_mutation_handlers.rs
 orchestration_run_handlers.rs
+query_handlers.rs
 rebase_apply_handlers.rs
 replay_handlers.rs
 trigger_reapproval_handlers.rs
@@ -129,26 +130,6 @@ for f in $WEBHOOK_GAP; do
     fi
 done
 
-# KNOWN_RESIDUAL: OptionalRlsTenantClaims present but no begin_with_tenant
-KNOWN_RESIDUAL="
-query_handlers.rs
-"
-
-for f in $KNOWN_RESIDUAL; do
-    path="$API_SRC/$f"
-    if [ ! -f "$path" ]; then
-        fail "$f: file not found"
-        continue
-    fi
-    if grep -q "begin_with_tenant" "$path"; then
-        fail "$f: known residual now has begin_with_tenant — update audit expectations"
-    elif grep -q "OptionalRlsTenantClaims" "$path"; then
-        warn "$f: known residual (OptionalRlsTenantClaims present, no begin_with_tenant)"
-    else
-        fail "$f: expected OptionalRlsTenantClaims in known residual"
-    fi
-done
-
 # ---------------------------------------------------------------------------
 # 3. Unclassified handler module detection
 # ---------------------------------------------------------------------------
@@ -166,7 +147,7 @@ for path in "$API_SRC"/*handlers.rs; do
     esac
 
     known=0
-    for k in $RLS_WRAPPED $READONLY $WEBHOOK_GAP $KNOWN_RESIDUAL; do
+    for k in $RLS_WRAPPED $READONLY $WEBHOOK_GAP; do
         if [ "$f" = "$k" ]; then
             known=1
             break

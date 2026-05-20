@@ -22,6 +22,17 @@ pub trait PropagationRecordRepository: Send + Sync {
         record: PropagationRecord,
     ) -> Result<PropagationRecord, IntentRebaseError>;
 
+    /// Create a new propagation record within an existing RLS-aware transaction.
+    ///
+    /// The caller is responsible for beginning the transaction via `RlsAwarePool::begin_with_tenant`
+    /// which sets the RLS tenant context before any operations.
+    /// In-memory implementations delegate to `create_record` and ignore the transaction.
+    async fn create_record_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        record: PropagationRecord,
+    ) -> Result<PropagationRecord, IntentRebaseError>;
+
     /// Get a propagation record by ID (tenant-scoped)
     async fn get_record(
         &self,
@@ -101,6 +112,15 @@ impl PropagationRecordRepository for InMemoryPropagationRecordRepository {
             .push(record.id);
 
         Ok(record)
+    }
+
+    async fn create_record_with_tx(
+        &self,
+        _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        record: PropagationRecord,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        // In-memory implementation delegates to create_record and ignores the transaction.
+        self.create_record(record).await
     }
 
     async fn get_record(
@@ -298,6 +318,53 @@ impl PropagationRecordRepository for SqlxPropagationRecordRepository {
         .await
         .map_err(|e| {
             IntentRebaseError::StorageError(format!("Failed to create propagation record: {}", e))
+        })?;
+
+        Ok(map_row_to_record(row))
+    }
+
+    async fn create_record_with_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        record: PropagationRecord,
+    ) -> Result<PropagationRecord, IntentRebaseError> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO propagation_records (
+                id, tenant_id, intent_id, downstream_system_id, status,
+                last_seen_version, signaled_at, acknowledged_at, failed_at,
+                failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                lock_version, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING id, tenant_id, intent_id, downstream_system_id, status,
+                      last_seen_version, signaled_at, acknowledged_at, failed_at,
+                      failure_reason, delivery_attempt_count, last_delivery_attempt_at,
+                      lock_version, created_at, updated_at
+            "#,
+        )
+        .bind(record.id)
+        .bind(record.tenant_id)
+        .bind(record.intent_id)
+        .bind(&record.downstream_system_id)
+        .bind(format!("{:?}", record.status).to_lowercase())
+        .bind(record.last_seen_version)
+        .bind(record.signaled_at)
+        .bind(record.acknowledged_at)
+        .bind(record.failed_at)
+        .bind(record.failure_reason.as_deref().unwrap_or(""))
+        .bind(record.delivery_attempt_count)
+        .bind(record.last_delivery_attempt_at)
+        .bind(record.lock_version)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| {
+            IntentRebaseError::StorageError(format!(
+                "Failed to create propagation record in tx: {}",
+                e
+            ))
         })?;
 
         Ok(map_row_to_record(row))

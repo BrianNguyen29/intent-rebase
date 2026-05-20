@@ -779,6 +779,10 @@ pub async fn get_propagation_status(
 /// Records that a downstream system has been signaled for an intent change.
 /// This is a bounded internal API — no actual webhook delivery or event
 /// streaming occurs. The record is created with status `pending`.
+///
+/// When `state.rls_pool` is Some AND valid JWT claims are present, this handler
+/// uses RLS-aware transaction wrapping for tenant isolation. Falls back to
+/// non-RLS path when no JWT claims are present (backward compatible).
 #[cfg(feature = "jwt-auth")]
 pub async fn ingest_propagation_signal(
     State(state): State<AppState>,
@@ -787,7 +791,7 @@ pub async fn ingest_propagation_signal(
     Json(body): Json<IngestPropagationSignalRequest>,
 ) -> Result<Json<IngestPropagationSignalResponse>, ApiErrorResponse> {
     // Phase 5.1: JWT tenant guard - fail closed on mismatch, fail open when JWT absent
-    if let Some(rls_claims) = optional_rls_claims {
+    if let Some(ref rls_claims) = optional_rls_claims {
         if body.tenant_id != rls_claims.tenant_id {
             let msg = format!(
                 "Tenant mismatch: JWT tenant_id ({}) does not match body tenant_id ({})",
@@ -826,6 +830,48 @@ pub async fn ingest_propagation_signal(
         intent_id,
         body.downstream_system_id.clone(),
     );
+
+    // RLS path: if pool exists AND JWT claims present
+    if let (Some(rls_pool), Some(rls_claims)) = (&state.rls_pool, &optional_rls_claims) {
+        let tx_result = rls_pool.begin_with_tenant(rls_claims.tenant_id).await;
+        let mut tx = match tx_result {
+            Ok(tx) => tx,
+            Err(e) => {
+                return Err(ApiErrorResponse(IntentRebaseError::Internal(format!(
+                    "failed to begin RLS transaction: {}",
+                    e
+                ))));
+            }
+        };
+
+        let record = repo
+            .create_record_with_tx(&mut tx, record)
+            .await
+            .map_err(ApiErrorResponse)?;
+
+        let commit_result = tx.commit().await;
+        if let Err(e) = commit_result {
+            return Err(ApiErrorResponse(IntentRebaseError::StorageError(format!(
+                "failed to commit RLS transaction: {}",
+                e
+            ))));
+        }
+
+        tracing::debug!(
+            "ingest_propagation_signal: RLS path success for tenant_id={}",
+            rls_claims.tenant_id
+        );
+
+        return Ok(Json(IngestPropagationSignalResponse {
+            record_id: record.id,
+            intent_id,
+            tenant_id: body.tenant_id,
+            downstream_system_id: body.downstream_system_id,
+            status: format!("{:?}", record.status).to_lowercase(),
+        }));
+    }
+
+    // Fallback non-RLS path (backward compatible)
     let record = repo.create_record(record).await.map_err(ApiErrorResponse)?;
 
     Ok(Json(IngestPropagationSignalResponse {
