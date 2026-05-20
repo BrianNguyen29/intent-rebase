@@ -57,4 +57,7 @@ pub use s3_bundle_storage::*;
 pub use verification::*;
 
 #[cfg(test)]
+mod bundle_repo_tests;
+
+#[cfg(test)]
 mod bundle_replay_tests;
