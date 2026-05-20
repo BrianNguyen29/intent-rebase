@@ -18,6 +18,8 @@ pub mod compensation_planner;
 pub mod compensation_simulator;
 
 #[cfg(test)]
+mod compensation_action_repo_tests;
+#[cfg(test)]
 mod compensation_action_tests;
 #[cfg(test)]
 mod compensation_simulator_tests;
