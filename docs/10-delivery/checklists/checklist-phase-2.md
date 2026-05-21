@@ -113,7 +113,7 @@ Slice A verification complete. Slice B (residual risk items, deferral register, 
 
 [x] Checkpoint service/query layer - PARTIAL GROUNDWORK
     Evidence:
-    - Code: crates/intent-service/src/lib.rs (CheckpointService with 12 methods)
+    - Code: crates/intent-service/src/checkpoint_service.rs (CheckpointService)
     - Internal API: create_checkpoint, get_checkpoint, list_by_workflow, list_by_intent,
       get_latest_checkpoint, get_checkpoint_for_version, activate/supersede/invalidate_checkpoint,
       run_expiration, list_checkpoints_by_type
@@ -135,7 +135,7 @@ Slice A verification complete. Slice B (residual risk items, deferral register, 
 
 [x] Checkpoint expiration (expire old checkpoints) - PARTIAL
     Evidence:
-    - CheckpointService::run_expiration implemented (crates/intent-service/src/lib.rs, lines 769-771)
+    - CheckpointService::run_expiration implemented (crates/intent-service/src/checkpoint_service.rs)
     - Tests: checkpoint_service_tests::test_run_expiration passes
 
 [x] Checkpoint creation on intent update (automatic) - PHASE 2b BOUNDED SLICE DELIVERED (TEST-ONLY INFRASTRUCTURE)
@@ -309,7 +309,7 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 [x] Policy snapshot read-only REST API surface (Phase 2b bounded slice - schema, types, repo, canonical hashing, and GET endpoints; S3 upload/write/revalidation out of scope)
     Note: Four read-only GET endpoints are implemented: GET /policy-snapshots/{id}, GET /policy-snapshots/intent/{intent_id}/latest, GET /policy-snapshots/intent/{intent_id}/versions/{version}, GET /policy-snapshots/intent/{intent_id}. S3 blob storage, write endpoints, and revalidation API remain future.
     Evidence:
-    - Code: crates/intent-api/src/lib.rs:1252-1388 (handlers), 1604-1617 (routes)
+    - Code: crates/intent-api/src/policy_snapshot_handlers.rs (handlers), crates/intent-api/src/routes/policy.rs (routes)
     - Code: intent-service/policy_snapshot_repo.rs
     - Types: intent-rebase-types/src/policy_snapshot.rs
     - Schema: infrastructure/migrations/009_create_policy_snapshot.sql
@@ -406,7 +406,7 @@ Current bounded approval queue/read/status-only workflow is delivered in Section
 [x] Graph nodes updated when intent changes - BOUNDED SLICE DELIVERED (Phase 2b)
     Evidence:
     - Code: crates/rebase-orchestrator/src/lib.rs
-    - GraphUpdater wired into apply_rebase path (update_graph_state called in Proceed path, lines 500-507)
+    - GraphUpdater wired into apply_rebase path (update_graph_state called in RebaseOrchestrator::apply_rebase Proceed path)
     - update_graph_state method iterates affected items and calls graph_updater.update_node_state_if_affected
     - RebaseApplyResult.graph_updates populated with GraphUpdateResult for each mutation
     - RebaseApplySummary.graph_updates_applied/graph_updates_failed derived from graph_updates

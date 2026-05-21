@@ -674,7 +674,7 @@
 ```
 [x] Rebase simulation endpoint (N4-4 bounded API slice — Phase 3)
     Evidence:
-    - Code: crates/intent-api/src/lib.rs (rebase_simulation handler at line 1414)
+    - Code: crates/intent-api/src/simulation_handlers.rs (rebase_simulation handler)
     - Code: crates/intent-api/src/lib.rs (RebaseSimulationQuery struct with tenant_id, from_version, to_version, mode, seed)
     - Code: crates/compensation-service/src/compensation_simulator.rs (CompensationSimulator with deterministic/stochastic modes)
     - OpenAPI: docs/04-api/openapi.yaml (GET /intents/{intent_id}/rebase-simulation path definition)

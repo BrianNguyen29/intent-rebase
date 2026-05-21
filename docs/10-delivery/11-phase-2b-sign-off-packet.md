@@ -45,7 +45,7 @@ Phase 2b delivers bounded runtime-integrated slices across eight work areas:
 | Apply pipeline (risk-tier policy) | `crates/rebase-orchestrator/src/apply_pipeline.rs` |
 | `POST /intents/{id}/rebase-apply` + audit | `crates/intent-api/src/lib.rs` |
 | Approval queue / approve / reject | `crates/intent-api/src/lib.rs` |
-| Policy snapshot read API | `crates/intent-api/src/lib.rs` (handlers 1252–1388, routes 1604–1617) |
+| Policy snapshot read API | `crates/intent-api/src/policy_snapshot_handlers.rs` (handlers), `crates/intent-api/src/routes/policy.rs` (routes) |
 | Checkpoint service | `crates/intent-service/src/lib.rs` |
 | Graph updater | `crates/rebase-orchestrator/src/graph_updater.rs` |
 | Edge re-evaluation + orphan detection | `crates/graph-service/src/edge_reevaluation.rs` |

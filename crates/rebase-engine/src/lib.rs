@@ -144,8 +144,8 @@ impl RebaseEngine {
     /// Returns a typed `RebasePlan` with:
     /// - Decision class (A-E)
     /// - Rationale and section decisions
-    /// - Affected items preview (empty in Phase 1 baseline — TODO for Phase 2)
-    /// - Deferred fields (TODO markers for Phase 2)
+    /// - Affected items preview (empty in Phase 1 baseline — deferred to Phase 2)
+    /// - Deferred fields (deferred placeholders)
     ///
     /// Note: This is a preview-only implementation. Full rebase planning with
     /// graph integration, checkpoint selection, and approval revalidation is

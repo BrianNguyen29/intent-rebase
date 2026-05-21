@@ -10,7 +10,7 @@
 //!
 //! This module does NOT include:
 //! - Graph-based impact classification integration (requires graph HTTP API)
-//! - Approval revalidation hooks (TODO/None in Phase 1)
+//! - Approval revalidation hooks (deferred to Phase 2+; baseline scaffolding present)
 //! - Runtime adapter integration (Phase 2)
 //!
 //! The planner is deterministic: same diff+risk input always produces
@@ -446,9 +446,9 @@ pub struct RebasePlan {
     pub rationale: String,
     /// Section-level decisions
     pub section_decisions: Vec<SectionDecision>,
-    /// Affected items preview (Phase 1: empty, TODO in Phase 2)
+    /// Affected items preview (Phase 1 baseline: empty; deferred to Phase 2)
     pub affected_items: AffectedItemsPreview,
-    /// Deferred fields (Phase 1: TODO markers)
+    /// Deferred fields (Phase 1 baseline: deferred placeholders)
     pub deferred: DeferredFields,
     /// Whether manual review is recommended
     pub manual_review_recommended: bool,
