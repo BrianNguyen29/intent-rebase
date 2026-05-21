@@ -249,6 +249,72 @@ If a per-tenant stream is added **alongside** the shared stream, every message w
 4. **Local validation:** Spin up a local NATS container (e.g., `docker compose -f infrastructure/local/docker-compose.yml up nats`) and validate configs with `nats-box`.
 5. **Consumer audit:** Identify all consumer groups that bind to `audit_events` and plan their migration to per-tenant streams.
 
+#### Stage 1 Execution Log (2026-05-21)
+
+> **Status:** Stage 1 local readiness assessment executed and documented. No per-tenant streams created. No server-side topology changed. Stage 2–4 remain blocked.
+
+| Step | Action | Result | Caveats |
+|------|--------|--------|---------|
+| 1 | Start local NATS | `docker compose -f infrastructure/local/docker-compose.yml up -d nats` succeeded after restart with fresh volume | Prior NATS instance was unhealthy due to corrupted `test_tenant_missing_...` stream from previous test run; volume cleared and recreated |
+| 2 | Inspect shared stream | `audit_events` stream created idempotently by `live_jetstream_g5_stream_config` test; subject filter `audit.events.v1.>` confirmed | Stream created dynamically by tests, not pre-existing in fresh NATS; 0 messages, 0 consumers after test run |
+| 3 | List consumers for shared stream | `audit_events` has **0 consumers** after full test suite | All test consumers bind to isolated test streams, not the shared stream; production consumer audit requires staging/prod NATS |
+| 4 | Confirm publisher subject format | `audit.events.v1.<tenant_id>.<event_type>` — confirmed in `nats_event_publisher.rs` (subject built from `EventSubject`) and `stream.rs` (shared stream filter) | Concrete emitted subjects match `audit.events.v1.{tenant_uuid}.{event_type}` pattern |
+| 5 | Inventory tenant UUIDs in NATS tests | No hardcoded tenant UUIDs in NATS publisher/consumer/JetStream code; all live tests use `uuid::Uuid::new_v4()` dynamically | Hardcoded test UUID `550e8400-e29b-41d4-a716-446655440000` exists in auth tests, forensic handler tests, and webhook HMAC tests, but is **not** referenced in NATS subject construction |
+| 6 | Run NATS live integration suite | `NATS_URL=nats://localhost:4222 cargo test -p intent-api --lib nats_jetstream -- --ignored` | **14 passed, 0 failed** (see Test Result Detail below) |
+| 7 | Local stream/consumer post-test inventory | 12 streams, 10 consumers, 12 messages total | All streams use isolated `test.*` namespaces; no cross-test pollution; shared `audit_events` remains empty |
+
+**Test Result Detail:**
+
+```
+running 14 tests
+test nats_jetstream::tests_live_integration::live_jetstream_g5_failed_no_dlq ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_g5_stream_config ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_malformed_traceparent ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_g5_consumer_max_deliver_3 ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_message_without_traceparent ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_stream_idempotent_create ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_tenant_scope_matching_tenant_consumes ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_stream_publish_consume_ack_trace_roundtrip ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_full_consumer_dlq_publish_on_failed ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_tenant_scope_unscoped_consumes_all ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_dlq_peek_does_not_consume_messages ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_tenant_scope_mismatched_tenant_rejects_and_acks ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_tenant_scope_missing_tenant_rejects ... ok
+test nats_jetstream::tests_live_integration::live_jetstream_dlq_replay_worker_replays_message ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out
+```
+
+**Prepared Stream Config Template (DO NOT EXECUTE — planning only):**
+
+```json
+{
+  "name": "audit_events_{tenant_id}",
+  "subjects": ["audit.events.v1.{tenant_id}.>"],
+  "retention": "limits",
+  "storage": "file",
+  "max_msgs": -1,
+  "max_bytes": -1,
+  "max_age": 0,
+  "max_msg_size": -1,
+  "discard": "old"
+}
+```
+
+> **DO NOT CREATE** per-tenant streams while `audit_events` shared stream still has filter `audit.events.v1.>`. Subject overlap would duplicate every message into both streams.
+
+**Stage 1 Readiness Assessment:**
+
+- ✅ Local NATS healthy and accessible
+- ✅ Shared stream `audit_events` subject filter confirmed: `audit.events.v1.>`
+- ✅ Publisher subject shape confirmed tenant-scoped: `audit.events.v1.{tenant_id}.{event_type}`
+- ✅ Consumer guard (`NatsPullConsumerAdapter::tenant_scope`) validated through live tests
+- ✅ Live integration suite passes (14/14)
+- ✅ Stream config template prepared (planning-only)
+- 🔴 **Blocked:** No production tenant UUID inventory (requires staging/prod database or tenant service)
+- 🔴 **Blocked:** No production consumer groups inventory (requires staging/prod NATS)
+- 🔴 **Blocked:** Stage 2–4 require external SRE sign-off, staging environment, and coordinated rollout
+
 #### Stage 2 — Server-Side Rollout (requires coordination)
 
 Choose **one** of the following strategies:
