@@ -93,6 +93,34 @@ export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/in
 cargo test -p intent-api -- --ignored
 ```
 
+### Backup/restore validation (I6)
+
+Non-destructive local validation that a `pg_dump` archive can be restored and application tests pass against the restored database:
+
+```bash
+# 1. Start Postgres
+docker compose -f infrastructure/local/docker-compose.yml up -d postgres
+
+# 2. Dump the source database
+docker exec intent-rebase-postgres pg_dump -U intent_rebase -Fc -d intent_rebase_phase1_fix -f /tmp/i6_restore_test.dump
+
+# 3. Create a fresh restore target
+docker exec intent-rebase-postgres createdb -U intent_rebase intent_rebase_i6_restore
+
+# 4. Restore
+docker exec intent-rebase-postgres pg_restore -U intent_rebase -d intent_rebase_i6_restore /tmp/i6_restore_test.dump
+
+# 5. Verify migrations are present
+docker exec intent-rebase-postgres psql -U intent_rebase -d intent_rebase_i6_restore -c "SELECT COUNT(*) AS migrations FROM _sqlx_migrations"
+
+# 6. Run integration tests against the restored database
+export DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_i6_restore
+cargo test -p intent-service --test migration_integration -- --ignored
+cargo test -p intent-api --test webhook_integration -- --ignored
+```
+
+> **Caveat:** This is local docker-compose `pg_dump`/`pg_restore` only. It does not validate production PITR, WAL archiving, basebackup, or offsite replication. RPO/RTO were not measured.
+
 **Prerequisites for ignored tests:**
 1. Start local services: `docker compose -f infrastructure/local/docker-compose.yml up -d`
 2. Verify Postgres is healthy: `docker compose -f infrastructure/local/docker-compose.yml ps`

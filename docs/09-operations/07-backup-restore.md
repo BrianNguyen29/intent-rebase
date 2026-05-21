@@ -1,9 +1,9 @@
 # 07 — Backup & Restore Procedures
 
-**Status:** `DOCUMENTED — Procedure Templates Only`
+**Status:** `LOCAL VALIDATED — Templates + Docker-Compose Non-Destructive Restore Verified`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** April 2026
+**Last Updated:** May 2026
 
 ---
 
@@ -14,6 +14,44 @@ This document provides **procedure templates** for backup and restore operations
 > **⚠️ Evidence Strength Disclaimer**
 >
 > These are **procedure templates and playbooks**, not executed production backups. Do not represent these procedures as having been run against production. Real backup/restore validation requires production infrastructure and external SRE sign-off.
+
+---
+
+## Local Validation Evidence (Phase 3 I6)
+
+> **Scope:** Non-destructive `pg_dump` / `pg_restore` validation against the local docker-compose PostgreSQL instance. This is **not** a production PITR/basebackup validation, nor a destructive incident restore.
+
+A local backup/restore round-trip was executed on `intent_rebase_phase1_fix` to a separate restore database (`intent_rebase_i6_restore`) to verify that:
+1. A `pg_dump` produces a restorable archive.
+2. `pg_restore` recreates the schema and data faithfully.
+3. Migrations and application tests pass against the restored database.
+
+### Execution Log
+
+| Step | Command | Result |
+|------|---------|--------|
+| 1 | `docker compose -f infrastructure/local/docker-compose.yml up -d postgres` | Postgres healthy after startup |
+| 2 | `docker exec intent-rebase-postgres pg_dump -U intent_rebase -Fc -d intent_rebase_phase1_fix -f /tmp/i6_restore_test.dump` | Passed |
+| 3 | `docker exec intent-rebase-postgres ls -l /tmp/i6_restore_test.dump` | `156498` bytes |
+| 4 | `docker exec intent-rebase-postgres dropdb -U intent_rebase --if-exists intent_rebase_i6_restore` | Skipped (absent) |
+| 5 | `docker exec intent-rebase-postgres createdb -U intent_rebase intent_rebase_i6_restore` | Passed |
+| 6 | `docker exec intent-rebase-postgres pg_restore -U intent_rebase -d intent_rebase_i6_restore /tmp/i6_restore_test.dump` | Passed |
+| 7 | `docker exec intent-rebase-postgres psql -U intent_rebase -d intent_rebase_i6_restore -c "SELECT COUNT(*) AS migrations FROM _sqlx_migrations"` | `21` rows |
+| 8 | `DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_i6_restore cargo test -p intent-service --test migration_integration -- --ignored` | **1/1 passed** |
+| 9 | `DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_i6_restore cargo test -p intent-api --test webhook_integration -- --ignored` | **1/1 passed** |
+
+### Interpretation
+
+- The restored database contains all 21 `_sqlx_migrations` rows, indicating schema fidelity.
+- The migration integration test passes against the restore target, confirming the restored schema is functional for application tests.
+- The webhook integration test passes against the restore target, confirming data and outbox/subscription schema are intact after restore.
+
+> **⚠️ Caveats**
+>
+> - This is `pg_dump`/`pg_restore` into a **separate** database, not `pg_basebackup` + WAL PITR.
+> - No production infrastructure was involved; no RPO/RTO targets were measured.
+> - No destructive overwrite of the source database occurred.
+> - Production backup/restore validation (basebackup, WAL archiving, PITR, offsite replication) remains deferred to Phase 4+ with external SRE sign-off.
 
 ---
 
