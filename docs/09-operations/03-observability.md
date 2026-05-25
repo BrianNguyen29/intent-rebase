@@ -50,6 +50,8 @@ Structured logs với:
 
 Local Alertmanager is configured in `infrastructure/local/alertmanager/alertmanager.yml` with placeholder webhook routes.
 
+> **Panic alerting:** The panic hook (`crates/intent-api/src/panic_hardening.rs`) logs sanitized panic payloads but does **not** emit Prometheus metrics. The intended panic alerting path is documented in [`12-panic-alerting-integration.md`](12-panic-alerting-integration.md) (S7 design-only; production blocked).
+
 **Standalone (host):**
 ```bash
 python3 infrastructure/local/alertmanager/webhook_receiver.py

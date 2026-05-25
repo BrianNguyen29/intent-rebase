@@ -1,7 +1,7 @@
 # Project Completion Roadmap
 
-> **Status:** P0 complete, P1 complete, P2 docs audit complete (benchmarks deferred)  
-> **Last updated:** 2026-05-16  
+> **Status:** P0 complete, P1 complete, P2 docs audit complete (benchmarks deferred)
+> **Last updated:** 2026-05-21
 > **Non-production caveat:** This project is explicitly **NOT production-ready**. All phases below are bounded non-production feature delivery. Production readiness requires external sign-off (SRE, Security, Runtime Integration), load testing, pen testing, and compliance audit — none of which are claimed here.
 
 ---
@@ -35,9 +35,9 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Router Stage 1: extract JWT builders and auth middleware from `router.rs` into `router/jwt_builders.rs` and `router/auth_middleware.rs` (preserving `jwt-auth` feature gating and public signatures)
 
 ### Remaining (P0)
-- [ ] Extract `rebase_apply_handlers.rs` inline tests → deferred per task constraints
+- [x] Extract `rebase_apply_handlers.rs` inline tests → `rebase_apply_handler_tests.rs` (delivered; module registered in `lib.rs`)
 - [x] Ensure all test modules follow consistent import style (`crate::...` paths) — handler and non-handler
-- [ ] Router Stage 2 (route-group split) → deferred to P1/P2 per bounded scope constraints
+- [x] Router Stage 2 (route-group split) → deferred to P1/P2 per bounded scope constraints
 
 ### Acceptance Criteria
 - `cargo fmt --all -- --check` passes
@@ -53,7 +53,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 **Goal:** Extract all remaining inline test modules and decompose oversized files.
 
 **Items:**
-- [ ] Extract `rebase_apply_handlers.rs` inline tests → `rebase_apply_handler_tests.rs` (currently deferred)
+- [x] Extract `rebase_apply_handlers.rs` inline tests → `rebase_apply_handler_tests.rs` (delivered; module registered in `lib.rs`)
 - [x] Extract any remaining inline `#[cfg(test)] mod tests` blocks from handler files (all cleared)
 - [x] Extract propagation-signal helper block from `rebase_apply_handlers.rs` → `propagation_signals.rs`
 - [x] Extract DLQ error types + `validate_nats_subject` from `nats_jetstream.rs` → `nats_jetstream/dlq.rs` (S2 only)
@@ -66,7 +66,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 - [x] Relocate `live_integration_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_live_integration.rs` (A2)
 - [x] Relocate `lifecycle_tests` module from `nats_jetstream.rs` → `nats_jetstream/tests_lifecycle.rs` (A3)
 - [x] Router Stage 1: JWT builders and auth middleware extracted from `router.rs` → `router/jwt_builders.rs` + `router/auth_middleware.rs` (preserves public API, gated by `jwt-auth` feature)
-- [ ] Router Stage 2: route-group split (e.g., graph-routes, compensation-routes, forensic-routes) → deferred to P2; requires evaluation of maintainability thresholds and API stability
+- [x] Router Stage 2: route-group split → domain-grouped route modules under `crates/intent-api/src/routes/` (intent, graph, compensation, approval, forensic, policy, webhook, propagation, health) delivered as A-09 decomposition slice
 - [x] Normalize `super::...` references to `crate::...` paths in all extracted test modules
 
 **Constraints:**

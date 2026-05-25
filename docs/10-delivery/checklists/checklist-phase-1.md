@@ -22,7 +22,7 @@
 ```
 [x] Intent data model implemented
     Evidence:
-    - Code: crates/intent-rebase-types/src/intent.rs:266-340 (Intent, IntentVersion, IntentPayload structs)
+    - Code: crates/intent-rebase-types/src/intent.rs (`Intent`, `IntentVersion`, `IntentPayload` structs)
     - Code: crates/intent-service/src/lib.rs (IntentService CRUD ops)
     - Code: crates/intent-service/src/sqlx_repository.rs (SQL-backed repository)
     - Migration: migrations/001_create_intents.sql (intents table with intent_id PRIMARY KEY)

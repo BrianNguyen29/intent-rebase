@@ -615,6 +615,82 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 
 ---
 
+## RB15. Process Panic Detected
+
+> **Status:** Design-only runbook — panic hook and sanitized logging are delivered locally; no Prometheus panic metric is instrumented; no production alerting is configured. This runbook describes the intended operator response once `process_panics_total` is implemented and Alertmanager routes to external receivers.
+
+**Symptoms:**
+- `ProcessPanicDetected` alert fires (design-only; no metric currently exists)
+- Application logs contain lines starting with `PANIC: thread=..., location=..., payload=...`
+- Worker task join errors logged with `... worker task panicked: ...` and sanitized payload
+- Service may remain partially functional (tokio runtime survives panics in spawned tasks) but individual requests or background jobs may fail
+
+**Diagnosis:**
+1. Check application logs for panic output:
+   ```bash
+   docker logs intent-rebase-api 2>&1 | grep -i "PANIC:"
+   ```
+   Or if running natively:
+   ```bash
+   cargo run -p intent-api 2>&1 | grep -i "PANIC:"
+   ```
+2. Note the sanitized payload — it will have secrets redacted (JWT, DB URL, AWS creds, Bearer tokens). The raw payload is not logged for security reasons.
+3. Identify the file location and line number from the log:
+   ```
+   PANIC: thread=<name>, location=crates/.../src/....rs:123:45, payload=<sanitized>
+   ```
+4. Check if the panic is recurring (same location repeated) or isolated:
+   ```bash
+   docker logs intent-rebase-api 2>&1 | grep -c "PANIC:"
+   ```
+5. Check worker health:
+   - `DlqMetricsWorker` — check `intent_api_dlq_messages_current` metric
+   - `DlqReplayWorker` — check DLQ replay endpoint responsiveness
+   - `WebhookOutboxWorker` — check `intent_api_webhook_deliveries_attempted_total` for delivery stalls
+
+**Mitigation:**
+1. **If single isolated panic:**
+   - Capture log line with sanitized payload
+   - File a bug with location and payload (sanitized is safe to paste)
+   - Monitor for recurrence
+2. **If recurring panic at same location:**
+   - Identify the code path triggering the panic
+   - If panic is in a background worker (DLQ, webhook outbox), the worker task terminates but the runtime continues
+   - Restart the affected service/container to restore worker tasks
+   - If panic is in the HTTP handler path, requests to that endpoint will fail until the root cause is fixed
+3. **If panic indicates data corruption or security breach:**
+   - Escalate to backend lead immediately
+   - Preserve logs and container state for forensic analysis
+   - Do NOT restart until initial evidence is captured
+4. **If panic is caused by resource exhaustion (OOM, stack overflow):**
+   - Check host/container memory and CPU usage
+   - Reduce load if possible (disable non-critical workers via env gates)
+   - Scale resources if running in an environment that supports it
+
+**Recovery:**
+1. Apply code fix for the panic root cause
+2. Run `cargo test --workspace --lib --all-features` to verify fix does not regress
+3. If applicable, run load tests to confirm stability under load:
+   ```bash
+   cargo test -p intent-api --features load-test --test load_test -- --nocapture test_sustained_load_smoke
+   ```
+4. Re-deploy and monitor for 30 minutes
+5. Verify no new `PANIC:` lines in logs
+
+**Prevention:**
+- Use `Result` and `?` propagation instead of `unwrap()`/`expect()` in new code
+- Fuzz-test serialization/deserialization boundaries that may receive untrusted input
+- Review all `panic!()` calls in codebase during security reviews
+- Panic hook is a last-resort observability mechanism, not an error-handling strategy
+
+**Caveats:**
+- No automated alert currently fires because `process_panics_total` is not instrumented
+- Log-based panic detection requires manual inspection or external log aggregation (e.g., Loki, CloudWatch Logs) — not configured locally
+- Sanitized payload may obscure the exact cause; reproduction with `RUST_BACKTRACE=1` may be needed in a safe environment
+- This runbook has not been reviewed by an external SRE or executed in staging/production
+
+---
+
 ## On-Call Quick Reference
 
 | Alert | Severity | Immediate Action |
@@ -633,6 +709,7 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 | DLQDepthHigh | Warning | Check DLQ subject count and replay messages; see RB11 |
 | DLQMessageStale | Warning | Investigate oldest DLQ message; see RB11 |
 | DLQReplayFailures | Warning | Check replay logs and consumer health; see RB11 |
+| ProcessPanicDetected | Critical (design-only) | Check logs for `PANIC:` lines, identify location, escalate if recurring or data-corruption related; see RB15. **Not currently active — no metric instrumented.** |
 | LocalAlertReceiver | Info | Standalone: `python3 infrastructure/local/alertmanager/webhook_receiver.py` → http://localhost:9094/webhook; Docker Compose: `docker compose -f infrastructure/local/docker-compose.yml --profile observability up -d` → Alertmanager routes to `alert-receiver:9094` internally; local/manual-only — not a production receiver |
 
 > **Removed alerts (metrics not instrumented):** `CompensationDLQCandidatesElevated` — panel and rule cleaned up as part of stale observability cleanup. DLQ alerts are now present as local dev scaffolding.
