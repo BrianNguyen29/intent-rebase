@@ -801,6 +801,146 @@ curl -s http://localhost:9090/api/v1/query?query=intent_api_intent_version_creat
 
 ---
 
+## Section 5: I2a Local Sub-Slice Evidence — 2026-06-06
+
+**Goal:** Document I2a as a bounded local-dev sub-slice of Phase 3 I2 (30min sustained + all alert types + real receivers). I2a captures two narrow local signals: (1) a 10-minute sustained-load run targeting an externally-running intent-api binary, and (2) a local alert-pipeline smoke that fires exactly one availability alert (`IntentVersionCreationLowSuccessRate`) end-to-end through Prometheus → Alertmanager → alert-receiver. This is **not** a claim that I2, A-06, L4, L5, or production readiness is complete.
+
+**Local stack command (full observability profile):**
+```bash
+docker compose -f infrastructure/local/docker-compose.yml up -d postgres nats minio prometheus alertmanager alert-receiver grafana
+```
+
+**Stack status observed (`docker compose ps`):**
+| Service | Status |
+|---------|--------|
+| postgres | healthy |
+| nats | healthy |
+| minio | healthy |
+| prometheus | healthy |
+| alertmanager | healthy (after one initial observability-profile startup timeout; relaunched successfully) |
+| alert-receiver | healthy (started after the timeout-relaunch) |
+| grafana | healthy |
+
+> **Startup caveat:** The initial `docker compose ... --profile observability up -d` reported a startup timeout for the observability profile; a subsequent launch of `alertmanager` and `alert-receiver` started both services successfully. The eventual healthy state is what supports the evidence below. NATS healthy in this run; this is **not** production NATS evidence.
+
+### 5.1 Build Pre-flight
+
+**Attempt 1 — `cargo build -p intent-api --no-default-features`** failed because `jwt_auth_async` is feature-gated and produced an unresolved import error under the disabled-default-features build.
+
+**Workaround:** Switched to the default-feature local binary for the I2a runs. This is recorded as a caveat — it is not treated as an I2a blocker, but it does mean I2a uses the same local dev JWT fallback (`INTENT_API_REQUIRE_JWT=false`) that other local runs use, and does not validate production auth or production build flags.
+
+**Attempt 2 — `cargo build -p intent-api`** (default features) **passed**.
+
+### 5.2 intent-api Bring-up and Health
+
+**Startup command (default-feature local binary):**
+```bash
+DATABASE_URL=postgres://intent_rebase:intent_rebase_dev@localhost:5432/intent_rebase_phase1_fix \
+INTENT_API_WEBHOOK_DELIVERY=false \
+INTENT_API_WEBHOOK_OUTBOX_WORKER=false \
+cargo run -p intent-api
+```
+
+**Observed server signals:**
+- Local JWT dev fallback warning logged (expected; `INTENT_API_REQUIRE_JWT=false`).
+- `Intent API server starting on 0.0.0.0:8080`.
+- `GET /health` → `{"status":"ok",...}` (healthy).
+- Prometheus `up{job="intent-api"}` query returned `up=1` for the running instance.
+
+### 5.3 Sustained Load — 10 Minutes (External Binary)
+
+> **First-attempt note:** An initial run with shell timeout 900000ms did not complete within the interactive-shell budget (~580s) because the `cargo test` compile phase consumed the wall-clock budget. That attempt is **not** counted as a pass; only the completed run below counts.
+
+**Run command:**
+```bash
+SUSTAINED_LOAD_URL=http://localhost:8080 \
+SUSTAINED_LOAD_DURATION_SECS=600 \
+SUSTAINED_LOAD_RPS=50 \
+cargo test -p intent-api --features load-test --test load_test -- --nocapture test_sustained_load_smoke
+```
+
+**Result:**
+- `test result: ok. 1 passed; 0 failed; 0 ignored; finished in 600.06s`
+
+| Metric | Value |
+|--------|-------|
+| Duration | 600.01 s |
+| Total requests | 30,005 |
+| Successful | 30,005 |
+| Failed | 0 |
+| Error rate | 0.0000% |
+| Throughput | 50.01 req/s |
+| p50 latency | 2 ms |
+| p95 latency | 14 ms |
+| p99 latency | 25 ms |
+| Warm RSS | 16,384 kB |
+| Final RSS | 17,604 kB |
+| RSS delta | +1,220 kB (+7.4%) |
+| Warm FD | 15 |
+| Final FD | 15 |
+| FD delta | 0 |
+
+**Oracle criteria:**
+| Criterion | Threshold | Result |
+|-----------|-----------|--------|
+| Error rate | < 0.1% | ✅ PASS (0.0000%) |
+| RSS stability | ±20% of warm baseline | ✅ PASS (+7.4%) |
+| FD stability | Non-increasing | ✅ PASS (0) |
+| Throughput stability | Within 0.5x–2x of initial | ✅ PASS (50.01 req/s steady) |
+
+### 5.4 Alert Pipeline Smoke — One Availability Alert
+
+> **Scope:** I2a validates one availability alert pipeline only. It does not validate all 17 alert rules, and it does not validate latency, compensation, error-budget, or DLQ alert types.
+
+**First fault-injection attempts (did not fire):**
+- Load-harness fault body schema drift caused HTTP 422 (request rejected at schema validation, before the handler) — `intent_api_intent_version_created_total` remained empty; `/api/v1/alerts` returned no firing alerts.
+- Diagnosed as local harness/schema drift, **not** production alert evidence. The handler simply never executed against a non-validating payload.
+
+**Schema-valid baseline check:**
+- A schema-valid `POST /intents` with nil `workflow_id` returned HTTP 400 `INVALID_INGEST_REQUEST` and incremented the error counter.
+
+**Final fault-injection run (schema-valid success + error mix):**
+- `intent_api_intent_version_created_total` accumulated 5 success and 361 cumulative errors.
+- Prometheus success-rate query (`sum(rate(intent_api_intent_version_created_total{status="success"}[5m])) / sum(rate(...))`) returned `0` (0% success rate over the evaluation window).
+- `/api/v1/alerts` showed `IntentVersionCreationLowSuccessRate` with `state: "firing"`, `severity: "warning"`, `slo: "availability"`, description `Success rate is 0.00%`.
+- Alertmanager `/api/v2/alerts` showed one active alert routed to receiver `warning-alerts`.
+- `alert-receiver` logs received a webhook payload with `receiver: "warning-alerts"`, `status: "firing"`, `alertname: "IntentVersionCreationLowSuccessRate"`, `severity: "warning"`, `slo: "availability"`, `truncatedAlerts: 0`.
+
+**Alert-pipeline validation table:**
+| Step | Result |
+|------|--------|
+| Binary `/metrics` exposes counters with `status` labels | ✅ Both `{status="success"}` and `{status="error"}` recorded |
+| Prometheus scrapes successfully | ✅ `up{job="intent-api"} = 1` |
+| PromQL success-rate query returns vector | ✅ Returns `0` (0% success rate) |
+| Alert expression evaluates without error | ✅ `IntentVersionCreationLowSuccessRate` reaches firing state |
+| Alertmanager received and routed alert | ✅ Routed to `warning-alerts` |
+| alert-receiver webhook received payload | ✅ Receiver, alertname, severity, slo, status all present |
+
+**No overclaim:** I2a validates the end-to-end path for **one** availability alert only. Latency, compensation, error-budget, and DLQ alert types were not exercised. The `alert-receiver` is a local placeholder, not a real external receiver. The 5/361 ratio is a deliberately engineered fault scenario, not organic production traffic.
+
+### 5.5 Browser Tools
+
+Browser-based verification tools (Playwright, headless Chrome, etc.) were **not** used during I2a evidence collection. All checks were performed via `curl`, `cargo test`, Prometheus HTTP API, Alertmanager HTTP API, and `docker compose` CLI.
+
+### 5.6 Evidence Strength (I2a Sub-Slice)
+
+| Criterion | Status |
+|-----------|--------|
+| Local docker-compose stack up (postgres/nats/minio/prometheus/alertmanager/alert-receiver/grafana) | ✅ YES (after one observability-profile startup timeout-relaunch) |
+| 10-minute sustained load against running intent-api binary | ✅ PASS (30,005/30,005, 0% error, RSS +7.4%, FD flat) |
+| Prometheus scrapes intent-api | ✅ YES (`up{job="intent-api"} = 1`) |
+| One availability alert fires end-to-end | ✅ YES (`IntentVersionCreationLowSuccessRate` → Alertmanager → `warning-alerts` → alert-receiver) |
+| All 17 alert rules exercised | 🔴 NO (one alert only) |
+| Real external receiver | 🔴 NO (local `alert-receiver` placeholder) |
+| 30-minute sustained load | 🔴 NO (10 minutes only) |
+| Production-grade config / release profile | 🔴 NO (dev build, default features, local JWT fallback) |
+| CI-green | 🔴 NO (no CI claim) |
+| Production readiness | 🔴 NO (explicitly not claimed) |
+
+**No overclaim:** I2a is a bounded local-dev sub-slice. It validates a 10-minute sustained-load pass and one availability alert pipeline end-to-end. It does **not** validate the full I2 deliverable (30min sustained + all alert types + real receivers), does **not** satisfy A-06 (L4/L5), and does **not** represent staging or production evidence. Full I2 / A-06 / L4 / L5 remain blocked and deferred to staging and production infrastructure.
+
+---
+
 ## Limitations
 
 ### In-Memory Tests
@@ -819,6 +959,7 @@ curl -s http://localhost:9090/api/v1/query?query=intent_api_intent_version_creat
 - **L4 Grafana dashboards validated** — 2026-05-11 2 dashboards provisioned, Prometheus datasource healthy, panel queries use correct metric names
 - **L4 Alertmanager receivers blocked** — 2026-05-11 all receivers are localhost placeholders; real external routing requires user-provided credentials/infra
 - **NATS unhealthy (initial run)** — 2026-05-11 initial run showed NATS container as unhealthy; fixed in follow-up by adding `-m 8222` to NATS command
+- **I2a local sub-slice captured (10min sustained + one availability alert)** — 2026-06-06 Section 5 documents I2a evidence: 10-minute sustained-load run against an external default-feature intent-api binary (30,005/30,005, 0% error, RSS +7.4%, FD flat) and an end-to-end alert-pipeline smoke that fired `IntentVersionCreationLowSuccessRate` through Prometheus → Alertmanager → local `alert-receiver` (receiver `warning-alerts`, severity `warning`, slo `availability`). This is **not** the full I2 deliverable (30min sustained + all alert types + real receivers) and does not satisfy A-06; it is a bounded local-dev sub-slice. Initial observability-profile startup timed out once before `alertmanager` and `alert-receiver` started successfully.
 
 ### SQLx Tests
 - **Local docker-compose Postgres only** — not equivalent to production RDS/high-performance managed Postgres
@@ -834,5 +975,7 @@ curl -s http://localhost:9090/api/v1/query?query=intent_api_intent_version_creat
 2. Test with release profile builds for realistic latency numbers
 3. Add connection pool saturation tests (gradually increase clients until errors start)
 4. Test with realistic payload sizes (large intents, many graph nodes)
-5. Run sustained load test for 30min+ at normal traffic levels for memory leak detection (10min validated locally; 30min+ deferred to Phase 4)
+5. Run sustained load test for 30min+ at normal traffic levels for memory leak detection (10min validated locally via I2a on 2026-06-06; 30min+ remains Phase 4)
 6. Validate SQLx pool config (max_connections, min_connections) against production load patterns
+7. Exercise all 17 alert rules (latency, compensation, error-budget, DLQ) under sustained fault scenarios (only one availability alert pipeline validated locally via I2a on 2026-06-06; all-alert validation deferred to Phase 4)
+8. Configure real Alertmanager receivers (PagerDuty, Slack, email, etc.) and validate external notification delivery (I2a uses local `alert-receiver` placeholder; real receivers remain Phase 4)
