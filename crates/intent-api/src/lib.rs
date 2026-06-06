@@ -86,6 +86,9 @@ pub mod webhook_dispatcher;
 /// Propagation signal helpers (bounded helper decomposition slice)
 pub mod propagation_signals;
 
+/// Propagation handlers (S6 bounded decomposition slice — extracted from query_handlers.rs)
+pub mod propagation_handlers;
+
 /// Policy snapshot handlers (Phase 2 bounded read-only slice, extracted as bounded handler decomposition slice)
 pub mod policy_snapshot_handlers;
 

@@ -8,11 +8,11 @@ pub fn add_routes(router: Router<crate::AppState>) -> Router<crate::AppState> {
         // Propagation status endpoint (Slice 1 bounded, Slice 2 record-backed)
         .route(
             "/intents/:intent_id/propagation-status",
-            get(crate::query_handlers::get_propagation_status),
+            get(crate::propagation_handlers::get_propagation_status),
         )
         // Propagation signal ingestion endpoint (Slice 2 bounded)
         .route(
             "/intents/:intent_id/propagation-signals",
-            post(crate::query_handlers::ingest_propagation_signal),
+            post(crate::propagation_handlers::ingest_propagation_signal),
         )
 }
