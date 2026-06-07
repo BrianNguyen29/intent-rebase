@@ -13,9 +13,9 @@
 
 | Router Path | OpenAPI Path | Method | Tag | Handler Module | Status |
 |-------------|--------------|--------|-----|----------------|--------|
-| `/health` | `/health` | GET | health | `health_routes` | ✅ Implemented |
-| `/ready` | `/ready` | GET | health | `health_routes` | ✅ Implemented |
-| `/metrics` | `/metrics` | GET | health | `health_routes` | ✅ Implemented |
+| `/health` | `/health` | GET | health | `routes::health` | ✅ Implemented |
+| `/ready` | `/ready` | GET | health | `routes::health` | ✅ Implemented |
+| `/metrics` | `/metrics` | GET | health | `routes::health` | ✅ Implemented |
 | `/v1/intents/validate` | `/v1/intents/validate` | POST | intents | `intent_validation_handlers` | ✅ Implemented |
 | `/intents` | `/intents` | POST | intents | `intent_mutation_handlers` | ✅ Implemented |
 | `/intents/:intent_id` | `/intents/{intent_id}` | GET | intents | `intent_read_handlers` | ✅ Implemented |

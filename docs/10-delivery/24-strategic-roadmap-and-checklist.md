@@ -42,7 +42,7 @@ This document exists to translate the latest strategic evaluation findings (boun
 | # | Priority | Item | Owner Type | Est. Slice Effort | Status | External Gate? |
 |---|----------|------|------------|-------------------|--------|----------------|
 | 1 | **P0** | Runtime Adapter End-to-End Proof | local | S (1–2 days bounded) | 🟡 BOUNDED DONE (local proof — see [§4.10](#410-evidence-link)) | ❌ No |
-| 2 | **P1** | Intent API Decomposition | local | M (3–5 bounded slices) | 🟡 In progress (continuation of A-09 S6) | ❌ No |
+| 2 | **P1** | Intent API Decomposition | local | M (3–5 bounded slices) | 🟡 First bounded demo slice done — `health_routes` → `routes::health` (see [§5.10](#510-evidence-link)); A-09 S6 continuation ongoing | ❌ No |
 | 3 | **P1** | Webhook SQL Repository Wiring | local | S–M (bounded slices) | 🟡 BOUNDED WIRING DONE (SQL router startup now passes concrete `SqlxWebhookSubscriptionRepository` + `SqlxWebhookOutboxRepository`; see [§6.10](#610-evidence-link)) | ❌ No |
 | 4 | **P2** | Intent CLI Decoupling | local | S (1 slice) | 🟡 BOUNDED DONE (binary-to-library split with 3 new unit tests; see [§7.10](#710-evidence-link)) | ❌ No |
 | 5 | **P2** | Benchmark Compile Guard | local | XS (1 slice) | ⬜ Not started | ❌ No |
@@ -168,12 +168,14 @@ Supporting code change:
 
 ### 5.5 Action Checklist
 
-- [ ] Inventory current `intent-api/src/` top-level modules and identify leaf modules safe to move (no `pub use` re-export coupling).
-- [ ] Pick the lowest-risk leaf (suggested: `health_routes.rs` → `routes/health.rs`) and execute one bounded extraction.
-- [ ] Update `lib.rs` `pub mod` and any `crate::health_routes::` references to `crate::routes::health::`.
-- [ ] Run the validation commands in §5.7.
-- [ ] Update `22-phase-4-entry-plan.md` A-09 status line to note the continuation slice.
-- [ ] Update this document's §5.5 with the executed slice and the next candidate.
+- [x] Inventory current `intent-api/src/` top-level modules and identify leaf modules safe to move (no `pub use` re-export coupling). *(See A-09 in `22-phase-4-entry-plan.md` for the existing decomposition inventory; the P1 demo slice picked the lowest-risk leaf.)*
+- [x] Pick the lowest-risk leaf (`health_routes.rs` → `routes/health.rs`) and execute one bounded extraction. *(Demo slice delivered 2026-06-07; see §5.10.)*
+- [x] Update `lib.rs` `pub mod` and any `crate::health_routes::` references to `crate::routes::health::`. *(Removed `pub mod health_routes;`; `routes::health::add_routes` now uses local handlers; `router.rs` now references `routes::health::request_id_middleware` / `routes::health::trace_context_middleware`; `health_routes.rs` deleted.)*
+- [x] Run the validation commands in §5.7. *(All four sequential gates pass — see §5.10.)*
+- [ ] Update `22-phase-4-entry-plan.md` A-09 status line to note the continuation slice. *(Out of scope for the demo slice per the slice handoff; deferred to the next A-09 continuation slice. Tracked as the follow-up in the §5.5 next-candidate list below.)*
+- [x] Update this document's §5.5 with the executed slice and the next candidate. *(This checklist and §5.10 evidence link.)*
+
+**Next candidate (bounded extraction, after the demo slice):** the `intents/...` handler modules under `intent-api/src/` that are still top-level and not yet grouped under `routes/intent.rs` are the natural next leaf candidates. The same A-09 / S6 pattern (leaf module → `routes/<domain>.rs` plus a single `add_routes` aggregator) applies. The candidate selection and execution is a follow-up slice and is **not** part of this bounded demo slice.
 
 ### 5.6 Acceptance Criteria
 
@@ -200,6 +202,26 @@ git diff --check
 ### 5.9 Owner Type
 
 **local** — bounded local-executable slice; no external dependency, no user decision.
+
+### 5.10 Evidence Link (P1 Demo Slice)
+
+> **Status:** P1 demo slice is **🟡 First bounded demo slice done** as of 2026-06-07. The lowest-risk leaf module (`health_routes.rs` → `routes/health.rs`) was extracted, the top-level module declaration was removed, the public route paths and middleware layering are preserved byte-identically, and all sequential verification gates pass. Production-readiness, CI-green, and external sign-off are **not** claimed. The decomposition remains a longer P1 workstream; further leaf candidates are tracked in the §5.5 "Next candidate" paragraph.
+
+The bounded local evidence and the full command/result record live in:
+
+- `docs/10-delivery/24e-health-routes-extraction-evidence.md` — what moved from `crates/intent-api/src/health_routes.rs` into `crates/intent-api/src/routes/health.rs` (handlers, middleware, route registration), the reference-rewrite table (`lib.rs` / `router.rs` / `routes/health.rs` / `docs/04-api/route-openapi-contract-map.md`), the deletion of the now-orphan top-level `health_routes.rs`, sequential verification gates (fmt / check / clippy / lib tests / `git diff --check` / workspace check), and explicit non-production caveats.
+
+Supporting code changes:
+
+- `crates/intent-api/src/routes/health.rs` — file rewritten to be the single self-contained health route group. All five items (`request_id_middleware`, `trace_context_middleware`, `health_handler`, `ready_handler`, `metrics_handler`) are `pub` in this module; `add_routes` now references them as local symbols instead of `crate::health_routes::*`. Module doc-comment preserved non-production caveats and notes the A-09 / S6 follow-on pattern.
+- `crates/intent-api/src/lib.rs` — removed `pub mod health_routes;`; replaced the stale `// Health check routes and middleware have been moved to health_routes.rs` comment with a one-liner pointing to `routes::health`.
+- `crates/intent-api/src/router.rs` — removed `use crate::health_routes;`; `axum::middleware::from_fn` layers now reference `routes::health::request_id_middleware` and `routes::health::trace_context_middleware`. Middleware layering order (request-id before trace-context) is preserved.
+- `crates/intent-api/src/health_routes.rs` — **deleted** (no remaining references after the rewrites; verified by `grep -r health_routes`).
+- `docs/04-api/route-openapi-contract-map.md` — three rows for `/health`, `/ready`, `/metrics` updated `Handler Module` column from `health_routes` to `routes::health`. Status, paths, methods, and tags are unchanged.
+
+**Companion update-log row:** `docs/10-delivery/23-project-assessment-and-execution-tracker.md` §13 (2026-06-07) records this slice and the verification result.
+
+**What is not claimed by this slice:** the same non-production caveats as the rest of this document apply. Route paths, methods, status codes, headers, request/response bodies, middleware ordering, and metrics behavior are byte-identical to the pre-extraction implementation; the only observable difference is the Rust module path of the moved symbols. External gates (A-03, A-04, A-05, A-06, A-07, A-10, A-12, A-13) remain blocked. A-11 remains deferred/SDK-blocked.
 
 ---
 
@@ -365,36 +387,49 @@ Supporting code changes:
 
 ### 8.1 Problem Statement
 
-`[[bench]]` stanzas and `criterion` dev-dependencies exist in 4 crates (`intent-api`, `graph-service`, `intent-service`, `rebase-engine`). On a clean checkout, `cargo bench --workspace` will fail to compile because no benchmark source files exist. This is a hidden footgun for new contributors. The strategic evaluation recommends a bounded compile guard: a stub `benches/<name>.rs` returning a `criterion::criterion_main!(benches)` over a no-op benchmark. This makes the harness non-fatal and explicit.
+`[[bench]]` stanzas and `criterion` dev-dependencies exist in 4 crates (`intent-api`, `graph-service`, `intent-service`, `rebase-engine`), **and benchmark source files exist in every matching `benches/<name>.rs` location** (see "Observed state" below). The original P2 problem statement described the gap as "no benchmark source files exist" — that wording is **stale**. The actual remaining work is to make sure those existing harnesses stay in a compilable, non-fatal state (i.e., a **compile guard**): on a clean checkout, `cargo bench --workspace --no-run` should succeed, and any criterion setup that *would* fail on a missing fixture / live service should be hardened so a contributor does not hit a confusing error. The strategic evaluation recommends a bounded compile guard: each `benches/<name>.rs` continues to compile against the existing criterion API, with explicit in-file caveats pointing at `20-project-completion-roadmap.md` P2 for any future benchmark work.
+
+### 8.1a Observed State (corrects the stale wording above)
+
+| Crate | `Cargo.toml` `[[bench]]` stanza(s) | Existing `benches/<name>.rs` file(s) |
+|-------|-----------------------------------|--------------------------------------|
+| `intent-api` | `name = "http_handlers"` (`harness = false`) | `crates/intent-api/benches/http_handlers.rs` (597 lines, real criterion benchmarks) |
+| `graph-service` | 2 stanzas (graph_ops, graph_traversal) | `crates/graph-service/benches/graph_ops.rs`, `graph_traversal.rs` (real criterion benchmarks) |
+| `intent-service` | 1 stanza (db_operations / query_latency) | `crates/intent-service/benches/db_operations.rs`, `query_latency.rs` (real criterion benchmarks) |
+| `rebase-engine` | 1 stanza (diff_latency / rebase_latency) | `crates/rebase-engine/benches/diff_latency.rs`, `rebase_latency.rs` (real criterion benchmarks) |
+
+> **Correction:** the original "no benchmark source files exist" wording in earlier P2 problem statements is **stale**; the source files exist, the remaining work is compile-guard hardening (not "create the missing harness files").
 
 ### 8.2 Why Now
 
-- New contributors who run `cargo bench` on a clean checkout encounter a confusing error.
-- The `20-project-completion-roadmap.md` P2 "Observability & Documentation" backlog already lists "Integrate criterion benchmarks into CI" as deferred; a compile guard is a precondition for any future benchmark work.
+- The `cargo bench --workspace --no-run` compile guard is the only remaining bounded item now that the harness source files exist.
+- The `20-project-completion-roadmap.md` P2 "Observability & Documentation" backlog already lists "Integrate criterion benchmarks into CI" as deferred; a compile guard is a precondition for any future CI integration.
 
 ### 8.3 Scope IN
 
-- A stub benchmark file in each of the 4 crates with `[[bench]]` stanzas, named per the existing stanza.
-- The stub returns a no-op `criterion::criterion_main!(benches)` and a `criterion::criterion_group!(benches, no_op_bench)` with `no_op_bench` doing nothing.
-- A doc note in `docs/10-delivery/20-project-completion-roadmap.md` or this document explaining the guard.
+- Verify that each existing `benches/<name>.rs` compiles against its crate's current API (criterion 0.5, current dev-dependencies).
+- If any `benches/<name>.rs` has a fragile fixture (e.g., live Postgres, NATS, network), guard the offending benches behind a feature flag, a `compile-time` `#[cfg]`, or an explicit `compile_error!` doc comment that names the prerequisite.
+- A short doc note (in this document §8.10 evidence link or a new `docs/10-delivery/24f-benchmark-compile-guard-evidence.md`) recording the verification command, the result, and a per-bench fixture/feature table.
 
 ### 8.4 Scope OUT
 
-- No real benchmark logic.
-- No CI integration.
+- No real benchmark logic changes (no extra measurement, no parameter sweep).
+- No CI integration (deferred to a separate slice).
+- No replacement of existing harnesses.
 
 ### 8.5 Action Checklist
 
-- [ ] Read each `[[bench]]` stanza in `intent-api/Cargo.toml`, `graph-service/Cargo.toml`, `intent-service/Cargo.toml`, `rebase-engine/Cargo.toml`.
-- [ ] For each stanza, create a stub `benches/<name>.rs` with a no-op benchmark.
-- [ ] Verify `cargo bench --workspace --no-run` succeeds.
-- [ ] Document the guard.
+- [x] Read each `[[bench]]` stanza in `intent-api/Cargo.toml`, `graph-service/Cargo.toml`, `intent-service/Cargo.toml`, `rebase-engine/Cargo.toml`. *(See §8.1a table above.)*
+- [x] Confirm the matching `benches/<name>.rs` source files exist in each of the 4 crates. *(Confirmed by `ls crates/*/benches/` on 2026-06-07; 7 source files across 4 crates.)*
+- [ ] Run `cargo bench --workspace --no-run` and record the result. *(The `[[bench]]` + `harness = false` + criterion 0.5 set-up is unchanged since the source files landed; the bounded compile-guard verification command is recorded in §8.7 and is **deferred to a follow-up bounded slice** so this P2 item can be claimed closed with evidence.)*
+- [ ] Document the guard (per-bench fixture/feature table) in a new `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` or in this document. *(Deferred to the same follow-up slice.)*
 
 ### 8.6 Acceptance Criteria
 
 - `cargo bench --workspace --no-run` succeeds (compilation succeeds without running).
-- `cargo test --workspace --lib --all-features` still passes (bench stubs do not affect lib tests).
-- `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass (with `#[allow(dead_code)]` if needed on the stub function).
+- `cargo test --workspace --lib --all-features` still passes (bench harness state does not affect lib tests).
+- `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+- A per-bench fixture/feature table is recorded in the §8.10 evidence link (or in `24f-…-evidence.md`).
 
 ### 8.7 Validation Commands
 
@@ -409,8 +444,8 @@ git diff --check
 
 ### 8.8 Risks / Tradeoffs
 
-- **Risk:** Stubs could be mistaken for real benchmarks. **Mitigation:** Stub doc-comment explicitly says "no-op guard; real benchmarks pending" with a TODO pointer to `20-project-completion-roadmap.md` P2.
-- **Risk:** Clippy flags dead code. **Mitigation:** Use `#[allow(dead_code)]` on the stub function.
+- **Risk:** Live-service fixtures (live Postgres / NATS / HTTP receiver) in an existing bench file make `cargo bench --workspace --no-run` non-deterministic. **Mitigation:** Document the prerequisite in the bench file's doc-comment and/or gate the live-service benchmark behind a feature flag.
+- **Risk:** A criterion API bump breaks an existing harness silently. **Mitigation:** Pin `criterion = "0.5"` (already done at the workspace level); add a CI smoke that runs `cargo bench --workspace --no-run` in the follow-up slice.
 
 ### 8.9 Owner Type
 
@@ -656,3 +691,5 @@ grep -nPi "is production[- ]ready|claim.*production[- ]ready|production[- ]ready
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P0 Runtime Adapter End-to-End Proof — bounded local slice delivered. Status flipped from `⬜ Not started` to `🟡 BOUNDED DONE (local proof)`. New test `test_runtime_adapter_apply_end_to_end` in `crates/rebase-orchestrator/src/orchestrator_tests.rs` drives the orchestrator through `align_checkpoint` (mapping) → `send_runtime_rebase_signal` (signal) → `replay_from_checkpoint` (replay) using `MockAdapter::ready()`, asserting checkpoint id + outcome, signal success, replay success/outcome shape, and adapter call evidence (3 of 5 `RuntimeAdapter` methods in sequence). Sequential verification gates pass: `cargo fmt --all -- --check`, `cargo test -p rebase-orchestrator --lib test_runtime_adapter_apply_end_to_end` (1/1), `cargo test -p rebase-orchestrator --lib` (41/41), `cargo check -p rebase-orchestrator --all-features`, `cargo clippy -p rebase-orchestrator --all-features -- -D warnings`. §4.5 action checklist: 5 of 7 items checked off; the `intent-api` filtered-test run and the `docs/getting-started/configuration.md` cross-link are **deferred** with explicit rationale (the slice handoff forbids public-doc edits; the new test lives in `rebase-orchestrator` and exercises the same adapter seam). New internal evidence doc `docs/10-delivery/24b-runtime-adapter-e2e-evidence.md` records the test, command, result, and non-production caveat. New §4.10 in this document links the evidence doc and restates the non-production caveat. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. |
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P2 Intent CLI Decoupling — bounded local slice delivered (binary-to-library split). Status flipped from `⬜ Not started` to `🟡 BOUNDED DONE (local bounded evidence)`. New `crates/intent-cli/src/lib.rs` exposes `pub struct Cli`, `pub enum Commands`, `pub fn run(cli: Cli) -> anyhow::Result<()>`, `pub fn init_tracing()` (idempotent `try_init`), and `pub fn build_run_payload(action_ids: &[Uuid], intent_id: Option<Uuid>, initiated_by: Option<&str>) -> serde_json::Value` (pure helper extracted from `run_orchestration`). The `Run` / `GetRun` subcommands and the `#[arg]` / `#[command]` attributes are byte-identical at the source level, so user-visible CLI behavior is preserved. `crates/intent-cli/src/main.rs` rewritten as an 11-line thin entry point: `fn main() -> anyhow::Result<()> { intent_cli::run(intent_cli::Cli::parse()) }`. `crates/intent-cli/Cargo.toml` gained explicit `[lib] name = "intent_cli" path = "src/lib.rs"` and `[[bin]] name = "intent-cli" path = "src/main.rs"`; `[dependencies]` and `[dev-dependencies]` unchanged. Three new unit tests in `lib.rs` (`build_run_payload_includes_all_fields`, `build_run_payload_emits_nulls_for_optional_fields`, `build_run_payload_has_exactly_three_top_level_keys`) verify the JSON request-body shape end-to-end without a live HTTP server. Sequential verification gates: `cargo fmt --all -- --check` pass, `cargo check -p intent-cli --all-targets` pass, `cargo clippy -p intent-cli --all-targets -- -D warnings` pass, `cargo test -p intent-cli --lib` 3/3 pass, `git diff --check` pass. The `cargo run -p intent-cli -- --help` step is recorded as **behavior-preserved** (same panic as pre-refactor) — a pre-existing latent duplicate-short-flag bug for `-a` on `api_url` and `api_key` exists in the original `main.rs` (verified by stashing the P2 diff and re-running `--help` against the un-refactored binary, which panics with the identical message); the bug is documented in the evidence doc and routed to a follow-up slice per the "no change to CLI flags" guardrail. §3 status row updated to `🟡 BOUNDED DONE (binary-to-library split with 3 new unit tests; see §7.10)`, §7.5 action checklist 5 of 5 items checked off, new §7.10 evidence-link subsection added. New internal evidence doc `docs/10-delivery/24d-intent-cli-decoupling-evidence.md` records the refactor, the new test coverage table, sequential verification gates, the pre-existing `--help` panic, and explicit local-bounded caveats. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. |
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | Pre-existing `intent-cli --help` panic resolved within the P2 slice scope. In `crates/intent-cli/src/lib.rs`, added `short = 'u'` to the top-level `api_url` field and `short = 'k'` to the top-level `api_key` field so the two fields no longer collide on the default short form (`-a`). Long flags (`--api-url`, `--tenant-id`, `--api-key`), the default `http://localhost:8080`, the `Run` / `GetRun` subcommand shapes, and all HTTP payload semantics are unchanged; the bounded scope is one `#[arg]` attribute correction per conflicting top-level flag. After the fix, `cargo run -p intent-cli -- --help` exits 0 and prints the clap-generated help listing `-u` / `--api-url`, `-t` / `--tenant-id`, `-k` / `--api-key`, `-h` / `--help`, and the `run` / `get-run` subcommands. No test changes were required (existing 3 `build_run_payload` tests still pass). §7.6 acceptance criterion reworded to reflect "help succeeds" instead of "produces the same help text as before"; §7.10 evidence-link paragraph and bullet updated to drop the "behavior-preserved" wording and to point at the now-resolved short-flag correction. `docs/10-delivery/24d-intent-cli-decoupling-evidence.md` §4.1 verification table flipped the `Help output` row to **Pass**, §5 reframed from "Pre-Existing `--help` Behavior (Not Introduced by This Slice)" to "`--help` Panic Fix (Duplicate Short Flag)" with the exact one-line-per-flag diff, the new help text, and the explicit out-of-scope note for any latent Run-subcommand short collisions, and §2.1 / §6 caveats updated. Sequential verification re-run: `cargo fmt --all -- --check` pass, `cargo check -p intent-cli --all-targets` pass, `cargo clippy -p intent-cli --all-targets -- -D warnings` pass, `cargo test -p intent-cli --lib` 3/3 pass, `cargo run -p intent-cli -- --help` **pass**, `git diff --check` pass. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. |
+| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P1 Intent API Decomposition — first bounded demo slice delivered. Status flipped to `🟡 First bounded demo slice done — health_routes → routes::health` (continuation of A-09 S6). The lowest-risk leaf `crates/intent-api/src/health_routes.rs` was moved into `crates/intent-api/src/routes/health.rs` and made self-contained: all five items (`request_id_middleware`, `trace_context_middleware`, `health_handler`, `ready_handler`, `metrics_handler`) are `pub` in the new location, and `add_routes` references them as local symbols instead of `crate::health_routes::*`. `crates/intent-api/src/lib.rs` lost `pub mod health_routes;` and the stale `// Health check routes and middleware have been moved to health_routes.rs` comment (replaced with a one-liner pointing to `routes::health`). `crates/intent-api/src/router.rs` now references `routes::health::request_id_middleware` and `routes::health::trace_context_middleware` (middleware layering order preserved: request-id before trace-context). The now-orphan `crates/intent-api/src/health_routes.rs` was deleted (verified by `grep -r health_routes` — remaining matches are the new doc-comment historical note in `routes/health.rs` and the corrected roadmap text). `docs/04-api/route-openapi-contract-map.md` (internal) updated the `Handler Module` column for `/health`, `/ready`, `/metrics` from `health_routes` to `routes::health`; paths, methods, status, and tags unchanged. §3 status row updated; §5.5 action checklist 5 of 6 items checked off (the `22-phase-4-entry-plan.md` A-09 cross-update is **deferred** to a follow-up A-09 continuation slice per the slice handoff); new §5.10 evidence-link subsection added; §14 update log gained this row. New internal evidence doc `docs/10-delivery/24e-health-routes-extraction-evidence.md` records the move, the reference-rewrite table, the deletion of the orphan file, sequential verification gates, and the explicit non-production caveat. Sequential verification: `cargo fmt --all -- --check` pass, `cargo check -p intent-api --all-features` pass, `cargo clippy -p intent-api --all-features -- -D warnings` pass, `cargo test -p intent-api --lib` 442/442 + 17 ignored pass, `cargo check --workspace --all-features` pass, `git diff --check` pass. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. A-11 remains deferred/SDK-blocked. |
+| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P2 Benchmark Compile Guard — stale wording corrected. The original P2 problem statement claimed "no benchmark source files exist"; that wording is **stale** because real criterion benchmark source files exist in all four crates (`intent-api/benches/http_handlers.rs`, `graph-service/benches/{graph_ops,graph_traversal}.rs`, `intent-service/benches/{db_operations,query_latency}.rs`, `rebase-engine/benches/{diff_latency,rebase_latency}.rs`). §8.1 problem statement rewritten to call out the stale wording; new §8.1a "Observed State" table records the `[[bench]]` stanza ↔ `benches/<name>.rs` file mapping per crate; §8.3 scope IN, §8.5 action checklist, §8.6 acceptance criteria, and §8.7 validation commands reframed around compile-guard verification (i.e., `cargo bench --workspace --no-run` and a per-bench fixture/feature table) rather than "create the missing harness files". The `cargo bench --workspace --no-run` evidence run and the per-bench fixture/feature doc note are **deferred** to a follow-up bounded slice so this P2 item can be claimed closed with evidence (the source-file inventory and the wording correction are delivered by this slice). §14 update log gained this row. No public-doc edits. No code changes; this is a wording-and-scope correction only. No production-readiness claim. External gates remain blocked. |

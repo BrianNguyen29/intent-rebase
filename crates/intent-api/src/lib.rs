@@ -43,9 +43,6 @@ pub mod tracing_init;
 /// Intent API response and request types (Phase 2 bounded file decomposition slice)
 pub mod types;
 
-/// Health check routes and middleware (Phase 3 Batch 2 bounded slice)
-pub mod health_routes;
-
 /// Graph handlers (Phase 1 - Internal CRUD only, extracted as bounded handler decomposition slice)
 pub mod graph_handlers;
 
@@ -325,7 +322,7 @@ pub struct AppState {
     pub start_time: Instant,
 }
 
-// Health check routes and middleware have been moved to health_routes.rs
+// Health check route group and observability middleware live in `routes::health` (P1 demo slice).
 
 // Side effect and orchestration dashboard handlers have been moved to query_handlers.rs
 

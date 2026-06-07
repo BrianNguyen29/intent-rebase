@@ -13,7 +13,6 @@ use std::time::Instant;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::health_routes;
 use crate::routes;
 
 /// Build a CORS layer from the `INTENT_API_CORS_ALLOWED_ORIGINS` env var.
@@ -117,10 +116,10 @@ pub fn build_router(
         // Trace context middleware must run AFTER request_id_middleware so that
         // the span created here is a child of any extracted trace context.
         .layer(axum::middleware::from_fn(
-            health_routes::request_id_middleware,
+            routes::health::request_id_middleware,
         ))
         .layer(axum::middleware::from_fn(
-            health_routes::trace_context_middleware,
+            routes::health::trace_context_middleware,
         ))
         .layer(TraceLayer::new_for_http())
 }
