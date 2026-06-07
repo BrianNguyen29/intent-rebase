@@ -1408,3 +1408,120 @@ async fn test_audit_summary_with_graph_updates() {
     assert_eq!(summary.graph_updates_failed, 0);
     assert!(!summary.notification_required);
 }
+
+#[tokio::test]
+async fn test_runtime_adapter_apply_end_to_end() {
+    // P0 Runtime Adapter End-to-End Proof
+    //
+    // Bounded local proof that `RebaseOrchestrator::send_runtime_rebase_signal()`
+    // drives a single apply cycle through the full runtime adapter boundary
+    // (checkpoint alignment → signal delivery → replay) using `MockAdapter`
+    // as the local test seam. See `docs/10-delivery/24b-runtime-adapter-e2e-evidence.md`
+    // for the recorded command/result and the explicit non-production caveat.
+    use runtime_adapter::{AdapterStatus, MockAdapter};
+
+    let checkpoint_repo = Arc::new(MockCheckpointRepo::new());
+    let graph_repo = Arc::new(MockGraphRepo::new());
+    let graph_service = Arc::new(graph_service::GraphService::new(graph_repo));
+    // MockAdapter is configured to the success path: ready, signal accepts, replay accepts.
+    let mock_adapter = Arc::new(MockAdapter::ready());
+
+    let orchestrator =
+        RebaseOrchestrator::new(checkpoint_repo.clone(), graph_service, mock_adapter.clone());
+
+    let intent_id = Uuid::new_v4();
+    let workflow_id = Uuid::new_v4();
+    let tenant_id = Uuid::new_v4();
+
+    // Step 0: Seed a real checkpoint so the alignment step resolves a concrete
+    // record rather than the `NoCheckpointFound` path.
+    let seeded_checkpoint = create_test_checkpoint(intent_id, 1, workflow_id, tenant_id);
+    let seeded_checkpoint_id = seeded_checkpoint.checkpoint_id;
+    checkpoint_repo.add_checkpoint(seeded_checkpoint).await;
+
+    // Step 1: Build a Class B / Low risk_tier plan (proceed path) and resolve
+    // it through the orchestrator's checkpoint alignment seam.
+    let plan = RebasePlan {
+        decision_class: DecisionClass::B,
+        rationale: "P0 runtime adapter end-to-end proof".to_string(),
+        section_decisions: vec![],
+        affected_items: AffectedItemsPreview::unavailable(),
+        deferred: rebase_engine::DeferredFields::phase1_baseline(
+            DecisionClass::B,
+            &AffectedItemsPreview::unavailable(),
+        ),
+        manual_review_recommended: false,
+        risk_tier: RiskTier::Low,
+        risk_level: 2,
+    };
+
+    let aligned = orchestrator
+        .align_checkpoint(intent_id, tenant_id, workflow_id, &plan)
+        .await
+        .expect("alignment must succeed for seeded checkpoint");
+
+    // Checkpoint mapping/alignment observable: the planner's `phase1_baseline`
+    // selection is `ready: false`, so alignment falls into best-effort and
+    // returns `ClosestMatch` with the seeded checkpoint's id.
+    assert_eq!(
+        aligned.checkpoint_id,
+        Some(seeded_checkpoint_id),
+        "alignment must surface the seeded checkpoint id"
+    );
+    assert_eq!(aligned.outcome, CheckpointAlignmentOutcome::ClosestMatch);
+    assert!(
+        !aligned.rationale.is_empty(),
+        "alignment rationale must explain the selection"
+    );
+
+    // Step 2 + 3: Drive the runtime adapter path through the function under test.
+    // A single `send_runtime_rebase_signal` call exercises:
+    //   - `is_adapter_ready` (gating)
+    //   - `send_rebase_signal` (signal delivery)
+    //   - `replay_from_checkpoint` (replay)
+    let runtime_result = orchestrator
+        .send_runtime_rebase_signal(intent_id, tenant_id, workflow_id, &aligned)
+        .await
+        .expect(
+            "send_runtime_rebase_signal should not error for MockAdapter::ready() with a seeded checkpoint",
+        );
+
+    // Signal success observable: the signal was accepted by the MockAdapter and
+    // the orchestrator recorded the result.
+    assert!(
+        runtime_result.signal_sent,
+        "MockAdapter::ready() must accept send_rebase_signal"
+    );
+    assert!(!runtime_result.status_message.is_empty());
+
+    // Replay success/outcome shape observable: the replay ran through the
+    // MockAdapter and returned successfully.
+    assert_eq!(runtime_result.status, RuntimeExecutionStatus::Succeeded);
+    assert!(
+        runtime_result.replay_attempted,
+        "replay must be attempted when a checkpoint is available"
+    );
+    assert!(
+        runtime_result.replay_completed,
+        "MockAdapter::ready() must accept replay_from_checkpoint"
+    );
+    assert!(
+        runtime_result
+            .status_message
+            .contains("Signal sent and replay completed"),
+        "status_message must reflect the signal+replay success shape"
+    );
+
+    // Adapter call evidence: the MockAdapter remains in its configured success
+    // state and the orchestrator's readiness check returns true, proving the
+    // call path goes through the same `Arc<dyn RuntimeAdapter>` seam.
+    assert_eq!(
+        mock_adapter.is_adapter_ready().await.unwrap(),
+        AdapterStatus::Ready,
+        "MockAdapter must remain Ready after the apply cycle"
+    );
+    assert!(
+        orchestrator.is_runtime_ready().await,
+        "orchestrator must report the MockAdapter-backed runtime as ready"
+    );
+}

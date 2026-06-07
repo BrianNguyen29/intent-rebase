@@ -53,6 +53,7 @@ use intent_api::{
         is_webhook_outbox_worker_enabled, maybe_start_webhook_outbox_worker,
         WebhookOutboxWorkerHandle,
     },
+    webhook_subscription_repo::SqlxWebhookSubscriptionRepository,
     NatsEventPublisher,
 };
 
@@ -541,6 +542,18 @@ async fn build_sql_router_with_consumer_jwt(
     let policy_snapshot_repo: Arc<dyn PolicySnapshotRepository> =
         Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
 
+    // SQL-backed webhook subscription and outbox repositories (P1 WEB-LOCAL wiring).
+    // Local-dev bounded; production hardening remains blocked. See §6 of
+    // docs/10-delivery/24-strategic-roadmap-and-checklist.md.
+    let webhook_subscription_repo: Option<
+        Arc<dyn intent_api::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    > = Some(Arc::new(SqlxWebhookSubscriptionRepository::new(
+        pool.clone(),
+    )));
+    let webhook_outbox_repo: Option<
+        Arc<dyn intent_api::webhook_outbox_repo::WebhookOutboxRepository>,
+    > = Some(Arc::new(SqlxWebhookOutboxRepository::new(pool.clone())));
+
     let router = build_router_with_sql_audit_and_approval_jwt(
         pool,
         intent_service,
@@ -557,8 +570,8 @@ async fn build_sql_router_with_consumer_jwt(
         propagation_record_repo,
         Some(rls_pool),
         policy_snapshot_repo.clone(),
-        None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
-        None, // webhook_outbox_repo: local-dev only, not wired in main.rs yet
+        webhook_subscription_repo,
+        webhook_outbox_repo,
     );
 
     Ok((
@@ -715,6 +728,18 @@ async fn build_sql_router_with_consumer_impl(
     let policy_snapshot_repo: Arc<dyn PolicySnapshotRepository> =
         Arc::new(SqlxPolicySnapshotRepository::new(pool.clone()));
 
+    // SQL-backed webhook subscription and outbox repositories (P1 WEB-LOCAL wiring).
+    // Local-dev bounded; production hardening remains blocked. See §6 of
+    // docs/10-delivery/24-strategic-roadmap-and-checklist.md.
+    let webhook_subscription_repo: Option<
+        Arc<dyn intent_api::webhook_subscription_repo::WebhookSubscriptionRepository>,
+    > = Some(Arc::new(SqlxWebhookSubscriptionRepository::new(
+        pool.clone(),
+    )));
+    let webhook_outbox_repo: Option<
+        Arc<dyn intent_api::webhook_outbox_repo::WebhookOutboxRepository>,
+    > = Some(Arc::new(SqlxWebhookOutboxRepository::new(pool.clone())));
+
     let router = build_router_with_sql_audit_and_approval(
         pool,
         intent_service,
@@ -730,8 +755,8 @@ async fn build_sql_router_with_consumer_impl(
         propagation_record_repo,
         Some(rls_pool),
         policy_snapshot_repo.clone(),
-        None, // webhook_subscription_repo: local-dev only, not wired in main.rs yet
-        None, // webhook_outbox_repo: local-dev only, not wired in main.rs yet
+        webhook_subscription_repo,
+        webhook_outbox_repo,
     );
 
     Ok((

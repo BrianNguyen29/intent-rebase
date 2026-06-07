@@ -140,3 +140,4 @@ This codebase delivers **bounded non-production features** per phase. The follow
 - [Agent Safety Rebase Roadmap](./18-agent-safety-rebase-roadmap.md)
 - [Phase 4 Entry Plan](./22-phase-4-entry-plan.md) — detailed A-01..A-13 todo-list and execution roadmap; includes evidence packet plan and decomposition progress
 - [Project Assessment and Execution Tracker](./23-project-assessment-and-execution-tracker.md) — consolidated contradiction register, risk register, phase execution plan, and validation matrix
+- [Strategic Roadmap and Execution Checklist](./24-strategic-roadmap-and-checklist.md) — internal planning companion covering the latest strategic evaluation recommendations (P0 runtime adapter end-to-end proof, P1 intent-api decomposition, P1 webhook SQL repository wiring, P2 intent-cli decoupling, P2 benchmark compile guard, P2 documentation language policy, P3/P4 deferred); **internal only**, not a public support doc, not a production-readiness claim
