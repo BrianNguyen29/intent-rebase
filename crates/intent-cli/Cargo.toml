@@ -22,3 +22,11 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[lib]
+name = "intent_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "intent-cli"
+path = "src/main.rs"
