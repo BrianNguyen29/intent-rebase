@@ -617,10 +617,11 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 
 ## RB15. Process Panic Detected
 
-> **Status:** Design-only runbook — panic hook and sanitized logging are delivered locally; no Prometheus panic metric is instrumented; no production alerting is configured. This runbook describes the intended operator response once `process_panics_total` is implemented and Alertmanager routes to external receivers.
+> **Status:** Design-only runbook — panic hook, sanitized logging, and the `process_panics_total` counter are delivered locally; no production alerting is configured. This runbook describes the intended operator response once Alertmanager routes to external receivers.
 
 **Symptoms:**
-- `ProcessPanicDetected` alert fires (design-only; no metric currently exists)
+- `ProcessPanicDetected` alert fires (design-only; the `process_panics_total`
+  counter is implemented locally but no production alert pipeline is wired)
 - Application logs contain lines starting with `PANIC: thread=..., location=..., payload=...`
 - Worker task join errors logged with `... worker task panicked: ...` and sanitized payload
 - Service may remain partially functional (tokio runtime survives panics in spawned tasks) but individual requests or background jobs may fail
@@ -684,7 +685,7 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 - Panic hook is a last-resort observability mechanism, not an error-handling strategy
 
 **Caveats:**
-- No automated alert currently fires because `process_panics_total` is not instrumented
+- No automated alert currently fires because no production Prometheus/Alertmanager pipeline is wired (the `process_panics_total` counter is implemented locally and exposed via `/metrics` once the `metrics-exporter-prometheus` recorder is installed at startup)
 - Log-based panic detection requires manual inspection or external log aggregation (e.g., Loki, CloudWatch Logs) — not configured locally
 - Sanitized payload may obscure the exact cause; reproduction with `RUST_BACKTRACE=1` may be needed in a safe environment
 - This runbook has not been reviewed by an external SRE or executed in staging/production

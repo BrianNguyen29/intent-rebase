@@ -6,6 +6,10 @@
 // - Hook is registered at startup via init_panic_hook() before any async task spawns
 // - Panics are logged via tracing at ERROR level with thread info
 // - Panic payload is sanitized to avoid secret exposure (no raw error messages logged)
+// - `process_panics_total` counter is incremented per sanitized panic event
+//   (local-dev metric; the design-only Prometheus alert rule in
+//   `docs/09-operations/12-panic-alerting-integration.md` still requires
+//   staging/receivers/SRE sign-off to activate end-to-end production alerting)
 // - No production alerting claims (Phase 4 scope)
 // - No broad worker lifecycle redesign (only hook registration)
 //
@@ -116,11 +120,25 @@ fn format_panic_location(location: &std::panic::PanicHookInfo) -> String {
         .unwrap_or_else(|| "<unknown location>".to_string())
 }
 
+/// Increment the `process_panics_total` counter for a sanitized panic event.
+///
+/// Bounded local-dev metric: emitted via the global `metrics` recorder (typically
+/// `metrics-exporter-prometheus` installed at the `/metrics` endpoint). This is
+/// the prerequisite counter referenced by the design-only Prometheus alert
+/// `ProcessPanicDetected` in
+/// `docs/09-operations/12-panic-alerting-integration.md`; production alerting
+/// still requires staging, external alert receivers, and SRE sign-off.
+pub(crate) fn record_panic_event() {
+    metrics::counter!("process_panics_total").increment(1);
+}
+
 /// Panic hook that logs panic info via tracing.
 ///
 /// This hook is registered at startup to ensure panics are observable.
 /// - Logs at ERROR level with thread name and panic message
 /// - Sanitizes payload to avoid secret exposure
+/// - Increments the `process_panics_total` counter (local-dev; no production
+///   alerting claims)
 /// - Uses tracing to integrate with existing log infrastructure
 fn panic_hook(info: &std::panic::PanicHookInfo) {
     let location = format_panic_location(info);
@@ -134,6 +152,10 @@ fn panic_hook(info: &std::panic::PanicHookInfo) {
     } else {
         "<non-string panic payload>".to_string()
     };
+
+    // Increment the bounded panic counter (local-dev metric; production
+    // alerting remains blocked on staging/receivers/SRE sign-off).
+    record_panic_event();
 
     // Use eprintln as fallback since tracing may not be initialized yet during early panics
     eprintln!(

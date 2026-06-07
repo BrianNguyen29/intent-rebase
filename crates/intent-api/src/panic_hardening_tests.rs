@@ -1,4 +1,6 @@
-use crate::panic_hardening::{format_join_error, init_panic_hook, sanitize_panic_payload};
+use crate::panic_hardening::{
+    format_join_error, init_panic_hook, record_panic_event, sanitize_panic_payload,
+};
 
 #[test]
 fn test_sanitize_panic_payload_jwt_token() {
@@ -83,4 +85,54 @@ async fn test_format_join_error_on_aborted_task() {
     let err = result.unwrap_err();
     let formatted = format_join_error("aborted_worker", err);
     assert!(formatted.contains("aborted_worker worker task panicked:"));
+}
+
+#[test]
+fn test_record_panic_event_increments_counter() {
+    // Bounded S7 metric test: install a thread-local recorder that captures
+    // the `process_panics_total` counter increments without touching the
+    // global `metrics-exporter-prometheus` recorder (avoids global
+    // metrics-recorder conflicts with other tests in the suite).
+    use metrics::atomics::AtomicU64;
+    use metrics::{
+        Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
+    };
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    struct PanicCounterRecorder {
+        counter: Arc<AtomicU64>,
+    }
+
+    impl Recorder for PanicCounterRecorder {
+        fn describe_counter(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn describe_gauge(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
+            if key.name() == "process_panics_total" {
+                Counter::from_arc(self.counter.clone())
+            } else {
+                Counter::noop()
+            }
+        }
+        fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> Gauge {
+            Gauge::noop()
+        }
+        fn register_histogram(&self, _: &Key, _: &Metadata<'_>) -> Histogram {
+            Histogram::noop()
+        }
+    }
+
+    let counter = Arc::new(AtomicU64::new(0));
+    let recorder = PanicCounterRecorder {
+        counter: counter.clone(),
+    };
+
+    metrics::with_local_recorder(&recorder, || {
+        record_panic_event();
+        record_panic_event();
+        record_panic_event();
+    });
+
+    assert_eq!(counter.load(Ordering::Relaxed), 3);
 }
