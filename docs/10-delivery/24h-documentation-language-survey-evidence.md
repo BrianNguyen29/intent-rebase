@@ -178,7 +178,7 @@ docs/10-delivery/checklists/checklist-phase-4.md
 
 ## 7. Next-Slice Recommendations
 
-1. **Bounded slice: Tier 1 triage.** Pick one Tier 1 file (recommendation: `docs/13-adrs/01-runtime-adapter.md`), classify every Vietnamese segment as translate / pair / label, execute the change, and record the diff in an evidence doc (`24i-…` or next in series).
+1. **Bounded slice: Tier 1 triage.** Pick one Tier 1 file (recommendation: `docs/13-adrs/01-runtime-adapter.md`), classify every Vietnamese segment as translate / pair / label, execute the change, and record the diff in an evidence doc (`24i-…` or next in series). *(Partially completed 2026-06-08: `docs/13-adrs/01-runtime-adapter.md` classified as `translate` and executed in full. Evidence doc: `docs/10-delivery/24i-runtime-adapter-adr-language-migration-evidence.md`. Remaining Tier 1 files: `docs/10-delivery/04-phase-2-runtime-integrated.md` and `docs/10-delivery/01-roadmap.md` remain pending.)*
 2. **Bounded slice: Tier 2 header sweep.** Fix all 15 header-only files in a single slice if the total diff is < 50 lines; otherwise split into two slices.
 3. **Bounded slice: Tier 3 batch 1.** Pick the first 3–5 full-translation files from §5.2 (recommendation: start with `docs/01-product/` in numerical order) and translate them in a single bounded slice.
 4. **Per-slice guardrails** (mandatory, per policy §9.7):

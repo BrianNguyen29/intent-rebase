@@ -9,27 +9,27 @@
 
 ## Context
 
-Intent Rebase Engine (IRE) hoạt động như một control layer trên các agent runtime execution platforms. Nó cần khả năng:
+Intent Rebase Engine (IRE) operates as a control layer over agent runtime execution platforms. It requires the ability to:
 
-- Theo dõi intent versions và execution checkpoints
-- Phát hiện và phản ứng với intent changes
-- Gửi rebase signals tới runtime để adjust/pause/resume workflows
-- Mapping checkpoint ↔ intent version để support replay
+- Track intent versions and execution checkpoints
+- Detect and react to intent changes
+- Send rebase signals to the runtime to adjust/pause/resume workflows
+- Map checkpoint ↔ intent version to support replay
 
-Các runtime platforms phổ biến bao gồm Temporal, Prefect, Airflow, hoặc custom event-loop runtimes.
+Common runtime platforms include Temporal, Prefect, Airflow, or custom event-loop runtimes.
 
 ---
 
 ## Decision
 
-**Chọn MockAdapter làm default runtime adapter, với TemporalAdapter available qua explicit opt-in khi compiled với `temporal` feature.**
+**Select MockAdapter as the default runtime adapter, with TemporalAdapter available through explicit opt-in when compiled with the `temporal` feature.**
 
 ### Rationale
 
-1. **Bounded selection** — Phase 2b bounded scope: MockAdapter là default để giữ dev/test workflow không phụ thuộc vào live Temporal cluster.
-2. **Explicit Temporal opt-in** — TemporalAdapter chỉ được activate khi `INTENT_API_RUNTIME_ADAPTER=temporal` và compiled với `temporal` feature.
-3. **Fail-clear on misconfiguration** — Temporal request without feature/config phải fail visibly (not silent mock fallback).
-4. **No production readiness claim** — Trace propagation (W3C traceparent/tracestate) không được support với SDK hiện tại.
+1. **Bounded selection** — Phase 2b bounded scope: MockAdapter is the default to keep dev/test workflows independent of a live Temporal cluster.
+2. **Explicit Temporal opt-in** — TemporalAdapter is only activated when `INTENT_API_RUNTIME_ADAPTER=temporal` and compiled with the `temporal` feature.
+3. **Fail-clear on misconfiguration** — A Temporal request without the feature/config must fail visibly (not silently fall back to the mock).
+4. **No production readiness claim** — Trace propagation (W3C traceparent/tracestate) is not supported with the current SDK.
 
 ### Adapter Architecture
 
@@ -60,16 +60,16 @@ TEMPORAL_TASK_QUEUE=intent-rebase
 ## Consequences
 
 ### Positive
-- Dev/test workflow không phụ thuộc vào live Temporal cluster
-- Clear failure mode khi Temporal requested nhưng không available/configured
-- Temporal adapter sẵn sàng khi bounded scope mở rộng
+- Dev/test workflows are independent of a live Temporal cluster
+- Clear failure mode when Temporal is requested but not available/configured
+- Temporal adapter is ready when the bounded scope expands
 
 ### Negative
-- Temporal Cloud hoặc self-hosted cluster vẫn là operational dependency khi opt-in
-- Trace propagation không support trong Phase 2b bounded scope
+- Temporal Cloud or self-hosted cluster remains an operational dependency upon opt-in
+- Trace propagation is not supported in the Phase 2b bounded scope
 
 ### Neutral
-- Adapter trait abstract hóa runtime-specific logic; protocol-level changes affect only adapter
+- The adapter trait abstracts runtime-specific logic; protocol-level changes affect only the adapter
 - Phase 0–2a: define trait and mock/internal wiring; Phase 2b bounded: explicit env-gated Temporal path
 - Other runtimes deferred to Phase 4+
 
