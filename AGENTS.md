@@ -1,19 +1,19 @@
 # AGENTS.md — Intent Rebase Engine
 
 ## Workspace Root
-- **Real workspace root**: `/home/uong_guyen/work/intent-rebase/intent-rebase`
-- The outer `/home/uong_guyen/work/intent-rebase` is a shell containing only an orphan `crates/` dir; all real project files are inside `intent-rebase/`.
+- **Workspace root**: `/home/uong_guyen/work/intent-rebase`
+- Members are under `crates/*` per `Cargo.toml`.
 
 ## Build & Test Commands
 ```bash
 cargo fmt --all -- --check          # format check
 cargo clippy --workspace --all-targets -- -D warnings  # lint (fails on warnings)
 cargo check --workspace             # type/check only
-cargo test --workspace              # run all tests (inline in lib.rs, use tokio::test + in-memory mocks)
+cargo test --workspace              # run all tests (use tokio::test + in-memory mocks)
 cargo build --workspace --release   # release build
 ```
-- **No Makefile/justfile**: use `cargo` directly.
-- CI also runs: `npx @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error` as a standalone OpenAPI validation job.
+- **Justfile**: targets `fmt-check`, `check`, `clippy`, `test-lib`, `verify-fast`. Shortcut: `just verify-fast`.
+- CI job `openapi-validate` in `.github/workflows/ci.yml` runs: `npx --yes @stoplight/spectral-cli lint docs/04-api/openapi.yaml --ruleset .spectral.yml --fail-severity=error`
 
 ## Local Services
 ```bash
@@ -42,5 +42,5 @@ docker compose -f infrastructure/local/docker-compose.yml up -d
 Control, Execution, Data, Operator. See `docs/02-architecture/` for details.
 
 ## Rust Toolchain
-- Stable (from `dtolnay/rust-toolchain@stable` in CI).
-- Edition 2021.
+- Stable (from `rust-toolchain.toml`).
+- Edition 2021 (from `Cargo.toml`).
