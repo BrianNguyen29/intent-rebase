@@ -1,7 +1,7 @@
 # Phase 2b Residual Risk & Phase 3 Deferral Register
 
 > **Purpose:** Catalog all explicit Phase 3 deferrals identified during Phase 2b exit review — items that are intentionally out of Phase 2b scope but required for Phase 3 production hardening. This register supports sign-off by making deferred risks explicit, traceable, and owned.
-> **Basis:** Phase 2b exit gate review (2026-04-09). Most items below are explicit `[ ] PHASE 3 ITEM` entries in [checklist-phase-2.md](./checklist-phase-2.md); D-09 and D-10 are bounded-scope Phase 2b limitations derived from checked-item notes that still require Phase 3 follow-up.
+> **Basis:** Phase 2b exit gate review (2026-04-09). Most items below are explicit `[ ] PHASE 3 ITEM` entries in [checklist-phase-2.md](./checklists/checklist-phase-2.md); D-09 and D-10 are bounded-scope Phase 2b limitations derived from checked-item notes that still require Phase 3 follow-up.
 > **Status:** `P1 APPROVED — Phase 2b conditionally complete with explicit Phase 3 deferrals; external sign-off received (Product Owner ✅, Security ✅, Runtime Integration ✅); Brian Nguyen sole signer (personal project) — 2026-04-28`
 
 ---
