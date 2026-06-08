@@ -130,7 +130,7 @@ POST /forensic/verify
 
 ---
 
-## Mục đích
+## Purpose
 
 Forensic bundles provide complete, tamper-evident snapshots of system state for:
 - Incident investigation

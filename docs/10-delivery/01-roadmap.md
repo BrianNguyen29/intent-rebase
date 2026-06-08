@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 0 — Foundations (2–4 tuần)
+## Phase 0 — Foundations (2–4 weeks)
 - product spec finalized
 - domain model finalized
 - repo scaffolding
@@ -9,7 +9,7 @@
 - local dev environment
 - CI baseline
 
-## Phase 1 — Core Control Plane MVP (4–8 tuần)
+## Phase 1 — Core Control Plane MVP (4–8 weeks)
 - intent schema + versioning
 - semantic diff v1
 - graph model v1
@@ -17,14 +17,14 @@
 - console basic
 - audit baseline
 
-## Phase 2 — Runtime-Integrated Rebase (6–10 tuần)
+## Phase 2 — Runtime-Integrated Rebase (6–10 weeks)
 - runtime adapter v1
 - checkpoint mapping
 - apply rebase for low/medium risk
 - approvals revalidation
 - artifact invalidation + quarantine
 
-## Phase 3 — Compensation + Production Hardening (6–10 tuần)
+## Phase 3 — Compensation + Production Hardening (6–10 weeks)
 - side effect ledger
 - compensation engine
 - SRE/observability

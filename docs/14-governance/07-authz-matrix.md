@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Defines role-based access control (RBAC) for Intent Rebase Engine, specifying who can perform which actions on which resources under which conditions.
 

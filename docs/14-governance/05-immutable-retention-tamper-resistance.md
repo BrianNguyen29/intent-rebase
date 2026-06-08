@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Ensure that audit data, policy snapshots, and provenance records are:
 - **Immutable**: Cannot be modified or deleted

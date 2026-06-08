@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Define the process for identifying, documenting, and accepting residual risks — risks that remain after all mitigations are applied. Ensures:
 - **Transparency** — known risks are not hidden

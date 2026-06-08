@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Provenance tracking provides a complete chain of custody for artifacts produced under Intent Rebase Engine. It answers:
 - **Which intent version** produced this artifact?

@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Defines the end-to-end incident response process for Intent Rebase Engine — covering detection, triage, containment, eradication, recovery, and post-incident review. This plan operates in conjunction with [11-incident-freeze.md](./11-incident-freeze.md) (data freeze procedures) and [10-forensic-bundle.md](./10-forensic-bundle.md) (evidence preservation).
 

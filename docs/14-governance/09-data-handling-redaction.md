@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Define how PII and sensitive data are handled throughout Intent Rebase Engine, including:
 - Data classification

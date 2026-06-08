@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Defines the scope, boundaries, and expectations for penetration testing activities against the Intent Rebase Engine. This document is a **planning artifact** — it defines what a future pen test should cover, and what is explicitly in or out of scope. It does not represent the results of an actual penetration test.
 

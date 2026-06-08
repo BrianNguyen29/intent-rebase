@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Define guarantees and requirements for replaying intent execution, ensuring:
 - **Reproducibility** — same intent version produces same result

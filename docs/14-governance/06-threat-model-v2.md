@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Comprehensive threat model for Intent Rebase Engine covering:
 - Attack surfaces

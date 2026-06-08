@@ -7,7 +7,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 This document describes the **bounded retention verification slice** delivered in Phase 3 P6-S1. It provides:
 

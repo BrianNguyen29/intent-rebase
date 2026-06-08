@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Defines how approval scope is computed, how approvals are invalidated on intent changes, and how revalidation works. This ensures that intent changes cannot bypass approval requirements.
 

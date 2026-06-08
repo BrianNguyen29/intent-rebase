@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Tracks compliance requirements against SOC 2 Type II, GDPR, and ISO 27001 control families. This checklist is a **bounded planning artifact** — items represent work-in-progress against defined controls, not a certification of compliance. Final compliance sign-off requires successful audit.
 

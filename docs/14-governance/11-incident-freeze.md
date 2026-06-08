@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 During incident investigation, data freeze procedures ensure:
 - **Evidence preservation** — critical data is not modified or deleted

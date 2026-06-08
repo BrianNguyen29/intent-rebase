@@ -6,7 +6,7 @@
 
 ---
 
-## Mục đích
+## Purpose
 
 Define and verify tenant isolation guarantees to ensure:
 - **No cross-tenant data access** — intentional or accidental
