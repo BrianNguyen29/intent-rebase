@@ -30,7 +30,7 @@ This document exists to translate the latest strategic evaluation findings (boun
 | **Webhook SQL Repository Wiring** | **P1** | `SqlxWebhookOutboxRepository` and `SqlxWebhookSubscriptionRepository` exist and pass bounded integration tests (see `22-phase-4-entry-plan.md` A-12 WEB-LOCAL-1 + Slice 4a/4b). The remaining wiring gap is the durable write path through the propagation/dispatch boundary and full coverage in the default-feature startup sequence; this is a high-leverage local-executable slice. |
 | **Intent CLI Decoupling** | **P2** | `crates/intent-cli/src/main.rs` is a single 294-line file with bounded scope (single-shot compensation action orchestration). The CLI directly calls HTTP endpoints and could be split into a thin `bin/intent-cli.rs` plus a `lib` module for testable command logic, enabling subcommand tests without running the full clap parse path. |
 | **Benchmark Compile Guard** | **P2** | `[[bench]]` stanzas and `criterion` dev-dependencies exist in 4 crates (`intent-api`, `graph-service`, `intent-service`, `rebase-engine`) but no benchmark source files exist. `cargo bench` on a clean checkout will fail to compile (or no-op), which is a hidden footgun for new contributors. A bounded compile guard (e.g., a stub `benches/<name>.rs` returning a `criterion::criterion_main!` over a no-op) would make the harness non-fatal and explicit. |
-| **Documentation Language Policy** | **P2** | The repo mixes English and Vietnamese in internal docs (e.g., `docs/10-delivery/01-roadmap.md` has English headers with Vietnamese items; `docs/13-adrs/01-runtime-adapter.md` lines 25, 38; `docs/10-delivery/04-phase-2-runtime-integrated.md` line 4). The strategic evaluation flagged this as an inconsistency risk: public-facing reading order docs are in English; internal-only files drift. A formal language policy prevents future contributor confusion. |
+| **Documentation Language Policy** | **P2** | The repo mixes English and Vietnamese in internal docs (e.g., `docs/10-delivery/01-roadmap.md` has English headers with Vietnamese items; `docs/13-adrs/01-runtime-adapter.md` lines 25, 38; `docs/10-delivery/04-phase-2-runtime-integrated.md` line 4). The strategic evaluation flagged this as an inconsistency risk: public-facing reading order docs are in English; internal-only files drift. A formal language policy prevents future contributor confusion. **User decision accepted 2026-06-07 (option A: English-primary technical docs; Vietnamese allowed only in `README.vi.md` or explicit `*.vi.md` translation files); see §9.5 and §9.11.** |
 | **P3/P4 Deferred / External-Gated** | P3/P4 | Items that depend on external reviewers, production infrastructure, vendor certifications, or upstream SDK fixes. Not actionable locally beyond tracking. |
 
 **Critical-Path Read:** P0 must be executed before any new feature work touches the runtime adapter contract. P1 items can be parallelized across crates. P2 items are bounded local-executable hardening.
@@ -45,8 +45,8 @@ This document exists to translate the latest strategic evaluation findings (boun
 | 2 | **P1** | Intent API Decomposition | local | M (3–5 bounded slices) | 🟡 First bounded demo slice done — `health_routes` → `routes::health` (see [§5.10](#510-evidence-link)); A-09 S6 continuation ongoing | ❌ No |
 | 3 | **P1** | Webhook SQL Repository Wiring | local | S–M (bounded slices) | 🟡 BOUNDED WIRING DONE (SQL router startup now passes concrete `SqlxWebhookSubscriptionRepository` + `SqlxWebhookOutboxRepository`; see [§6.10](#610-evidence-link)) | ❌ No |
 | 4 | **P2** | Intent CLI Decoupling | local | S (1 slice) | 🟡 BOUNDED DONE (binary-to-library split with 3 new unit tests; see [§7.10](#710-evidence-link)) | ❌ No |
-| 5 | **P2** | Benchmark Compile Guard | local | XS (1 slice) | ⬜ Not started | ❌ No |
-| 6 | **P2** | Documentation Language Policy | user decision | S (1 doc policy) | ⬜ Not started | ⚠️ User-facing policy decision |
+| 5 | **P2** | Benchmark Compile Guard | local | XS (1 slice) | 🟡 BOUNDED DONE (local compile guard — see [§8.10](#810-evidence-link)) | ❌ No |
+| 6 | **P2** | Documentation Language Policy | user decision | S (1 doc policy) | ✅ ACCEPTED (user decision — see [§9.5](#95-accepted-policy-user-decision-on-2026-06-07) and [§9.11](#911-evidence-link)) | ⚠️ User-facing policy decision |
 | 7 | **P3** | External Gates (A-03 SRE, A-04 Security, A-07 Pen Test, A-05 Infra, A-06 Load L3–L5) | external | n/a (gated) | 🔴 Blocked | ✅ Yes |
 | 8 | **P4** | Enterprise Expansion (P8 Policy Sim, P9 Advanced Adapters, P10 Trust Scoring) | external / Phase 4+ | n/a (gated) | 🔴 Blocked / Planned | ✅ Yes |
 
@@ -421,8 +421,8 @@ Supporting code changes:
 
 - [x] Read each `[[bench]]` stanza in `intent-api/Cargo.toml`, `graph-service/Cargo.toml`, `intent-service/Cargo.toml`, `rebase-engine/Cargo.toml`. *(See §8.1a table above.)*
 - [x] Confirm the matching `benches/<name>.rs` source files exist in each of the 4 crates. *(Confirmed by `ls crates/*/benches/` on 2026-06-07; 7 source files across 4 crates.)*
-- [ ] Run `cargo bench --workspace --no-run` and record the result. *(The `[[bench]]` + `harness = false` + criterion 0.5 set-up is unchanged since the source files landed; the bounded compile-guard verification command is recorded in §8.7 and is **deferred to a follow-up bounded slice** so this P2 item can be claimed closed with evidence.)*
-- [ ] Document the guard (per-bench fixture/feature table) in a new `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` or in this document. *(Deferred to the same follow-up slice.)*
+- [x] Run `cargo bench --workspace --no-run` and record the result. *(Executed 2026-06-07; exit 0; all 7 `benches/<name>.rs` source files compiled into optimized bench-profile executables under `target/release/deps/`; full command/result/wall-time in §8.10 below.)*
+- [x] Document the guard (per-bench fixture/feature table) in a new `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` or in this document. *(Delivered: `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` records the command, result, compiled-executable table, per-bench fixture/feature/env table, and explicit compile-only caveats. See §8.10 below for the link.)*
 
 ### 8.6 Acceptance Criteria
 
@@ -450,6 +450,25 @@ git diff --check
 ### 8.9 Owner Type
 
 **local** — bounded local-executable slice; no external dependency, no user decision.
+
+### 8.10 Evidence Link
+
+> **Status:** P2 compile-guard slice is **🟡 BOUNDED DONE (local compile guard)** as of 2026-06-07. `cargo bench --workspace --no-run` exits 0 with all 7 `benches/<name>.rs` source files compiling into optimized bench-profile executables (`http_handlers`, `graph_ops`, `graph_traversal`, `db_operations`, `query_latency`, `diff_latency`, `rebase_latency`). `cargo fmt --all -- --check` and `git diff --check` pass. The 5 §8.6 acceptance criteria are met: compile-guard exits 0, the prior workspace lib tests (green from slices 24b/24c/24d/24e on this HEAD) confirm "bench harness state does not affect lib tests", format check passes, and the per-bench fixture/feature table is recorded in the evidence link below. Production-readiness, CI-green, external sign-off, **and benchmark performance numbers** are **not** claimed — this slice is compile-only by design.
+
+The bounded local evidence and the full command/result record live in:
+
+- `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` — what was verified (`cargo fmt --all -- --check` + `cargo bench --workspace --no-run` + `git diff --check`), the compiled-executable table with `[[bench]]`-stanza vs auto-discovery mapping for all 7 bench source files, the per-bench fixture / feature / env requirements table (grouped by pure/in-memory, live-service self-skip, and loopback-requiring sub-benches), known limitations (compile-only, no `--all-features` exercise, no clippy-on-benches re-run, no `cargo test --workspace --lib --all-features` re-run since the prior slices already green on this HEAD), and explicit local-bounded caveats.
+
+Supporting observations:
+
+- `cargo bench --workspace --no-run` compiled all 7 bench source files and produced 7 bench-profile executables plus 11 libtest bench-profile binaries (one per workspace lib crate) and 2 bin-profile executables (intent-api, intent-cli) under `target/release/deps/`. Full first-build wall time 16m 58s on this environment; subsequent incremental runs are seconds.
+- `intent-service/benches/query_latency.rs` and `rebase-engine/benches/diff_latency.rs` are **not** declared in any `[[bench]]` stanza in their respective `Cargo.toml` files, but they compile and link as bench executables because Cargo's bench auto-discovery picks them up. This is an informational observation, not a regression; the `[[bench]]` stanzas override `harness = true` → `harness = false` for the declared benches, and the auto-discovered benches use the same `harness = false` default from the `criterion` dev-dependency. No code change is required to keep these files compiling. A future slice owner may add explicit `[[bench]] name = "query_latency"` / `[[bench]] name = "diff_latency"` stanzas for symmetry, but that is a manifest-clarity follow-up and is out of scope for the compile-guard slice.
+- `cargo fmt --all -- --check` and `git diff --check` are both green on this HEAD (no `crates/**` or `benches/**` files were modified by this slice — it is a doc-only evidence slice, plus the strategic-roadmap and tracker updates documented in §14 and `23-…-tracker.md` §13).
+- The 6 pure/in-memory benches and 1 `DATABASE_URL`-gated self-skipping bench compile without requiring any external service at compile time. The compile guard is environment-agnostic: no `DATABASE_URL`, no `NATS_URL`, no `TEMPORAL_ADDRESS`, no live HTTP receiver, no staging infra, no production deploy. It is a single `cargo bench --workspace --no-run` invocation.
+
+**Companion update-log row:** `docs/10-delivery/23-project-assessment-and-execution-tracker.md` §13 (2026-06-07) records this slice and the verification result.
+
+**What is not claimed by this slice:** the same non-production caveats as the rest of this document apply. In particular, this slice does **not** collect benchmark timings, does **not** assert performance SLAs, does **not** introduce CI integration, and does **not** add or remove any `[[bench]]` stanza or `benches/<name>.rs` source file. External gates (A-03, A-04, A-05, A-06, A-07, A-10, A-12, A-13) remain blocked. A-11 remains deferred/SDK-blocked.
 
 ---
 
@@ -480,38 +499,79 @@ The public reading order docs (`docs/README.md`) and the public support docs (`d
 - No automated migration of existing docs to one language.
 - No enforcement tooling (pre-commit hook, lint).
 
-### 9.5 Recommended Policy (proposed, pending user decision)
+### 9.5 Accepted Policy (user decision on 2026-06-07)
+
+> The user (BrianNguyen) accepted **option A: English-primary technical docs** on 2026-06-07. The policy below is the canonical wording and is reproduced verbatim in `docs/10-delivery/24g-documentation-language-policy-evidence.md` §3.
+
+1. **Primary technical documentation language: English.** All public docs, internal ADRs (`docs/13-adrs/`), internal delivery docs (`docs/10-delivery/`), internal ops docs (`docs/09-operations/`), and any new technical doc surface written for maintainers, reviewers, or future contributors are in English by default.
+2. **Vietnamese is allowed only in the following surfaces:**
+   - `README.vi.md` (the existing bilingual top-level Vietnamese readme).
+   - Explicit translation files with the `.vi.md` suffix (e.g., `docs/getting-started/quickstart.vi.md` as a paired translation of `docs/getting-started/quickstart.md`).
+   - Quoted user input or historical/internal evidence where translation would change meaning. Such quotes **must be labeled** (e.g., `> Original user input (Vietnamese, preserved verbatim):`) so a reader knows the content is preserved-as-quoted, not authored-in-Vietnamese.
+3. **Public docs and technical docs should avoid mixed-language sections in the same file.** A single file should be either English or Vietnamese — not both. The only file-level exception is `README.vi.md` (which is, by name and intent, a Vietnamese counterpart of `README.md`).
+4. **Future migrations must be bounded, reviewed, and verify no public/internal leakage or overclaim.** See §9.6 for the migration checklist and §9.7 for the acceptance criteria a future bounded slice must meet.
 
 | Doc Surface | Language | Rationale |
 |-------------|----------|-----------|
 | Public reading order (`docs/README.md`) | English | Anchors the reading order for public users |
-| Public support docs (`docs/getting-started/`, `docs/reference/`) | English | Per existing public-doc refresh commit (`b9289e2`) |
-| Public top-level (`README.md`, `README.vi.md`) | Both | Existing bilingual top-level readmes |
-| Internal ADRs (`docs/13-adrs/`) | English (proposed) | ADRs are referenced across internal docs and the public reading order |
-| Internal delivery docs (`docs/10-delivery/`) | English (proposed) | Same as above |
-| Internal ops docs (`docs/09-operations/`) | English (proposed) | Same as above |
-| **Allowed exception** | Vietnamese is allowed in: (a) historical phase artifacts (`checklist-phase-*.md`); (b) explicit bilingual bullet items where both languages appear in the same line | Existing precedent; preserves historical content |
-
-**Decision required:** BrianNguyen (user) confirms whether the recommended policy is accepted, modified, or rejected. Until then, no automated enforcement is added.
+| Public support docs (`docs/getting-started/`, `docs/reference/`) | English | Per existing public-doc refresh commit (`b9289e2`); no Vietnamese content expected |
+| Public top-level (`README.md`, `README.vi.md`) | `README.md` = English; `README.vi.md` = Vietnamese (paired counterpart) | Existing bilingual top-level readmes; `README.vi.md` is the explicit allowlist entry in item 2 above |
+| Internal ADRs (`docs/13-adrs/`) | English | ADRs are referenced across internal docs and the public reading order |
+| Internal delivery docs (`docs/10-delivery/`) | English | Same as above |
+| Internal ops docs (`docs/09-operations/`) | English | Same as above |
+| Historical phase checklists (`docs/10-delivery/checklists/checklist-phase-*.md`) | English (preferred) or labeled Vietnamese quote | Existing precedent; historical artifacts may be labeled as quoted historical evidence per item 2's allowance |
+| Any new internal doc | English by default | Per item 1 |
 
 ### 9.6 Action Checklist
 
-- [ ] Surface this section to the user (BrianNguyen) for a decision.
-- [ ] If accepted: add a "Documentation Language Policy" section to `docs/README.md` (or a new top-level `docs/CONTRIBUTING-docs.md`).
-- [ ] If accepted: open follow-up bounded slices to normalize the worst offenders (e.g., `docs/13-adrs/01-runtime-adapter.md`).
-- [ ] If rejected: remove this section from the next update of this document.
+#### 9.6.a Policy Acceptance (delivered by this slice)
+
+- [x] Surface this section to the user (BrianNguyen) for a decision.
+- [x] Record the user's decision (option A: English-primary technical docs) in this document (§9.5) and in the new evidence doc `docs/10-delivery/24g-documentation-language-policy-evidence.md`.
+- [x] Flip the §3 status row from `⬜ Not started` to `✅ ACCEPTED (user decision)`.
+- [x] Add a §14 update-log row recording the acceptance.
+- [x] Add a tracker (`docs/10-delivery/23-project-assessment-and-execution-tracker.md` §13) update-log row recording the acceptance.
+
+#### 9.6.b Future Bounded Slices (planned, not executed by this slice)
+
+> Each item below is a separate future bounded slice. Do **not** bundle them; the policy's item 4 guardrail requires "bounded, reviewed".
+
+- [ ] **Survey slice.** Run a workspace-wide scan of every `.md` file and report which files contain Vietnamese content. Use `grep -rPl "[\\xC0-\\xFF]" --include="*.md" docs README.md README.vi.md` and capture the output as the survey report. *(Out of scope for this slice; deferred to the first bounded migration slice.)*
+- [ ] **Migration slice 1 (lowest-risk first).** Triage the three files called out in §9.1: `docs/13-adrs/01-runtime-adapter.md` (lines 25, 38), `docs/10-delivery/04-phase-2-runtime-integrated.md` (line 4), and `docs/10-delivery/01-roadmap.md` (mixed English/Vietnamese phase bullets). For each file, classify per the §9.7 acceptance criteria (translate / pair / label) and execute the change in a single bounded slice. *(Out of scope for this slice; deferred to a follow-up bounded slice. The survey slice is a prerequisite.)*
+- [ ] **Migration slices 2..N.** Triage the remaining files in survey-slice order. *(Out of scope for this slice; deferred.)*
+- [ ] **Policy pointer in public docs (optional, future bounded slice).** If the next slice owner judges it useful, add a one-line "Internal docs follow the Documentation Language Policy" pointer to `docs/README.md` (or `AGENTS.md`) with a link to this document's §9.5. The default is to leave `docs/README.md` untouched; the policy is internal planning. *(Out of scope for this slice; deferred to a future slice if the slice owner judges it useful.)*
 
 ### 9.7 Acceptance Criteria
 
-- A user decision is recorded (accept/modify/reject) in the next update log of this document.
-- If accepted, a top-level policy doc exists and links back to this section.
+A future migration slice may claim "done" only if **all** of the following hold:
+
+- The slice is a single bounded slice (one file or one tightly-related group of files) with a written action checklist in `24-strategic-roadmap-and-checklist.md` (or the next update of this document) **before** any doc is touched.
+- The slice ran the **public-doc leakage scan** (`grep -rP "tuần|tiếng việt|đã|được|chưa|ADR-0[0-9]" README.md docs/README.md docs/getting-started/*.md docs/reference/*.md`) and the result is no matches.
+- The slice ran the **affirmative-claim scan** (`grep -nPi "is production[- ]ready|...|pen test passed" README.md README.vi.md docs/README.md docs/getting-started/*.md docs/reference/*.md`) and the result is no matches.
+- The slice ran the **no new `.vi.md` outside allowlist** check (`find . -name "*.vi.md" -not -path "./target/*"`) and any newly added `.vi.md` file is recorded in the slice's evidence doc with its paired English counterpart.
+- The slice recorded the diff (file paths + number of lines translated / labeled / quoted + the classification per file: translate / pair / label) in an evidence doc following the `24b`–`24g` naming pattern (e.g., `24h-docs-migration-step-1-evidence.md`).
+- The slice did **not** modify any of: `README.md`, `README.vi.md`, `docs/README.md`, `docs/getting-started/*.md`, `docs/reference/*.md`, `.github/**`, `CONTRIBUTING*`, `SECURITY.md`. (The `.vi.md` translation-file pattern is the only exception, and only if explicitly authorized by the slice handoff.)
+- The slice did **not** add a new CI step, pre-commit hook, or lint rule. The policy is documentation-only at this stage; enforcement tooling is out of scope and is a future decision.
+- The slice's evidence doc contains a non-production caveat paragraph (the `24g` evidence doc §6 boilerplate is a good template) and does **not** claim "CI-green", "production-ready", "external sign-off", or any equivalent affirmative claim.
 
 ### 9.8 Validation Commands
 
 ```bash
-# Public-doc leakage scan
-grep -rE "tiếng việt|tuần|ADR-01" docs/getting-started/ docs/reference/ README.md
-# (No matches expected: public docs should not contain Vietnamese content.)
+# Public-doc leakage scan (forbidden Vietnamese content in public docs)
+grep -rP "tuần|tiếng việt|đã|được|chưa|ADR-0[0-9]" \
+  README.md docs/README.md \
+  docs/getting-started/*.md docs/reference/*.md 2>/dev/null
+# Expected: no matches.
+
+# Affirmative-claim scan (forbidden positive-affirmation phrases in public docs)
+grep -nPi "is production[- ]ready|claim.*production[- ]ready|production[- ]ready\s+(system|service|build|cut|claim|signal)|CI[- ]green|external sign[- ]off obtained|pen test passed" \
+  README.md README.vi.md docs/README.md \
+  docs/getting-started/*.md docs/reference/*.md
+# Expected: no matches.
+
+# No new .vi.md outside allowlist
+find . -name "*.vi.md" -not -path "./target/*" -not -path "./node_modules/*"
+# Expected (as of 2026-06-07): ./README.vi.md only.
 
 # Diff hygiene
 git diff --check
@@ -519,12 +579,28 @@ git diff --check
 
 ### 9.9 Risks / Tradeoffs
 
-- **Risk:** Future contributors may not read the policy. **Mitigation:** The policy is referenced from `docs/README.md` and `AGENTS.md` (if accepted).
-- **Tradeoff:** A wholesale migration of existing Vietnamese content to English is out of scope and would erase historical context.
+- **Risk:** Future contributors may not read the policy. **Mitigation:** The policy is referenced from `24-strategic-roadmap-and-checklist.md` §9.5 and from the new evidence doc `24g-documentation-language-policy-evidence.md`; a future slice owner may add a one-line pointer to `AGENTS.md` or `docs/README.md` if the slice handoff explicitly authorizes it (default: leave public docs untouched).
+- **Risk:** A future migration slice could accidentally create a new `.vi.md` file outside the allowlist. **Mitigation:** The §9.7 acceptance criteria and the §9.8 `find` check make any such file a "not done" regression.
+- **Tradeoff:** A wholesale translation of existing Vietnamese content to English would erase historical context (e.g., the original user-decision rationales, command outputs preserved verbatim, sign-off text). **Mitigation:** Item 2's "labeled quoted historical evidence" allowance preserves the original wording where translation would change meaning; a future migration slice is expected to *classify* content per §4 of `24g-documentation-language-policy-evidence.md` (translate / pair / label) before changing it.
+- **Tradeoff:** The policy does not enforce a per-doc or per-line author language check. **Mitigation:** The policy is documentation-only; enforcement tooling (pre-commit hook, lint) is a future decision and is explicitly out of scope for this acceptance slice.
 
 ### 9.10 Owner Type
 
-**user decision** — BrianNguyen must accept, modify, or reject the recommended policy before any further bounded slice executes.
+**user decision** — The policy itself is **user-accepted** (this slice). Future migration slices are **local** (bounded local-executable, no user decision, no external dependency). The survey slice is **local**. The optional policy-pointer-in-public-docs slice is **local** if the next slice owner judges it useful; default is to skip it.
+
+### 9.11 Evidence Link
+
+> **Status:** P2 policy slice is **✅ ACCEPTED (user decision)** as of 2026-06-07. The user accepted option A: English-primary technical docs; Vietnamese allowed only in `README.vi.md` or explicit `*.vi.md` translation files. The accepted policy text is reproduced verbatim in §9.5 above and in the new evidence doc below. **No doc was translated, renamed, or deleted by this slice; no public doc was touched.** The actual migration is **deferred to future bounded slices** per the policy's "Future migrations must be bounded, reviewed, and verify no public/internal leakage or overclaim" guardrail (item 4 in §9.5). Production-readiness, CI-green, and external sign-off are **not** claimed.
+
+The full acceptance record lives in:
+
+- `docs/10-delivery/24g-documentation-language-policy-evidence.md` — the user decision (option A, recorded 2026-06-07), the policy text reproduced verbatim, the future-bounded-slice migration checklist (survey → triage → translate / pair / label → verify → record), the acceptance criteria a future migration slice must meet, the verification commands (public-doc leakage scan, affirmative-claim scan, no new `.vi.md` outside allowlist, `git diff --check`), the non-production boilerplate for future migration evidence docs, the relationship to other documents, and the explicit local-bounded caveats.
+
+**Companion update-log rows:**
+- `docs/10-delivery/24-strategic-roadmap-and-checklist.md` §14 (2026-06-07) records this slice and the verification result.
+- `docs/10-delivery/23-project-assessment-and-execution-tracker.md` §13 (2026-06-07) records this slice and the verification result.
+
+**What is not claimed by this slice:** the same non-production caveats as the rest of this document apply. In particular, this slice is a **policy acceptance** slice, not a migration slice. No code change is associated. No CI step, pre-commit hook, or lint rule is added. External gates (A-03, A-04, A-05, A-06, A-07, A-10, A-12, A-13) remain blocked. A-11 remains deferred/SDK-blocked.
 
 ---
 
@@ -676,6 +752,12 @@ grep -nPi "is production[- ]ready|claim.*production[- ]ready|production[- ]ready
 | `docs/10-delivery/20-project-completion-roadmap.md` | P0–P3 completion roadmap; this document adds the strategic evaluation recommendations and per-item action checklists |
 | `docs/10-delivery/22-phase-4-entry-plan.md` | A-01..A-13 detailed tracker; this document is referenced from A-09 (decomposition) and A-12 (webhook wiring) sub-sections |
 | `docs/10-delivery/17-production-readiness-backlog.md` | Source of P1/P2 backlog items; this document cross-references P1-0, P1-S5i, P2-6 |
+| `docs/10-delivery/24b-runtime-adapter-e2e-evidence.md` | P0 runtime adapter end-to-end evidence; cited from §4.10 |
+| `docs/10-delivery/24c-webhook-sql-repo-wiring-evidence.md` | P1 webhook SQL repo wiring evidence; cited from §6.10 |
+| `docs/10-delivery/24d-intent-cli-decoupling-evidence.md` | P2 intent CLI decoupling evidence; cited from §7.10 |
+| `docs/10-delivery/24e-health-routes-extraction-evidence.md` | P1 intent-API decomposition demo-slice evidence; cited from §5.10 |
+| `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` | P2 benchmark compile-guard evidence; cited from §8.10 |
+| `docs/10-delivery/24g-documentation-language-policy-evidence.md` | P2 documentation language policy acceptance evidence; cited from §9.11 |
 | `docs/10-delivery/11-phase-2b-sign-off-packet.md` | Phase 2b sign-off; cited as the source of the runtime adapter delivery claim |
 | `docs/13-adrs/01-runtime-adapter.md` | ADR for runtime adapter; cited as the source of the trait definition and the "Mock default" decision |
 | `docs/getting-started/configuration.md` | Public config reference; **must not** be edited to add production-readiness language; one internal cross-link permitted (see §4.5) |
@@ -693,3 +775,5 @@ grep -nPi "is production[- ]ready|claim.*production[- ]ready|production[- ]ready
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | Pre-existing `intent-cli --help` panic resolved within the P2 slice scope. In `crates/intent-cli/src/lib.rs`, added `short = 'u'` to the top-level `api_url` field and `short = 'k'` to the top-level `api_key` field so the two fields no longer collide on the default short form (`-a`). Long flags (`--api-url`, `--tenant-id`, `--api-key`), the default `http://localhost:8080`, the `Run` / `GetRun` subcommand shapes, and all HTTP payload semantics are unchanged; the bounded scope is one `#[arg]` attribute correction per conflicting top-level flag. After the fix, `cargo run -p intent-cli -- --help` exits 0 and prints the clap-generated help listing `-u` / `--api-url`, `-t` / `--tenant-id`, `-k` / `--api-key`, `-h` / `--help`, and the `run` / `get-run` subcommands. No test changes were required (existing 3 `build_run_payload` tests still pass). §7.6 acceptance criterion reworded to reflect "help succeeds" instead of "produces the same help text as before"; §7.10 evidence-link paragraph and bullet updated to drop the "behavior-preserved" wording and to point at the now-resolved short-flag correction. `docs/10-delivery/24d-intent-cli-decoupling-evidence.md` §4.1 verification table flipped the `Help output` row to **Pass**, §5 reframed from "Pre-Existing `--help` Behavior (Not Introduced by This Slice)" to "`--help` Panic Fix (Duplicate Short Flag)" with the exact one-line-per-flag diff, the new help text, and the explicit out-of-scope note for any latent Run-subcommand short collisions, and §2.1 / §6 caveats updated. Sequential verification re-run: `cargo fmt --all -- --check` pass, `cargo check -p intent-cli --all-targets` pass, `cargo clippy -p intent-cli --all-targets -- -D warnings` pass, `cargo test -p intent-cli --lib` 3/3 pass, `cargo run -p intent-cli -- --help` **pass**, `git diff --check` pass. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. |
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P1 Intent API Decomposition — first bounded demo slice delivered. Status flipped to `🟡 First bounded demo slice done — health_routes → routes::health` (continuation of A-09 S6). The lowest-risk leaf `crates/intent-api/src/health_routes.rs` was moved into `crates/intent-api/src/routes/health.rs` and made self-contained: all five items (`request_id_middleware`, `trace_context_middleware`, `health_handler`, `ready_handler`, `metrics_handler`) are `pub` in the new location, and `add_routes` references them as local symbols instead of `crate::health_routes::*`. `crates/intent-api/src/lib.rs` lost `pub mod health_routes;` and the stale `// Health check routes and middleware have been moved to health_routes.rs` comment (replaced with a one-liner pointing to `routes::health`). `crates/intent-api/src/router.rs` now references `routes::health::request_id_middleware` and `routes::health::trace_context_middleware` (middleware layering order preserved: request-id before trace-context). The now-orphan `crates/intent-api/src/health_routes.rs` was deleted (verified by `grep -r health_routes` — remaining matches are the new doc-comment historical note in `routes/health.rs` and the corrected roadmap text). `docs/04-api/route-openapi-contract-map.md` (internal) updated the `Handler Module` column for `/health`, `/ready`, `/metrics` from `health_routes` to `routes::health`; paths, methods, status, and tags unchanged. §3 status row updated; §5.5 action checklist 5 of 6 items checked off (the `22-phase-4-entry-plan.md` A-09 cross-update is **deferred** to a follow-up A-09 continuation slice per the slice handoff); new §5.10 evidence-link subsection added; §14 update log gained this row. New internal evidence doc `docs/10-delivery/24e-health-routes-extraction-evidence.md` records the move, the reference-rewrite table, the deletion of the orphan file, sequential verification gates, and the explicit non-production caveat. Sequential verification: `cargo fmt --all -- --check` pass, `cargo check -p intent-api --all-features` pass, `cargo clippy -p intent-api --all-features -- -D warnings` pass, `cargo test -p intent-api --lib` 442/442 + 17 ignored pass, `cargo check --workspace --all-features` pass, `git diff --check` pass. No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. A-11 remains deferred/SDK-blocked. |
 | 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P2 Benchmark Compile Guard — stale wording corrected. The original P2 problem statement claimed "no benchmark source files exist"; that wording is **stale** because real criterion benchmark source files exist in all four crates (`intent-api/benches/http_handlers.rs`, `graph-service/benches/{graph_ops,graph_traversal}.rs`, `intent-service/benches/{db_operations,query_latency}.rs`, `rebase-engine/benches/{diff_latency,rebase_latency}.rs`). §8.1 problem statement rewritten to call out the stale wording; new §8.1a "Observed State" table records the `[[bench]]` stanza ↔ `benches/<name>.rs` file mapping per crate; §8.3 scope IN, §8.5 action checklist, §8.6 acceptance criteria, and §8.7 validation commands reframed around compile-guard verification (i.e., `cargo bench --workspace --no-run` and a per-bench fixture/feature table) rather than "create the missing harness files". The `cargo bench --workspace --no-run` evidence run and the per-bench fixture/feature doc note are **deferred** to a follow-up bounded slice so this P2 item can be claimed closed with evidence (the source-file inventory and the wording correction are delivered by this slice). §14 update log gained this row. No public-doc edits. No code changes; this is a wording-and-scope correction only. No production-readiness claim. External gates remain blocked. |
+| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P2 Benchmark Compile Guard — bounded local slice delivered (compile-only, no timings). Status flipped from `⬜ Not started` to `🟡 BOUNDED DONE (local compile guard)`. Sequential verification: `cargo fmt --all -- --check` pass (exit 0, < 1s); `cargo bench --workspace --no-run` pass (exit 0, 16m 58s first build); `git diff --check` pass (exit 0, working tree clean). All 7 `benches/<name>.rs` source files compiled into optimized bench-profile executables under `target/release/deps/`: `http_handlers` (intent-api), `graph_ops` + `graph_traversal` (graph-service), `db_operations` + `query_latency` (intent-service), `diff_latency` + `rebase_latency` (rebase-engine). Informational observation (no code change): `intent-service/benches/query_latency.rs` and `rebase-engine/benches/diff_latency.rs` are **not** declared in any `[[bench]]` stanza in their respective `Cargo.toml` files, but they compile and link as bench executables because Cargo's bench auto-discovery picks them up; the `[[bench]]` stanzas override the `harness` default for the declared benches, and the auto-discovered benches inherit the same `harness = false` default from the `criterion` dev-dependency. A future slice owner may add explicit stanzas for symmetry, but that is a manifest-clarity follow-up and is out of scope for the compile-guard slice. §3 status row updated; §8.5 action checklist 4 of 4 items checked off (the previous slice's two deferred items — `cargo bench --workspace --no-run` evidence run and the per-bench fixture/feature doc — are now closed); new §8.10 evidence-link subsection added; §14 update log gained this row. New internal evidence doc `docs/10-delivery/24f-benchmark-compile-guard-evidence.md` records the commands, results, compiled-executable table, per-bench fixture/feature/env table, known limitations (compile-only, no `--all-features` exercise, no clippy-on-benches re-run, no `cargo test --workspace --lib --all-features` re-run since the prior slices already green on this HEAD), and explicit local-bounded caveats. The 6 pure/in-memory benches and 1 `DATABASE_URL`-gated self-skipping bench compile without requiring any external service at compile time; the compile guard is environment-agnostic. No benchmark timings collected (compile-only by design per the slice scope). No CI integration (deferred to a separate slice per §8.4). No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. A-11 remains deferred/SDK-blocked. |
+| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | P2 Documentation Language Policy — user decision accepted (option A: English-primary technical docs). User accepted the policy on 2026-06-07; the accepted policy is recorded verbatim in §9.5 (and in the new evidence doc `docs/10-delivery/24g-documentation-language-policy-evidence.md` §3): primary technical documentation language is English; Vietnamese is allowed only in `README.vi.md`, explicit `.vi.md` translation files, or labeled quoted historical/internal evidence where translation would change meaning; public docs and technical docs should avoid mixed-language sections in the same file; future migrations must be bounded, reviewed, and verify no public/internal leakage or overclaim. §3 status row flipped from `⬜ Not started` to `✅ ACCEPTED (user decision)`. §9.5 rewritten from "Recommended Policy (proposed, pending user decision)" to "Accepted Policy (user decision on 2026-06-07)"; §9.6 action checklist split into 9.6.a (policy-acceptance items, all checked off by this slice) and 9.6.b (future bounded slices: survey, migration slice 1 lowest-risk first, migrations 2..N, optional public-doc pointer — all planned, not executed); §9.7 acceptance criteria (per-slice: bounded, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md` outside allowlist, evidence doc with classification per file, no public-doc edits, no enforcement tooling, non-production caveat) added; §9.8 validation commands (Vietnamese-content scan, affirmative-claim scan, `find -name "*.vi.md"`, `git diff --check`) added; §9.11 evidence-link subsection added; §13 relationship table now references the new 24g evidence doc; §14 update log gained this row. **No doc was translated, renamed, or deleted by this slice; no public doc was touched; no code change.** The actual migration is deferred to future bounded slices per the policy's "bounded, reviewed" guardrail. New internal evidence doc `docs/10-delivery/24g-documentation-language-policy-evidence.md` records the user decision, the policy text verbatim, the future-bounded-slice migration checklist (survey → triage → translate / pair / label → verify → record), the acceptance criteria, the verification commands, and a non-production boilerplate for future migration evidence docs. Public docs (`README.md`, `README.vi.md`, `docs/README.md`, `docs/getting-started/`, `docs/reference/`, `.github/`, `CONTRIBUTING`, `SECURITY`) untouched. No production-readiness claim. External gates (A-03..A-13) remain blocked / deferred. A-11 remains deferred/SDK-blocked. Verification: `git diff --check` pass. No `cargo` commands were run by this slice (it is a docs-only acceptance slice with no code change). |
