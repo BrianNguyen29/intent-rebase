@@ -51,7 +51,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **Correction:** The `24h` §5.3 inventory lists 3 files, but `docs/13-adrs/01-runtime-adapter.md` was **already translated** in `24i` / `24j`. Do not re-count it as remaining.
 
-**Status:** ⬜ Not started.
+**Status:** ✅ DONE.
 
 ---
 
@@ -183,3 +183,4 @@ These gates **cannot** be closed by local work. They require named independent t
 | Date | Updated By | Changes |
 |------|------------|---------|
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Initial creation — canonical remaining todo-list from verified audit. Separates completed work (§1), local-executable remaining tasks (§2 A–G), risky/design-first work (§3), and external-gated blockers (§4). No production-readiness claim. No public docs touched. No code changes. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Slice B executed — translated `docs/13-adrs/README.md` and `docs/14-governance/README.md` from Vietnamese to English; fixed `docs/09-operations/03-observability.md` L28 (`với` → `with`). Vietnamese-diacritic scan clean on target files. No public docs touched. No new `.vi.md`. No code changes. External gates remain blocked. |

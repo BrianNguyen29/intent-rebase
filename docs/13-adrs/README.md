@@ -1,16 +1,16 @@
 # ADR Pack — Architecture Decision Records
 
-## Mục đích
+## Purpose
 
-Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được đánh giá, thảo luận và resolved cho Intent Rebase Engine. Mỗi ADR bao gồm context, lựa chọn, hệ quả và trạng thái.
+The ADR pack records key architectural decisions that have been evaluated, discussed, and resolved for the Intent Rebase Engine. Each ADR includes context, the decision, consequences, and status.
 
-**Trạng thái qui ước:** `Proposed` → `Accepted` → `Deprecated` → `Superseded`
+**Status convention:** `Proposed` → `Accepted` → `Deprecated` → `Superseded`
 
 ---
 
-## Chỉ mục ADR
+## ADR Index
 
-| ID | Tiêu đề | Trạng thái | Phase |
+| ID | Title | Status | Phase |
 |----|---------|-----------|-------|
 | [ADR-01](./01-runtime-adapter.md) | Runtime Adapter Selection | **Accepted** | P0–P1 |
 | [ADR-02](./02-data-plane.md) | Data Plane Architecture | **Accepted — Partially implemented** | P0–P1 |
@@ -27,7 +27,7 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 
 ---
 
-## Liên kết nội bộ
+## Internal Links
 
 - **Roadmap:** `../10-delivery/01-roadmap.md`
 - **Agent Guide:** `../12-agents/01-agent-implementation-guide.md`
@@ -35,10 +35,10 @@ Bộ ADR ghi lại các quyết định kiến trúc quan trọng đã được 
 - **Threat Model:** `../14-governance/06-threat-model-v2.md` (current) — see also `../08-security/01-threat-model.md` (baseline/legacy)
 - **Governance Pack:** `../14-governance/README.md`
 
-## Hướng dẫn đóng góp ADR mới
+## Contributing a New ADR
 
-1. Tạo file mới theo pattern `NN-title-slug.md` trong thư mục này
-2. Sử dụng template chuẩn: **Context → Decision → Consequences**
-3. Đánh dấu `Proposed` cho đến khi được team review và accept
-4. Cập nhật bảng chỉ mục trong file này
-5. Liên kết từ ADR liên quan (xem `## Related ADRs` ở mỗi file)
+1. Create a new file following the `NN-title-slug.md` pattern in this directory
+2. Use the standard template: **Context → Decision → Consequences**
+3. Mark as `Proposed` until reviewed and accepted by the team
+4. Update the index table in this file
+5. Link from related ADRs (see `## Related ADRs` in each file)

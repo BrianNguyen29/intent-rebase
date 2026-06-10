@@ -25,7 +25,7 @@
 - webhook outbox DLQ depth / age / replay rate — **not instrumented; design-only (P2-6e). No queue or worker exists.**
 
 ## Logs
-Structured logs với:
+Structured logs with:
 - trace_id
 - tenant_id
 - workflow_id
