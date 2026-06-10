@@ -1,7 +1,7 @@
 # P2 Documentation Language Policy — Evidence
 
 > **Status:** POLICY ACCEPTED — 2026-06-07
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Internal evidence for the P2 Documentation Language Policy decision. Records the user-accepted policy, the rationale, the migration checklist, and the future-bounded-slice guardrails. **This slice records the policy and the next-step checklist only; it does not perform any actual doc migration.** Actual migrations are future bounded slices.
 > **Non-Production Caveat:** This document is an internal planning artifact. It is not a public support document, it does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. No code change is associated with this slice. All external and production evidence gates remain blocked or deferred.
 
@@ -11,7 +11,7 @@
 
 The strategic roadmap (`docs/10-delivery/24-strategic-roadmap-and-checklist.md` §9) called for a P2 Documentation Language Policy decision because the repo mixes English and Vietnamese in internal docs (e.g., `docs/10-delivery/01-roadmap.md` has English headers with Vietnamese phase bullets, `docs/13-adrs/01-runtime-adapter.md` lines 25 and 38 contain Vietnamese content in an English-doc'd ADR, `docs/10-delivery/04-phase-2-runtime-integrated.md` line 4 has a Vietnamese phase description). The strategic evaluation flagged this as a future-contributor confusion risk. The §9.5 wording was framed as a **recommended** policy, pending a user decision.
 
-This evidence doc closes that decision: the user (BrianNguyen) **accepted** option A from the policy options as the canonical Documentation Language Policy, recorded in `24-strategic-roadmap-and-checklist.md` §9.5 (now marked "Accepted Policy (user decision on 2026-06-07)").
+This evidence doc closes that decision: the user (BrianNguyen29) **accepted** option A from the policy options as the canonical Documentation Language Policy, recorded in `24-strategic-roadmap-and-checklist.md` §9.5 (now marked "Accepted Policy (user decision on 2026-06-07)").
 
 The acceptance records:
 - the policy text (verbatim);
@@ -28,7 +28,7 @@ No files were migrated, renamed, translated, or deleted by this slice. No public
 | Field | Value |
 |-------|-------|
 | Decision | **A. English-primary technical docs** — Public/technical docs use English; Vietnamese is allowed only in `README.vi.md` or explicit `*.vi.md` translation files. |
-| Decided by | BrianNguyen (user) |
+| Decided by | BrianNguyen29 (user) |
 | Decided on | 2026-06-07 |
 | Recorded in | `docs/10-delivery/24-strategic-roadmap-and-checklist.md` §9.5 (rewritten from "Recommended Policy (proposed, pending user decision)" to "Accepted Policy (user decision on 2026-06-07)"). |
 | Tracker log | `docs/10-delivery/23-project-assessment-and-execution-tracker.md` §13 (2026-06-07 row). |
@@ -174,4 +174,11 @@ git diff --check
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy user decision (option A: English-primary technical docs; Vietnamese allowed only in `README.vi.md` or explicit `*.vi.md` translation files). §3 reproduces the policy verbatim. §4 is a future-slice migration checklist (translate / pair / label classification; bounded per-file slices; lowest-risk first). §5 records the public-doc leakage scan, the affirmative-claim scan, the no-new-`.vi.md` check, and `git diff --check`. §6 is a non-production boilerplate for future migration evidence docs. No doc files were translated, renamed, or deleted by this slice; no public docs were touched; no code changes. The actual migration is **deferred to future bounded slices** per the policy's "Future migrations must be bounded, reviewed, and verify no public/internal leakage or overclaim" guardrail. No production-readiness claim. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-07 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy user decision (option A: English-primary technical docs; Vietnamese allowed only in `README.vi.md` or explicit `*.vi.md` translation files). §3 reproduces the policy verbatim. §4 is a future-slice migration checklist (translate / pair / label classification; bounded per-file slices; lowest-risk first). §5 records the public-doc leakage scan, the affirmative-claim scan, the no-new-`.vi.md` check, and `git diff --check`. §6 is a non-production boilerplate for future migration evidence docs. No doc files were translated, renamed, or deleted by this slice; no public docs were touched; no code changes. The actual migration is **deferred to future bounded slices** per the policy's "Future migrations must be bounded, reviewed, and verify no public/internal leakage or overclaim" guardrail. No production-readiness claim. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+---
+
+## Sign-Off
+
+**Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
+
+> This sign-off is internal planning/evidence documentation only. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

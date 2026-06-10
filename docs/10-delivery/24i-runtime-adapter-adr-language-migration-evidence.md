@@ -1,7 +1,7 @@
 # P2 Documentation Language Policy — Migration Slice 1 Evidence
 
 > **Status:** MIGRATION SLICE 1 PARTIAL — 2026-06-08
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Internal evidence for the first Tier 1 Documentation Language Policy migration slice. Records the classification, changed file, verification results, and caveats for the bounded translation of `docs/13-adrs/01-runtime-adapter.md` only. Other Tier 1 files remain pending.
 > **Non-Production Caveat:** This document is an internal planning artifact. It is not a public support document, it does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. No code change is associated with this slice. All external and production evidence gates remain blocked or deferred.
 
@@ -132,4 +132,11 @@ Only `docs/13-adrs/01-runtime-adapter.md` was modified by this slice. No public 
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-08 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the bounded translation of `docs/13-adrs/01-runtime-adapter.md` from Vietnamese/mixed original-authored prose to English. Classification: `translate` (full). ~22 lines changed across Context, Decision, Rationale, and Consequences sections. Verification: Vietnamese-diacritic scan (clean), public-doc leakage scan (clean), affirmative-claim scan (clean), no-new-`.vi.md` check (only `README.vi.md`), `git diff --check` (pass). No public docs touched; no `.vi.md` added; no code changes. Non-production caveat preserved. Other Tier 1 files (`04-phase-2-runtime-integrated.md`, `01-roadmap.md`) remain pending. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-08 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — records the bounded translation of `docs/13-adrs/01-runtime-adapter.md` from Vietnamese/mixed original-authored prose to English. Classification: `translate` (full). ~22 lines changed across Context, Decision, Rationale, and Consequences sections. Verification: Vietnamese-diacritic scan (clean), public-doc leakage scan (clean), affirmative-claim scan (clean), no-new-`.vi.md` check (only `README.vi.md`), `git diff --check` (pass). No public docs touched; no `.vi.md` added; no code changes. Non-production caveat preserved. Other Tier 1 files (`04-phase-2-runtime-integrated.md`, `01-roadmap.md`) remain pending. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+---
+
+## Sign-Off
+
+**Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
+
+> This sign-off is internal planning/evidence documentation only. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

@@ -1,7 +1,7 @@
 # P2 Documentation Language Policy — Survey Evidence
 
 > **Status:** SURVEY COMPLETE — 2026-06-08
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Internal evidence for the P2 Documentation Language Policy workspace-wide survey. Records the scan method, file counts, public-doc verdict, classification inventory, priority tiers, and next-slice recommendations. **This slice is survey-only; it does not perform any actual doc migration.** Actual migrations are future bounded slices.
 > **Non-Production Caveat:** This document is an internal planning artifact. It is not a public support document, it does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. No code change is associated with this slice. All external and production evidence gates remain blocked or deferred.
 
@@ -216,7 +216,14 @@ docs/10-delivery/checklists/checklist-phase-4.md
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-08 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy workspace-wide survey: scan method (`rg -c` for Vietnamese diacritics), counts (159 total `*.md`, 70 with hits), public-doc verdict (PASS), full classification inventory (34 full-translation files, 3 ADR/governance READMEs, 15 header-only fixes, 12 mixed delivery docs, 1 minor single-word fix), priority tiers (Tier 1/2/3), and next-slice recommendations. No files were translated, renamed, or deleted; no public docs were touched; no code changes. Non-production caveat preserved. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 2 (`docs/02-architecture/`) completion note added. Five files (`01-system-overview.md`, `02-components.md`, `03-trust-boundaries.md`, `04-scaling-topology.md`, `05-deployment-models.md`) translated from Vietnamese to English in place. Next-slice recommendation item 4 added. Remaining Tier 3 count: 24 files. No public docs touched. No code changes. External gates remain blocked. |
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 3 (`docs/03-spec/`) completion note added. Six files (`01-intent-model.md`, `02-semantic-diff.md`, `03-dependency-graph.md`, `04-rebase-engine.md`, `05-compensation.md`, `06-provenance.md`) translated from Vietnamese to English in place. Next-slice recommendation item 5 added. Remaining Tier 3 count: 18 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 4 (`docs/04-api/`) completion note added. Three files (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 15 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-08 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy workspace-wide survey: scan method (`rg -c` for Vietnamese diacritics), counts (159 total `*.md`, 70 with hits), public-doc verdict (PASS), full classification inventory (34 full-translation files, 3 ADR/governance READMEs, 15 header-only fixes, 12 mixed delivery docs, 1 minor single-word fix), priority tiers (Tier 1/2/3), and next-slice recommendations. No files were translated, renamed, or deleted; no public docs were touched; no code changes. Non-production caveat preserved. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 2 (`docs/02-architecture/`) completion note added. Five files (`01-system-overview.md`, `02-components.md`, `03-trust-boundaries.md`, `04-scaling-topology.md`, `05-deployment-models.md`) translated from Vietnamese to English in place. Next-slice recommendation item 4 added. Remaining Tier 3 count: 24 files. No public docs touched. No code changes. External gates remain blocked. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 3 (`docs/03-spec/`) completion note added. Six files (`01-intent-model.md`, `02-semantic-diff.md`, `03-dependency-graph.md`, `04-rebase-engine.md`, `05-compensation.md`, `06-provenance.md`) translated from Vietnamese to English in place. Next-slice recommendation item 5 added. Remaining Tier 3 count: 18 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 4 (`docs/04-api/`) completion note added. Three files (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 15 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+---
+
+## Sign-Off
+
+**Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
+
+> This sign-off is internal planning/evidence documentation only. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

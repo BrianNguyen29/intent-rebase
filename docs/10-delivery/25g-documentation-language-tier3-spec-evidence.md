@@ -1,7 +1,7 @@
 # Tier 3 Batch 3 — Spec Documentation Language Migration Evidence
 
 > **Status:** TRANSLATION SLICE COMPLETE — 2026-06-10
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Translate six `docs/03-spec/*.md` files from Vietnamese to English in place.
 > **Non-Production Caveat:** This document is an internal planning artifact. It does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. All external and production evidence gates remain blocked or deferred.
 
@@ -69,7 +69,7 @@ git diff --check
 
 ## 4. Internal Sign-Off
 
-> **Signed:** BrianNguyen (via authorized assistant fixer), internal documentation slice only.
+> **Signed:** BrianNguyen29 (via authorized assistant fixer), internal documentation slice only.
 >
 > This sign-off applies solely to the translation of the six `docs/03-spec/*.md` files listed in §1. It is **not** an external gate sign-off, a production-readiness attestation, or a CI-green claim.
 

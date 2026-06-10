@@ -1,7 +1,7 @@
 # Tier 3 Batch 1 — Product Documentation Translation Evidence
 
 > **Status:** BOUNDED SLICE COMPLETE — 2026-06-10
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Tier 3 Batch 1 translation of `docs/01-product/*.md` from Vietnamese to English in place. Preserves headings, intent, product semantics, and caveats.
 > **Non-Production Caveat:** This document is an internal planning artifact. It does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. All external and production evidence gates remain blocked or deferred.
 
@@ -78,7 +78,7 @@ git diff --check
 
 ## 4. Sign-Off
 
-> **Signed:** BrianNguyen (via authorized assistant), internal documentation slice only.
+> **Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
 >
 > This sign-off applies solely to the local translation of `docs/01-product/*.md` and the associated evidence/todo updates. It does **not** signify external SRE review, security review, production readiness, or CI-green status. All external gates (A-03..A-13) remain blocked or deferred.
 

@@ -1,7 +1,7 @@
 # P2 Benchmark Compile Guard — Evidence
 
 > **Status:** COMPILE GUARD PASSES — 2026-06-07
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Internal evidence for the P2 Benchmark Compile Guard bounded slice. Records the `cargo bench --workspace --no-run` verification result, the per-bench fixture/feature table, and explicit compile-only caveats.
 > **Non-Production Caveat:** This document is an internal planning artifact. It is not a public support document, it does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. No benchmark timings or performance numbers are recorded here; this slice is compile-only by design. All external and production evidence gates remain blocked or deferred.
 
@@ -145,4 +145,11 @@ The command exited 0 with no compile errors, no missing-dependency errors, and n
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-07 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the P2 Benchmark Compile Guard bounded slice that closes the deferred follow-up from the previous wording-correction slice. `cargo fmt --all -- --check` passes (exit 0, < 1s). `cargo bench --workspace --no-run` passes (exit 0, 16m 58s first build) with all 7 `benches/<name>.rs` source files compiling into optimized bench-profile executables under `target/release/deps/`. `git diff --check` passes (exit 0, working tree clean). No `crates/**` or `benches/**` files were modified; this is a doc-only evidence slice. Per-bench fixture/feature/env table (§3) records the runtime prerequisites for each of the 7 bench source files; the `[[bench]]` ↔ `benches/<name>.rs` mapping quirk (`query_latency.rs` and `diff_latency.rs` are auto-discovered, not listed in any `[[bench]]` stanza) is recorded as an informational observation in §2.2. No benchmark timings collected (compile-only by design per the slice scope). No CI integration (deferred to a separate slice per §8.4). No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-07 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — records the P2 Benchmark Compile Guard bounded slice that closes the deferred follow-up from the previous wording-correction slice. `cargo fmt --all -- --check` passes (exit 0, < 1s). `cargo bench --workspace --no-run` passes (exit 0, 16m 58s first build) with all 7 `benches/<name>.rs` source files compiling into optimized bench-profile executables under `target/release/deps/`. `git diff --check` passes (exit 0, working tree clean). No `crates/**` or `benches/**` files were modified; this is a doc-only evidence slice. Per-bench fixture/feature/env table (§3) records the runtime prerequisites for each of the 7 bench source files; the `[[bench]]` ↔ `benches/<name>.rs` mapping quirk (`query_latency.rs` and `diff_latency.rs` are auto-discovered, not listed in any `[[bench]]` stanza) is recorded as an informational observation in §2.2. No benchmark timings collected (compile-only by design per the slice scope). No CI integration (deferred to a separate slice per §8.4). No public-doc edits. No production-readiness claim. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+---
+
+## Sign-Off
+
+**Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
+
+> This sign-off is internal planning/evidence documentation only. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

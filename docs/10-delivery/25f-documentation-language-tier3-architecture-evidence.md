@@ -1,7 +1,7 @@
 # Tier 3 Batch 2 — Architecture Docs Translation Evidence
 
 > **Status:** TRANSLATION COMPLETE — 2026-06-10
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Internal evidence for the translation of `docs/02-architecture/*.md` from Vietnamese to English per the accepted Documentation Language Policy (`24g` §3, `24h` §5.2).
 > **Non-Production Caveat:** This document is an internal planning artifact. It does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. All external and production evidence gates remain blocked or deferred.
 
@@ -55,6 +55,6 @@
 
 ## 5. Sign-Off
 
-**Signed:** BrianNguyen (via authorized assistant fixer), internal documentation slice only
+**Signed:** BrianNguyen29 (via authorized assistant fixer), internal documentation slice only
 
 > **Signing constraint:** This is an internal solo sign-off for a documentation translation slice. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

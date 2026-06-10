@@ -2,7 +2,7 @@
 
 > **Status:** INTERNAL EVIDENCE — local design and bounded implementation only
 > **Date:** 2026-06-10
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Evidence for the design-first unblock slice executed under task `unblock-design-first-items`. Covers webhook D1, forensic chain-hash, and NATS per-tenant streams.
 > **Non-Production Caveat:** This document is an internal planning and implementation evidence artifact. It does not claim production readiness, CI-green status, or external sign-off. All external and production evidence gates remain blocked or deferred.
 
@@ -112,7 +112,7 @@
 
 ## 6. Sign-Off
 
-**Internal-only sign-off:** BrianNguyen (Backend Lead)
+**Internal-only sign-off:** BrianNguyen29 (Backend Lead)
 
 - [x] Webhook D1 bounded implementation reviewed and accepted for local-dev scope
 - [x] Forensic chain-hash local algorithm reviewed and accepted for local-dev scope

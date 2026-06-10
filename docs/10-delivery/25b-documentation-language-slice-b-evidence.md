@@ -2,7 +2,7 @@
 
 > **Status:** BOUNDED DONE — 2026-06-10
 > **Slice:** B (ADR/governance README translations + minor single-word fix)
-> **Owner:** BrianNguyen (via authorized assistant fixer)
+> **Owner:** BrianNguyen29 (via authorized assistant fixer)
 > **Non-Production Caveat:** This document records a bounded local doc-translation slice. It does not claim production-readiness, CI-green status, or external sign-off.
 
 ---
@@ -140,4 +140,11 @@ Result: **Clean.** No trailing whitespace or conflict markers introduced.
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Initial creation — Slice B evidence. Records classification, changed files, segments translated, verification results (Vietnamese-diacritic scan, public-doc leakage scan, affirmative-claim scan, no-new-`.vi.md` check, `git diff --check`), and explicit non-production caveat. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — Slice B evidence. Records classification, changed files, segments translated, verification results (Vietnamese-diacritic scan, public-doc leakage scan, affirmative-claim scan, no-new-`.vi.md` check, `git diff --check`), and explicit non-production caveat. |
+---
+
+## Sign-Off
+
+**Signed:** BrianNguyen29 (via authorized assistant), internal documentation slice only.
+
+> This sign-off is internal planning/evidence documentation only. It does **not** constitute external review, production sign-off, or CI-green attestation. No external or production gates are claimed closed by this signature.

@@ -2,7 +2,7 @@
 
 > **Status:** INTERNAL EVIDENCE — Tier 3 Batch 4 (`docs/04-api/`) translation completed
 > **Date:** 2026-06-10
-> **Owner:** BrianNguyen (Backend Lead, solo practitioner)
+> **Owner:** BrianNguyen29 (Backend Lead, solo practitioner)
 > **Scope:** Evidence for the translation of three API prose docs from Vietnamese/mixed to English. No production claims. No public docs touched.
 > **Non-Production Caveat:** This document is an internal planning artifact. It does not constitute production-readiness evidence, it does not claim CI-green status, and it does not claim external sign-off. All external and production evidence gates remain blocked or deferred.
 
@@ -52,8 +52,8 @@
 
 ## 5. Internal-Only Sign-Off
 
-**Translated by:** BrianNguyen (Backend Lead, solo practitioner) via authorized assistant fixer
-**Verified by:** BrianNguyen (Backend Lead, solo practitioner) via authorized assistant fixer
+**Translated by:** BrianNguyen29 (Backend Lead, solo practitioner) via authorized assistant fixer
+**Verified by:** BrianNguyen29 (Backend Lead, solo practitioner) via authorized assistant fixer
 **Date:** 2026-06-10
 
 > **Solo-practitioner attestation only.** This sign-off is internal planning evidence and is explicitly insufficient to close any external gate (A-03, A-04, A-07, etc.). No external reviewer has signed this document.
@@ -64,4 +64,4 @@
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Initial creation — evidence for Tier 3 Batch 4 (`docs/04-api/`). Three files translated (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`). Verification scans all clean. Internal-only sign-off added. No public docs touched. No code changes. No production-readiness claim. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Initial creation — evidence for Tier 3 Batch 4 (`docs/04-api/`). Three files translated (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`). Verification scans all clean. Internal-only sign-off added. No public docs touched. No code changes. No production-readiness claim. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
