@@ -68,7 +68,7 @@ These files contain Vietnamese text only as labeled policy context, scan command
 | `docs/10-delivery/24-strategic-roadmap-and-checklist.md` | 6 | Labeled/quoted policy context (§9.5, §9.1 examples) |
 | `docs/10-delivery/24g-documentation-language-policy-evidence.md` | 2 | Scan commands and labeled evidence |
 
-### 5.2 Full Vietnamese Internal Docs — Translation Candidates (36 files)
+### 5.2 Full Vietnamese Internal Docs — Translation Candidates (34 files)
 
 These files contain substantial Vietnamese prose and are the primary targets for future bounded translation slices.
 
@@ -139,7 +139,7 @@ docs/08-security/06-pen-test-scope.md
 docs/08-security/07-data-retention-verification.md
 ```
 
-### 5.5 Mixed Delivery Docs — Translation / Classification Needed (11 files)
+### 5.5 Mixed Delivery Docs — Translation / Classification Needed (12 files)
 
 These files mix English and Vietnamese at the section or bullet level. A future slice should classify each section as **translate**, **pair**, or **label** before editing.
 
@@ -214,4 +214,4 @@ docs/10-delivery/checklists/checklist-phase-4.md
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-08 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy workspace-wide survey: scan method (`rg -c` for Vietnamese diacritics), counts (159 total `*.md`, 70 with hits), public-doc verdict (PASS), full classification inventory (36 full-translation files, 3 ADR/governance READMEs, 15 header-only fixes, 11 mixed delivery docs, 1 minor single-word fix), priority tiers (Tier 1/2/3), and next-slice recommendations. No files were translated, renamed, or deleted; no public docs were touched; no code changes. Non-production caveat preserved. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-08 | BrianNguyen (via authorized assistant fixer) | Initial creation — records the P2 Documentation Language Policy workspace-wide survey: scan method (`rg -c` for Vietnamese diacritics), counts (159 total `*.md`, 70 with hits), public-doc verdict (PASS), full classification inventory (34 full-translation files, 3 ADR/governance READMEs, 15 header-only fixes, 12 mixed delivery docs, 1 minor single-word fix), priority tiers (Tier 1/2/3), and next-slice recommendations. No files were translated, renamed, or deleted; no public docs were touched; no code changes. Non-production caveat preserved. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
