@@ -1,11 +1,12 @@
 # Semantic Diff Specification
 
-## Mục tiêu
-Text diff không đủ cho production. IRE cần semantic diff để trả lời:
-- thay đổi là gì về mặt ý nghĩa
-- mức rủi ro bao nhiêu
-- phần nào của workflow có khả năng bị ảnh hưởng
-- có cần con người xác nhận không
+## Purpose
+
+Text diff is insufficient for production. The IRE needs semantic diff to answer:
+- what changed in meaning
+- what is the risk level
+- which parts of the workflow may be affected
+- whether human confirmation is needed
 
 ## Inputs
 - `IntentVersion N`
@@ -54,37 +55,38 @@ Text diff không đủ cho production. IRE cần semantic diff để trả lời
 
 ## Severity heuristic
 ### Low
-- mô tả rõ hơn nhưng không đổi nghĩa
-- thêm chi tiết không ảnh hưởng execution path
+- clearer description but no change in meaning
+- added detail that does not affect the execution path
 
 ### Medium
-- thay trade-off hoặc reporting expectations
-- sửa criteria không đụng side effects
+- changed trade-off or reporting expectations
+- fixed criteria without touching side effects
 
 ### High
-- thay constraints có thể làm invalid patch/test/approval
-- thay authority scope
-- thay budget/time cap ảnh hưởng runtime plan
+- changed constraints that may invalidate patch/test/approval
+- changed authority scope
+- changed budget/time cap affecting the runtime plan
 
 ### Critical
-- thay policy/compliance
-- thêm forbidden action
-- invalidate legal/security assumptions
-- revoke permissions của hành động đã scheduled
+- changed policy/compliance
+- added forbidden action
+- invalidated legal/security assumptions
+- revoked permissions for an already-scheduled action
 
 ## Human confirmation triggers
-- confidence thấp hơn threshold
-- change chạm policy/high-risk domain
+- confidence below threshold
+- change touches policy/high-risk domain
 - multiple conflicting changes
-- diff dẫn đến compensation không chắc chắn
+- diff leads to uncertain compensation
 
 ## Implementation note
-Bản đầu nên là hybrid:
-- rule-based deterministic diff cho fields có cấu trúc
-- model-assisted classification cho prose / ambiguity
-- policy overlay để gán severity
+
+The first version should be hybrid:
+- rule-based deterministic diff for structured fields
+- model-assisted classification for prose / ambiguity
+- policy overlay to assign severity
 
 ## Acceptance criteria
-- diff output phải ổn định cùng input
-- cùng change set phải cho ra cùng impact outcome trong cùng rule version
-- có thể replay diff dưới historical rule pack
+- diff output must be stable for the same input
+- the same change set must produce the same impact outcome under the same rule version
+- diff can be replayed under a historical rule pack

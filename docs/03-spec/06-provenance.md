@@ -1,13 +1,14 @@
 # Provenance Specification
 
-## Mục tiêu
-Cho phép trả lời:
-- output này sinh khi nào
-- dưới intent version nào
-- từ input/source nào
-- dưới policy snapshot nào
-- bởi agent/runtime nào
-- sau rebase nào
+## Purpose
+
+Enables answering:
+- when this output was produced
+- under which intent version
+- from which input/source
+- under which policy snapshot
+- by which agent/runtime
+- after which rebase
 
 ## Provenance envelope
 
@@ -36,7 +37,8 @@ created_by_run_id: uuid
 - included in forensic export
 
 ## Provenance-aware policies
-Có thể định nghĩa:
-- không dùng artifact sinh trước policy snapshot X
-- không cho merge output dưới intent version stale
-- không tái sử dụng approval quá N versions cũ
+
+Can define:
+- do not use an artifact produced before policy snapshot X
+- do not allow merging output under a stale intent version
+- do not reuse an approval more than N versions old

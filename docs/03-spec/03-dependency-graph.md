@@ -1,9 +1,10 @@
 # Dependency Graph Specification
 
-## Mục tiêu
-Graph là lõi của impact analysis. Nếu không có graph đủ tốt, rebase sẽ hoặc:
-- quá bảo thủ: invalidate quá nhiều
-- quá lạc quan: bỏ sót hậu quả
+## Purpose
+
+The graph is the core of impact analysis. Without a good-enough graph, rebase will either:
+- be too conservative: invalidate too much
+- be too optimistic: miss consequences
 
 ## Node types
 - IntentClause
@@ -33,36 +34,36 @@ Graph là lõi của impact analysis. Nếu không có graph đủ tốt, rebase
 - `compensates`
 - `blocked_by`
 
-## Ví dụ quan hệ
+## Example Relationships
 - `Artifact patch-42 depends_on IntentClause compatibility-must`
 - `Approval appr-7 governed_by PolicySnapshot pol-14`
 - `ToolCall deploy-1 blocked_by Approval appr-7`
 - `Checkpoint cp-9 supersedes cp-8`
 
 ## Graph invariants
-1. Mọi Artifact phải trace được về ít nhất một IntentVersion.
-2. Mọi SideEffect phải trace được về:
-   - initiating TaskNode
-   - intent version
-   - approval snapshot nếu có
-3. Mọi Approval phải gắn policy snapshot và scope.
+1. Every Artifact must be traceable to at least one IntentVersion.
+2. Every SideEffect must be traceable to:
+   - the initiating TaskNode
+   - the intent version
+   - an approval snapshot if applicable
+3. Every Approval must be attached to a policy snapshot and scope.
 
 ## Storage strategy
 ### OLTP relational
-Cho metadata và edge tables có query đơn giản.
+For metadata and edge tables with simple queries.
 
 ### Optional graph engine
-Dùng khi:
-- traversal sâu
-- causal analysis nặng
-- cross-artifact visualization phức tạp
+Use when:
+- deep traversal
+- heavy causal analysis
+- complex cross-artifact visualization
 
-Khuyến nghị production v1:
-- Postgres với edge tables + recursive CTE
-- chưa cần graph DB riêng trừ khi scale hoặc query patterns đòi hỏi
+Production v1 recommendation:
+- Postgres with edge tables + recursive CTE
+- no separate graph DB needed unless scale or query patterns demand it
 
 ## Impact propagation rules
-Ví dụ:
-- Nếu `IntentClause` bị `tighten_constraint` và `Artifact depends_on clause`, artifact -> `review_required` hoặc `invalid` tùy domain.
-- Nếu `Approval governed_by PolicySnapshot old` và policy domain bị đổi ở mức high, approval -> `stale`.
-- Nếu `SideEffect` thuộc lớp irreversible và upstream change invalidates scope, trigger operator escalation.
+Examples:
+- If an `IntentClause` is `tighten_constraint` and an `Artifact depends_on` that clause, the artifact becomes `review_required` or `invalid` depending on domain.
+- If an `Approval` is `governed_by` an old `PolicySnapshot` and the policy domain is changed at high severity, the approval becomes `stale`.
+- If a `SideEffect` is of the irreversible class and an upstream change invalidates its scope, trigger operator escalation.

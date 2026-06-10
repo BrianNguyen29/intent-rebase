@@ -1,12 +1,13 @@
 # Intent Model Specification
 
-## Mục tiêu
-Định nghĩa cấu trúc chuẩn cho intent, để:
-- có thể version
-- có thể diff
-- có thể trace sang artifacts
-- có thể đánh giá policy/approval
-- có thể tái dựng lịch sử
+## Purpose
+
+Define the standard structure for an intent, so that it can:
+- be versioned
+- be diffed
+- be traced to artifacts
+- be evaluated against policy/approval
+- be used to reconstruct history
 
 ## Entity: IntentDocument
 
@@ -74,7 +75,8 @@ payload:
 ```
 
 ## Intent Clause Model
-Để trace chính xác, các phần quan trọng nên có `clause_id`.
+
+To enable precise tracing, important parts should have a `clause_id`.
 
 ```yaml
 constraint:
@@ -87,7 +89,7 @@ constraint:
   priority: must|should|could
 ```
 
-## Phân loại intent changes
+## Intent Change Classification
 
 - `add_detail`
 - `remove_detail`
@@ -102,10 +104,10 @@ constraint:
 - `invalidate_assumption`
 - `source_update`
 
-## Quy tắc modeling
+## Modeling Rules
 
-1. Phần nào ảnh hưởng execution phải tách được thành clause.
-2. Không nhét mọi thứ vào prose.
-3. Source refs phải immutable và truy hồi được.
-4. Change reason là bắt buộc.
-5. Không overwrite version cũ.
+1. Anything that affects execution must be separable into a clause.
+2. Do not stuff everything into prose.
+3. Source refs must be immutable and retrievable.
+4. Change reason is mandatory.
+5. Do not overwrite the old version.

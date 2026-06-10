@@ -1,33 +1,34 @@
 # Compensation Model
 
-## Tại sao cần
-Không phải mọi task đều thuần tính toán. Nhiều workflow có side effects:
-- gửi email
-- mở PR
-- deploy
-- tạo ticket
-- sửa DB
-- post message ra channel
-- approve / reject giao dịch
+## Why Compensation Is Needed
 
-Nếu intent đổi sau khi side effect xảy ra, chỉ invalidate artifact là chưa đủ.
+Not every task is purely computational. Many workflows have side effects:
+- sending email
+- opening a PR
+- deploying
+- creating a ticket
+- modifying the DB
+- posting a message to a channel
+- approving / rejecting a transaction
+
+If the intent changes after a side effect has occurred, merely invalidating the artifact is not enough.
 
 ## Side effect classes
 
 ### S0 — Pure read
-Không cần compensation.
+No compensation needed.
 
 ### S1 — Internal reversible
-Ví dụ ghi metadata nội bộ có thể rollback transactionally.
+Example: internal metadata writes that can be rolled back transactionally.
 
 ### S2 — External reversible
-Ví dụ tạo ticket rồi có thể close/cancel; mở PR rồi có thể close.
+Example: creating a ticket that can later be closed/cancelled; opening a PR that can later be closed.
 
 ### S3 — External partially reversible
-Ví dụ gửi email có thể follow-up correction, nhưng không thu hồi tuyệt đối.
+Example: sending an email that can be followed up with a correction, but cannot be absolutely recalled.
 
 ### S4 — Irreversible
-Ví dụ chuyển tiền, công bố public, xóa dữ liệu không backup.
+Example: transferring money, making something public, deleting data without backup.
 
 ## Compensation record
 
@@ -42,15 +43,16 @@ status: pending|approved|executed|failed|waived
 ```
 
 ## Rules
-- S0: bỏ qua
-- S1: auto nếu policy cho phép
-- S2: auto hoặc semi-auto tùy risk
-- S3: operator review mặc định
-- S4: escalation bắt buộc
+- S0: skip
+- S1: auto if policy permits
+- S2: auto or semi-auto depending on risk
+- S3: operator review by default
+- S4: mandatory escalation
 
 ## UI requirements
-Operator phải thấy:
-- side effect nào đã xảy ra
-- intent change nào làm nó trở nên problematic
-- phương án bù được đề xuất
-- residual risk sau compensation
+
+The operator must see:
+- which side effects have occurred
+- which intent change made it problematic
+- the proposed compensation plan
+- the residual risk after compensation

@@ -1,12 +1,13 @@
 # Rebase Engine Specification
 
-## Mục tiêu
-Tạo quyết định có cấu trúc khi intent thay đổi:
-- giữ cái gì
-- hủy cái gì
-- xin lại gì
-- bù gì
-- resume từ đâu
+## Purpose
+
+Make structured decisions when an intent changes:
+- keep what
+- cancel what
+- re-request what
+- compensate what
+- resume from where
 
 ## Rebase state machine
 
@@ -44,19 +45,19 @@ DetectedChange
 ## Decision classes
 
 ### Class A — No-op / Metadata update
-Thay đổi không ảnh hưởng execution semantics.
+Change does not affect execution semantics.
 
 ### Class B — Soft review
-Không invalidate ngay, nhưng cần review trước bước tiếp theo.
+Does not invalidate immediately, but requires review before the next step.
 
 ### Class C — Partial repair
-Invalidate cục bộ, giữ phần còn lại, rerun từ checkpoint chọn lọc.
+Invalidate locally, keep the rest, rerun from a selected checkpoint.
 
 ### Class D — Compensation + repair
-Đã có side effect cần bù hoặc mitigate.
+Side effects exist that need compensation or mitigation.
 
 ### Class E — Hard restart / manual handoff
-Không đủ an toàn để auto-repair.
+Not safe enough for auto-repair.
 
 ## Rebase algorithm (v1 conceptual)
 
@@ -74,11 +75,11 @@ Không đủ an toàn để auto-repair.
 12. Verify resulting execution state
 
 ## Checkpoint selection rules
-Ưu tiên checkpoint:
-- gần nhất
-- trước node invalid đầu tiên
-- không bỏ sót dependency bắt buộc
-- tránh rerun side effects đã irreversible nếu không cần
+Prefer a checkpoint that is:
+- closest
+- before the first invalid node
+- does not miss mandatory dependencies
+- avoids rerunning irreversible side effects unless necessary
 
 ## Repair primitives
 - drop_task(node)
@@ -91,10 +92,10 @@ Không đủ an toàn để auto-repair.
 - quarantine_output(artifact_id)
 
 ## Safety rails
-- Không auto-apply với critical changes nếu adapter không hỗ trợ safe pause/resume
-- Không auto-compensate irreversible side effects
-- Không reuse stale approvals
-- Không resume nếu runtime state và graph state không đồng bộ
+- Do not auto-apply critical changes if the adapter does not support safe pause/resume.
+- Do not auto-compensate irreversible side effects.
+- Do not reuse stale approvals.
+- Do not resume if runtime state and graph state are out of sync.
 
 ## Success metrics
 - rebase acceptance rate
