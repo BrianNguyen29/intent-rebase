@@ -7,7 +7,7 @@
 - untrusted source
 - duplicate delivery
 
-Hành động:
+Actions:
 - reject + audit
 - optionally create quarantined draft
 
@@ -16,7 +16,7 @@ Hành động:
 - low confidence
 - malformed prior version
 
-Hành động:
+Actions:
 - fallback rules-only
 - manual review required
 
@@ -25,7 +25,7 @@ Hành động:
 - orphan edges
 - stale projection
 
-Hành động:
+Actions:
 - graph repair job
 - unsafe auto-apply disabled
 
@@ -34,7 +34,7 @@ Hành động:
 - checkpoint lookup failed
 - resume rejected
 
-Hành động:
+Actions:
 - rollback apply if possible
 - manual intervention
 - mark rebase blocked
@@ -44,13 +44,13 @@ Hành động:
 - action non-idempotent
 - insufficient permissions
 
-Hành động:
+Actions:
 - retry if safe
 - escalate operator
 - annotate residual risk
 
 ## Incident policy
-Critical incidents bắt buộc:
+Critical incidents require:
 - freeze affected workflow
 - capture forensic snapshot
 - create operator task

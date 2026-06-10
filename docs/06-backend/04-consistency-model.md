@@ -1,13 +1,13 @@
 # Consistency Model
 
-## Nguyên tắc
-Không cần strong consistency mọi nơi. Nhưng một số điểm bắt buộc strong/serializable hơn:
-- tạo intent version
+## Principle
+Strong consistency is not needed everywhere. But some points require stronger/serializable consistency:
+- create intent version
 - apply rebase plan
 - approval status transitions
 - side effect dispatch preflight
 
-## Model đề xuất
+## Proposed model
 
 ### Stronger consistency areas
 - `intents.current_version`
@@ -22,19 +22,19 @@ Không cần strong consistency mọi nơi. Nhưng một số điểm bắt bu�
 - operator insights summaries
 
 ## Techniques
-- optimistic concurrency với version numbers
+- optimistic concurrency with version numbers
 - transactional outbox
 - idempotency keys
-- compare-and-swap cho apply rebase
-- saga patterns cho multi-step external effects
+- compare-and-swap for apply rebase
+- saga patterns for multi-step external effects
 
-## Critical race conditions cần xử lý
-1. Intent head đổi giữa preview và apply
-2. Approval bị revoke trong lúc workflow chuẩn bị side effect
-3. Compensation chạy trong khi operator force restart
-4. Runtime state đổi trong lúc graph snapshot đã cũ
+## Critical race conditions to handle
+1. Intent head changes between preview and apply
+2. Approval is revoked while workflow is preparing side effect
+3. Compensation runs while operator force-restarts
+4. Runtime state changes while graph snapshot is stale
 
 ## Rule
-Apply rebase phải kiểm tra:
+Apply rebase must check:
 - current intent head == rebase_plan.to_version
-- runtime execution state hash khớp hoặc nằm trong allowed window
+- runtime execution state hash matches or falls within allowed window

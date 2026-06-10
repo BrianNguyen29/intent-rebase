@@ -67,6 +67,6 @@
 - webhooks, email, chatops, internal events
 
 ## Boundary rules
-- services giao tiếp qua gRPC hoặc async events nội bộ
-- cross-service writes nên đi qua explicit APIs hoặc transactional outbox
-- không query DB chéo trực tiếp trừ analytics/read models
+- services communicate via gRPC or internal async events
+- cross-service writes should go through explicit APIs or transactional outbox
+- no cross-service direct DB queries except analytics/read models

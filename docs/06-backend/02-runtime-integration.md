@@ -1,7 +1,7 @@
 # Runtime Integration
 
-## Mục tiêu
-IRE không thay workflow runtime. Nó cần adapters chuẩn để:
+## Goal
+IRE does not replace the workflow runtime. It needs standard adapters to:
 - read execution state
 - read/write checkpoints
 - pause
@@ -11,7 +11,7 @@ IRE không thay workflow runtime. Nó cần adapters chuẩn để:
 - inject tasks/approvals
 
 ## Adapter capability contract
-Mỗi adapter phải khai báo:
+Each adapter must declare:
 - supports_pause
 - supports_resume
 - supports_branch
@@ -22,7 +22,7 @@ Mỗi adapter phải khai báo:
 - max_resume_delay
 
 ## Temporal adapter
-Khuyến nghị cho production v1 nếu cần:
+Recommended for production v1 if you need:
 - durable execution
 - workflow histories
 - versioning
@@ -35,15 +35,15 @@ Use cases:
 - compensation orchestration
 
 ## LangGraph adapter
-Phù hợp nếu:
-- agent harness đã dùng LangGraph
-- cần interrupts, persistence, HITL
-- logic graph-centric mạnh
+Suitable if:
+- agent harness already uses LangGraph
+- needs interrupts, persistence, HITL
+- strong graph-centric logic
 
 ## Custom adapter
-Phải đáp ứng tối thiểu:
+Must meet the minimum requirements:
 - workflow execution identity
-- checkpoint semantics rõ ràng
+- clear checkpoint semantics
 - action preflight hook
 - intent version propagation
 
