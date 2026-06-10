@@ -83,10 +83,10 @@ These tasks can be executed locally without external reviewers, production infra
 
 | Location | Line | Text | Action |
 |----------|------|------|--------|
-| `crates/intent-api/src/webhook_dispatcher.rs` | 79 | `TODO(Slice 4+): version info should be stored in the outbox record at creation time.` | Active TODO — evaluate whether to implement (store `version` in `WebhookOutboxRecord` at creation) or reclassify as deferred design note. |
-| `crates/intent-rebase-types/src/graph.rs` | 488 | `Replaces the Phase 1 baseline TODO structure with graph-integrated classification.` | **Doc-comment historical reference only**, not an active `TODO()` task. Re-evaluate wording to avoid false-positive grep hits (e.g., replace "TODO structure" with "placeholder structure"). No functional change required. |
+| `crates/intent-api/src/webhook_dispatcher.rs` | 79 | `TODO(Slice 4+): version info should be stored in the outbox record at creation time.` | **DEFERRED / DESIGN-FIRST** — requires schema decision and explicit approval before implementation. See evidence doc D1 rationale. |
+| `crates/intent-rebase-types/src/graph.rs` | 488 | `Replaces the Phase 1 baseline TODO structure with graph-integrated classification.` | ✅ DONE — wording updated to "placeholder structure"; no functional change. |
 
-**Status:** ⬜ Not started.
+**Status:** D1 deferred; D2 done.
 
 ---
 
@@ -99,9 +99,9 @@ These tasks can be executed locally without external reviewers, production infra
 | **C-1** | P0-1 marked ✅ RESOLVED | `17-production-readiness-backlog.md` P2-6 vs `22-phase-4-entry-plan.md` A-12 status may have drifted since 2026-05-20 | Re-read both docs; update if any newly delivered local-dev slices are not reflected |
 | **C-8** | P0-8 marked ✅ RESOLVED | `20-project-completion-roadmap.md` P2 "Docs Complete" vs Phase 4 decomposition may still lag | Verify roadmap accurately reflects delivered decomposition (A-09 S6, route groups, test extractions) |
 | **C-9** | P0-9 marked ✅ RESOLVED | `10-external-review-packet.md` G-RLS-1 may lag behind latest RLS integration status | Sync G-RLS-1 with `22-phase-4-entry-plan.md` A-02 and `17-production-readiness-backlog.md` P1-S5i if any changes landed since 2026-05-20 |
-| **A-09** | Tracker / 24-strategic note deferred cross-update | `22-phase-4-entry-plan.md` A-09 status line was explicitly deferred in `24e` line 89 and `24-strategic` §5.5 | Add continuation note to A-09 tracking the `health_routes` → `routes::health` demo slice and next candidate |
+| **A-09** | Tracker / 24-strategic note deferred cross-update | `22-phase-4-entry-plan.md` A-09 status line was explicitly deferred in `24e` line 89 and `24-strategic` §5.5 | ✅ DONE — continuation note added to A-09 status line tracking `health_routes` → `routes::health` demo slice and next candidate |
 
-**Status:** ⬜ Not started.
+**Status:** A-09 done; C-8 wording polished.
 
 ---
 
@@ -113,7 +113,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **Approach:** Run `cargo run -p intent-cli -- --help` and `cargo run -p intent-cli -- run --help` / `cargo run -p intent-cli -- get-run --help`; verify no `clap` panic or duplicate short flags.
 
-**Status:** ⬜ Not started.
+**Status:** ✅ DONE — audit revealed latent `-i` collision between `intent_id` and `initiated_by` in `Run` subcommand; fixed by assigning `short = 'b'` to `initiated_by`. All three help commands now exit 0. Top-level `-a` (api_url/api_key) collision was already fixed in `24d` (`-u` / `-k`).
 
 ---
 
@@ -125,7 +125,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **Approach:** Add `[[bench]] name = "query_latency" harness = false` to `crates/intent-service/Cargo.toml` and `[[bench]] name = "diff_latency" harness = false` to `crates/rebase-engine/Cargo.toml`. Verify `cargo bench --workspace --no-run` still exits 0.
 
-**Status:** ⬜ Not started.
+**Status:** ✅ DONE — explicit stanzas added; `cargo check --benches -p intent-service -p rebase-engine` passes (full `--no-run` timed out in local env but check confirms manifest symmetry).
 
 ---
 
@@ -183,4 +183,4 @@ These gates **cannot** be closed by local work. They require named independent t
 | Date | Updated By | Changes |
 |------|------------|---------|
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Initial creation — canonical remaining todo-list from verified audit. Separates completed work (§1), local-executable remaining tasks (§2 A–G), risky/design-first work (§3), and external-gated blockers (§4). No production-readiness claim. No public docs touched. No code changes. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
-| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Slice B executed — translated `docs/13-adrs/README.md` and `docs/14-governance/README.md` from Vietnamese to English; fixed `docs/09-operations/03-observability.md` L28 (`với` → `with`). Vietnamese-diacritic scan clean on target files. No public docs touched. No new `.vi.md`. No code changes. External gates remain blocked. |
+| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Low-risk remaining tasks D2/G/F/E executed. D2: `graph.rs` doc-comment "TODO structure" → "placeholder structure". G: explicit `[[bench]]` stanzas added for `query_latency` and `diff_latency` in `intent-service/Cargo.toml` and `rebase-engine/Cargo.toml`. F: CLI short-flag audit revealed `-i` collision in `Run` subcommand (`intent_id` vs `initiated_by`); fixed via `short = 'b'` for `initiated_by`; all help commands exit 0. E: A-09 continuation note added to `22-phase-4-entry-plan.md`; C-8 benchmark wording polished in `20-project-completion-roadmap.md`. D1 webhook TODO deferred/design-first per repo constraints. New evidence doc `docs/10-delivery/25d-low-risk-remaining-tasks-evidence.md` created. No public docs touched. No production claims. External gates remain blocked. |

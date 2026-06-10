@@ -30,3 +30,7 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 [[bench]]
 name = "db_operations"
 harness = false
+
+[[bench]]
+name = "query_latency"
+harness = false

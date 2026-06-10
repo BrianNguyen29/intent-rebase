@@ -81,8 +81,8 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 **Goal:** Integrate benchmarks into CI, complete documentation gaps, and harden the local-dev experience.
 
 **Items:**
-- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred; no benchmark harnesses exist in the workspace yet (benchmark stubs are design-only)
-- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred; no benchmarks exist yet
+- [ ] Integrate criterion benchmarks into CI (non-blocking, informational only) — deferred; real criterion source files exist in 4 crates (`intent-service`, `rebase-engine`, `intent-api`, `graph-service`) but CI wiring not implemented
+- [ ] Add `cargo bench` step to `verify-fast.sh` as optional/skippable flag — deferred; bench compile guard passes (`cargo check --benches`) but harness execution not wired into `verify-fast.sh`
 - [x] Review and update module-level documentation (`//!` headers) for recently extracted modules — completed for router/auth_middleware, router/jwt_builders, nats_jetstream/consumer, nats_jetstream/tests_*
 - [x] Ensure recently extracted modules have brief doc comments explaining bounded scope — completed
 - [x] Review and update `//!` headers for remaining handler modules — completed (added bounded/non-production caveats to the weakest modules; all 21 listed handler modules have concise `//!` docs)

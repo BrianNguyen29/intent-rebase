@@ -485,7 +485,7 @@ pub enum AffectedItemsStatus {
 
 /// Preview of affected items for rebase planning (Phase 1 PR #16).
 ///
-/// Replaces the Phase 1 baseline TODO structure with graph-integrated classification.
+/// Replaces the Phase 1 baseline placeholder structure with graph-integrated classification.
 /// The `status` field indicates whether graph data was available for accurate classification.
 ///
 /// When `status` is `Available`, the classified arrays contain real graph-derived affected items.

@@ -57,7 +57,7 @@ pub enum Commands {
         intent_id: Option<Uuid>,
 
         /// Actor who initiated this run (for audit purposes).
-        #[arg(short, long)]
+        #[arg(short = 'b', long)]
         initiated_by: Option<String>,
     },
 
