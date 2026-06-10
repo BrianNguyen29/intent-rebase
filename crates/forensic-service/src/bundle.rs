@@ -125,6 +125,8 @@ impl BundleRetention {
 pub struct BundleIntegrity {
     /// SHA256 hash of the manifest
     pub manifest_hash: String,
+    /// Hash of the previous bundle in the chain (for tamper-evident linking)
+    pub previous_bundle_hash: Option<String>,
     /// Whether the full hash chain was verified successfully
     pub chain_verified: bool,
     /// When verification was performed
@@ -223,6 +225,7 @@ impl ForensicBundle {
             contents,
             integrity: BundleIntegrity {
                 manifest_hash: String::new(), // Computed during generation
+                previous_bundle_hash: None,
                 chain_verified: false,
                 verification_timestamp: Utc::now(),
                 intent_versions_hash: String::new(), // Computed during generation

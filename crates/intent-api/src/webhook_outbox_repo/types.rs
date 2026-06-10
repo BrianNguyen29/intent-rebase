@@ -62,6 +62,12 @@ pub struct WebhookOutboxRecord {
     pub replayed_at: Option<DateTime<Utc>>,
     /// Actor identity for the most recent DLQ replay
     pub replayed_by: Option<String>,
+    /// Intent version number at the time of outbox creation
+    pub version: i32,
+    /// Content hash of the intent version at creation time
+    pub version_hash: Option<String>,
+    /// Previous intent version number (for version chain continuity)
+    pub previous_version: Option<i32>,
     /// Optimistic locking version
     pub lock_version: i32,
     /// Creation timestamp
@@ -120,6 +126,9 @@ impl WebhookOutboxRecord {
             replay_count: 0,
             replayed_at: None,
             replayed_by: None,
+            version: 0,
+            version_hash: None,
+            previous_version: None,
             lock_version: 0,
             created_at: now,
             updated_at: now,
@@ -133,6 +142,24 @@ impl WebhookOutboxRecord {
     /// persisted by the SQLx repository when present.
     pub fn with_webhook_url(mut self, url: impl Into<String>) -> Self {
         self.webhook_url = Some(url.into());
+        self
+    }
+
+    /// Builder-style helper to set the intent version.
+    pub fn with_version(mut self, version: i32) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// Builder-style helper to set the intent version hash.
+    pub fn with_version_hash(mut self, hash: impl Into<String>) -> Self {
+        self.version_hash = Some(hash.into());
+        self
+    }
+
+    /// Builder-style helper to set the previous intent version.
+    pub fn with_previous_version(mut self, previous_version: i32) -> Self {
+        self.previous_version = Some(previous_version);
         self
     }
 }

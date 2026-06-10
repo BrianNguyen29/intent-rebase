@@ -7109,7 +7109,7 @@ components:
 
     WebhookOutboxRecord:
       type: object
-      required: [id, tenant_id, intent_id, subscription_id, event_type, payload, status, attempt_count, max_attempts, scheduled_at, lock_version, replay_count, created_at, updated_at]
+      required: [id, tenant_id, intent_id, subscription_id, event_type, payload, status, attempt_count, max_attempts, scheduled_at, lock_version, replay_count, version, created_at, updated_at]
       properties:
         id:
           type: string
@@ -7163,6 +7163,17 @@ components:
         replayed_by:
           type: string
           nullable: true
+        version:
+          type: integer
+          description: Intent version number at the time of outbox creation
+        version_hash:
+          type: string
+          nullable: true
+          description: Content hash of the intent version at creation time
+        previous_version:
+          type: integer
+          nullable: true
+          description: Previous intent version number for version chain continuity
         lock_version:
           type: integer
         created_at:

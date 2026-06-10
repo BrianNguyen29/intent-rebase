@@ -756,7 +756,8 @@ pub async fn dispatch_webhooks_for_intent_with_outbox(
                 payload.event_type.clone(),
                 payload_value,
                 Some(sub.webhook_url.clone()),
-            );
+            )
+            .with_version(version);
             if let Err(e) = outbox.create(outbox_record).await {
                 tracing::warn!(
                     "Failed to create outbox record for subscription {}: {}",

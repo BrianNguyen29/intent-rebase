@@ -24,6 +24,9 @@ The ADR pack records key architectural decisions that have been evaluated, discu
 | [ADR-10](./10-impact-report-design.md) | ImpactReport Design | **Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim** | Phase 2 |
 | [ADR-11](./11-policy-config-rebase-pillar.md) | Policy / Config Rebase Pillar — MVP Design | **Accepted — bounded MVP implemented; no persistence, no migration, no production-ready claim** | Phase 3 |
 | [ADR-12](./12-workflow-migration-rebase.md) | Workflow Migration / Rebase Pillar — Phase 4 Design | **Proposed — design-only; no implementation, no persistence, no production-ready claim** | Phase 4 |
+| [ADR-13](./13-webhook-outbox-version-persistence.md) | Webhook Outbox Version Persistence | **Accepted — bounded implemented; no production readiness claim** | Phase 4a |
+| [ADR-14](./14-forensic-chain-hash.md) | Forensic Chain-Hash Algorithm and Linking Protocol | **Accepted — local algorithm implemented; Object Lock/production deferred** | Phase 4 |
+| [ADR-15](./15-nats-per-tenant-streams.md) | NATS Per-Tenant JetStream Stream Migration Strategy | **Proposed — design-only; implementation blocked on external gates** | Phase 4 |
 
 ---
 

@@ -99,6 +99,11 @@ fn map_row(row: &sqlx::postgres::PgRow) -> Result<WebhookOutboxRecord, IntentReb
             .map_err(|e| map_err_column("replay_count", e))?,
         replayed_at: row.try_get("replayed_at").ok(),
         replayed_by: row.try_get("replayed_by").ok(),
+        version: row
+            .try_get("version")
+            .map_err(|e| map_err_column("version", e))?,
+        version_hash: row.try_get("version_hash").ok(),
+        previous_version: row.try_get("previous_version").ok(),
         lock_version: row
             .try_get("lock_version")
             .map_err(|e| map_err_column("lock_version", e))?,
@@ -124,13 +129,15 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
                 webhook_url, status, attempt_count, max_attempts, scheduled_at,
                 locked_at, locked_by, delivered_at, last_error,
                 replay_count, replayed_at, replayed_by,
+                version, version_hash, previous_version,
                 lock_version, created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9, $10, $11,
                 $12, $13, $14, $15,
                 $16, $17, $18,
-                $19, $20, $21
+                $19, $20, $21,
+                $22, $23, $24
             )
             "#,
         )
@@ -152,6 +159,9 @@ impl WebhookOutboxRepository for SqlxWebhookOutboxRepository {
         .bind(record.replay_count)
         .bind(record.replayed_at)
         .bind(record.replayed_by.as_ref())
+        .bind(record.version)
+        .bind(record.version_hash.as_ref())
+        .bind(record.previous_version)
         .bind(record.lock_version)
         .bind(record.created_at)
         .bind(record.updated_at)

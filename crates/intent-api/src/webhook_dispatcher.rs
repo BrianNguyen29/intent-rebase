@@ -76,13 +76,12 @@ impl WebhookDispatcher for WebhookDeliveryDispatcher {
                     reason: "No webhook_url in outbox record".to_string(),
                 })?;
 
-        // TODO(Slice 4+): version info should be stored in the outbox record at creation time.
         let payload = build_webhook_payload(WebhookPayloadInput {
             intent_id: record.intent_id,
             tenant_id: record.tenant_id,
-            version: 0,
-            version_hash: None,
-            previous_version: None,
+            version: record.version,
+            version_hash: record.version_hash.clone(),
+            previous_version: record.previous_version,
             delivery_id: record.id,
             attempt_number: record.attempt_count + 1,
             subscription_id: record.subscription_id,
