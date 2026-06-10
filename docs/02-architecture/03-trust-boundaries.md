@@ -1,7 +1,7 @@
 # Trust Boundaries
 
 ## Boundary A: External Sources -> Intent Ingestion
-Rủi ro:
+Risks:
 - malformed payload
 - forged actor identity
 - malicious spec injection
@@ -15,10 +15,10 @@ Controls:
 - source-specific sanitization
 
 ## Boundary B: Control Plane -> Runtime Adapters
-Rủi ro:
-- adapter chạy sai rebase plan
+Risks:
+- adapter executes wrong rebase plan
 - inconsistent checkpoint mapping
-- runtime không hỗ trợ pause/resume chuẩn
+- runtime does not support standard pause/resume
 
 Controls:
 - adapter capability registry
@@ -27,10 +27,10 @@ Controls:
 - explicit support matrix
 
 ## Boundary C: Control Plane -> Side Effects
-Rủi ro:
-- action thực thi theo intent cũ
-- approval stale nhưng vẫn được dùng
-- compensation chạy sai scope
+Risks:
+- action executes according to old intent
+- stale approval still being used
+- compensation runs in wrong scope
 
 Controls:
 - action preflight with current intent head
@@ -38,10 +38,10 @@ Controls:
 - action tokens with intent_version binding
 
 ## Boundary D: Tenant Isolation
-Rủi ro:
+Risks:
 - graph traversal cross-tenant
 - leaked artifacts
-- replay logs lẫn tenant
+- replay logs mixed across tenants
 
 Controls:
 - row-level security
@@ -50,7 +50,7 @@ Controls:
 - signed tenant context in every request
 
 ## Boundary E: Operator Console
-Rủi ro:
+Risks:
 - unauthorized force override
 - hidden diff causing operator mistakes
 

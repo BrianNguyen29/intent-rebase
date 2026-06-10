@@ -3,26 +3,26 @@
 ## Scale dimensions
 
 ### 1. Tenants
-Mỗi tenant có:
-- policies riêng
-- connectors riêng
-- retention riêng
-- encryption context riêng
+Each tenant has:
+- own policies
+- own connectors
+- own retention
+- own encryption context
 
 ### 2. Workflow count
-Số workflow chạy đồng thời ảnh hưởng:
-- write throughput vào event log
+Number of concurrently running workflows affects:
+- write throughput into event log
 - graph updates
 - console queries
 - replay load
 
 ### 3. Artifact size
-Patches, reports, transcripts, plans có thể lớn.
-Metadata và payload phải tách.
+Patches, reports, transcripts, and plans can be large.
+Metadata and payload must be separated.
 
 ### 4. Rebase frequency
-Một số domains sẽ có nhiều intent changes trong một workflow.
-Cần tối ưu incremental impact analysis.
+Some domains will have many intent changes within a single workflow.
+Requires optimizing incremental impact analysis.
 
 ## Logical topology
 
@@ -46,7 +46,7 @@ Event Bus -> Diff Workers -> Graph Workers -> Rebase Workers
 - diff
 - critical impact classification
 
-Tối ưu:
+Optimization:
 - async message fan-out
 - bounded queues
 - priority lanes
@@ -58,8 +58,8 @@ Tối ưu:
 - full graph scans
 - historical audits
 
-Tối ưu:
-- warehouse / analytics db riêng
+Optimization:
+- separate warehouse / analytics db
 - background indexing
 - archival tiers
 
@@ -82,6 +82,6 @@ Cache:
 - adapter capabilities
 - artifact metadata summaries
 
-Không cache:
-- mutable approval decisions nếu thiếu ETag/version
+Do not cache:
+- mutable approval decisions if ETag/version is missing
 - high-risk action authorizations

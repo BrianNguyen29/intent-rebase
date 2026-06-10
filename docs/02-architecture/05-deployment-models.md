@@ -1,48 +1,48 @@
 # Deployment Models
 
 ## Model A — Single-tenant self-hosted
-Phù hợp:
+Best for:
 - enterprise regulated
-- air-gapped hoặc semi-isolated
-- custom integrations nhiều
+- air-gapped or semi-isolated
+- many custom integrations
 
-Ưu điểm:
-- kiểm soát dữ liệu tối đa
-- dễ bán enterprise
+Advantages:
+- maximum data control
+- easy enterprise sales
 
-Nhược điểm:
-- vận hành phức tạp
-- upgrade management khó
+Disadvantages:
+- complex operations
+- difficult upgrade management
 
 ## Model B — Multi-tenant SaaS
-Phù hợp:
-- startup / teams vừa
-- cần onboarding nhanh
+Best for:
+- startup / mid-size teams
+- need fast onboarding
 
-Ưu điểm:
-- triển khai nhanh
-- telemetry tập trung
-- data network effects tốt
+Advantages:
+- fast deployment
+- centralized telemetry
+- good data network effects
 
-Nhược điểm:
-- tenant isolation yêu cầu cao
-- compliance phức tạp hơn
+Disadvantages:
+- high tenant isolation requirements
+- more complex compliance
 
 ## Model C — Hybrid control plane
-Phù hợp:
+Best for:
 - metadata control plane hosted
 - artifact payload / secrets self-hosted
 
-Ưu điểm:
-- cân bằng tốc độ và compliance
-- giảm chi phí self-host toàn bộ
+Advantages:
+- balance speed and compliance
+- reduce cost of full self-hosting
 
-## Khuyến nghị
-Bắt đầu với:
-- bản dev/staging đơn tenant
-- production architecture hỗ trợ nâng dần lên hybrid hoặc multi-tenant
+## Recommendation
+Start with:
+- single-tenant dev/staging
+- production architecture supporting gradual upgrade to hybrid or multi-tenant
 
-## Mô hình môi trường
+## Environment Model
 - local dev
 - ephemeral review env
 - shared staging

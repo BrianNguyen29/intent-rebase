@@ -1,9 +1,9 @@
 # Components
 
 ## 1. Intent Ingestion Service
-### Nhiệm vụ
-- nhận sources: chat, markdown spec, issue comment, webhook, API call
-- normalize sang Intent DTO
+### Responsibilities
+- receive sources: chat, markdown spec, issue comment, webhook, API call
+- normalize to Intent DTO
 - validate schema
 - enrich metadata: actor, source, timestamps, tenant, workflow refs
 
@@ -14,24 +14,24 @@
 - policy system events
 
 ## 2. Intent Registry
-### Nhiệm vụ
-- lưu current intent và lịch sử versions
-- quản lý lineage giữa versions
-- hỗ trợ compare và snapshot retrieval
+### Responsibilities
+- store current intent and version history
+- manage lineage between versions
+- support compare and snapshot retrieval
 
-### Yêu cầu
+### Requirements
 - immutable version records
-- mutable “current head” pointer theo workflow/session
+- mutable "current head" pointer per workflow/session
 - optimistic concurrency control
 
 ## 3. Semantic Diff Engine
-### Nhiệm vụ
-- so sánh intent versions
-- xuất ra machine-readable change set
-- gán severity và confidence
-- tách low-risk vs high-risk changes
+### Responsibilities
+- compare intent versions
+- emit machine-readable change set
+- assign severity and confidence
+- separate low-risk vs high-risk changes
 
-### Output mẫu
+### Sample Output
 - change_type
 - affected_fields
 - rationale
@@ -40,15 +40,15 @@
 - requires_human_confirmation
 
 ## 4. Trace Graph Service
-### Nhiệm vụ
-- quản lý quan hệ giữa intent clauses và artifacts/actions
+### Responsibilities
+- manage relationships between intent clauses and artifacts/actions
 - query impact radius
 - compute transitive dependencies
 
 ## 5. Impact Analysis Engine
-### Nhiệm vụ
-- chạy propagation rules trên graph
-- xuất danh sách:
+### Responsibilities
+- run propagation rules on the graph
+- emit list:
   - still_valid
   - review_required
   - invalid
@@ -56,32 +56,32 @@
   - restart_required
 
 ## 6. Rebase Planner
-### Nhiệm vụ
-- tạo repair plan
-- tính checkpoint resume point
-- chèn approval steps
-- sinh compensation tasks nếu cần
+### Responsibilities
+- create repair plan
+- compute checkpoint resume point
+- insert approval steps
+- generate compensation tasks if needed
 
 ## 7. Runtime Adapter Layer
-### Nhiệm vụ
-- translate rebase plan sang workflow runtime cụ thể
+### Responsibilities
+- translate rebase plan to specific workflow runtime
 - pause/resume/cancel/branch execution
-- gắn metadata intent_version vào runs
+- attach intent_version metadata to runs
 
 ## 8. Policy / Approval Evaluator
-### Nhiệm vụ
-- xác định approval nào phải xin lại
-- kiểm tra authority scope, cost caps, forbidden actions
-- evaluate under policy snapshot mới
+### Responsibilities
+- determine which approvals must be re-requested
+- check authority scope, cost caps, forbidden actions
+- evaluate under new policy snapshot
 
 ## 9. Artifact Service
-### Nhiệm vụ
-- quản lý outputs, patches, summaries, test reports, decision docs
-- lưu object payloads ngoài metadata
+### Responsibilities
+- manage outputs, patches, summaries, test reports, decision docs
+- store object payloads outside metadata
 
 ## 10. Side Effect Ledger
-### Nhiệm vụ
-- phân loại actions:
+### Responsibilities
+- classify actions:
   - pure read
   - internal write
   - external reversible
@@ -89,15 +89,15 @@
 - attach compensation strategy
 
 ## 11. Audit and Replay Service
-### Nhiệm vụ
-- ghi event log
+### Responsibilities
+- record event log
 - reconstruct timeline
 - replay decisions
-- xuất forensic bundle
+- export forensic bundle
 
 ## 12. Operator Console
-### Nhiệm vụ
-- hiển thị diff intent
+### Responsibilities
+- display intent diff
 - impact map
 - rebase preview
 - approval UI

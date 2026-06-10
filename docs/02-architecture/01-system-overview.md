@@ -1,6 +1,6 @@
 # System Overview
 
-## Kiến trúc ở mức cao
+## High-Level Architecture
 
 ```text
 [User / Spec Source / Ticket / Policy Update]
@@ -39,6 +39,8 @@
 
 ### Policy Snapshot → Impact Report Delegation Path
 
+> **Historical implementation detail preserved verbatim** — this section documents an already-delivered bounded MVP (ADR-11).
+
 **Bounded MVP (ADR-11, implemented):**
 ```text
 GET /policy-snapshots/{snapshot_id}/impact-report
@@ -54,7 +56,7 @@ GET /policy-snapshots/{snapshot_id}/impact-report
 - **No mutation** — endpoint is read-only
 - **Full PolicyRebaseAdapter deferred to Phase 4+** — cross-intent policy lookup, synthetic `IntentVersionDiff` generation, and policy-specific preview/apply pipelines remain future design
 
-## Các lớp chính
+## Core Planes
 
 ### 1. Control Plane
 - Intent ingestion
@@ -66,7 +68,7 @@ GET /policy-snapshots/{snapshot_id}/impact-report
 - audit
 
 ### 2. Execution Plane
-- adapters tới workflow runtimes
+- adapters to workflow runtimes
 - agent runtimes
 - task schedulers
 - side effect dispatchers
@@ -85,11 +87,11 @@ GET /policy-snapshots/{snapshot_id}/impact-report
 - policy simulation
 - rebase previews
 
-## Mục tiêu kiến trúc
+## Architecture Goals
 
 - composable
 - auditable
-- deterministic ở phần control logic
-- eventually consistent ở phần integrations nơi cần
+- deterministic in the control logic
+- eventually consistent in the integrations layer where needed
 - multi-tenant
 - failure-tolerant
