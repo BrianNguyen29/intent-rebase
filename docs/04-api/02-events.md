@@ -1,10 +1,10 @@
 # Event Contracts
 
 ## Eventing principles
-- tất cả events có `event_id`, `event_type`, `event_time`, `tenant_id`, `workflow_id`, `trace_id`
+- all events have `event_id`, `event_type`, `event_time`, `tenant_id`, `workflow_id`, `trace_id`
 - schema versioned
 - at-least-once delivery
-- consumers phải idempotent
+- consumers must be idempotent
 
 ## Core events
 
@@ -51,7 +51,7 @@
 }
 ```
 
-## Topics/streams đề xuất
+## Proposed topics/streams
 - `intent-events`
 - `rebase-events`
 - `approval-events`
@@ -59,6 +59,6 @@
 - `audit-events`
 
 ## DLQ rules
-- poison events sau N retries
+- poison events after N retries
 - schema incompatibility
 - tenant routing failure

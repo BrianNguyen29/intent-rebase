@@ -32,7 +32,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **What:** Translate 34 full-Vietnamese internal docs to English per the accepted Documentation Language Policy (`24g` §3, `24h` §5.2).
 
-**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 18 files remaining after Batch 3; full list in `24h` §5.2.
+**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 15 files remaining after Batch 4; full list in `24h` §5.2.
 
 **Approach:** Bounded single-file or small-batch slices; each slice must run the public-doc leakage scan, affirmative-claim scan, and `git diff --check` per `24-strategic-roadmap-and-checklist.md` §9.7.
 
@@ -45,6 +45,10 @@ These tasks can be executed locally without external reviewers, production infra
 ---
 
 **Status:** ✅ DONE — Batch 3 (`docs/03-spec/`, 6 files) completed 2026-06-10. Evidence: `25g`.
+
+---
+
+**Status:** ✅ DONE — Batch 4 (`docs/04-api/`, 3 files) completed 2026-06-10. Evidence: `25i`.
 
 ---
 
@@ -104,12 +108,12 @@ These tasks can be executed locally without external reviewers, production infra
 
 | ID | Tracker Claim | Residual Risk | Next Action |
 |----|---------------|---------------|-------------|
-| **C-1** | P0-1 marked ✅ RESOLVED | `17-production-readiness-backlog.md` P2-6 vs `22-phase-4-entry-plan.md` A-12 status may have drifted since 2026-05-20 | Re-read both docs; update if any newly delivered local-dev slices are not reflected |
+| **C-1** | P0-1 marked ✅ RESOLVED | `17-production-readiness-backlog.md` P2-6 vs `22-phase-4-entry-plan.md` A-12 status may have drifted since 2026-05-20 | ✅ VERIFIED — no drift since 2026-05-20; A-12 Slice 5a/5b and Phases 1.1–2.3 already recorded. C-1 closed per `25d` evidence. |
 | **C-8** | P0-8 marked ✅ RESOLVED | `20-project-completion-roadmap.md` P2 "Docs Complete" vs Phase 4 decomposition may still lag | Verify roadmap accurately reflects delivered decomposition (A-09 S6, route groups, test extractions) |
 | **C-9** | P0-9 marked ✅ RESOLVED | `10-external-review-packet.md` G-RLS-1 may lag behind latest RLS integration status | Sync G-RLS-1 with `22-phase-4-entry-plan.md` A-02 and `17-production-readiness-backlog.md` P1-S5i if any changes landed since 2026-05-20 |
 | **A-09** | Tracker / 24-strategic note deferred cross-update | `22-phase-4-entry-plan.md` A-09 status line was explicitly deferred in `24e` line 89 and `24-strategic` §5.5 | ✅ DONE — continuation note added to A-09 status line tracking `health_routes` → `routes::health` demo slice and next candidate |
 
-**Status:** A-09 done; C-8 wording polished.
+**Status:** A-09 done; C-1 verified/no drift (closed per `25d`); C-8 wording polished.
 
 ---
 
@@ -196,3 +200,4 @@ These gates **cannot** be closed by local work. They require named independent t
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 2 (`docs/02-architecture/`) translated. Five files (`01-system-overview.md`, `02-components.md`, `03-trust-boundaries.md`, `04-scaling-topology.md`, `05-deployment-models.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 29 to 24. Policy Snapshot section in `01-system-overview.md` labeled as historical implementation detail preserved verbatim. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25f-documentation-language-tier3-architecture-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. |
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 3 (`docs/03-spec/`) translated. Six files (`01-intent-model.md`, `02-semantic-diff.md`, `03-dependency-graph.md`, `04-rebase-engine.md`, `05-compensation.md`, `06-provenance.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 24 to 18. Phase 1 Status block in `04-rebase-engine.md` preserved verbatim (already English). Schemas, code blocks, and English type lists preserved verbatim across all six files. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25g-documentation-language-tier3-spec-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | **Design-first unblock slice executed.** (1) Webhook D1: ADR-13 created and accepted; store-at-creation bounded implementation delivered — `WebhookOutboxRecord` version fields, migration `022`, dispatcher reads stored values, OpenAPI updated, tests pass. (2) Forensic chain-hash: ADR-14 created and accepted; pure local algorithm module `chain_hash.rs` with tests delivered; `BundleIntegrity.previous_bundle_hash` added. (3) NATS per-tenant streams: ADR-15 created (Proposed); staged migration design with duplicate-storage guardrail; no code changes. (4) Todo list updated with truthful statuses. (5) Evidence doc `25h` created with internal-only BrianNguyen sign-off and explicit non-production caveats. Verification: `cargo fmt --check` pass, `cargo clippy --workspace --all-targets` pass (warnings-only), `cargo test --workspace --lib` pass (567 passed, 0 failed, 18 ignored). No public docs touched except OpenAPI schema update for WebhookOutboxRecord. External gates remain blocked. S3/S4 auto-compensation remains blocked pending explicit approval. |
+| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 4 (`docs/04-api/`) translated. Three files (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 18 to 15. §2.E C-1 status updated to verified/no drift (closed per `25d`). Blockquotes, JSON examples, API paths, schemas, event names, and existing caveats preserved verbatim across all three files. Chinese example value `chk_after_approval_收集` left untouched as example data. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25i-documentation-language-tier3-api-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |

@@ -4,7 +4,7 @@
 
 ## Design principles
 - JSON over HTTPS
-- idempotency cho create/update có side effects
+- idempotency for create/update with side effects
 - cursor-based pagination
 - ETags/version preconditions
 - explicit tenant scoping
@@ -18,7 +18,7 @@ Conceptually `/v1`, but the current implementation contains a mix of legacy `/v1
 > **Important:** The resource paths in this section are conceptual/design-time examples for API shape discussion. They are **not** a guaranteed inventory of implemented endpoints or exact live path shapes. For canonical implemented routes, always use [`openapi.yaml`](./openapi.yaml).
 
 ### POST /intents
-Tạo intent mới.
+Create a new intent.
 
 Request:
 ```json
@@ -49,17 +49,17 @@ Response:
 ```
 
 ### POST /intents/{intent_id}/versions
-Tạo version mới từ intent hiện có.
+Create a new version from an existing intent.
 
 ### GET /intents/{intent_id}
 ### GET /intents/{intent_id}/versions
 ### GET /intents/{intent_id}/versions/{version}
 
 ### POST /diffs
-Tính semantic diff giữa hai versions.
+Compute semantic diff between two versions.
 
 ### POST /rebases
-Tạo rebase plan.
+Create rebase plan.
 
 Request:
 ```json
@@ -88,13 +88,13 @@ Response:
 ```
 
 ### POST /rebases/{rebase_plan_id}/apply
-Áp dụng rebase plan.
+Apply rebase plan.
 
 ### GET /rebases/{rebase_plan_id}
 ### GET /rebases/{rebase_plan_id}/timeline
 
 ### GET /workflows/{workflow_id}/impact-map
-Trả impact graph rút gọn để hiển thị UI.
+Return a simplified impact graph for UI display.
 
 ### POST /approvals/{approval_id}/revalidate
 ### GET /artifacts/{artifact_id}/provenance

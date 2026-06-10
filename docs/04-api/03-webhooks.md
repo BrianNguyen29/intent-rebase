@@ -14,8 +14,8 @@
 
 > **Rollback Plan:** A draft rollback plan design (env-gate disable, worker drain, subscription disable/deregister, outbox state matrix, DLQ interaction, verification checklist, escalation path) is documented in the [Production Readiness Backlog](../10-delivery/17-production-readiness-backlog.md) as P2-6f. It is design-only — no automation or scripts exist.
 
-## Mục tiêu
-Cho phép tích hợp IRE với:
+## Purpose
+Enable IRE integration with:
 - Git providers
 - ticketing systems
 - internal workflow engines
