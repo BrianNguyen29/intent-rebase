@@ -1,10 +1,10 @@
 # Phase 0 — Foundations
 
 ## Objectives
-- thống nhất product thesis
-- cố định core data model
-- quyết định runtime integration strategy
-- thiết lập engineering baseline
+- unify product thesis
+- fix core data model
+- decide runtime integration strategy
+- set up engineering baseline
 
 ## Deliverables
 - ADRs
@@ -16,7 +16,7 @@
 - threat model v1
 
 ## Exit criteria
-- kiến trúc được sign-off
+- architecture signed off
 - MVP scope freeze
-- decision log rõ ràng
-- repo bootstrap hoàn chỉnh
+- clear decision log
+- repo bootstrap complete

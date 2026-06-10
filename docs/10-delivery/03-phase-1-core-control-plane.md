@@ -15,6 +15,6 @@
 - multi-runtime support
 
 ## KPIs
-- semantic diff usable trên 3 use cases đầu
-- impact preview giải thích được
-- operator thấy rõ invalid/review/still-valid
+- semantic diff usable on first 3 use cases
+- impact preview explainable
+- operator sees invalid/review/still-valid clearly

@@ -1,10 +1,10 @@
 # Phase 4 — Enterprise Expansion Checklist
 
-**Exit Gate:** Phase 4 complete khi tất cả items checked và có evidence.  
+**Exit Gate:** Phase 4 complete when all items are checked and have evidence.
 **Prerequisite:** Phase 3 exit gate passed.
 
-**Trạng thái:** `NOT STARTED`  
-**Phase:** Phase 4  
+**Status:** `NOT STARTED`
+**Phase:** Phase 4
 **Target Duration:** Ongoing
 
 ---

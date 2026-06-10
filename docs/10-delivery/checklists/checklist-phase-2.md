@@ -1,11 +1,11 @@
 # Phase 2 — Runtime-Integrated Rebase Checklist
 
-**Exit Gate:** Phase 2 complete khi tất cả Phase 2-scoped items checked và có evidence; items explicitly deferred to Phase 3 with rationale do not block Phase 2 exit.  
+**Exit Gate:** Phase 2 complete when all Phase 2-scoped items are checked and have evidence; items explicitly deferred to Phase 3 with rationale do not block Phase 2 exit.
 **Prerequisite:** Phase 1 exit gate passed.
 
-**Trạng thái:** `PHASE 2 COMPLETE — GATE CLOSED` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered and externally signed off (Product Owner ✅, Security ✅, Runtime Integration ✅). All Phase 2b sign-offs recorded as APPROVED — Brian Nguyen sole signer (personal project) on 2026-04-28. Phase 3 entry is authorized.
-**Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ | 2b exit gate CLOSED ✓)  
-**Target Duration:** 6–10 tuần
+**Status:** `PHASE 2 COMPLETE — GATE CLOSED` — Phase 2a internal groundwork and Phase 2b bounded runtime-integrated slices are delivered and externally signed off (Product Owner ✅, Security ✅, Runtime Integration ✅). All Phase 2b sign-offs recorded as APPROVED — Brian Nguyen sole signer (personal project) on 2026-04-28. Phase 3 entry is authorized.
+**Phase:** Phase 2 (2a internal groundwork ✓ | 2b bounded external/integrated slices ✓ | 2b exit gate CLOSED ✓)
+**Target Duration:** 6–10 weeks
 
 ### Phase 2b Slice A — Evidence Verification ✅ GREEN (2026-04-11)
 

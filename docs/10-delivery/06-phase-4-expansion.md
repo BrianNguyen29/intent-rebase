@@ -14,6 +14,6 @@
 - Webhook delivery hardening — P2-6a..P2-6f design baseline complete: outbox schema, background worker lifecycle, HMAC signing + key rotation, subscription CRUD API, retry / dead-letter semantics, rollback plan. No implementation, no production readiness claim.
 
 ## Decision criteria
-- khách hàng đang đau chỗ nào nhất
-- data đủ để productize recommendation chưa
-- adapter nào được dùng nhiều nhất
+- where the customer hurts most
+- is data sufficient to productize recommendation yet
+- which adapter is used most

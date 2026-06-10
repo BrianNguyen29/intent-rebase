@@ -1,10 +1,10 @@
 # Phase 0 — Foundations Checklist
 
-**Exit Gate:** Phase 0 complete khi tất cả items bên dưới checked và có evidence.
+**Exit Gate:** Phase 0 complete when all items below are checked and have evidence.
 
-**Trạng thái:** `⚠️ Phase 0 Foundations Complete (Evidence Verification Pending)`
+**Status:** `⚠️ Phase 0 Foundations Complete (Evidence Verification Pending)`
 **Phase:** Phase 0
-**Target Duration:** 2–4 tuần
+**Target Duration:** 2–4 weeks
 
 > **Note:** Phase 0 foundational documents and scaffolding are in place. However, formal evidence verification (PR links, external sign-offs) may be pending or documented with placeholder links. See individual items for evidence status.
 

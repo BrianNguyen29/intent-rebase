@@ -73,7 +73,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **Note:** `docs/10-delivery/01-roadmap.md` and `docs/10-delivery/04-phase-2-runtime-integrated.md` were completed in `24j`; do not list them as remaining.
 
-**Status:** ⬜ Not started.
+**Status:** ✅ DONE.
 
 ---
 

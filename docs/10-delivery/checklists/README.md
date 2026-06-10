@@ -1,12 +1,12 @@
 # Implementation Checklist Pack
 
-## Mục đích
+## Purpose
 
-Bộ checklist này định nghĩa các **exit gates** cho từng phase của Intent Rebase Engine. Mỗi checklist là **bắt buộc** trước khi chuyển sang phase tiếp theo.
+This checklist pack defines the **exit gates** for each phase of the Intent Rebase Engine. Each checklist is **mandatory** before moving to the next phase.
 
 ---
 
-## Chỉ mục Checklist
+## Checklist Index
 
 | Checklist | Phase | Exit Gate Criteria |
 |-----------|-------|-------------------|
@@ -18,20 +18,20 @@ Bộ checklist này định nghĩa các **exit gates** cho từng phase của In
 
 ---
 
-## Quy tắc chung
+## General Rules
 
-1. **Mỗi checkbox phải có evidence** trước khi đánh dấu complete:
-   - PR merged và reviewed
-   - Test coverage ≥ 80% cho module mới
-   - Metrics dashboard available và showing green
-   - Security review signed off (cho items liên quan security)
-2. **No partial passes** — exit gate chỉ pass khi tất cả items checked
-3. **Blocking issues** phải được resolve trước khi proceed
-4. **Docs must be updated** khi code changes affect documented behavior
+1. **Every checkbox must have evidence** before being marked complete:
+   - PR merged and reviewed
+   - Test coverage ≥ 80% for new module
+   - Metrics dashboard available and showing green
+   - Security review signed off (for security-related items)
+2. **No partial passes** — exit gate only passes when all items are checked
+3. **Blocking issues** must be resolved before proceeding
+4. **Docs must be updated** when code changes affect documented behavior
 
 ---
 
-## Liên kết nội bộ
+## Internal Links
 
 - **Roadmap:** `../01-roadmap.md`
 - **Phase descriptions:** `../02-phase-0-foundations.md`, `../03-phase-1-core-control-plane.md`, `../04-phase-2-runtime-integrated.md`, `../05-phase-3-hardening.md`, `../06-phase-4-expansion.md`
@@ -41,7 +41,7 @@ Bộ checklist này định nghĩa các **exit gates** cho từng phase của In
 
 ---
 
-## Definition of Done cho mỗi Item
+## Definition of Done for Each Item
 
 ```
 [ ] Item description

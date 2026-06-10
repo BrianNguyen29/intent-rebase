@@ -1,11 +1,11 @@
 # Phase 1 — Core Control Plane MVP Checklist
 
-**Exit Gate:** Phase 1 complete khi tất cả items checked và có evidence.  
+**Exit Gate:** Phase 1 complete when all items are checked and have evidence.
 **Prerequisite:** Phase 0 exit gate passed.
 
-**Trạng thái:** `✓ Complete`  
-**Phase:** Phase 1  
-**Target Duration:** 4–8 tuần
+**Status:** `✓ Complete`
+**Phase:** Phase 1
+**Target Duration:** 4–8 weeks
 
 **Deferred to Phase 2 (not Phase 1 scope):**
 - Section 5: Console Basic (5 items — frontend/Next.js work)

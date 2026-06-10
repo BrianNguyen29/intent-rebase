@@ -56,7 +56,7 @@ Phase 2b delivers bounded runtime-integrated slices across eight work areas:
 
 ### Phase 2 Exit Gate Status (from checklist-phase-2.md)
 
-> **Trạng thái:** `PHASE 2 CONDITIONALLY COMPLETE — GATE READY WITH EXPLICIT PHASE 3 DEFERRALS`
+> **Status:** `PHASE 2 CONDITIONALLY COMPLETE — GATE READY WITH EXPLICIT PHASE 3 DEFERRALS`
 
 - Phase 2a internal groundwork: ✅
 - Phase 2b bounded external/integrated slices: ✅ with Phase 3 infra deferred
