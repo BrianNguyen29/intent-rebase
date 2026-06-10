@@ -32,11 +32,11 @@ These tasks can be executed locally without external reviewers, production infra
 
 **What:** Translate 34 full-Vietnamese internal docs to English per the accepted Documentation Language Policy (`24g` §3, `24h` §5.2).
 
-**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 34 files enumerated in the current inventory; full list in `24h` §5.2.
+**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 29 files remaining after Batch 1; full list in `24h` §5.2.
 
 **Approach:** Bounded single-file or small-batch slices; each slice must run the public-doc leakage scan, affirmative-claim scan, and `git diff --check` per `24-strategic-roadmap-and-checklist.md` §9.7.
 
-**Status:** ⬜ Not started.
+**Status:** ✅ DONE — Batch 1 (`docs/01-product/`, 5 files) completed 2026-06-10. Evidence: `25e`.
 
 ---
 
@@ -184,3 +184,4 @@ These gates **cannot** be closed by local work. They require named independent t
 |------|------------|---------|
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Initial creation — canonical remaining todo-list from verified audit. Separates completed work (§1), local-executable remaining tasks (§2 A–G), risky/design-first work (§3), and external-gated blockers (§4). No production-readiness claim. No public docs touched. No code changes. External gates (A-03..A-13) remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Low-risk remaining tasks D2/G/F/E executed. D2: `graph.rs` doc-comment "TODO structure" → "placeholder structure". G: explicit `[[bench]]` stanzas added for `query_latency` and `diff_latency` in `intent-service/Cargo.toml` and `rebase-engine/Cargo.toml`. F: CLI short-flag audit revealed `-i` collision in `Run` subcommand (`intent_id` vs `initiated_by`); fixed via `short = 'b'` for `initiated_by`; all help commands exit 0. E: A-09 continuation note added to `22-phase-4-entry-plan.md`; C-8 benchmark wording polished in `20-project-completion-roadmap.md`. D1 webhook TODO deferred/design-first per repo constraints. New evidence doc `docs/10-delivery/25d-low-risk-remaining-tasks-evidence.md` created. No public docs touched. No production claims. External gates remain blocked. |
+| 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 1 (`docs/01-product/`) translated. Five files (`01-product-thesis.md`, `02-goals-nongoals.md`, `03-core-principles.md`, `04-use-cases.md`, `05-glossary.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 34 to 29. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25e-documentation-language-tier3-product-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. |

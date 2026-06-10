@@ -1,34 +1,34 @@
 # Core Principles
 
 ## 1. Intent-first, not prompt-first
-Prompt là phương tiện truyền lệnh; intent là đối tượng cần quản lý dài hạn.
+Prompt is a means of conveying command; intent is the object that needs long-term management.
 
 ## 2. Repair before restart
-Chỉ restart toàn bộ khi repair hoặc compensation không an toàn / không khả thi.
+Only restart the entire workflow when repair or compensation is unsafe / infeasible.
 
 ## 3. Explicit provenance
-Mỗi artifact phải biết nó dựa trên:
-- intent version nào
-- inputs nào
-- policy snapshot nào
-- agent/runtime nào
+Every artifact must know what it is based on:
+- which intent version
+- which inputs
+- which policy snapshot
+- which agent/runtime
 
 ## 4. Explainable invalidation
-Khi đánh dấu artifact là invalid hoặc review-required, hệ phải đưa lý do rõ ràng.
+When marking an artifact as invalid or review-required, the system must give a clear reason.
 
 ## 5. Side-effect awareness
-Đọc/viết/approval/external call là các loại hành vi có mức độ rủi ro khác nhau; rebase không thể chỉ nhìn text diff.
+Read/write/approval/external call are behaviors with different risk levels; rebase cannot look at text diff alone.
 
 ## 6. Human override by design
-Operator phải luôn có đường:
-- approve repair plan
+The operator must always have a path to:
+- approve a repair plan
 - force restart
 - force manual handoff
 - suppress low-risk invalidations
-- quarantine risky branch
+- quarantine a risky branch
 
 ## 7. Event-sourced control history
-Mọi thay đổi quan trọng phải được ghi thành events để replay và forensic analysis.
+Every important change must be recorded as events for replay and forensic analysis.
 
 ## 8. Multi-tenant and policy-safe
-Không để tenant A nhìn thấy graph hoặc artifact nội bộ của tenant B.
+Do not let tenant A see the graph or internal artifacts of tenant B.

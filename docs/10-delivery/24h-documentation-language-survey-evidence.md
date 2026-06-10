@@ -180,7 +180,7 @@ docs/10-delivery/checklists/checklist-phase-4.md
 
 1. **Bounded slice: Tier 1 triage.** Pick one Tier 1 file (recommendation: `docs/13-adrs/01-runtime-adapter.md`), classify every Vietnamese segment as translate / pair / label, execute the change, and record the diff in an evidence doc (`24i-…` or next in series). *(Completed 2026-06-08: all three Tier 1 files delivered. `docs/13-adrs/01-runtime-adapter.md` classified as `translate` and executed in full — evidence: `24i`. `docs/10-delivery/04-phase-2-runtime-integrated.md` and `docs/10-delivery/01-roadmap.md` translated — evidence: `24j`.)*
 2. **Bounded slice: Tier 2 header sweep.** Fix all 15 header-only files in a single slice if the total diff is < 50 lines; otherwise split into two slices. *(Completed 2026-06-08: 15 files, 16 lines changed — evidence: `24j`.)*
-3. **Bounded slice: Tier 3 batch 1.** Pick the first 3–5 full-translation files from §5.2 (recommendation: start with `docs/01-product/` in numerical order) and translate them in a single bounded slice.
+3. **Bounded slice: Tier 3 batch 1.** Pick the first 3–5 full-translation files from §5.2 (recommendation: start with `docs/01-product/` in numerical order) and translate them in a single bounded slice. *(Completed 2026-06-10: `docs/01-product/01-product-thesis.md`, `02-goals-nongoals.md`, `03-core-principles.md`, `04-use-cases.md`, `05-glossary.md` translated — evidence: `25e`. Remaining Tier 3 count: 29 files.)*
 4. **Per-slice guardrails** (mandatory, per policy §9.7):
    - Run the public-doc leakage scan and affirmative-claim scan before claiming done.
    - Record classification (translate / pair / label) per file in the evidence doc.

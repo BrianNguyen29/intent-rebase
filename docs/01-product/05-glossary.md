@@ -1,18 +1,18 @@
 # Glossary
 
-- **Intent**: biểu diễn có cấu trúc của mục tiêu, ràng buộc và tiêu chí hoàn thành.
-- **Intent Version**: phiên bản của intent sau mỗi thay đổi đáng kể.
-- **Semantic Diff**: khác biệt có ý nghĩa giữa hai intent versions.
-- **Trace Edge**: liên kết giữa một clause/field của intent với artifact hoặc hành động thực thi.
-- **Artifact**: bất kỳ đầu ra hoặc trạng thái trung gian nào của workflow: plan, patch, test, summary, approval, report.
-- **Invalidation**: đánh dấu một artifact hoặc task không còn đáng tin dưới intent mới.
-- **Review Required**: artifact chưa chắc sai, nhưng cần con người hoặc hệ rules xác minh lại.
-- **Compensation**: hành động bù/undo/mitigate cho side effect đã xảy ra.
-- **Repair Plan**: kế hoạch sửa cục bộ workflow sau khi intent đổi.
-- **Rebase Plan**: kết quả cuối cùng mô tả cách chuyển execution từ intent cũ sang intent mới.
-- **Side Effect**: hành động tác động ra ngoài hệ, ví dụ ghi DB, gửi mail, merge PR, gọi API thay đổi trạng thái.
-- **Policy Snapshot**: ảnh chụp chính sách hiệu lực tại thời điểm một artifact hoặc action được tạo.
-- **Checkpoint**: trạng thái bền vững cho phép resume workflow.
+- **Intent**: structured representation of goal, constraints, and completion criteria.
+- **Intent Version**: versioned snapshot of an intent after each significant change.
+- **Semantic Diff**: meaningful difference between two intent versions.
+- **Trace Edge**: link between a clause/field of an intent and an artifact or executed action.
+- **Artifact**: any output or intermediate state of a workflow: plan, patch, test, summary, approval, report.
+- **Invalidation**: marking an artifact or task as no longer trustworthy under the new intent.
+- **Review Required**: artifact is not necessarily wrong, but needs human or rule-system verification.
+- **Compensation**: action to offset/undo/mitigate a side effect that has already occurred.
+- **Repair Plan**: plan to locally fix a workflow after intent changes.
+- **Rebase Plan**: final result describing how to transition execution from the old intent to the new intent.
+- **Side Effect**: action that affects the outside world, e.g. writing to DB, sending email, merging PR, calling an API that changes state.
+- **Policy Snapshot**: capture of the effective policy at the time an artifact or action was created.
+- **Checkpoint**: durable state that allows a workflow to resume.
 
 ---
 
