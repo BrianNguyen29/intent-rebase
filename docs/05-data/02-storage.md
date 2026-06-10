@@ -1,22 +1,22 @@
 # Storage Strategy
 
 ## 1. Postgres
-Dùng cho:
-- metadata có tính giao dịch
+Used for:
+- transactional metadata
 - intent versions
 - diff outputs
-- graph edges ở v1
+- graph edges at v1
 - approvals
-- audit trail chính
+- primary audit trail
 
-Lý do:
-- transaction tốt
-- JSONB linh hoạt
-- recursive CTE đủ cho graph vừa
-- row-level security khả thi
+Rationale:
+- strong transactions
+- flexible JSONB
+- recursive CTE sufficient for moderate graphs
+- row-level security feasible
 
 ## 2. Object Store
-Dùng cho:
+Used for:
 - patch bundles
 - full reports
 - transcript chunks
@@ -24,20 +24,20 @@ Dùng cho:
 - replay bundles
 
 ## 3. Stream/Event Store
-Dùng cho:
+Used for:
 - event fan-out
 - async processing
-- durable decoupling giữa services
+- durable decoupling between services
 
 ## 4. Analytics Store
-Dùng cho:
+Used for:
 - SLA dashboards
 - rebase metrics
 - incident analytics
 - tenant usage reports
 
 ## Retention
-- OLTP operational state: 90–365 ngày tùy plan
-- audit logs: theo compliance
+- OLTP operational state: 90–365 days depending on plan
+- audit logs: per compliance requirements
 - forensic exports: immutable retention policy
-- artifacts lớn: warm/cold tiers
+- large artifacts: warm/cold tiers
