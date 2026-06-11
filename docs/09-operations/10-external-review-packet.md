@@ -393,6 +393,8 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 **Signature:** DuongNguyen
 
+> **Designation note:** DuongNguyen is recorded as the designated reviewer; no approval is granted unless the relevant sign-off boxes are explicitly checked and supporting evidence is linked.
+
 ### Internal Acknowledgment
 
 **Reviewed By:** BrianNguyen (Backend Lead, solo practitioner)

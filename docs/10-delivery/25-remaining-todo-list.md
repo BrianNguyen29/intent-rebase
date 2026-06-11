@@ -182,8 +182,8 @@ These gates **cannot** be closed by local work. They require named independent t
 
 | Gate | Required Evidence | Owner | Local Status |
 |------|-------------------|-------|--------------|
-| **A-03** | Named external SRE reviewer; signed Section H of external review packet | External SRE (to be named) | 🔴 Blocked |
-| **A-04** | Named external security reviewer; threat model v2 assessment | External Security (to be named) | 🔴 Blocked |
+| **A-03** | Named external SRE reviewer; signed Section H of external review packet | DuongNguyen (designated; approval/evidence pending) | 🔴 Blocked |
+| **A-04** | Named external security reviewer; threat model v2 assessment | DuongNguyen (designated; approval/evidence pending) | 🔴 Blocked |
 | **A-05** | Production Postgres/NATS/S3/monitoring operational; deployment runbook executed | SRE | 🔴 Blocked |
 | **A-06** | L4 30min sustained + all alert types + real receivers; L5 production load test | Backend Lead / SRE | 🔴 Blocked (I2a 10min + 1 alert sub-slice recorded only) |
 | **A-07** | External pen test report (PDF + JSON); HIGH/CRITICAL remediation | External Pen Test Team | 🔴 Blocked |

@@ -316,6 +316,8 @@ These are **planning and execution artifacts** — they document how testing sho
 **Overall Assessment:** [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED
 
 **Signature:** DuongNguyen
+
+> **Designation note:** DuongNguyen is recorded as pen test lead; this is not a pen-test approval until deliverables are complete, assessment is checked, and report evidence is attached.
 ```
 
 ---

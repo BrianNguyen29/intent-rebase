@@ -113,7 +113,7 @@ Date: 2026-06-10
 Security Reviewer: DuongNguyen
 Date: 2026-06-10
 
-All items above confirmed and approved.
+Reviewer names are recorded for planning/designation only. Items above are not confirmed or approved until their checkboxes are checked and evidence is linked.
 ```
 
 ---
