@@ -1,10 +1,10 @@
 # Acceptance and UAT
 
 ## MVP acceptance
-- operator có thể tạo/đọc versions
-- semantic diff có thể giải thích
-- rebase preview cho 3 use cases chính
-- audit trail đầy đủ cho các hành động cốt lõi
+- operator can create/read versions
+- semantic diff can explain
+- rebase preview for 3 main use cases
+- full audit trail for core actions
 
 ## Phase 2a acceptance (internal groundwork)
 - internal apply pipeline wired end-to-end with mock adapter
@@ -24,12 +24,12 @@
 
 ## Phase 3 acceptance
 - compensation flows usable
-- replay export điều tra được
-- SLO dashboards hoạt động
-- runbooks đã dry-run
+- replay export supports investigation
+- SLO dashboards operational
+- runbooks have been dry-run
 
 ## UAT questions
-- operator có hiểu vì sao artifact bị invalid không?
-- preview có đủ thông tin để quyết định không?
-- side effect residual risk có rõ không?
-- force override có bị lạm dụng không?
+- does the operator understand why an artifact was invalidated?
+- does the preview provide enough information to decide?
+- is the side-effect residual risk clear?
+- is force override being abused?

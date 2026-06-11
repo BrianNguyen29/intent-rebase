@@ -1,7 +1,7 @@
 # Agent Contracts and Prompting Contracts
 
 ## Agent contract style
-Khi dùng coding agents để triển khai, mỗi task nên có:
+When using coding agents to implement, each task should have:
 - objective
 - constraints
 - inputs
@@ -43,7 +43,7 @@ Acceptance:
 ```
 
 ## Review contract
-Mọi PR do agent tạo phải có:
+Every PR created by an agent must have:
 - summary
 - assumptions
 - changed files

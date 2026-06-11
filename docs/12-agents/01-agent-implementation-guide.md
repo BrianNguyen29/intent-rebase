@@ -1,16 +1,16 @@
 # Agent Implementation Guide
 
-## Mục tiêu
-Cho AI agents một bản đồ rõ ràng để triển khai mà không mơ hồ.
+## Purpose
+Give AI agents a clear map to implement without ambiguity.
 
-## Quy tắc làm việc cho agents
-1. Không sửa intent schema nếu chưa cập nhật ADR.
-2. Mọi thay đổi API phải cập nhật OpenAPI và event contract.
-3. Mọi thay đổi graph rule phải đi kèm tests.
-4. Mọi thay đổi risky ở apply path phải có replay tests.
-5. Không triển khai side effect auto-compensation cho S3/S4 nếu chưa có explicit approval.
+## Agent working rules
+1. Do not change intent schema without updating the ADR.
+2. Every API change must update OpenAPI and the event contract.
+3. Every graph rule change must include tests.
+4. Every risky apply-path change must have replay tests.
+5. Do not implement S3/S4 side-effect auto-compensation without explicit approval.
 
-## Workstreams đề xuất
+## Recommended workstreams
 
 ### Stream A — Core Data and APIs
 - schema migrations
@@ -41,7 +41,7 @@ Cho AI agents một bản đồ rõ ràng để triển khai mà không mơ hồ
 - export
 - permissions matrix
 
-## Definition of done cho mỗi task
+## Definition of done for each task
 - code
 - tests
 - docs
