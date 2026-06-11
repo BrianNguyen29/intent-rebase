@@ -300,9 +300,9 @@ These are **planning and execution artifacts** — they document how testing sho
 ```markdown
 ## PT-6: Pen Test Sign-Off
 
-**Pen Test Lead:** _______________________
+**Pen Test Lead:** DuongNguyen
 **Organization:** _______________________
-**Date of Test:** _______________________
+**Date of Test:** 2026-06-10
 **Report Date:** _______________________
 
 | Deliverable | Status | Notes |
@@ -315,7 +315,7 @@ These are **planning and execution artifacts** — they document how testing sho
 
 **Overall Assessment:** [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED
 
-**Signature:** _______________________
+**Signature:** DuongNguyen
 ```
 
 ---

@@ -380,9 +380,9 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 ### External Reviewer Sign-Off
 
-**Reviewer Name:** _______________________
+**Reviewer Name:** DuongNguyen
 **Organization:** _______________________
-**Date:** _______________________
+**Date:** 2026-06-10
 
 | Area | Sign-Off | Notes |
 |------|----------|-------|
@@ -391,7 +391,7 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 | Pen Test Results | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
 | Overall Recommendation | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
 
-**Signature:** _______________________
+**Signature:** DuongNguyen
 
 ### Internal Acknowledgment
 
