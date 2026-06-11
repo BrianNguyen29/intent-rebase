@@ -1,13 +1,13 @@
 # Audit and Compliance
 
 ## Audit requirements
-Ghi lại:
-- ai tạo intent/change
-- diff nào được tính
-- rebase plan nào được tạo
-- ai approve/reject/apply
-- side effect/compensation nào xảy ra
-- policy snapshot nào có hiệu lực
+Record:
+- who created intent/change
+- which diff was calculated
+- which rebase plan was created
+- who approved/rejected/applied
+- which side effect/compensation occurred
+- which policy snapshot was in effect
 
 ## Audit event properties
 - immutable id
@@ -19,7 +19,7 @@ Ghi lại:
 - trace id
 
 ## Compliance readiness targets
-Tùy thị trường:
+By market:
 - SOC 2 controls mapping
 - ISO 27001 operational controls
 - internal change management evidence

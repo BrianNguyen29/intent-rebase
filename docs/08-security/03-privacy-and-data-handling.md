@@ -16,7 +16,7 @@
 - encryption at rest and in transit
 
 ## Redaction
-Các trường có thể cần redaction/masking:
+Fields that may require redaction/masking:
 - secrets
 - tokens
 - customer PII
@@ -24,7 +24,7 @@ Các trường có thể cần redaction/masking:
 - legal or HR content
 
 ## Export controls
-Forensic export phải hỗ trợ:
+Forensic export must support:
 - redacted mode
 - full mode with elevated approval
 - short-lived signed URLs

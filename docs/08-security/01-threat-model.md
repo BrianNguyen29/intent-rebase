@@ -20,7 +20,7 @@
 ## Major threats
 
 ### T1. Intent spoofing
-Attacker gửi fake webhook/spec update.
+Attacker sends fake webhook/spec update.
 
 Mitigations:
 - signed webhooks
@@ -29,7 +29,7 @@ Mitigations:
 - idempotency + anti-replay
 
 ### T2. Approval confusion
-Approval được issue dưới scope cũ nhưng vẫn dùng cho intent mới.
+Approval issued under old scope but still used for new intent.
 
 Mitigations:
 - approval scope hashing
@@ -37,7 +37,7 @@ Mitigations:
 - preflight approval revalidation
 
 ### T3. Cross-tenant leakage
-Graph traversal hoặc replay export lộ dữ liệu tenant khác.
+Graph traversal or replay export leaks other tenant data.
 
 Mitigations:
 - tenant isolation in data model
@@ -46,7 +46,7 @@ Mitigations:
 - export signing and access TTL
 
 ### T4. Adapter forgery
-Adapter báo checkpoint sai hoặc apply sai rebase plan.
+Adapter reports wrong checkpoint or applies wrong rebase plan.
 
 Mitigations:
 - signed adapter attestations
@@ -55,15 +55,15 @@ Mitigations:
 - state hash verification
 
 ### T5. Audit tampering
-Actor xóa hoặc sửa timeline incident.
+Actor deletes or modifies incident timeline.
 
 Mitigations:
 - append-only audit log
-- WORM/immutable retention tùy tier
+- WORM/immutable retention by tier
 - external log sink optional
 
 ### T6. Prompt/policy injection via source refs
-Spec/ticket chứa nội dung làm lệch diff hoặc rebase classification.
+Spec/ticket contains content that skews diff or rebase classification.
 
 Mitigations:
 - source trust tiers

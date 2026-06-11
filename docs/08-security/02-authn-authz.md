@@ -102,14 +102,14 @@ The `POST /v1/graph/nodes` endpoint now supports RLS-wrapped node creation:
 
 ## Authentication
 - User auth: OIDC/OAuth2
-- Service auth: mTLS hoặc workload identity
+- Service auth: mTLS or workload identity
 - Connectors/webhooks: signed secrets + issuer validation
 
 ## Authorization model
-Kết hợp:
-- RBAC cho console actions
-- ABAC theo tenant, workflow risk, domain, environment
-- scope-based permissions cho APIs
+Combination:
+- RBAC for console actions
+- ABAC by tenant, workflow risk, domain, environment
+- scope-based permissions for APIs
 
 ## Permissions examples
 - `intent.read`
