@@ -32,7 +32,7 @@ These tasks can be executed locally without external reviewers, production infra
 
 **What:** Translate 34 full-Vietnamese internal docs to English per the accepted Documentation Language Policy (`24g` §3, `24h` §5.2).
 
-**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 9 files remaining after Batch 6; full list in `24h` §5.2.
+**Files:** `docs/01-product/` (5), `docs/02-architecture/` (5), `docs/03-spec/` (6), `docs/04-api/` (3), `docs/05-data/` (2), `docs/06-backend/` (4), `docs/07-frontend/` (1), `docs/08-security/` (4), `docs/11-quality/` (1), `docs/12-agents/` (2), `docs/99-reference/` (1). 8 files remaining after Batch 7; full list in `24h` §5.2.
 
 **Approach:** Bounded single-file or small-batch slices; each slice must run the public-doc leakage scan, affirmative-claim scan, and `git diff --check` per `24-strategic-roadmap-and-checklist.md` §9.7.
 
@@ -57,6 +57,10 @@ These tasks can be executed locally without external reviewers, production infra
 ---
 
 **Status:** ✅ DONE — Batch 6 (`docs/06-backend/`, 4 files) completed 2026-06-10. Evidence: `25k`.
+
+---
+
+**Status:** ✅ DONE — Batch 7 (`docs/07-frontend/`, 1 file) completed 2026-06-10. Evidence: `25l`.
 
 ---
 

@@ -222,6 +222,7 @@ docs/10-delivery/checklists/checklist-phase-4.md
 | 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 4 (`docs/04-api/`) completion note added. Three files (`01-rest-api.md`, `02-events.md`, `03-webhooks.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 15 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 5 (`docs/05-data/`) completion note added. Two files (`02-storage.md`, `03-dataflow.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 13 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 6 (`docs/06-backend/`) completion note added. Four files (`01-service-boundaries.md`, `02-runtime-integration.md`, `04-consistency-model.md`, `05-failure-handling.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 9 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 7 (`docs/07-frontend/`) completion note added. One file (`02-ux-flows.md`) translated from Vietnamese to English in place. Remaining Tier 3 count: 8 files. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 
 ---
 
