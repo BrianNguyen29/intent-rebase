@@ -6,13 +6,13 @@
 
 ---
 
-## Mục đích
+## Purpose
 
-Canonical audit event schema cho phép:
+Canonical audit event schema enables:
 - Full traceability of all state-changing operations
 - Compliance evidence for regulatory requirements
 - Forensic investigation support
-- Anomaly detection và threat hunting
+- Anomaly detection and threat hunting
 
 ---
 

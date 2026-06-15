@@ -490,6 +490,7 @@ This checklist enumerates the gates that must close before any production-readin
 | `docs/09-operations/08-secrets-inventory.md` | Secrets management under review |
 | `docs/09-operations/09-security-audit.md` | Public repo security audit |
 | `docs/08-security/02-authn-authz.md` | Authn/authz implementation status |
+| `docs/09-operations/13-reviewer-guide.md` | Reviewer preparation guide for A-03/A-04 (maps evidence to packet sections) |
 
 ---
 
