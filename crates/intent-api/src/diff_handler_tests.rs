@@ -1,4 +1,4 @@
-use crate::diff_handlers::compute_diff;
+use crate::routes::intent::compute_diff;
 use crate::test_helpers::create_test_payload;
 use crate::test_helpers::create_test_service_with_forensic_config as create_test_service_for_diff;
 use axum::{

@@ -1,4 +1,4 @@
-use crate::intent_validation_handlers::validate_intent;
+use crate::routes::intent::validate_intent;
 use axum::Json;
 use intent_rebase_types::{
     AcceptanceCriteria, ActorRef, CreateIntentRequest, IntentAssumptions, IntentAuthority,

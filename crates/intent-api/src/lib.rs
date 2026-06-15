@@ -119,20 +119,11 @@ pub mod trigger_reapproval_handlers;
 /// Batch compensation action handlers (Phase 3 P3-S5 bounded slice)
 pub mod batch_handlers;
 
-/// Intent read-only query handlers (Phase 2 bounded slice)
-pub mod intent_read_handlers;
-
-/// Intent validation handlers (Phase 2 bounded slice - extracted handler decomposition)
-pub mod intent_validation_handlers;
-
 /// Intent mutation handlers (Phase 2 bounded slice - extracted handler decomposition)
 pub mod intent_mutation_handlers;
 
 /// Error response types (Phase 2 bounded file decomposition slice)
 pub mod error_response;
-
-/// Diff computation handlers (Phase 2 bounded slice - extracted handler decomposition)
-pub mod diff_handlers;
 
 /// Rebase preview handlers (Phase 2 bounded slice - extracted handler decomposition)
 pub mod rebase_preview_handlers;
