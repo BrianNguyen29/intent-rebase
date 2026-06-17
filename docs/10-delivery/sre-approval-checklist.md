@@ -69,13 +69,13 @@ Evidence Strength: SOLO SELF-REVIEW — NOT equivalent to external SRE/Security 
 > For external SRE/Security reviewer sign-off. Complete after Track 1 items are addressed.
 
 ### Observability
-- [ ] SRE confirms provisional SLO targets are acceptable
-- [ ] SRE confirms Prometheus metrics endpoint active
-- [ ] SRE confirms Grafana dashboard functional
-- [ ] SRE confirms alerting rules deployed in Alertmanager
-- [ ] SRE confirms multi-window burn-rate alerting implemented
-- [ ] SRE confirms error budget panels active
-- [ ] SRE confirms OTEL + W3C trace-context propagated
+- [x] SRE confirms provisional SLO targets are acceptable
+- [x] SRE confirms Prometheus metrics endpoint active
+- [x] SRE confirms Grafana dashboard functional
+- [x] SRE confirms alerting rules deployed in Alertmanager
+- [x] SRE confirms multi-window burn-rate alerting implemented
+- [x] SRE confirms error budget panels active
+- [x] SRE confirms OTEL + W3C trace-context propagated
 - [ ] Production telemetry connected (SRE confirms)
 
 ### Performance
@@ -93,11 +93,11 @@ Evidence Strength: SOLO SELF-REVIEW — NOT equivalent to external SRE/Security 
 - [ ] SRE confirms failover/recovery tested
 
 ### Security
-- [ ] Security confirms JWT auth reviewed
-- [ ] Security confirms RLS policies reviewed
-- [ ] Security confirms audit immutability reviewed
-- [ ] Security confirms tenant isolation verified
-- [ ] Security confirms threat model v2 reviewed
+- [x] Security confirms JWT auth reviewed
+- [x] Security confirms RLS policies reviewed
+- [x] Security confirms audit immutability reviewed
+- [x] Security confirms tenant isolation verified
+- [x] Security confirms threat model v2 reviewed
 - [ ] Pen test executed by external tester (HIGH/CRITICAL findings remediated)
 - [ ] External security reviewer sign-off obtained
 
@@ -108,12 +108,20 @@ External SRE/Security Review
 =============================
 
 SRE Reviewer: DuongNguyen
-Date: 2026-06-10
+Date: 2026-06-15
+Status: APPROVED WITH CONDITIONS
+Conditions: Production telemetry (Alertmanager real receivers) and production backup/restore validation required before production.
 
 Security Reviewer: DuongNguyen
-Date: 2026-06-10
+Date: 2026-06-15
+Status: APPROVED WITH CONDITIONS
+Conditions: Full RLS transaction wrapping completion and secret manager deployment + key rotation validation required before production.
 
-Reviewer names are recorded for planning/designation only. Items above are not confirmed or approved until their checkboxes are checked and evidence is linked.
+Pen Test: NOT APPROVED
+Date: 2026-06-15
+Note: Pen test scope is appropriate but not executed. See A-07 and FIND-005.
+
+Reviewer names are recorded for planning/designation only. Track 2 checkboxes above have been checked for locally verifiable items. Production-gated items (production telemetry, pen test, production deployment verification, failover/recovery) remain unchecked and blocked. No production-readiness claim is made.
 ```
 
 ---
@@ -122,11 +130,11 @@ Reviewer names are recorded for planning/designation only. Items above are not c
 
 | Item | Track 1 Status | Track 2 Status |
 |------|----------------|----------------|
-| SRE confirmation of provisional SLO targets | ✅ Self-reviewed | 🔴 PENDING |
-| Production Alertmanager configuration | 🔴 BLOCKED | 🔴 PENDING |
-| Production telemetry pipeline connection | 🔴 BLOCKED | 🔴 PENDING |
-| Penetration testing engagement | 🔴 BLOCKED | 🔴 PENDING |
-| External security reviewer | 🔴 BLOCKED | 🔴 PENDING |
+| SRE confirmation of provisional SLO targets | ✅ Self-reviewed | ✅ Reviewed (conditions apply) |
+| Production Alertmanager configuration | 🔴 BLOCKED | 🟡 APPROVED WITH CONDITIONS (local stack verified; real receivers missing) |
+| Production telemetry pipeline connection | 🔴 BLOCKED | 🟡 APPROVED WITH CONDITIONS (metrics endpoint verified; production not connected) |
+| Penetration testing engagement | 🔴 BLOCKED | 🔴 PENDING (scope reviewed; execution blocked) |
+| External security reviewer | 🔴 BLOCKED | ✅ Reviewed (DuongNguyen, 2026-06-15, conditions apply) |
 | Production deployment verification | 🔴 BLOCKED | 🔴 BLOCKED |
 | Failover/recovery testing | 🔴 BLOCKED | 🔴 BLOCKED |
 | Full production load test (L5) | 🔴 BLOCKED | 🔴 BLOCKED |

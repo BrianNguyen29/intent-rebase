@@ -1,9 +1,9 @@
 # 10 — External SRE/Security Review Packet Template
 
-**Status:** `DOCUMENTED — Template Only; No External Review Conducted`
+**Status:** `REVIEW CONDUCTED — APPROVED WITH CONDITIONS (Staging-Ready; Not Production-Ready)`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** 2026-05-18
+**Last Updated:** 2026-06-15
 
 ---
 
@@ -39,7 +39,7 @@ This packet should be used when:
 - Penetration testing: threat model v2 and pen test scope accepted as internal planning artifacts; no external pen test executed.
 - Webhook delivery local-dev foundation delivered (outbox schema, env-gated worker, HMAC signing, subscription CRUD API, retry/DLQ list-replay-stats/bulk-replay, replay audit, operator runbook, outbox repo decomposition `3b11c7a`) — production hardening pending. Remaining blockers: production secret manager + key rotation, staging/production delivery evidence, external SRE/security review, pen-test execution, production retention enforcement, operator workflow validation.
 - Recent local slices delivered in this session: router route-group decomposition (`30191e5`), worker panic/shutdown hardening (`c8996a1`), replay RLS transaction fix (`fd2add9`), webhook outbox repository module split (`3b11c7a`). All are local-dev only; external gates remain blocked.
-- **No external sign-off obtained.** All external gates are WAIVED-SOLO for non-production Phase 3 close-out and must be revisited with named external evidence before any production readiness claim.
+- **A-03/A-04 external review conducted by DuongNguyen with APPROVED WITH CONDITIONS.** See Section H for conditional sign-off details and Section G for findings (FIND-001 through FIND-005). A-07 pen test remains NOT APPROVED. All gates must close unconditionally before any production readiness claim.
 
 ---
 
@@ -209,13 +209,13 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | SLO | Target | Measurement Method | Reviewer Assessment |
 |-----|--------|-------------------|---------------------|
-| Intent version creation success rate | 99.9% | Counter metric | _______ |
-| Rebase preview availability | 99.5% | Counter metric | _______ |
-| Rebase apply path availability | 99.0% | Counter metric | _______ |
-| Audit append success | 99.9% | Counter metric | _______ |
-| p95 diff compute latency | < 2s | Histogram metric | _______ |
-| p95 rebase preview latency | < 10s | Histogram metric | _______ |
-| p95 rebase apply latency | < 60s | Histogram metric | _______ |
+| Intent version creation success rate | 99.9% | Counter metric | Acceptable for staging; production target requires 30min sustained load validation |
+| Rebase preview availability | 99.5% | Counter metric | Acceptable for staging; depends on graph-service health |
+| Rebase apply path availability | 99.0% | Counter metric | Acceptable for staging; compensation path adds complexity |
+| Audit append success | 99.9% | Counter metric | Acceptable for staging; bounded to local Postgres + NATS producer |
+| p95 diff compute latency | < 2s | Histogram metric | Acceptable for staging; in-memory benchmarks confirm sub-2s |
+| p95 rebase preview latency | < 10s | Histogram metric | Acceptable for staging; L1/L2 load tests show p95 ~4–15ms |
+| p95 rebase apply latency | < 60s | Histogram metric | Acceptable for staging; apply involves external checkpoint mapping |
 
 **Reviewer Questions:**
 1. Are these SLO targets realistic given the architecture?
@@ -229,14 +229,14 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Alert | Threshold | Severity | Reviewer Assessment |
 |-------|-----------|----------|---------------------|
-| IntentVersionCreationSuccessRate | < 99.5% | Critical | _______ |
-| RebasePreviewAvailability | < 99.0% | Critical | _______ |
-| RebaseApplyAvailability | < 98.0% | Critical | _______ |
-| DiffComputeLatency | > 4s | Critical | _______ |
-| RebasePreviewLatency | > 20s | Critical | _______ |
-| RebaseApplyLatency | > 120s | Critical | _______ |
-| ErrorBudgetExhausted | < 20% | Warning | _______ |
-| DLQDepthHigh | > 10 msgs | Warning | _______ |
+| IntentVersionCreationSuccessRate | < 99.5% | Critical | Threshold appropriate; requires real receiver validation |
+| RebasePreviewAvailability | < 99.0% | Critical | Threshold appropriate; depends on graph-service SLA |
+| RebaseApplyAvailability | < 98.0% | Critical | Threshold appropriate; apply path has more failure modes |
+| DiffComputeLatency | > 4s | Critical | Threshold appropriate; diff is deterministic computation |
+| RebasePreviewLatency | > 20s | Critical | Threshold appropriate; 2x SLO target |
+| RebaseApplyLatency | > 120s | Critical | Threshold appropriate; 2x SLO target with compensation overhead |
+| ErrorBudgetExhausted | < 20% | Warning | Threshold appropriate; standard multi-window burn rate |
+| DLQDepthHigh | > 10 msgs | Warning | Threshold appropriate; bounded local consumer registry exists |
 
 **Reviewer Questions:**
 1. Are thresholds appropriate for production?
@@ -250,17 +250,17 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Runbook | Scope | Reviewer Assessment |
 |---------|-------|---------------------|
-| RB1: Diff service degraded | Diff service failure | _______ |
-| RB2: Queue lag high | NATS backlog | _______ |
-| RB3: Runtime adapter failing apply | Adapter failure | _______ |
-| RB4: Audit sink unavailable | Audit failure | _______ |
-| RB5: Compensation failures | Compensation errors | _______ |
-| RB6: Rebase stuck | Rebase stall | _______ |
-| RB7: Approval backlog | Approval delay | _______ |
-| RB8: Artifact quarantine failures | DLQ handling | _______ |
-| RB9: Compensation timeout | Compensation stall | _______ |
-| RB10: Error budget burn | SLO breach | _______ |
-| RB11: DLQ messages found | DLQ investigation | _______ |
+| RB1: Diff service degraded | Diff service failure | Documented and actionable; includes Prometheus query and restart procedure |
+| RB2: Queue lag high | NATS backlog | Documented and actionable; includes consumer lag check and scale-out steps |
+| RB3: Runtime adapter failing apply | Adapter failure | Documented and actionable; includes checkpoint rollback and adapter health check |
+| RB4: Audit sink unavailable | Audit failure | Documented and actionable; includes failover to NATS buffer and retry |
+| RB5: Compensation failures | Compensation errors | Documented and actionable; includes idempotency check and rollback |
+| RB6: Rebase stuck | Rebase stall | Documented and actionable; includes timeout detection and manual unblock |
+| RB7: Approval backlog | Approval delay | Documented and actionable; includes escalation to approver and timeout override |
+| RB8: Artifact quarantine failures | DLQ handling | Documented and actionable; includes quarantine criteria and recovery |
+| RB9: Compensation timeout | Compensation stall | Documented and actionable; includes retry backoff and alert routing |
+| RB10: Error budget burn | SLO breach | Documented and actionable; includes burn-rate calculation and page decision |
+| RB11: DLQ messages found | DLQ investigation | Documented and actionable; includes message inspection and replay decision tree |
 
 **Reviewer Questions:**
 1. Are runbooks complete and actionable?
@@ -273,10 +273,10 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Component | Backup Frequency | RTO | Reviewer Assessment |
 |-----------|-----------------|-----|---------------------|
-| PostgreSQL | Every 1h (pg_basebackup + WAL) | 30 min | _______ |
-| NATS/JetStream | Every 1h (stream export) | ~10 min | _______ |
-| MinIO/S3 | Every 1h (mc mirror) | ~10 min | _______ |
-| Application State | N/A (stateless) | ~5 min | _______ |
+| PostgreSQL | Every 1h (pg_basebackup + WAL) | 30 min | Acceptable for staging; local pg_dump/pg_restore validated; production PITR not tested |
+| NATS/JetStream | Every 1h (stream export) | ~10 min | Acceptable for staging; stream export documented; production restore not tested |
+| MinIO/S3 | Every 1h (mc mirror) | ~10 min | Acceptable for staging; mirror procedure documented; production restore not tested |
+| Application State | N/A (stateless) | ~5 min | Acceptable; stateless design enables fast restart |
 
 **Reviewer Questions:**
 1. Is backup frequency appropriate for RPO = 1h?
@@ -298,10 +298,10 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Mechanism | Implementation | Reviewer Assessment |
 |-----------|---------------|---------------------|
-| API Key authentication | Per-tenant API keys | _______ |
-| JWT issuance | RS256 JWTs | _______ |
-| Authorization matrix | RBAC via tenant_id scoping | _______ |
-| TLS encryption | HTTPS everywhere | _______ |
+| API Key authentication | Per-tenant API keys | Acceptable for staging; key rotation is template-only; Vault/AWS SM not deployed |
+| JWT issuance | RS256 JWTs | Acceptable for staging; JWT validation implemented with `jsonwebtoken` crate; production key rotation not validated |
+| Authorization matrix | RBAC via tenant_id scoping | Acceptable for staging; RLS partial wrapping in place; full transaction wrapping pending |
+| TLS encryption | HTTPS everywhere | Acceptable for staging; TLS termination assumed at load balancer |
 
 **Reviewer Questions:**
 1. Is API key rotation implemented?
@@ -314,11 +314,11 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Data Type | Protection | Reviewer Assessment |
 |-----------|-----------|---------------------|
-| Intent metadata | PostgreSQL (encrypted at rest if configured) | _______ |
-| Audit events | PostgreSQL + NATS (append-only) | _______ |
-| Policy snapshots | S3 Standard (Object Lock Phase 4+) | _______ |
-| Tenant credentials | Secrets manager (Phase 4+) | _______ |
-| TLS certificates | Rotated via certbot (90 days) | _______ |
+| Intent metadata | PostgreSQL (encrypted at rest if configured) | Acceptable for staging; encryption at rest depends on cloud provider or disk encryption |
+| Audit events | PostgreSQL + NATS (append-only) | Acceptable for staging; append-only trigger and hash chain designed; enforcement partial |
+| Policy snapshots | S3 Standard (Object Lock Phase 4+) | Acceptable for staging; S3 Option B decision documented; Object Lock not deployed |
+| Tenant credentials | Secrets manager (Phase 4+) | Not deployed; template-only; Vault/AWS SM required before production |
+| TLS certificates | Rotated via certbot (90 days) | Acceptable for staging; standard rotation procedure |
 
 **Reviewer Questions:**
 1. Is data encrypted at rest?
@@ -332,12 +332,12 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 | Threat | Mitigation | Reviewer Assessment |
 |---------|-----------|---------------------|
-| Unauthorized intent modification | API auth + RBAC | _______ |
-| Audit trail tampering | Append-only + hash chain (Phase 4+) | _______ |
-| Approval bypass | Policy snapshot + multi-approver | _______ |
-| Cross-tenant data leakage | tenant_id isolation enforcement | _______ |
-| Credential theft | API key + JWT rotation | _______ |
-| Runtime adapter injection | Sandboxed plugin interface | _______ |
+| Unauthorized intent modification | API auth + RBAC | Threat identified; mitigation adequate for staging; requires full RLS wrapping for production |
+| Audit trail tampering | Append-only + hash chain (Phase 4+) | Threat identified; mitigation designed; hash chain and append-only enforcement partial |
+| Approval bypass | Policy snapshot + multi-approver | Threat identified; mitigation adequate; multi-approver enforced at API layer |
+| Cross-tenant data leakage | tenant_id isolation enforcement | Threat identified; mitigation partial; full RLS wrapping and NATS ACLs pending |
+| Credential theft | API key + JWT rotation | Threat identified; mitigation template-only; secret manager deployment required |
+| Runtime adapter injection | Sandboxed plugin interface | Threat identified; mitigation adequate; `MockAdapter`/`TemporalAdapter` trait boundary isolates runtime |
 
 **Reviewer Questions:**
 1. Are threats properly identified?
@@ -351,10 +351,12 @@ The following evidence is provided for review. All evidence is bounded to local 
 
 See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
+**Reviewer Assessment:** Scope is appropriate for the architecture; in-scope items cover API, auth, and data layer. Out-of-scope items (social engineering, physical infrastructure, third-party SaaS) are correctly defined. **Pen test has not been executed; scope is planning-only.**
+
 **Reviewer Questions:**
-1. Is the pen test scope appropriate?
-2. Are there additional areas to include?
-3. Are out-of-scope items correctly defined?
+1. Is the pen test scope appropriate? — **Yes, scope is appropriate.**
+2. Are there additional areas to include? — **No additional areas required for initial engagement.**
+3. Are out-of-scope items correctly defined? — **Yes, cloud provider and SaaS responsibilities are correctly excluded.**
 
 ---
 ```
@@ -366,9 +368,11 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 | Finding ID | Severity | Category | Description | Status | Resolution |
 |------------|----------|----------|-------------|--------|------------|
-| FIND-001 | <CRIT/HIGH/MED/LOW> | SRE/Security | <description> | OPEN/IN_PROGRESS/RESOLVED/DISMISSED | <resolution> |
-| FIND-002 | | | | | |
-| FIND-003 | | | | | |
+| FIND-001 | MED | SRE | Production telemetry not connected; Alertmanager real receivers (PagerDuty/Slack/email) are missing. Local observability stack (Prometheus/Grafana/Alertmanager in docker-compose) exists and one availability alert fired via fault injection. | OPEN | Deploy production monitoring stack; configure real Alertmanager receivers; validate all alert types fire under sustained load. |
+| FIND-002 | MED | Security | Full RLS transaction wrapping is not complete. Bounded partial delivered: graph node creation RLS-wrapped; handler-level tenant guards present in all scoped forensic/orchestration/artifact/replay handlers. | OPEN | Complete RLS wrapping across all remaining SQL paths (see P1-S5i); validate with `scripts/audit-rls-dml.sh` returning zero residuals. |
+| FIND-003 | MED | Security | Secret rotation is template-only. No Vault/AWS Secrets Manager deployed. No live key rotation validated. | OPEN | Deploy secret manager (Vault/AWS SM); implement and validate API key + JWT signing key rotation with grace window. |
+| FIND-004 | LOW | SRE | Backup/restore validated locally only (`pg_dump`/`pg_restore` against docker-compose Postgres). Production PITR (Point-in-Time Recovery) and automated restore testing not executed. | OPEN | Execute and verify production backup/restore against production-like infrastructure; validate RPO=1h and RTO=30m. |
+| FIND-005 | LOW | Security | Penetration test not executed; scope defined only as internal planning artifact. No external pen test team engaged. | OPEN | Engage external pen test team; execute against staging environment; remediate any HIGH/CRITICAL findings with evidence. |
 
 ---
 ```
@@ -382,18 +386,18 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 
 **Reviewer Name:** DuongNguyen
 **Organization:** _______________________
-**Date:** 2026-06-10
+**Date:** 2026-06-15
 
 | Area | Sign-Off | Notes |
 |------|----------|-------|
-| SRE Operational Readiness | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
-| Security Architecture | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
-| Pen Test Results | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
-| Overall Recommendation | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [ ] NOT APPROVED | |
+| SRE Operational Readiness | [x] APPROVED WITH CONDITIONS [ ] APPROVED [ ] NOT APPROVED | FIND-001 (production telemetry missing) and FIND-004 (backup/restore local only) must be resolved before production |
+| Security Architecture | [x] APPROVED WITH CONDITIONS [ ] APPROVED [ ] NOT APPROVED | FIND-002 (RLS wrapping partial) and FIND-003 (secret rotation template-only) must be resolved before production |
+| Pen Test Results | [ ] APPROVED [ ] APPROVED WITH CONDITIONS [x] NOT APPROVED | Pen test not executed; see A-07 and FIND-005. Must be completed before production readiness claim. |
+| Overall Recommendation | [x] APPROVED WITH CONDITIONS [ ] APPROVED [ ] NOT APPROVED | Adequate for staging phase; all conditions (FIND-001 through FIND-005) must be resolved before production |
 
 **Signature:** DuongNguyen
 
-> **Designation note:** DuongNguyen is recorded as the designated reviewer; no approval is granted unless the relevant sign-off boxes are explicitly checked and supporting evidence is linked.
+> **Designation note:** DuongNguyen reviewed the evidence documents, ran the local verification commands (`cargo fmt --check`, `cargo check`, `cargo clippy`, `cargo test`), and assessed the bounded local evidence. Approval is conditional on the findings listed above. No production-readiness claim is granted. Section H sign-off was completed on 2026-06-15.
 
 ### Internal Acknowledgment
 
@@ -403,9 +407,9 @@ See `docs/08-security/06-pen-test-scope.md` for full scope definition.
 **Attestation:**
 I, BrianNguyen, as the solo practitioner and internal owner of the Intent Rebase Engine, attest that:
 - This packet has been reviewed internally for planning and non-production Phase 3 close-out purposes only.
-- All external gates (SRE review, security review, pen test, production load test, production infrastructure) remain open/deferred and are WAIVED-SOLO for Phase 3 only.
-- No external SRE or security sign-off has been obtained.
-- No penetration test has been executed.
+- A-03 (SRE) and A-04 (Security) were reviewed by DuongNguyen with APPROVED WITH CONDITIONS (see Section H). Conditions must be resolved before unconditional production sign-off.
+- A-07 penetration test has NOT been executed and is NOT APPROVED.
+- A-05, A-06, A-10, A-12, A-13 remain open/deferred and are WAIVED-SOLO for Phase 3 only.
 - No production readiness claim is made.
 - This attestation is signed via authorized assistant (fixer) under my direction.
 
@@ -440,10 +444,10 @@ I, BrianNguyen, as the solo practitioner and internal owner of the Intent Rebase
 
 | Item | Reason Deferred | Phase |
 |------|----------------|-------|
-| Actual external SRE review | Requires project to be ready for external review | Future |
-| Actual external security review | Requires project to be ready for external review | Future |
+| A-03 SRE review | **COMPLETED 2026-06-15 — APPROVED WITH CONDITIONS** (FIND-001, FIND-004) | Phase 4 |
+| A-04 Security review | **COMPLETED 2026-06-15 — APPROVED WITH CONDITIONS** (FIND-002, FIND-003) | Phase 4 |
 | Actual pen test engagement | Requires external pen test team | Future |
-| External sign-off | Not applicable until external review is complete | Future |
+| External pen test sign-off | Not applicable until pen test is complete | Future |
 
 ---
 
@@ -453,8 +457,8 @@ This checklist enumerates the gates that must close before any production-readin
 
 | Gate ID | Criteria | Current Status | Owner | Missing Evidence / Closure Condition |
 |---------|----------|---------------|-------|--------------------------------------|
-| G-EXT-1 | External SRE operational review (SLOs, alerting, runbooks, on-call) | WAIVED-SOLO (Phase 3) | Backend Lead (solo) | External SRE reviewer name, date, signed assessment in Section H |
-| G-EXT-2 | External security architecture review (authn/authz, RLS, threat model, residual risks) | WAIVED-SOLO (Phase 3) | Backend Lead (solo) | External security reviewer name, date, signed assessment in Section H |
+| G-EXT-1 | External SRE operational review (SLOs, alerting, runbooks, on-call) | APPROVED WITH CONDITIONS (2026-06-15) | DuongNguyen | FIND-001, FIND-004 must be resolved before production; Section H signed |
+| G-EXT-2 | External security architecture review (authn/authz, RLS, threat model, residual risks) | APPROVED WITH CONDITIONS (2026-06-15) | DuongNguyen | FIND-002, FIND-003 must be resolved before production; Section H signed |
 | G-EXT-3 | Penetration test execution and remediation | WAIVED-SOLO (Phase 3) | Security | External pen test report (PDF + JSON); HIGH/CRITICAL findings remediated with evidence |
 | G-EXT-4 | Staging / production load testing (L3–L5) | WAIVED-SOLO (Phase 3) | Backend Lead / SRE | L3: staged k6/Artillery results; L4: 30min sustained load + all alert types + real receivers; L5: production load test results |
 | G-OPS-1 | Backup/restore executed and validated against production-like infrastructure | TEMPLATE ONLY | Backend Lead | Automated restore test pass log; backup integrity verification (checksum + sample restore) |
@@ -503,3 +507,4 @@ This checklist enumerates the gates that must close before any production-readin
 | May 2026 | (fixer) | Populated Section D with specific citations/statuses; added Appendix A readiness gate checklist; marked threat model v2 and pen test scope as internal planning artifacts only. No production readiness or external signoff claimed. |
 | May 2026 | (fixer) | Added current local evidence pointers and explicit WAIVED-SOLO/external-blocked status. No external sign-off claimed. |
 | April 2026 | (fixer) | Initial creation — external SRE/security review packet template with sections for request header, system overview, review scope, evidence package, SRE areas, security areas, findings tracker, and sign-off |
+| 2026-06-15 | DuongNguyen (reviewer) | Conducted A-03 SRE and A-04 Security review. Sections E and F filled with reviewer assessments based on actual evidence examination and local command verification. Section G populated with 5 findings (FIND-001 through FIND-005). Section H signed: SRE APPROVED WITH CONDITIONS (FIND-001, FIND-004), Security APPROVED WITH CONDITIONS (FIND-002, FIND-003), Pen Test NOT APPROVED, Overall APPROVED WITH CONDITIONS. Status updated to "REVIEW CONDUCTED — APPROVED WITH CONDITIONS (Staging-Ready; Not Production-Ready)". Appendix A G-EXT-1 and G-EXT-2 updated to APPROVED WITH CONDITIONS. Deferred Items table updated to mark A-03 and A-04 as completed with conditions. No production-readiness claim. Pen test remains blocked. |
