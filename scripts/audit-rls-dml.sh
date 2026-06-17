@@ -66,7 +66,7 @@ graph_handlers.rs
 ingest_handlers.rs
 intent_mutation_handlers.rs
 orchestration_run_handlers.rs
-query_handlers.rs
+propagation_handlers.rs
 rebase_apply_handlers.rs
 replay_handlers.rs
 trigger_reapproval_handlers.rs
@@ -86,14 +86,14 @@ for f in $RLS_WRAPPED; do
 done
 
 # READONLY: must NOT contain begin_with_tenant or _with_rls
+# Note: diff, intent read, and intent validation handlers were decomposed into
+# routes/intent.rs (read-only/validation routes, no DML/RLS patterns).
 READONLY="
 approval_handlers_readonly.rs
 compensation_planner_handlers.rs
 compensation_query_handlers.rs
-diff_handlers.rs
-intent_read_handlers.rs
-intent_validation_handlers.rs
 policy_snapshot_handlers.rs
+query_handlers.rs
 rebase_preview_handlers.rs
 simulation_handlers.rs
 "
