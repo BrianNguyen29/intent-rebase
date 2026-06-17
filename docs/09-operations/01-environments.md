@@ -35,7 +35,20 @@ External gates required before production consideration:
 
 - [ ] External SRE sign-off
 - [ ] External security review / pen test
-- [ ] External load testing (L3+)
-- [ ] Compliance checklist completion
+  - [ ] External load testing (L3+)
+  - [ ] Compliance checklist completion
 
 **Note:** Do not claim `infrastructure/local/docker-compose.yml` as staging. The local stack is for local development only. Use `infrastructure/staging/docker-compose.yml` for staging-like evidence collection.
+
+## Production scaffold status
+
+**Location:** `infrastructure/production/`
+
+| Field | Value |
+|-------|-------|
+| **Scaffold exists** | ✅ Yes (GCP + Terraform, Kubernetes Secrets, Alertmanager templates) |
+| **Production-ready** | ❌ No — template-only; not applied; requires real GCP project, credentials, external gates, and named evidence |
+| **Evidence strength** | TEMPLATE ONLY — no infrastructure provisioned; no production claim |
+| **Last Updated** | June 2026 |
+
+**Note:** This scaffold is pre-work for A-05 and related findings (FIND-001, FIND-003, FIND-004). All gates remain OPEN until applied and validated. Do not apply Terraform or commit real secrets.

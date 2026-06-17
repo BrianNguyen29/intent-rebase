@@ -105,5 +105,9 @@ In both cases the helper is local/manual-only, does not persist alerts, and does
    ```
    To stop the whole observability profile, including Grafana/Prometheus if running:
    ```bash
-   docker compose -f infrastructure/local/docker-compose.yml --profile observability down
-   ```
+    docker compose -f infrastructure/local/docker-compose.yml --profile observability down
+    ```
+
+## Production alerting template
+
+> **Not production-ready.** The production scaffold includes Alertmanager templates with Slack and SMTP placeholders in `infrastructure/production/kubernetes/configmaps/alertmanager-config.yaml` and `infrastructure/production/alertmanager/alertmanager-prod.yml`. These are TEMPLATE ONLY and require real webhook URLs and SMTP credentials before any apply. Real receiver validation remains blocked (FIND-001).
