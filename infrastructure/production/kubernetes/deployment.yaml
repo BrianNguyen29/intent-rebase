@@ -26,7 +26,10 @@ spec:
     spec:
       containers:
         - name: intent-api
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57
+          # Image tag :733e1ca includes INTENT_API_RUN_MIGRATIONS=true migration-only
+          # mode support. Live Deployment rollout is not yet applied; orchestrator
+          # will apply if/when appropriate.
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca
           ports:
             - containerPort: 8080
               name: http

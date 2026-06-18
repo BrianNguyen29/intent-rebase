@@ -2,19 +2,13 @@
 # Migrations are embedded at compile time via sqlx::migrate!; the image must be
 # rebuilt when migration files change to include the new revision.
 #
-# ⚠️ IMAGE TAG: The tag `c166e57` below is the smoke-deploy image that does NOT
-# contain the `INTENT_API_RUN_MIGRATIONS=true` migration-only mode. Before
-# applying this Job, replace the image with a newly built/pushed image that
-# includes the migration-mode code (e.g., rebuild from the commit that added
-# `INTENT_API_RUN_MIGRATIONS` support and push a new tag).
-#
-# CAVEAT: This Job uses the intent-api image with INTENT_API_RUN_MIGRATIONS=true.
-# It populates the `_sqlx_migrations` metadata table. If the database was
-# previously migrated using the raw-psql Job (postgres:16-alpine), sqlx may
-# fail because tables already exist but `_sqlx_migrations` is absent. For
-# databases already raw-applied, a baseline/repair step (e.g., recreating from
-# a clean backup or running sqlx::migrate! against a fresh DB) is required.
-# This standard Job is intended for future clean deploys after the image is rebuilt.
+# ⚠️ LIVE DB CAVEAT: The database was previously migrated using a raw-psql Job
+# (postgres:16-alpine). sqlx::migrate! may fail against this existing DB because
+# tables already exist but `_sqlx_migrations` metadata is absent. A baseline/repair
+# step (e.g., recreating from a clean backup or applying to a fresh DB) is
+# required before this Job can be applied against the live instance. This Job is
+# intended for future clean deploys or fresh databases after the live DB gap is
+# resolved.
 #
 # Apply this Job before starting the intent-api Deployment:
 #   kubectl apply -f infrastructure/production/kubernetes/migration-job.yaml
@@ -33,7 +27,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrations
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca
           envFrom:
             - secretRef:
                 name: app-secrets

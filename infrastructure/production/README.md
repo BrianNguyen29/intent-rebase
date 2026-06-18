@@ -98,7 +98,7 @@ infrastructure/production/
 - **Private IP** is configured for Cloud SQL; public IP is disabled.
 - **Kubernetes Secrets** are used as a placeholder secret mechanism. A production deployment should migrate to Vault, Google Secret Manager, or AWS Secrets Manager before any production claim.
 - **HPA + PDB manifests** are added under `kubernetes/` but are **not applied** to the live single-node cluster. The current node pool has insufficient capacity for HPA to scale meaningfully or for PDB `minAvailable: 1` to be honored during drains. Apply only after scaling node pool capacity and switching `strategy: Recreate` to `RollingUpdate` with `maxSurge: 0, maxUnavailable: 1` (or a larger cluster). HPA is safe to create with `Recreate` but scaling events will recreate the pod (brief downtime).
-- **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use the intent-api image instead of `postgres:16-alpine` raw `psql`. Migrations are embedded at compile time via `sqlx::migrate!`; the image must be rebuilt when migration files change. **Before applying the Job, replace the image tag (`c166e57`) with a newly built/pushed image that includes the migration-mode code.** The current smoke-deploy image does not contain `INTENT_API_RUN_MIGRATIONS=true` support. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. This standardized Job is for future clean deploys after image rebuild.
+- **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary. K8s Job `migration-job.yaml` updated to use the `intent-api:733e1ca` image (includes migration-mode support). **Live Deployment rollout not yet applied** — orchestrator will apply if/when appropriate. Migrations are embedded at compile time via `sqlx::migrate!`; the image must be rebuilt when migration files change. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. The standardized Job is for future clean deploys after the live DB gap is resolved.
 - **No Terraform state backend** is configured in this scaffold. Local state exists and is gitignored; migrate to a GCS-backed state bucket before any team use or further apply. **A GCS backend (`backend.tf`) is now present; initialize with `terraform init` to migrate state.**
 - **Cloud SQL password** is supplied via the `TF_VAR_db_password` environment variable. Do not commit a default value or a `.tfvars` file containing secrets.
 
@@ -143,7 +143,8 @@ Terraform apply **completed** for the core GCP scaffold. This is **infrastructur
 ## Applied App Smoke Status
 
 > **Date:** 2026-06-18
-> **Image:** `us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57` (digest `sha256:7eb8299cf5d6cb881360a43d65fc18e21f602cf9112b150cccb4e76b6c5b32e6`)
+> **Image (smoke deploy):** `us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57` (digest `sha256:7eb8299cf5d6cb881360a43d65fc18e21f602cf9112b150cccb4e76b6c5b32e6`)
+> **Image (migration-mode build):** `us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca` (digest `sha256:5b125abeff71c8c575ac8d7b2708f01e37e1f2307f94d97d287d90469661abb7`) — includes `INTENT_API_RUN_MIGRATIONS=true` migration-only mode support
 > **Artifact Registry:** `us-central1-docker.pkg.dev/ferrum-497801/intent-rebase`
 
 The following internal smoke deployment steps were executed against the provisioned scaffold:
@@ -154,7 +155,8 @@ The following internal smoke deployment steps were executed against the provisio
 | Terraform state migrated to GCS backend | ✅ Done | `backend.tf` initialized; local state no longer primary |
 | DB password rotated via Terraform | ✅ Done | Supplied via `TF_VAR_db_password`; actual value stored outside repo |
 | Artifact Registry repository created | ✅ Done | `intent-rebase` in `us-central1` |
-| Docker image built and pushed | ✅ Done | `intent-api:c166e57` pushed to Artifact Registry |
+| Docker image built and pushed | ✅ Done | `intent-api:c166e57` pushed to Artifact Registry (smoke deploy image) |
+| Docker image rebuilt with migration-mode | ✅ Done | `intent-api:733e1ca` pushed to Artifact Registry (includes `INTENT_API_RUN_MIGRATIONS=true` support) |
 | K8s Secret `app-secrets` applied | ✅ Done | Out-of-band; contains dummy JWT/API/HMAC and real DB URL |
 | ConfigMap `intent-rebase-migrations` created | ✅ Done | Out-of-band from `infrastructure/migrations` |
 | Migration Job `intent-rebase-migrations` completed | ✅ Done | `1/1` succeeded; raw `psql` loop over `.sql` files |
@@ -213,6 +215,6 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | 8 | **Pen test (A-07)**: External engagement against staging/pre-production environment | External Pen Test | A-04, A-05, staging env | 🔴 OPEN |
 | 9 | **Terraform state backend access validation**: GCS backend configured (`backend.tf`); routine access validation and recovery docs | SRE | A-05 scaffold exists | 🟡 DOCUMENTED |
 | 10 | **CI/CD pipeline for GKE**: Build, push, deploy automation; no CI changes have been made | Backend Lead / SRE | A-05 | 🔴 OPEN |
-| 11 | **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use intent-api image with `INTENT_API_RUN_MIGRATIONS=true` (embeds sqlx migrations at compile time). **Before applying the Job, replace the image tag (`c166e57`) with a newly built/pushed image that includes the migration-mode code.** The current smoke-deploy image does not contain `INTENT_API_RUN_MIGRATIONS=true` support. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. This standardized Job is for future clean deploys after image rebuild. | Backend Lead / SRE | A-05 | 🟡 CODE/MANIFESTS ADDED — LIVE DB NOT YET REPAIRED |
+| 11 | **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use `intent-api:733e1ca` image (includes `INTENT_API_RUN_MIGRATIONS=true` support). **Live Deployment rollout not yet applied** — orchestrator will apply if/when appropriate. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. The standardized Job is for future clean deploys after the live DB gap is resolved. | Backend Lead / SRE | A-05 | 🟡 CODE/MANIFESTS + IMAGE BUILT — LIVE DB NOT YET REPAIRED |
 
 > **No overclaim:** The scaffold is applied and the app is running internally, but none of the hardening items above are complete. Do not claim production readiness until all items are closed with evidence.
