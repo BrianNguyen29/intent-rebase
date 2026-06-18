@@ -5,7 +5,10 @@ metadata:
   namespace: intent-rebase
 data:
   alertmanager.yml: |
-    # TEMPLATE ONLY — not applied; do not claim production-ready.
+    # TEMPLATE ONLY — placeholder values must be replaced with real secrets
+    # before the ConfigMap is applied to a cluster. Real values must be generated
+    # and injected out-of-band; do not commit this file with real credentials.
+    # Alertmanager Deployment and Prometheus rules are NOT deployed on GKE yet.
     global:
       smtp_smarthost: 'CHANGE_ME_SMTP_HOST:587'
       smtp_from: 'CHANGE_ME_SMTP_FROM'
@@ -25,5 +28,5 @@ data:
             title: 'Intent Rebase Alert'
             text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
         email_configs:
-          - to: 'CHANGE_ME_ALERT_EMAIL'
+          - to: 'CHANGE_ME_SMTP_TO'
             send_resolved: true

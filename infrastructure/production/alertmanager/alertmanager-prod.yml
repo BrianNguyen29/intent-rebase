@@ -18,5 +18,5 @@ receivers:
         title: 'Intent Rebase Alert'
         text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
     email_configs:
-      - to: 'CHANGE_ME_ALERT_EMAIL'
+      - to: 'CHANGE_ME_SMTP_TO'
         send_resolved: true
