@@ -3,7 +3,11 @@
 //! This module contains the `ApiErrorResponse` wrapper type that implements
 //! IntoResponse to map `IntentRebaseError` to appropriate HTTP responses.
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    http::{header, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 
 use crate::types::{ApiError, ErrorDetails};
 use intent_rebase_types::IntentRebaseError;
@@ -171,6 +175,11 @@ impl IntoResponse for ApiErrorResponse {
             },
         };
 
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        response
     }
 }

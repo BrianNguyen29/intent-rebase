@@ -30,6 +30,7 @@ pub struct ApiKeyRejection(pub String);
 
 impl IntoResponse for ApiKeyRejection {
     fn into_response(self) -> axum::response::Response {
+        use axum::http::header;
         let body = crate::ApiError {
             error: crate::ErrorDetails {
                 code: "INVALID_API_KEY".to_string(),
@@ -38,7 +39,12 @@ impl IntoResponse for ApiKeyRejection {
                 details: None,
             },
         };
-        (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+        let mut response = (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        response
     }
 }
 
@@ -68,6 +74,27 @@ where
                 Ok(ApiKey(String::new()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn test_api_key_rejection_has_cache_control_no_store() {
+        let rejection = ApiKeyRejection("test rejection".into());
+        let response = rejection.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
     }
 }
 

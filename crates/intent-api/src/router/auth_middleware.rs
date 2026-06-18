@@ -47,13 +47,55 @@ pub(crate) async fn jwt_auth_async(
                 }
                 Err(_) => axum::response::Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
-                    .body("Invalid or expired token".into())
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CACHE_CONTROL, "no-store")
+                    .body(axum::body::Body::from(
+                        r#"{"error":{"code":"UNAUTHORIZED","message":"Invalid or expired token"}}"#,
+                    ))
                     .unwrap(),
             }
         }
         _ => axum::response::Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .body("Missing or invalid Authorization header".into())
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(
+                r#"{"error":{"code":"UNAUTHORIZED","message":"Missing or invalid Authorization header"}}"#,
+            ))
             .unwrap(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header;
+
+    #[test]
+    fn test_unauthorized_response_builder_has_headers() {
+        let response = axum::response::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(
+                r#"{"error":{"code":"UNAUTHORIZED","message":"test"}}"#,
+            ))
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
     }
 }

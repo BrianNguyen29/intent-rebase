@@ -40,6 +40,13 @@ fn test_api_error_response_for_unauthorized() {
     let err = IntentRebaseError::Unauthorized("Missing credentials".to_string());
     let api_err_response = ApiErrorResponse(err).into_response();
     assert_eq!(api_err_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        api_err_response
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
 }
 
 #[test]
