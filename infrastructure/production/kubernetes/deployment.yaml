@@ -27,8 +27,9 @@ spec:
       containers:
         - name: intent-api
           # Image tag :733e1ca includes INTENT_API_RUN_MIGRATIONS=true migration-only
-          # mode support. Live Deployment rollout is not yet applied; orchestrator
-          # will apply if/when appropriate.
+          # mode support. Live Deployment rolled out on 2026-06-18; smoke passed
+          # (health/ready responding, JWT guard passed, SQL-backed router initialized).
+          # Still internal-only / not production-ready (single-node cluster, Recreate strategy).
           image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca
           ports:
             - containerPort: 8080

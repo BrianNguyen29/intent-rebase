@@ -1,4 +1,6 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # Root module: provider configuration and shared resources.
 
 provider "google" {

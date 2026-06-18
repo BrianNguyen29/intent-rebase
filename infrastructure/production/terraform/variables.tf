@@ -1,8 +1,10 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # Input variables for GCP production scaffold.
 
 variable "gcp_project_id" {
-  description = "GCP project ID. TEMPLATE ONLY — replace with real project."
+  description = "GCP project ID. Applied to ferrum-497801; update default for reuse."
   type        = string
   default     = "CHANGE_ME_GCP_PROJECT"
 }

@@ -1,11 +1,13 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # Terraform version and provider constraints for GCP production scaffold.
 
 terraform {
   required_version = ">= 1.5.0"
 
-  # NOTE: Add a GCS backend before any team apply:
-  # backend "gcs" { bucket = "CHANGE_ME_TFSTATE_BUCKET" prefix = "terraform/state" }
+  # NOTE: GCS backend is configured in backend.tf; state migrated to
+  # bucket ire-tfstate-ferrum-497801. This block is a legacy placeholder.
 
   required_providers {
     google = {

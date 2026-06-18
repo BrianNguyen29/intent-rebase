@@ -1,4 +1,6 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # GCS bucket with retention policy and uniform access.
 # NOTE: GCP retention policy is not S3 Object Lock. Object Lock compliance
 # mode is not available on GCS. Use this as a placeholder for immutable

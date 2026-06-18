@@ -1,4 +1,6 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # Cloud SQL PostgreSQL with backups, PITR, private IP, and deletion protection.
 
 resource "google_sql_database_instance" "postgres" {

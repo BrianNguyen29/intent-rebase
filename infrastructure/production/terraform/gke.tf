@@ -1,4 +1,6 @@
-# TEMPLATE ONLY — not applied; do not claim production-ready.
+# Applied GCP scaffold on project ferrum-497801. Not production-ready: internal
+# smoke deploy only, single-node cluster, no public ingress, no real Slack/SMTP
+# secrets, no A-07 pen test completed.
 # GKE cluster and node pool.
 
 resource "google_service_account" "gke" {
@@ -19,7 +21,9 @@ resource "google_container_cluster" "primary" {
   # Enable private nodes / private endpoint in production before apply
   # private_cluster_config { ... }
 
-  # TEMPLATE ONLY — enable workload identity and other hardening before production
+  # Hardening still required before production: enable workload identity, private
+  # nodes, and private endpoint. Scaffold applied with deletion_protection=false
+  # for internal smoke test only.
 
   deletion_protection = false # Scaffold/test apply only; re-enable before production
 }
