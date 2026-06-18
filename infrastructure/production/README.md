@@ -80,7 +80,7 @@ infrastructure/production/
 │   ├── namespace.yaml                 # intent-rebase namespace
 │   ├── deployment.yaml                # intent-api Deployment (internal smoke only)
 │   ├── horizontal-pod-autoscaler.yaml  # HPA for intent-api (NOT APPLIED — manifest-only; needs capacity)
-│   ├── migration-job.yaml             # Raw SQL migration Job (psql loop)
+│   ├── migration-job.yaml             # sqlx migration Job using intent-api image (INTENT_API_RUN_MIGRATIONS=true)
 │   ├── pod-disruption-budget.yaml      # PDB for intent-api (NOT APPLIED — manifest-only; needs capacity)
 │   ├── service.yaml                   # ClusterIP Service for intent-api
 │   ├── secrets/
@@ -98,6 +98,7 @@ infrastructure/production/
 - **Private IP** is configured for Cloud SQL; public IP is disabled.
 - **Kubernetes Secrets** are used as a placeholder secret mechanism. A production deployment should migrate to Vault, Google Secret Manager, or AWS Secrets Manager before any production claim.
 - **HPA + PDB manifests** are added under `kubernetes/` but are **not applied** to the live single-node cluster. The current node pool has insufficient capacity for HPA to scale meaningfully or for PDB `minAvailable: 1` to be honored during drains. Apply only after scaling node pool capacity and switching `strategy: Recreate` to `RollingUpdate` with `maxSurge: 0, maxUnavailable: 1` (or a larger cluster). HPA is safe to create with `Recreate` but scaling events will recreate the pod (brief downtime).
+- **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use the intent-api image instead of `postgres:16-alpine` raw `psql`. Migrations are embedded at compile time via `sqlx::migrate!`; the image must be rebuilt when migration files change. **Before applying the Job, replace the image tag (`c166e57`) with a newly built/pushed image that includes the migration-mode code.** The current smoke-deploy image does not contain `INTENT_API_RUN_MIGRATIONS=true` support. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. This standardized Job is for future clean deploys after image rebuild.
 - **No Terraform state backend** is configured in this scaffold. Local state exists and is gitignored; migrate to a GCS-backed state bucket before any team use or further apply. **A GCS backend (`backend.tf`) is now present; initialize with `terraform init` to migrate state.**
 - **Cloud SQL password** is supplied via the `TF_VAR_db_password` environment variable. Do not commit a default value or a `.tfvars` file containing secrets.
 
@@ -212,5 +213,6 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | 8 | **Pen test (A-07)**: External engagement against staging/pre-production environment | External Pen Test | A-04, A-05, staging env | 🔴 OPEN |
 | 9 | **Terraform state backend access validation**: GCS backend configured (`backend.tf`); routine access validation and recovery docs | SRE | A-05 scaffold exists | 🟡 DOCUMENTED |
 | 10 | **CI/CD pipeline for GKE**: Build, push, deploy automation; no CI changes have been made | Backend Lead / SRE | A-05 | 🔴 OPEN |
+| 11 | **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use intent-api image with `INTENT_API_RUN_MIGRATIONS=true` (embeds sqlx migrations at compile time). **Before applying the Job, replace the image tag (`c166e57`) with a newly built/pushed image that includes the migration-mode code.** The current smoke-deploy image does not contain `INTENT_API_RUN_MIGRATIONS=true` support. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. This standardized Job is for future clean deploys after image rebuild. | Backend Lead / SRE | A-05 | 🟡 CODE/MANIFESTS ADDED — LIVE DB NOT YET REPAIRED |
 
 > **No overclaim:** The scaffold is applied and the app is running internally, but none of the hardening items above are complete. Do not claim production readiness until all items are closed with evidence.

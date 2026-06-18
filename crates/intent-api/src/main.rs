@@ -802,6 +802,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing (supports OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set)
     init_tracing();
 
+    // =============================================================================
+    // Migration-only mode: run sqlx migrations and exit without starting the server
+    // =============================================================================
+    if std::env::var("INTENT_API_RUN_MIGRATIONS")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true")
+    {
+        let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+            "INTENT_API_RUN_MIGRATIONS=true requires DATABASE_URL to be set"
+        })?;
+        tracing::info!("INTENT_API_RUN_MIGRATIONS=true — connecting to database for migration run");
+        let pool = sqlx::PgPool::connect(&database_url).await?;
+        tracing::info!("Running sqlx migrations from infrastructure/migrations ...");
+        sqlx::migrate!("../../infrastructure/migrations")
+            .run(&pool)
+            .await?;
+        tracing::info!("Migrations completed successfully. Exiting without starting server.");
+        pool.close().await;
+        return Ok(());
+    }
+
     // Get bind address from environment or use default
     let bind_addr: SocketAddr = std::env::var("INTENT_API_BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())

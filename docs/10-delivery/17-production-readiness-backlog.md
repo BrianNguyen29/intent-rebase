@@ -128,6 +128,7 @@ P1 items are required for safe production deployment but may be addressed in par
 8. **Pen test (A-07)**: External engagement against staging/pre-production environment.
 9. **Terraform state backend**: GCS backend already configured (`backend.tf`); routine access validation and recovery docs remain.
 10. **CI/CD pipeline**: Build, push, deploy automation for GKE; no CI changes have been made.
+11. **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use intent-api image with `INTENT_API_RUN_MIGRATIONS=true` (embeds sqlx migrations at compile time). **Before applying the Job, replace the image tag (`c166e57`) with a newly built/pushed image that includes the migration-mode code.** The current smoke-deploy image does not contain `INTENT_API_RUN_MIGRATIONS=true` support. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. This standardized Job is for future clean deploys after image rebuild.
 
 ---
 

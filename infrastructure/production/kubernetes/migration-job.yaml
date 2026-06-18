@@ -1,11 +1,23 @@
-# INTERNAL SMOKE DEPLOY ONLY — not production-ready.
-# Apply once before the intent-api Deployment starts, or as a manual pre-deploy step.
-# Requires out-of-band secret `app-secrets` (DATABASE_URL) and ConfigMap `intent-rebase-migrations`.
+# Migration-only Job using the intent-api binary.
+# Migrations are embedded at compile time via sqlx::migrate!; the image must be
+# rebuilt when migration files change to include the new revision.
 #
-# CAVEAT: This Job runs raw `psql` against the `.sql` migration files. It does NOT populate
-# sqlx metadata tables (`_sqlx_migrations`). If the application relies on sqlx runtime
-# verify or expects `_sqlx_migrations` rows, run `sqlx migrate run` inside the application
-# container or use a sqlx-cli sidecar instead of this Job for production.
+# ⚠️ IMAGE TAG: The tag `c166e57` below is the smoke-deploy image that does NOT
+# contain the `INTENT_API_RUN_MIGRATIONS=true` migration-only mode. Before
+# applying this Job, replace the image with a newly built/pushed image that
+# includes the migration-mode code (e.g., rebuild from the commit that added
+# `INTENT_API_RUN_MIGRATIONS` support and push a new tag).
+#
+# CAVEAT: This Job uses the intent-api image with INTENT_API_RUN_MIGRATIONS=true.
+# It populates the `_sqlx_migrations` metadata table. If the database was
+# previously migrated using the raw-psql Job (postgres:16-alpine), sqlx may
+# fail because tables already exist but `_sqlx_migrations` is absent. For
+# databases already raw-applied, a baseline/repair step (e.g., recreating from
+# a clean backup or running sqlx::migrate! against a fresh DB) is required.
+# This standard Job is intended for future clean deploys after the image is rebuilt.
+#
+# Apply this Job before starting the intent-api Deployment:
+#   kubectl apply -f infrastructure/production/kubernetes/migration-job.yaml
 
 apiVersion: batch/v1
 kind: Job
@@ -21,25 +33,15 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrations
-          image: postgres:16-alpine
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57
           envFrom:
             - secretRef:
                 name: app-secrets
-          volumeMounts:
-            - name: migrations
-              mountPath: /migrations
+          env:
+            - name: INTENT_API_RUN_MIGRATIONS
+              value: "true"
+            - name: RUST_LOG
+              value: "info"
           command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              for file in $(ls /migrations/*.sql | sort); do
-                echo "Running $file"
-                psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"
-              done
-              echo "Migrations complete"
-      volumes:
-        - name: migrations
-          configMap:
-            name: intent-rebase-migrations
+            - /app/intent-api
   backoffLimit: 1
