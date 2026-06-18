@@ -94,6 +94,24 @@ infrastructure/production/
 - **Kubernetes Secrets** are used as a placeholder secret mechanism. A production deployment should migrate to Vault, Google Secret Manager, or AWS Secrets Manager before any production claim.
 - **No Terraform state backend** is configured in this scaffold. Add a GCS-backed state bucket before any apply in a team environment.
 
+## Bootstrap Status
+
+> **Date:** 2026-06-18
+> **Account:** nhduong020301@gmail.com
+> **GCP Project:** `ferrum-497801`
+
+The following GCP pre-work was completed to enable future Terraform apply. **No Terraform apply was executed; no GCP resources were created; no secrets were delivered.**
+
+| Step | Status | Details |
+|------|--------|---------|
+| Required APIs enabled | ✅ Done | `compute.googleapis.com`, `container.googleapis.com`, `iam.googleapis.com`, `servicenetworking.googleapis.com`, `sqladmin.googleapis.com`, `storage.googleapis.com` |
+| Terraform service account created | ✅ Done | `intent-rebase-terraform@ferrum-497801.iam.gserviceaccount.com` |
+| IAM roles bound to service account | ✅ Done | `roles/cloudsql.admin`, `roles/compute.networkAdmin`, `roles/container.admin`, `roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`, `roles/storage.admin` |
+| Terraform init/plan/apply | 🔴 Not executed | Scaffold remains template-only; no resources provisioned |
+| Kubernetes cluster provisioned | 🔴 Not executed | GKE cluster is Terraform config only |
+| Secrets delivered | 🔴 Not executed | All placeholders remain `CHANGE_ME`; no real Slack/SMTP credentials committed |
+| External review gates | 🔴 OPEN | FIND-001, FIND-003, FIND-004, and A-05 remain open until resources are applied and validated with named external evidence |
+
 ## Last Updated
 
 2026-06-17
