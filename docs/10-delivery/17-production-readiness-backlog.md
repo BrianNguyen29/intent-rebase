@@ -115,16 +115,16 @@ P1 items are required for safe production deployment but may be addressed in par
 | **Owner** | SRE |
 | **Status** | 🟡 SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY — core infrastructure provisioned on GCP project `ferrum-497801`; app running on single-node GKE cluster; remaining hardening: HPA, PDB, rolling-update, ingress/TLS, NATS JetStream, S3, remote Terraform state backend, secret manager, real Alertmanager receivers |
 
-**No overclaim:** Scaffold and internal smoke deploy are not production-equivalent. Production hardening (HPA, PDB, deletion protection, ingress/TLS, NATS, S3, secret manager, real Alertmanager, PITR restore test, load test, pen test) remain open.
+**No overclaim:** Scaffold and internal smoke deploy are not production-equivalent. Production hardening (HPA, PDB, deletion protection, ingress/TLS, NATS, S3, secret manager, real Alertmanager, load test, pen test) remain open. PITR restore validated against separate Cloud SQL clone (2026-06-18); RPO/RTO not measured against live production traffic. Full DR program maturity remains open.
 
 **Remaining completion items (recommended order):**
 1. **Infrastructure hardening**: HPA, PodDisruptionBudget, rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain.
 2. **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window.
 3. **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent.
 4. **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load.
-5. **Cloud SQL PITR restore test**: Execute and validate PITR procedure against provisioned instance; measure RPO/RTO.
+5. **Cloud SQL PITR restore test**: ✅ VALIDATED — CLONE-ONLY (2026-06-18). Clone `pitr-restore-test-20260618084607` created from `production-template-postgres-ed2c5bdd` at `2026-06-18T08:41:07Z`, operation `e90e714c-bd39-4169-98b1-b5ca00000032`, `DONE` with no error. Validation Job confirmed `database=intent_rebase`, `public_table_count=19`, core tables present. Clone deleted successfully. RPO/RTO not measured against live production traffic. `_sqlx_migrations` absent due to raw-psql migrations (expected). Full DR program maturity remains open.
 6. **Load test against provisioned infra**: Run 30min sustained + all alert types + real receivers on GKE + Cloud SQL.
-7. **External SRE sign-off (A-03)**: Named third-party evidence against the hardened infrastructure.
+7. **External SRE sign-off (A-03)**: Named third-party evidence against hardened infrastructure.
 8. **Pen test (A-07)**: External engagement against staging/pre-production environment.
 9. **Terraform state backend**: GCS backend already configured (`backend.tf`); routine access validation and recovery docs remain.
 10. **CI/CD pipeline**: Build, push, deploy automation for GKE; no CI changes have been made.

@@ -9,11 +9,11 @@
 
 ## Purpose
 
-This document provides **procedure templates** for backup and restore operations targeting **RPO = 1 hour** and **RTO = 30 minutes**. These are documented procedures for future execution — they have NOT been executed against production infrastructure.
+This document provides **procedure templates** for backup and restore operations targeting **RPO = 1 hour** and **RTO = 30 minutes**. **Cloud SQL PITR clone restore was validated against a separate Cloud SQL clone on 2026-06-18** (see §Execution Evidence). PostgreSQL basebackup/WAL archiving, MinIO/S3, and NATS/JetStream backup/restore procedures remain documented procedures for future execution — they have NOT been executed against production infrastructure.
 
 > **⚠️ Evidence Strength Disclaimer**
 >
-> These are **procedure templates and playbooks**, not executed production backups. Do not represent these procedures as having been run against production. Real backup/restore validation requires production infrastructure and external SRE sign-off.
+> **Cloud SQL PITR clone restore was validated against a separate Cloud SQL clone on 2026-06-18** (see §Execution Evidence). PostgreSQL basebackup/WAL archiving, MinIO/S3, and NATS/JetStream backup/restore procedures remain **procedure templates and playbooks**, not executed production backups. Do not represent these procedures as having been run against production. Real backup/restore validation for basebackup/WAL/MinIO/NATS requires production infrastructure and external SRE sign-off.
 
 ---
 
@@ -51,7 +51,7 @@ A local backup/restore round-trip was executed on `intent_rebase_phase1_fix` to 
 > - This is `pg_dump`/`pg_restore` into a **separate** database, not `pg_basebackup` + WAL PITR.
 > - No production infrastructure was involved; no RPO/RTO targets were measured.
 > - No destructive overwrite of the source database occurred.
-> - Production backup/restore validation (basebackup, WAL archiving, PITR, offsite replication) remains deferred to Phase 4+ with external SRE sign-off.
+> - Cloud SQL PITR clone-only validated (2026-06-18); full DR program (basebackup, WAL archiving, offsite replication, live RPO/RTO measurement, scheduled drills) remains deferred to Phase 4+ with external SRE sign-off.
 
 ---
 
@@ -79,58 +79,203 @@ These targets inform backup frequency and restore procedure priority, but do not
 
 ## Cloud SQL PITR Restore Procedure (GCP)
 
-> **⚠️ NOT YET EXECUTED — Procedure Only**
+ > **⚠️ EXECUTED — CLONE-ONLY VALIDATION (2026-06-18)**
 >
-> This section documents the intended Point-in-Time Recovery (PITR) procedure for the provisioned Cloud SQL Postgres instance (`production-template-postgres-ed2c5bdd`). The procedure has **not been executed** against the live instance. RPO/RTO targets are documented but not measured. Execute this only after scheduling a maintenance window and confirming with the SRE owner.
+> This section documents the Point-in-Time Recovery (PITR) procedure for the provisioned Cloud SQL Postgres instance (`production-template-postgres-ed2c5bdd`). A PITR clone restore was **executed and validated** against a separate Cloud SQL clone on 2026-06-18. The procedure was validated; RPO/RTO targets were not measured against live production traffic. Full disaster-recovery program maturity (regular drills, offsite replication, automated restore pipelines) remains future work.
+>
+> **Execution evidence summary:** see §Execution Evidence below.
 
-### Prerequisites
+### Execution Evidence (2026-06-18)
 
-- GCP project `ferrum-497801` with Cloud SQL Admin API enabled.
-- `gcloud` CLI authenticated with sufficient permissions (`roles/cloudsql.admin` or `roles/editor`).
-- A target recovery time (RFC 3339) within the PITR window (Cloud SQL PITR is enabled via `point_in_time_recovery_enabled = true` in Terraform).
-- Sufficient quota for a second Cloud SQL instance if restoring to a new instance (recommended to avoid overwriting the source).
+| Field | Value |
+|-------|-------|
+| **Source instance** | `production-template-postgres-ed2c5bdd` |
+| **Source state** | `RUNNABLE`, `us-central1`, `POSTGRES_16`, `db-f1-micro`, PITR enabled `True`, backups enabled `True`, deletion protection `False`, private IP `10.249.0.3` |
+| **Backup used** | Automated backup `1781759356040` (`SUCCESSFUL`, `AUTOMATED`, start `2026-06-18T05:09:16.054Z`) |
+| **Restore target (clone)** | `pitr-restore-test-20260618084607` |
+| **Restore time** | `2026-06-18T08:41:07Z` |
+| **Operation ID** | `e90e714c-bd39-4169-98b1-b5ca00000032` |
+| **Operation type** | `CLONE` |
+| **Operation result** | `DONE`, start `2026-06-18T08:46:36.870+00:00`, end `2026-06-18T09:04:57.913+00:00`, no error |
+| **Clone post-restore state** | `RUNNABLE`, `us-central1`, `POSTGRES_16`, `db-f1-micro`, private IP `10.249.0.5`, deletion protection `False` |
+| **Validation method** | Temporary Kubernetes Job `pitr-validate-20260618084607` in namespace `intent-rebase` (deleted after completion) |
+| **Validation results** | `database=intent_rebase`, `public_table_count=19`, `core_tables=graph_edges,graph_nodes,intent_versions,webhook_outbox` present, `_sqlx_migrations_table=absent` |
+| **Cleanup** | Clone deleted successfully; post-delete check returned `CLONE_DELETED` |
 
-### Restore to a New Instance (Recommended)
+**Caveats from this execution:**
+- `_sqlx_migrations` table was **absent** because the current migration Job uses raw `psql` and does not populate `sqlx` metadata. This is expected and does not indicate a PITR failure. Migration standardization (e.g., using `sqlx migrate run` or a `sqlx-cli` sidecar) is a separate work item.
+- This was a **clone-only validation** against a disposable target. The source instance was never touched.
+- RPO and RTO were not measured against live production traffic. The clone creation took ~18 minutes (from operation start to RUNNABLE), but this is not a production RTO measurement because no application cutover was performed.
+- Full disaster-recovery program maturity (scheduled drills, offsite replication, automated restore pipelines) remains open.
+
+### Phase 0 — Preflight (Fail-Closed)
+
+> ⚠️ **Do not proceed to Phase 1 until all checks below pass.** If any check fails, stop and escalate to the SRE owner.
+
+| # | Check | Command / Action | Stop Condition |
+|---|-------|------------------|----------------|
+| 0.1 | gcloud auth & project active | `gcloud config get-value project` returns `ferrum-497801` | ❌ STOP if not authenticated or wrong project |
+| 0.2 | Source instance exists and is RUNNABLE | `gcloud sql instances describe production-template-postgres-ed2c5bdd --project=ferrum-497801` | ❌ STOP if instance is not RUNNABLE or does not exist |
+| 0.3 | PITR / backup availability confirmed | `gcloud sql backups list --instance=production-template-postgres-ed2c5bdd --project=ferrum-497801` shows at least one backup within the PITR window | ❌ STOP if no backups or PITR is disabled |
+| 0.4 | Beta command surface confirmed | `gcloud beta sql instances clone --help` exits 0 and lists `--point-in-time` | ❌ STOP if beta component or flag missing; update gcloud / enable component |
+| 0.5 | Quota & cost acknowledged | Verify you have remaining Cloud SQL instance quota in `us-central1`. A clone creates a new billable instance for the duration of the test. | ⚠️ WARN — document cost estimate; do not proceed without budget approval |
+| 0.6 | Target name is unique and not equal to source | `NEW_INSTANCE_NAME` must be a name that does NOT already exist in the project and must NOT equal `production-template-postgres-ed2c5bdd` | ❌ STOP if name collision or `NEW_INSTANCE_NAME == production-template-postgres-ed2c5bdd` |
+
+### Phase 1 — Non-Destructive Clone to New Instance
+
+> **The source instance `production-template-postgres-ed2c5bdd` must NEVER be the target of a restore or clone-overwrite operation.** All PITR work is performed against a **new clone**.
 
 ```bash
-# 1. List available restore points (last 7 days for Cloud SQL Enterprise)
-gcloud sql backups list --instance=production-template-postgres-ed2c5bdd --project=ferrum-497801
+#!/bin/bash
+set -euo pipefail
 
-# 2. Restore to a new instance at a specific point in time
-#    Replace RESTORE_TIME with an RFC 3339 timestamp within the PITR window.
-RESTORE_TIME="2026-06-18T12:00:00.000Z"
+SOURCE_INSTANCE="production-template-postgres-ed2c5bdd"
+PROJECT="ferrum-497801"
+RESTORE_TIME="2026-06-18T12:00:00.000Z"   # RFC 3339; replace with real target
 NEW_INSTANCE_NAME="production-template-postgres-restore-$(date +%s)"
 
-gcloud sql instances clone production-template-postgres-ed2c5bdd \
-  --project=ferrum-497801 \
+# Paranoia check: source != target
+if [[ "${NEW_INSTANCE_NAME}" == "${SOURCE_INSTANCE}" ]]; then
+  echo "FATAL: NEW_INSTANCE_NAME equals SOURCE_INSTANCE. Aborting."
+  exit 1
+fi
+
+# 1. List backups / restore points (last 7 days for Cloud SQL Enterprise)
+echo "[$(date -Iseconds)] Listing available backups for ${SOURCE_INSTANCE}..."
+gcloud sql backups list --instance="${SOURCE_INSTANCE}" --project="${PROJECT}"
+
+# 2. Clone to a new instance at a specific point in time (beta command surface)
+#    This creates a NEW instance; the source instance is left untouched.
+echo "[$(date -Iseconds)] Cloning ${SOURCE_INSTANCE} → ${NEW_INSTANCE_NAME} at ${RESTORE_TIME}..."
+gcloud beta sql instances clone "${SOURCE_INSTANCE}" \
+  --project="${PROJECT}" \
   --destination-instance-name="${NEW_INSTANCE_NAME}" \
   --point-in-time="${RESTORE_TIME}"
 
-# 3. Verify the new instance is healthy
-gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project=ferrum-497801
-
-# 4. Connect and verify schema/data fidelity
-#    Update the connection string to use the new instance's private IP.
-#    DATABASE_URL="postgres://intent_rebase_app:REAL_PASSWORD@NEW_PRIVATE_IP:5432/intent_rebase"
-#    psql "${DATABASE_URL}" -c "SELECT COUNT(*) FROM _sqlx_migrations;"
-#    psql "${DATABASE_URL}" -c "SELECT COUNT(*) FROM intents;"
-
-# 5. (Optional) Run application smoke tests against the restored instance
-#    DATABASE_URL=... cargo test -p intent-service --test migration_integration -- --ignored
-#    DATABASE_URL=... cargo test -p intent-api --test webhook_integration -- --ignored
-
-# 6. If validation passes, coordinate cutover with SRE
-#    - Update the application DATABASE_URL to point to the new instance.
-#    - Or, delete the old instance and rename the new one (downtime required).
-
-# 7. Clean up the temporary restore instance if not needed for ongoing testing
-# gcloud sql instances delete "${NEW_INSTANCE_NAME}" --project=ferrum-497801 --quiet
+# 3. Wait for clone to reach RUNNABLE
+echo "[$(date -Iseconds)] Waiting for ${NEW_INSTANCE_NAME} to reach RUNNABLE..."
+while true; do
+  STATUS=$(gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project="${PROJECT}" --format="value(state)")
+  if [[ "${STATUS}" == "RUNNABLE" ]]; then
+    echo "[$(date -Iseconds)] ${NEW_INSTANCE_NAME} is RUNNABLE."
+    break
+  fi
+  echo "[$(date -Iseconds)] Current state: ${STATUS}. Waiting 30s..."
+  sleep 30
+done
 ```
 
-### Restore in Place (Destructive — Not Recommended Without Approval)
+### Phase 2 — Validation (Private-IP Connectivity)
+
+Both the source and the clone are configured with **private IP only** (no public IP). Direct `psql` from a local workstation may fail unless you are on the authorized VPC or using a VPN/Interconnect. Use one of the following connectivity methods.
+
+#### Option A — Connect from a GKE pod in the same VPC (preferred for validation)
 
 ```bash
-# ⚠️ WARNING: This overwrites the existing instance. Do not run without explicit SRE approval.
+# 1. Identify a running pod in the intent-rebase namespace
+kubectl -n intent-rebase get pods
+
+# 2. Exec a temporary postgres container inside the pod's network
+kubectl -n intent-rebase exec -it <intent-api-pod-name> -- /bin/sh
+
+# 3. Inside the pod, connect to the clone using its private IP
+#    (obtain the clone's private IP from gcloud describe or Terraform outputs)
+#    CLONE_PRIVATE_IP=$(gcloud sql instances describe "${NEW_INSTANCE_NAME}" \
+#      --project="${PROJECT}" --format="value(ipAddresses[0].ipAddress)")
+#    psql "postgresql://intent_rebase_app:REAL_PASSWORD@${CLONE_PRIVATE_IP}:5432/intent_rebase" \
+#      -c "SELECT current_database();"
+```
+
+> **Caveat:** The clone's private IP may differ from the source. Use the clone's actual IP from `gcloud sql instances describe`.
+
+#### Option B — Cloud SQL Auth Proxy (sidecar or local with authorized network)
+
+```bash
+# Run the proxy from a GKE pod or a Cloud Shell session with VPC connector:
+# cloud-sql-proxy "${PROJECT}:${REGION}:${NEW_INSTANCE_NAME}" --private-ip &
+# Then connect via localhost:5432
+# psql "postgresql://intent_rebase_app:REAL_PASSWORD@localhost:5432/intent_rebase" \
+#   -c "SELECT current_database();"
+```
+
+#### Validation Queries
+
+Run these inside the connected session. `_sqlx_migrations` may be **empty** because the current migration Job uses raw `psql` and does not populate `sqlx` metadata. If `_sqlx_migrations` is empty, fall back to the table-existence checks below.
+
+```sql
+-- 2.1 Verify database connectivity and current database
+SELECT current_database();
+
+-- 2.2 Schema migration metadata (optional — may be empty)
+SELECT COUNT(*) FROM _sqlx_migrations;
+-- Caveat: If 0 rows, this is expected because migrations were applied via raw psql.
+-- Fallback: check that application tables exist and are non-empty.
+
+-- 2.3 Intent table row count (core application table)
+SELECT COUNT(*) FROM intents;
+
+-- 2.4 Core table existence checks (fallback if _sqlx_migrations is empty)
+SELECT 'graph_nodes' AS table_name, COUNT(*) FROM graph_nodes
+UNION ALL
+SELECT 'graph_edges', COUNT(*) FROM graph_edges
+UNION ALL
+SELECT 'intent_versions', COUNT(*) FROM intent_versions
+UNION ALL
+SELECT 'webhook_outbox', COUNT(*) FROM webhook_outbox;
+```
+
+#### Application Smoke Tests (Optional — Requires Same Connectivity)
+
+> ⚠️ Only run if you can provide the clone's `DATABASE_URL` from within the cluster. The tests themselves do not create infrastructure; they connect to the DB you specify.
+
+```bash
+# From a GKE pod with the application binary or from a dev container:
+# DATABASE_URL="postgresql://intent_rebase_app:REAL_PASSWORD@CLONE_PRIVATE_IP:5432/intent_rebase" \
+#   cargo test -p intent-service --test migration_integration -- --ignored
+# DATABASE_URL="postgresql://intent_rebase_app:REAL_PASSWORD@CLONE_PRIVATE_IP:5432/intent_rebase" \
+#   cargo test -p intent-api --test webhook_integration -- --ignored
+```
+
+### Phase 3 — Cleanup (Clone Deletion)
+
+> **Cloud SQL clones may inherit deletion protection.** If the clone was created with `deletion_protection` enabled (matching the Terraform default), you must disable it before deletion.
+
+```bash
+# 1. Check deletion protection on the clone
+PROTECTION=$(gcloud sql instances describe "${NEW_INSTANCE_NAME}" \
+  --project="${PROJECT}" --format="value(settings.deletionProtectionEnabled)")
+
+if [[ "${PROTECTION}" == "True" || "${PROTECTION}" == "true" ]]; then
+  echo "[$(date -Iseconds)] Disabling deletion protection on ${NEW_INSTANCE_NAME}..."
+  gcloud sql instances patch "${NEW_INSTANCE_NAME}" \
+    --project="${PROJECT}" \
+    --no-deletion-protection
+  # Wait briefly for the patch to apply
+  sleep 15
+fi
+
+# 2. Delete the clone
+echo "[$(date -Iseconds)] Deleting ${NEW_INSTANCE_NAME}..."
+gcloud sql instances delete "${NEW_INSTANCE_NAME}" \
+  --project="${PROJECT}" \
+  --quiet
+
+# 3. Verify the clone is gone
+echo "[$(date -Iseconds)] Verifying deletion..."
+gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project="${PROJECT}" 2>&1 \
+  | grep -q "NOT_FOUND" && echo "Confirmed: ${NEW_INSTANCE_NAME} deleted."
+```
+
+> **Cost warning:** The clone accumulates billing from the moment it reaches `RUNNABLE`. Delete it promptly after validation to avoid unnecessary Cloud SQL charges.
+
+### Restore in Place (Destructive — NOT Allowed Without SRE + Budget Approval)
+
+```bash
+# ⚠️ FATAL WARNING: This overwrites the PRIMARY instance. Do NOT run without:
+#   1. Explicit written SRE approval.
+#   2. A scheduled maintenance window.
+#   3. A verified backup/clone fallback.
+#   4. A rollback plan signed off by the project owner.
 # gcloud sql instances restore production-template-postgres-ed2c5bdd \
 #   --project=ferrum-497801 \
 #   --backup-id=BACKUP_ID
@@ -140,11 +285,20 @@ gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project=ferrum-497801
 
 | Step | Check | Expected Result | Actual Result | Pass/Fail |
 |------|-------|-----------------|---------------|-----------|
-| 1 | Clone command completes | New instance enters `RUNNABLE` | | |
-| 2 | Schema migration count | `SELECT COUNT(*) FROM _sqlx_migrations` = 21 | | |
-| 3 | Intent table row count | Matches pre-restore approximate count | | |
-| 4 | Application migration integration test | `cargo test -p intent-service --test migration_integration` passes | | |
-| 5 | Application webhook integration test | `cargo test -p intent-api --test webhook_integration` passes | | |
+| 0.1 | Preflight: auth & project | `gcloud config get-value project` = `ferrum-497801` | | |
+| 0.2 | Preflight: source RUNNABLE | `gcloud sql instances describe` shows `state: RUNNABLE` | | |
+| 0.3 | Preflight: backup availability | `gcloud sql backups list` returns ≥1 backup within window | | |
+| 0.4 | Preflight: beta command surface | `gcloud beta sql instances clone --help` lists `--point-in-time` | | |
+| 0.6 | Preflight: target name ≠ source | `NEW_INSTANCE_NAME` != `production-template-postgres-ed2c5bdd` | | |
+| 1.1 | Clone command completes | `gcloud beta sql instances clone` exits 0 | | |
+| 1.2 | Clone reaches RUNNABLE | `gcloud sql instances describe` shows `state: RUNNABLE` within reasonable time | | |
+| 2.1 | Private-IP connectivity | `SELECT current_database()` from GKE pod or Auth Proxy succeeds | | |
+| 2.2 | Schema migration metadata | `SELECT COUNT(*) FROM _sqlx_migrations` returns ≥0 (may be 0 if raw-psql migrations) | | |
+| 2.3 | Intent table row count | Matches pre-restore approximate count or is non-empty | | |
+| 2.4 | Core table existence | `graph_nodes`, `graph_edges`, `intent_versions`, `webhook_outbox` exist and are non-empty | | |
+| 2.5 | (Optional) App smoke tests | `cargo test -p intent-service --test migration_integration` passes | | |
+| 3.1 | Deletion protection disabled | Patch command exits 0 if protection was enabled | | |
+| 3.2 | Clone deleted | `gcloud sql instances describe` returns `NOT_FOUND` | | |
 | 6 | RPO measurement | Data loss ≤ 1 hour from target restore time | | |
 | 7 | RTO measurement | Clone + validation completed ≤ 30 minutes | | |
 
@@ -152,7 +306,7 @@ gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project=ferrum-497801
 
 | Forbidden Claim | Allowed Replacement |
 |----------------|-------------------|
-| `PITR restore tested on production` | `PITR procedure documented; execution scheduled for next maintenance window` |
+| `PITR restore tested on production` | `PITR clone restore validated (2026-06-18) against separate Cloud SQL clone; full production DR drill not yet executed` |
 | `RPO/RTO SLA validated` | `Target RPO=1h/RTO=30m documented; validation pending execution against Cloud SQL instance` |
 | `Cloud SQL backups are immutable` | `Cloud SQL automated backups enabled; immutability not equivalent to S3 Object Lock` |
 

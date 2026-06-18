@@ -2,7 +2,7 @@
 
 > **⚠️ CORE SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY — not production-ready.**
 >
-> This directory contains an **applied GCP infrastructure scaffold** and an **internal GKE smoke deployment** for the Intent Rebase Engine. Core resources (VPC, GKE, GCS, Cloud SQL) have been provisioned, and the `intent-api` container is running in the `intent-rebase` namespace with SQL-backed health/ready endpoints responding. The system is **not production-ready**: no real Slack/SMTP credentials are configured, no PITR restore has been tested, no load test has been executed against the provisioned infrastructure, no pen test has been conducted, and the deployment targets a single-node cluster without HPA or rolling-update resilience. All gates (FIND-001, FIND-003, FIND-004, A-05, A-06) remain OPEN or BLOCKED until named external evidence is obtained.
+> This directory contains an **applied GCP infrastructure scaffold** and an **internal GKE smoke deployment** for the Intent Rebase Engine. Core resources (VPC, GKE, GCS, Cloud SQL) have been provisioned, and the `intent-api` container is running in the `intent-rebase` namespace with SQL-backed health/ready endpoints responding. The system is **not production-ready**: no real Slack/SMTP credentials are configured, PITR clone-only validated (2026-06-18) but RPO/RTO not measured against live production traffic and full DR program maturity remains open, no load test has been executed against the provisioned infrastructure, no pen test has been conducted, and the deployment targets a single-node cluster without HPA or rolling-update resilience. All gates (FIND-001, FIND-003, FIND-004, A-05, A-06) remain OPEN or BLOCKED until named external evidence is obtained.
 
 ---
 
@@ -39,10 +39,10 @@ Before using this scaffold:
 
 | Gate / Finding | Status | Scaffold Role |
 |----------------|--------|-------------|
-| A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created; `intent-api` pod running with health/ready responding. Not production-ready: no HPA, no ingress, no real secrets, no remote Terraform state, no PITR test, no load test, no pen test. |
+| A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created; `intent-api` pod running with health/ready responding. Not production-ready: no HPA, no ingress, no real secrets, no remote Terraform state, PITR clone-only validated, no load test, no pen test; full DR maturity/RPO-RTO still open. |
 | FIND-001 Production telemetry / Alertmanager real receivers | 🔴 OPEN | Alertmanager ConfigMap + `alertmanager-prod.yml` placeholders exist; Slack/SMTP not configured |
 | FIND-003 Secret rotation / Vault or AWS SM | 🔴 OPEN | Kubernetes Secrets placeholder only; secret manager not deployed |
-| FIND-004 Backup/restore PITR not validated | 🔴 OPEN | Cloud SQL backup + PITR configured in Terraform; not executed or validated |
+| FIND-004 Backup/restore PITR clone-only validated | 🟡 VALIDATED — CLONE-ONLY | Cloud SQL PITR clone restore validated on 2026-06-18 against separate clone `pitr-restore-test-20260618084607`; RPO/RTO not measured against live production traffic; full DR program maturity remains open |
 | A-07 Pen Test | 🔴 NOT APPROVED | No change; internal review only |
 | A-06 Load Testing (L3–L5) | 🔴 BLOCKED | Infrastructure exists (GKE + Cloud SQL) but no load test executed against it; no real Alertmanager receivers to validate alert firing under load |
 | A-10 DLQ/NATS Production-Grade | 🔴 BLOCKED | Requires production NATS topology + SRE sign-off |
@@ -53,10 +53,10 @@ Before using this scaffold:
 
 | Forbidden Claim | Why It Is Forbidden Here |
 |----------------|--------------------------|
-| `Production-ready` | Core GCP scaffold applied + internal smoke deploy (app running on GKE with SQL-backed health/ready). Not production-ready: no real Slack/SMTP secrets, no PITR/pen/load test validated, no HPA, single-node cluster, no remote state backend migration, Recreate strategy |
+| `Production-ready` | Core GCP scaffold applied + internal smoke deploy (app running on GKE with SQL-backed health/ready). Not production-ready: no real Slack/SMTP secrets, no full DR/live RPO-RTO, pen, or load test validated, no HPA, single-node cluster, no remote state backend migration, Recreate strategy |
 | `FIND-001 RESOLVED` | Alertmanager receivers are placeholders; no real Slack/SMTP configured |
 | `FIND-003 RESOLVED` | No secret manager deployed; Kubernetes Secrets are a placeholder |
-| `FIND-004 RESOLVED` | Cloud SQL backups are Terraform config only; no restore validated |
+| `FIND-004 RESOLVED` | Cloud SQL PITR clone-only validated (2026-06-18), but full DR/live RPO-RTO not validated; use only VALIDATED — CLONE-ONLY |
 | `FIND-005 RESOLVED` | No pen test executed; scope remains planning-only |
 | `External sign-off obtained` | A-03/A-04 are APPROVED WITH CONDITIONS; A-07 is NOT APPROVED |
 | `CI-green` | No CI changes; local gates remain source of truth |
@@ -129,10 +129,10 @@ Terraform apply **completed** for the core GCP scaffold. This is **infrastructur
 
 **Remaining blockers (not resolved by infrastructure scaffold apply):**
 - No real Slack/SMTP credentials configured in Alertmanager.
-- No PITR restore test has been executed against Cloud SQL.
 - No load test has been run against the provisioned infrastructure.
 - No penetration test has been conducted.
 - Terraform state migrated to GCS remote backend (`ire-tfstate-ferrum-497801`).
+- PITR restore validated against a separate Cloud SQL clone (2026-06-18); RPO/RTO not measured against live production traffic. Full DR program maturity remains open.
 
 ---
 
@@ -203,7 +203,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | 2 | **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window | SRE / Security | A-05, A-12 | 🔴 OPEN |
 | 3 | **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent | SRE / Backend Lead | A-05, A-10, A-13 | 🔴 OPEN |
 | 4 | **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load | SRE / Backend Lead | A-05, A-06 | 🔴 OPEN |
-| 5 | **Cloud SQL PITR restore test**: Execute documented PITR procedure against `production-template-postgres-ed2c5bdd`; measure RPO/RTO | SRE | A-05 | 🔴 OPEN |
+| 5 | **Cloud SQL PITR restore test**: Execute documented PITR procedure against `production-template-postgres-ed2c5bdd`; measure RPO/RTO | SRE | A-05 | ✅ VALIDATED — CLONE-ONLY (2026-06-18). Clone `pitr-restore-test-20260618084607` created, validated (19 public tables, core tables present), deleted. RPO/RTO not measured against live production traffic. `_sqlx_migrations` absent due to raw-psql migrations (expected). Full DR program maturity remains open. |
 | 6 | **Load test against provisioned infra**: Run 30min sustained + all alert types + real receivers on GKE + Cloud SQL | Backend Lead / SRE | A-05, A-03 | 🔴 OPEN |
 | 7 | **External SRE sign-off (A-03)**: Named third-party evidence against hardened infrastructure | External SRE | Items 1–6 above | 🔴 OPEN |
 | 8 | **Pen test (A-07)**: External engagement against staging/pre-production environment | External Pen Test | A-04, A-05, staging env | 🔴 OPEN |
