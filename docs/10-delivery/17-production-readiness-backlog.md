@@ -2,7 +2,7 @@
 
 > **Status:** Non-production — Phase 3 closed (2026-05-11)
 > **Scope:** Production readiness items only; feature delivery tracked separately
-> **Last Updated:** 2026-05-20
+> **Last Updated:** 2026-06-18
 
 ---
 
@@ -110,12 +110,24 @@ P1 items are required for safe production deployment but may be addressed in par
 | Field | Value |
 |-------|-------|
 | **Description** | Production-grade infrastructure: Postgres with connection pooling, NATS with JetStream, S3 storage, monitoring stack |
-| **Current State** | Local docker-compose environment available; production infra not provisioned |
-| **Evidence Required** | Production environment verified operational; deployment runbook executed |
+| **Current State** | ✅ GCP core scaffold applied (VPC, GKE, GCS, Cloud SQL) and internal GKE smoke deploy completed. `intent-api` pod running in namespace `intent-rebase` with SQL-backed health/ready endpoints responding. **Not production-ready.** |
+| **Evidence Required** | Production environment verified operational with production hardening; deployment runbook executed |
 | **Owner** | SRE |
-| **Status** | 🔴 BLOCKED — requires production environment provisioning |
+| **Status** | 🟡 SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY — core infrastructure provisioned on GCP project `ferrum-497801`; app running on single-node GKE cluster; remaining hardening: HPA, PDB, rolling-update, ingress/TLS, NATS JetStream, S3, remote Terraform state backend, secret manager, real Alertmanager receivers |
 
-**No overclaim:** docker-compose local is not production-equivalent.
+**No overclaim:** Scaffold and internal smoke deploy are not production-equivalent. Production hardening (HPA, PDB, deletion protection, ingress/TLS, NATS, S3, secret manager, real Alertmanager, PITR restore test, load test, pen test) remain open.
+
+**Remaining completion items (recommended order):**
+1. **Infrastructure hardening**: HPA, PodDisruptionBudget, rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain.
+2. **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window.
+3. **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent.
+4. **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load.
+5. **Cloud SQL PITR restore test**: Execute and validate PITR procedure against provisioned instance; measure RPO/RTO.
+6. **Load test against provisioned infra**: Run 30min sustained + all alert types + real receivers on GKE + Cloud SQL.
+7. **External SRE sign-off (A-03)**: Named third-party evidence against the hardened infrastructure.
+8. **Pen test (A-07)**: External engagement against staging/pre-production environment.
+9. **Terraform state backend**: GCS backend already configured (`backend.tf`); routine access validation and recovery docs remain.
+10. **CI/CD pipeline**: Build, push, deploy automation for GKE; no CI changes have been made.
 
 ---
 

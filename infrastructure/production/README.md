@@ -39,7 +39,7 @@ Before using this scaffold:
 
 | Gate / Finding | Status | Scaffold Role |
 |----------------|--------|-------------|
-| A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created. Not production-ready: no app deployed, no real secrets, no remote Terraform state, no PITR test, no load test, no pen test. |
+| A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED + INTERNAL SMOKE DEPLOY | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created; `intent-api` pod running with health/ready responding. Not production-ready: no HPA, no ingress, no real secrets, no remote Terraform state, no PITR test, no load test, no pen test. |
 | FIND-001 Production telemetry / Alertmanager real receivers | 🔴 OPEN | Alertmanager ConfigMap + `alertmanager-prod.yml` placeholders exist; Slack/SMTP not configured |
 | FIND-003 Secret rotation / Vault or AWS SM | 🔴 OPEN | Kubernetes Secrets placeholder only; secret manager not deployed |
 | FIND-004 Backup/restore PITR not validated | 🔴 OPEN | Cloud SQL backup + PITR configured in Terraform; not executed or validated |
@@ -190,3 +190,24 @@ The following GCP pre-work was completed to enable Terraform apply. Terraform ap
 ## Last Updated
 
 2026-06-18
+
+---
+
+## Remaining Completion Items (Recommended Order)
+
+This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessment-and-execution-tracker.md` §6. It is a concise checklist for moving from internal smoke deploy to production readiness.
+
+| # | Item | Owner | Blocker / Prerequisite | Status |
+|---|------|-------|------------------------|--------|
+| 1 | **K8s hardening**: HPA, PodDisruptionBudget, rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain | SRE / Backend Lead | Scaffold exists | 🔴 OPEN |
+| 2 | **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window | SRE / Security | A-05, A-12 | 🔴 OPEN |
+| 3 | **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent | SRE / Backend Lead | A-05, A-10, A-13 | 🔴 OPEN |
+| 4 | **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load | SRE / Backend Lead | A-05, A-06 | 🔴 OPEN |
+| 5 | **Cloud SQL PITR restore test**: Execute documented PITR procedure against `production-template-postgres-ed2c5bdd`; measure RPO/RTO | SRE | A-05 | 🔴 OPEN |
+| 6 | **Load test against provisioned infra**: Run 30min sustained + all alert types + real receivers on GKE + Cloud SQL | Backend Lead / SRE | A-05, A-03 | 🔴 OPEN |
+| 7 | **External SRE sign-off (A-03)**: Named third-party evidence against hardened infrastructure | External SRE | Items 1–6 above | 🔴 OPEN |
+| 8 | **Pen test (A-07)**: External engagement against staging/pre-production environment | External Pen Test | A-04, A-05, staging env | 🔴 OPEN |
+| 9 | **Terraform state backend access validation**: GCS backend configured (`backend.tf`); routine access validation and recovery docs | SRE | A-05 scaffold exists | 🟡 DOCUMENTED |
+| 10 | **CI/CD pipeline for GKE**: Build, push, deploy automation; no CI changes have been made | Backend Lead / SRE | A-05 | 🔴 OPEN |
+
+> **No overclaim:** The scaffold is applied and the app is running internally, but none of the hardening items above are complete. Do not claim production readiness until all items are closed with evidence.

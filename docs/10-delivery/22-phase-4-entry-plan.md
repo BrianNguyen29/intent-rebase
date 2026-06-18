@@ -1,7 +1,7 @@
 # Phase 4 Entry Plan
 
 **Status:** PLANNING — Phase 4 entry criteria and execution roadmap
-**Date:** 2026-06-07
+**Date:** 2026-06-18
 **Owner:** BrianNguyen (Backend Lead, solo practitioner)
 
 ---
@@ -92,7 +92,7 @@ This document provides a comprehensive todo-list and execution plan for entering
 | **Dependencies** | Cloud provider account; Terraform/CDK or equivalent IaC; SRE sign-off |
 | **Owner** | SRE |
 | **Validation Path** | Production environment verified operational; deployment runbook executed |
-| **Non-Production Caveat** | docker-compose local is not production-equivalent; provisioning requires external infrastructure and budget. Scaffold applied is not production-ready. |
+| **Non-Production Caveat** | docker-compose local is not production-equivalent; provisioning requires external infrastructure and budget. Scaffold applied and internal smoke deploy completed on GKE, but not production-ready: no HPA, no PDB, single-node cluster, `Recreate` strategy, no ingress/TLS, no NATS, no S3, no secret manager, no real Alertmanager receivers, no PITR restore test, no load test, no pen test. |
 
 ---
 

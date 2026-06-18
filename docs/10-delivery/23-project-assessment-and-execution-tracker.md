@@ -1,7 +1,7 @@
 # Project Assessment and Phase Execution Tracker
 
 > **Status:** ASSESSMENT — consolidated source of truth for executing next phases
-> **Date:** 2026-06-10
+> **Date:** 2026-06-18
 > **Owner:** BrianNguyen (Backend Lead, solo practitioner)
 > **Scope:** Non-production planning and execution tracker only
 
@@ -299,7 +299,9 @@ This document consolidates recent explorer/oracle findings into a single actiona
 
 ### Phase 4 — External / Production Evidence
 
-> **Goal:** Close external gates with named third-party evidence and production infrastructure. This phase **cannot proceed** until external reviewers and infrastructure are engaged.
+> **Goal:** Close external gates with named third-party evidence and production infrastructure. Core GCP scaffold and internal GKE smoke deploy are already provisioned (A-05); this phase focuses on production hardening, external validation, and evidence collection.
+>
+> **Current state (2026-06-18):** A-05 core infrastructure is provisioned (VPC, GKE, GCS, Cloud SQL) and the `intent-api` pod is running internally with SQL-backed health/ready endpoints. A-05 is **not closed** — it remains open until production hardening (HPA, PDB, ingress/TLS, deletion protection, NATS, S3, secret manager, real Alertmanager, PITR restore test, load test) is completed and a deployment runbook is executed against the hardened environment. External gates (A-03, A-04, A-07) still require named third-party evidence.
 
 | Gate | Phase 4 Action | Evidence Required | Owner | Phase 3 Prerequisite |
 |------|---------------|-------------------|-------|---------------------|
@@ -317,6 +319,23 @@ This document consolidates recent explorer/oracle findings into a single actiona
 - All external gates have named reviewer evidence or documented deferral
 - Production infrastructure is provisioned and operational
 - No WAIVED-SOLO items remain unaddressed before production claim
+
+### Phase 4 Remaining Completion Items (Recommended Order)
+
+| # | Item | Owner | Blocker / Prerequisite | Status |
+|---|------|-------|------------------------|--------|
+| 1 | **K8s hardening**: HPA, PodDisruptionBudget, rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain | SRE / Backend Lead | A-05 scaffold exists | 🔴 OPEN |
+| 2 | **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window | SRE / Security | A-05, A-12 | 🔴 OPEN |
+| 3 | **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent | SRE / Backend Lead | A-05, A-10, A-13 | 🔴 OPEN |
+| 4 | **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load | SRE / Backend Lead | A-05, A-06 | 🔴 OPEN |
+| 5 | **Cloud SQL PITR restore test**: Execute documented PITR procedure against `production-template-postgres-ed2c5bdd`; measure RPO/RTO | SRE | A-05 | 🔴 OPEN |
+| 6 | **Load test against provisioned infra**: Run 30min sustained + all alert types + real receivers on GKE + Cloud SQL | Backend Lead / SRE | A-05, A-03 | 🔴 OPEN |
+| 7 | **External SRE sign-off (A-03)**: Named third-party evidence against hardened infrastructure | External SRE | Items 1–6 above | 🔴 OPEN |
+| 8 | **Pen test (A-07)**: External engagement against staging/pre-production environment | External Pen Test | A-04, A-05, staging env | 🔴 OPEN |
+| 9 | **Terraform state backend access validation**: GCS backend configured (`backend.tf`); routine access validation and recovery docs | SRE | A-05 scaffold exists | 🟡 DOCUMENTED |
+| 10 | **CI/CD pipeline for GKE**: Build, push, deploy automation; no CI changes have been made | Backend Lead / SRE | A-05 | 🔴 OPEN |
+
+> **No overclaim:** The scaffold is applied and the app is running internally, but none of the hardening items above are complete. Do not claim production readiness until all items are closed with evidence.
 
 ---
 

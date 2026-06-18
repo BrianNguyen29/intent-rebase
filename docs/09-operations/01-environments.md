@@ -47,8 +47,10 @@ External gates required before production consideration:
 | Field | Value |
 |-------|-------|
 | **Scaffold exists** | ✅ Yes (GCP + Terraform, Kubernetes Secrets, Alertmanager templates) |
-| **Production-ready** | ❌ No — template-only; not applied; requires real GCP project, credentials, external gates, and named evidence |
-| **Evidence strength** | TEMPLATE ONLY — no infrastructure provisioned; no production claim |
+| **Core infrastructure applied** | ✅ Yes (VPC, GKE, GCS, Cloud SQL Postgres on project `ferrum-497801`) |
+| **Internal smoke deploy** | ✅ Yes (`intent-api` pod running in `intent-rebase` namespace; health/ready responding) |
+| **Production-ready** | ❌ No — internal smoke deploy only; requires HPA, PDB, ingress/TLS, secret manager, real Alertmanager receivers, NATS, S3, PITR restore test, load test, pen test, external gates |
+| **Evidence strength** | Internal smoke deploy against provisioned GCP resources; NOT production-equivalent |
 | **Last Updated** | June 2026 |
 
-**Note:** This scaffold is pre-work for A-05 and related findings (FIND-001, FIND-003, FIND-004). All gates remain OPEN until applied and validated. Do not apply Terraform or commit real secrets.
+**Note:** This scaffold is applied for A-05 but remains not production-ready. Terraform state migrated to GCS backend (`backend.tf`). All gates (FIND-001, FIND-003, FIND-004, A-05, A-06) remain OPEN or BLOCKED until validated with named external evidence. Do not apply Terraform or commit real secrets. The `intent-api` Deployment uses `strategy: Recreate` on a single-node cluster for smoke validation only.

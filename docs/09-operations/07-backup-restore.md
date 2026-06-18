@@ -3,7 +3,7 @@
 **Status:** `LOCAL VALIDATED — Templates + Docker-Compose Non-Destructive Restore Verified`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** May 2026
+**Last Updated:** 2026-06-18
 
 ---
 
@@ -74,6 +74,87 @@ These targets inform backup frequency and restore procedure priority, but do not
 | **NATS/JetStream** | Event stream, consumer state, stream metadata | JetStream backup (nats-server backup) | JetStream restore |
 | **MinIO (S3)** | Policy snapshot blobs, artifact storage | MinIO bucket replication / `mc mirror` | Restore from replicated bucket |
 | **Application State** | Intent-api in-memory state | N/A — stateless service; replay from PostgreSQL + NATS | Restart service; Kafka consumer replay |
+
+---
+
+## Cloud SQL PITR Restore Procedure (GCP)
+
+> **⚠️ NOT YET EXECUTED — Procedure Only**
+>
+> This section documents the intended Point-in-Time Recovery (PITR) procedure for the provisioned Cloud SQL Postgres instance (`production-template-postgres-ed2c5bdd`). The procedure has **not been executed** against the live instance. RPO/RTO targets are documented but not measured. Execute this only after scheduling a maintenance window and confirming with the SRE owner.
+
+### Prerequisites
+
+- GCP project `ferrum-497801` with Cloud SQL Admin API enabled.
+- `gcloud` CLI authenticated with sufficient permissions (`roles/cloudsql.admin` or `roles/editor`).
+- A target recovery time (RFC 3339) within the PITR window (Cloud SQL PITR is enabled via `point_in_time_recovery_enabled = true` in Terraform).
+- Sufficient quota for a second Cloud SQL instance if restoring to a new instance (recommended to avoid overwriting the source).
+
+### Restore to a New Instance (Recommended)
+
+```bash
+# 1. List available restore points (last 7 days for Cloud SQL Enterprise)
+gcloud sql backups list --instance=production-template-postgres-ed2c5bdd --project=ferrum-497801
+
+# 2. Restore to a new instance at a specific point in time
+#    Replace RESTORE_TIME with an RFC 3339 timestamp within the PITR window.
+RESTORE_TIME="2026-06-18T12:00:00.000Z"
+NEW_INSTANCE_NAME="production-template-postgres-restore-$(date +%s)"
+
+gcloud sql instances clone production-template-postgres-ed2c5bdd \
+  --project=ferrum-497801 \
+  --destination-instance-name="${NEW_INSTANCE_NAME}" \
+  --point-in-time="${RESTORE_TIME}"
+
+# 3. Verify the new instance is healthy
+gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project=ferrum-497801
+
+# 4. Connect and verify schema/data fidelity
+#    Update the connection string to use the new instance's private IP.
+#    DATABASE_URL="postgres://intent_rebase_app:REAL_PASSWORD@NEW_PRIVATE_IP:5432/intent_rebase"
+#    psql "${DATABASE_URL}" -c "SELECT COUNT(*) FROM _sqlx_migrations;"
+#    psql "${DATABASE_URL}" -c "SELECT COUNT(*) FROM intents;"
+
+# 5. (Optional) Run application smoke tests against the restored instance
+#    DATABASE_URL=... cargo test -p intent-service --test migration_integration -- --ignored
+#    DATABASE_URL=... cargo test -p intent-api --test webhook_integration -- --ignored
+
+# 6. If validation passes, coordinate cutover with SRE
+#    - Update the application DATABASE_URL to point to the new instance.
+#    - Or, delete the old instance and rename the new one (downtime required).
+
+# 7. Clean up the temporary restore instance if not needed for ongoing testing
+# gcloud sql instances delete "${NEW_INSTANCE_NAME}" --project=ferrum-497801 --quiet
+```
+
+### Restore in Place (Destructive — Not Recommended Without Approval)
+
+```bash
+# ⚠️ WARNING: This overwrites the existing instance. Do not run without explicit SRE approval.
+# gcloud sql instances restore production-template-postgres-ed2c5bdd \
+#   --project=ferrum-497801 \
+#   --backup-id=BACKUP_ID
+```
+
+### Validation Checklist (To Be Completed When Executed)
+
+| Step | Check | Expected Result | Actual Result | Pass/Fail |
+|------|-------|-----------------|---------------|-----------|
+| 1 | Clone command completes | New instance enters `RUNNABLE` | | |
+| 2 | Schema migration count | `SELECT COUNT(*) FROM _sqlx_migrations` = 21 | | |
+| 3 | Intent table row count | Matches pre-restore approximate count | | |
+| 4 | Application migration integration test | `cargo test -p intent-service --test migration_integration` passes | | |
+| 5 | Application webhook integration test | `cargo test -p intent-api --test webhook_integration` passes | | |
+| 6 | RPO measurement | Data loss ≤ 1 hour from target restore time | | |
+| 7 | RTO measurement | Clone + validation completed ≤ 30 minutes | | |
+
+### Forbidden Claims
+
+| Forbidden Claim | Allowed Replacement |
+|----------------|-------------------|
+| `PITR restore tested on production` | `PITR procedure documented; execution scheduled for next maintenance window` |
+| `RPO/RTO SLA validated` | `Target RPO=1h/RTO=30m documented; validation pending execution against Cloud SQL instance` |
+| `Cloud SQL backups are immutable` | `Cloud SQL automated backups enabled; immutability not equivalent to S3 Object Lock` |
 
 ---
 
