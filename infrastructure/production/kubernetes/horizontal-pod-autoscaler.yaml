@@ -1,0 +1,51 @@
+# HPA manifest — added but NOT YET APPLIED to the live cluster.
+# The current single-node internal smoke cluster has insufficient capacity
+# for HPA to function meaningfully. Apply only after scaling node pool capacity.
+#
+# NOTE: HPA is safe to create even if Deployment has `strategy: Recreate`,
+# but scaling events will recreate the pod (brief downtime). Switch to
+# `RollingUpdate` with `maxSurge: 0, maxUnavailable: 1` or a larger node pool
+# before enabling HPA in production.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: intent-api
+  namespace: intent-rebase
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: intent-api
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+      selectPolicy: Max

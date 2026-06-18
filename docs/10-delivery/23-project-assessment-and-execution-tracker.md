@@ -324,7 +324,7 @@ This document consolidates recent explorer/oracle findings into a single actiona
 
 | # | Item | Owner | Blocker / Prerequisite | Status |
 |---|------|-------|------------------------|--------|
-| 1 | **K8s hardening**: HPA, PodDisruptionBudget, rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain | SRE / Backend Lead | A-05 scaffold exists | 🔴 OPEN |
+| 1 | **K8s hardening**: HPA + PDB manifests added under `kubernetes/` but NOT APPLIED to live cluster. Remaining: rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain, scale node pool before HPA/PDB apply | SRE / Backend Lead | A-05 scaffold exists | 🟡 MANIFESTS ADDED — NOT APPLIED |
 | 2 | **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window | SRE / Security | A-05, A-12 | 🔴 OPEN |
 | 3 | **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent | SRE / Backend Lead | A-05, A-10, A-13 | 🔴 OPEN |
 | 4 | **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load | SRE / Backend Lead | A-05, A-06 | 🔴 OPEN |

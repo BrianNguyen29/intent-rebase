@@ -118,7 +118,7 @@ P1 items are required for safe production deployment but may be addressed in par
 **No overclaim:** Scaffold and internal smoke deploy are not production-equivalent. Production hardening (HPA, PDB, deletion protection, ingress/TLS, NATS, S3, secret manager, real Alertmanager, load test, pen test) remain open. PITR restore validated against separate Cloud SQL clone (2026-06-18); RPO/RTO not measured against live production traffic. Full DR program maturity remains open.
 
 **Remaining completion items (recommended order):**
-1. **Infrastructure hardening**: HPA, PodDisruptionBudget, rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain.
+1. **Infrastructure hardening**: HPA + PDB manifests added under `kubernetes/` but NOT APPLIED to live cluster. Remaining: rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain, scale node pool before HPA/PDB apply.
 2. **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window.
 3. **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent.
 4. **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load.

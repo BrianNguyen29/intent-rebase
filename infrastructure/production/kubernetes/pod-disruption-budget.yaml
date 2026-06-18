@@ -1,0 +1,19 @@
+# PDB manifest — added but NOT YET APPLIED to the live cluster.
+# The current single-node internal smoke cluster has insufficient capacity
+# to honor a PDB with minAvailable: 1 during node drains or voluntary disruptions.
+# Apply only after scaling the node pool to at least 2 nodes (or more) and
+# switching the Deployment strategy to RollingUpdate.
+#
+# If applied on a single-node cluster, a node drain will block indefinitely
+# because the PDB cannot be satisfied with a second pod.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: intent-api
+  namespace: intent-rebase
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: intent-api

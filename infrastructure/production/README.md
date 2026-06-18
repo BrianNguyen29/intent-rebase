@@ -79,8 +79,10 @@ infrastructure/production/
 ├── kubernetes/
 │   ├── namespace.yaml                 # intent-rebase namespace
 │   ├── deployment.yaml                # intent-api Deployment (internal smoke only)
-│   ├── service.yaml                   # ClusterIP Service for intent-api
+│   ├── horizontal-pod-autoscaler.yaml  # HPA for intent-api (NOT APPLIED — manifest-only; needs capacity)
 │   ├── migration-job.yaml             # Raw SQL migration Job (psql loop)
+│   ├── pod-disruption-budget.yaml      # PDB for intent-api (NOT APPLIED — manifest-only; needs capacity)
+│   ├── service.yaml                   # ClusterIP Service for intent-api
 │   ├── secrets/
 │   │   └── app-secrets.example.yaml   # Kubernetes Secret placeholders (do not commit real values)
 │   └── configmaps/
@@ -95,6 +97,7 @@ infrastructure/production/
 - **Deletion protection** is enabled on Cloud SQL in Terraform to prevent accidental destruction. GKE cluster has `deletion_protection = false` for this scaffold/test apply and must be re-enabled before any production claim.
 - **Private IP** is configured for Cloud SQL; public IP is disabled.
 - **Kubernetes Secrets** are used as a placeholder secret mechanism. A production deployment should migrate to Vault, Google Secret Manager, or AWS Secrets Manager before any production claim.
+- **HPA + PDB manifests** are added under `kubernetes/` but are **not applied** to the live single-node cluster. The current node pool has insufficient capacity for HPA to scale meaningfully or for PDB `minAvailable: 1` to be honored during drains. Apply only after scaling node pool capacity and switching `strategy: Recreate` to `RollingUpdate` with `maxSurge: 0, maxUnavailable: 1` (or a larger cluster). HPA is safe to create with `Recreate` but scaling events will recreate the pod (brief downtime).
 - **No Terraform state backend** is configured in this scaffold. Local state exists and is gitignored; migrate to a GCS-backed state bucket before any team use or further apply. **A GCS backend (`backend.tf`) is now present; initialize with `terraform init` to migrate state.**
 - **Cloud SQL password** is supplied via the `TF_VAR_db_password` environment variable. Do not commit a default value or a `.tfvars` file containing secrets.
 
@@ -199,7 +202,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 
 | # | Item | Owner | Blocker / Prerequisite | Status |
 |---|------|-------|------------------------|--------|
-| 1 | **K8s hardening**: HPA, PodDisruptionBudget, rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain | SRE / Backend Lead | Scaffold exists | 🔴 OPEN |
+| 1 | **K8s hardening**: HPA + PDB manifests added under `kubernetes/` but NOT APPLIED to live cluster. Remaining: rolling-update (`maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain, scale node pool before HPA/PDB apply | SRE / Backend Lead | Scaffold exists | 🟡 MANIFESTS ADDED — NOT APPLIED |
 | 2 | **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window | SRE / Security | A-05, A-12 | 🔴 OPEN |
 | 3 | **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent | SRE / Backend Lead | A-05, A-10, A-13 | 🔴 OPEN |
 | 4 | **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load | SRE / Backend Lead | A-05, A-06 | 🔴 OPEN |
