@@ -8,7 +8,8 @@ data:
     # TEMPLATE ONLY — placeholder values must be replaced with real secrets
     # before the ConfigMap is applied to a cluster. Real values must be generated
     # and injected out-of-band; do not commit this file with real credentials.
-    # Alertmanager Deployment and Prometheus rules are NOT deployed on GKE yet.
+    # Repo template remains placeholder-only. Live ConfigMap was generated from K8s Secret
+    # out-of-band and GKE Alertmanager/Prometheus are deployed (2026-06-18).
     global:
       smtp_smarthost: 'CHANGE_ME_SMTP_HOST:587'
       smtp_from: 'CHANGE_ME_SMTP_FROM'
@@ -24,7 +25,10 @@ data:
       - name: 'default'
         slack_configs:
           - api_url: 'CHANGE_ME_SLACK_WEBHOOK_URL'
-            channel: '#CHANGE_ME_ALERT_CHANNEL'
+            # channel is omitted by default: Slack incoming webhooks route to their
+            # configured channel and channel override can cause clientError if the
+            # webhook does not allow it or the channel does not exist. Add only if
+            # your webhook explicitly supports override and the channel exists.
             title: 'Intent Rebase Alert'
             text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
         email_configs:

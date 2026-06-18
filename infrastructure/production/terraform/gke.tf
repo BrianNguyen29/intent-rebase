@@ -22,10 +22,10 @@ resource "google_container_cluster" "primary" {
   # private_cluster_config { ... }
 
   # Hardening still required before production: enable workload identity, private
-  # nodes, and private endpoint. Scaffold applied with deletion_protection=false
-  # for internal smoke test only.
+  # nodes, and private endpoint. Deletion protection enabled for Phase 1 stable
+  # internal infrastructure.
 
-  deletion_protection = false # Scaffold/test apply only; re-enable before production
+  deletion_protection = true
 }
 
 resource "google_container_node_pool" "primary" {

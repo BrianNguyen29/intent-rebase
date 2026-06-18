@@ -181,11 +181,27 @@ Pen test findings may result in new entries or updates to the [13-residual-risk-
 | `Content-Type Header Missing` [10019] | 3x | `/`, `/robots.txt`, `/sitemap.xml` | Unauthenticated 401 responses; not a security vulnerability for public endpoints that return 401 |
 | `Non-Storable Content` [10049] | 3x | `/`, `/robots.txt`, `/sitemap.xml` | Unauthenticated 401 responses; cache-control headers are intentionally set for API responses |
 
+### ZAP Re-Run After 401 Header Hardening (image `9e26aaa`)
+
+| Field | Value |
+|-------|-------|
+| **Tool** | OWASP ZAP Docker `ghcr.io/zaproxy/zaproxy:stable` |
+| **Target** | Staging `intent-api` (image `9e26aaa`) via port-forward `0.0.0.0:18081` → `http://host.docker.internal:18081` |
+| **Report directory** | `/tmp/opencode/zap-a07-staging-9e26aaa-20260618` (not committed to repo) |
+| **Result** | `FAIL-NEW: 0`, `WARN-NEW: 1`, `PASS: 66`, `ZAP_RC: 2` |
+
+### Warnings (non-blocking)
+
+| Alert | Count | Context | Notes |
+|-------|-------|---------|-------|
+| `Non-Storable Content` [10049] | 2x | `/`, `/robots.txt` | Unauthenticated 401 responses; **expected and security-intended** due to `Cache-Control: no-store` header added in 401 response hardening. This is accepted risk, not a vulnerability. |
+
 ### Interpretation
 
-- **Zero failures** (`FAIL-NEW: 0`) means no HIGH/CRITICAL or MEDIUM findings from the ZAP baseline scan.
-- The two warnings are **informational** and relate to unauthenticated endpoints returning 401. They are not security vulnerabilities.
-- This scan does **not** cover: authenticated API surface, tenant isolation (RR-09), cross-tenant data leakage, approval bypass, audit trail tampering, or runtime adapter injection. These require manual/expert testing.
+- **Content-Type Header Missing [10019] now PASS** (was 3x WARN in initial scan) — 401 response header hardening (`Content-Type: application/json` + `Cache-Control: no-store`) resolved this warning.
+- **Non-Storable Content [10049] remains WARN** (reduced from 3x to 2x) — this is expected behavior on 401 responses that set `Cache-Control: no-store`. ZAP flags this because the response is not cacheable, which is the correct security posture for authenticated endpoints returning 401.
+- **Zero failures** (`FAIL-NEW: 0`) means no HIGH/CRITICAL or MEDIUM findings.
+- This scan does **not** cover: authenticated API surface, tenant isolation, cross-tenant data leakage, approval bypass, audit trail tampering, or runtime adapter injection. These require manual/expert testing.
 - A-07 remains **OPEN** until a named external tester completes the full scope and delivers evidence per the Execution Readiness Addendum checklist.
 
 ---
@@ -206,7 +222,7 @@ This addendum captures the execution prerequisites and evidence checklist requir
 | 4 | Separate staging credentials issued (staging API keys, staging JWT secrets, staging DB passwords) | Security | ✅ DONE | Staging DB user password rotated to separate credential; staging K8s Secret `app-secrets` created out-of-band with staging DB URL and generated JWT/API/HMAC. Secret values stored outside repo only. |
 | 5 | Staging Alertmanager/Slack/SMTP channels configured for test notification (do not route to production channels) | SRE | 🔴 OPEN |
 | 6 | A-04 updated security signoff obtained for any new external surface (e.g., if public ingress is created for staging) | Security | 🔴 OPEN |
-| 7 | `deletion_protection = true` enabled on GKE and Cloud SQL before any external testing begins | SRE | 🔴 OPEN |
+| 7 | `deletion_protection = true` enabled on GKE and Cloud SQL before any external testing begins | SRE | ✅ DONE | Applied on 2026-06-18 via Terraform; GKE cluster `deletion_protection=true`, Cloud SQL deletion protection enabled. |
 | 8 | Legal/contractual scope agreement signed with external tester (no production exploitation, no data destruction, no lateral movement) | Security / Legal | 🔴 OPEN |
 
 ### Evidence Checklist (Required to Close A-07)

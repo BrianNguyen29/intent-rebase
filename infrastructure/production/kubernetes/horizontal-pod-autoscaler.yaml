@@ -1,11 +1,11 @@
-# HPA manifest — added but NOT YET APPLIED to the live cluster.
-# The current single-node internal smoke cluster has insufficient capacity
-# for HPA to function meaningfully. Apply only after scaling node pool capacity.
+# HPA manifest — APPLIED on 2026-06-18.
+# Node pool scaled to 2; HPA metrics active: CPU 2%/70%, memory 2%/80%,
+# minReplicas 1, maxReplicas 3. Conditions AbleToScale True, ScalingActive True.
+# Deployment strategy is RollingUpdate with maxSurge:1, maxUnavailable:0.
 #
-# NOTE: HPA is safe to create even if Deployment has `strategy: Recreate`,
-# but scaling events will recreate the pod (brief downtime). Switch to
-# `RollingUpdate` with `maxSurge: 0, maxUnavailable: 1` or a larger node pool
-# before enabling HPA in production.
+# NOTE: HPA works with RollingUpdate; scaling events will roll the pod with zero
+# downtime when node pool capacity is sufficient. Do not revert to Recreate while
+# HPA is active. Apply only if node pool >= 2.
 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

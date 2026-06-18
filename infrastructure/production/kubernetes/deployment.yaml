@@ -12,10 +12,12 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate
-    # Recreate is used for this single-node internal smoke cluster to avoid
-    # two pods pending simultaneously during rolling updates. Change to
-    # RollingUpdate with proper maxSurge/maxUnavailable before production.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    # RollingUpdate requires node pool >= 2 to avoid scheduling conflicts.
+    # Node pool scaled to 2; HPA and PDB applied. RollingUpdate is active.
   selector:
     matchLabels:
       app: intent-api
@@ -26,11 +28,10 @@ spec:
     spec:
       containers:
         - name: intent-api
-          # Image tag :733e1ca includes INTENT_API_RUN_MIGRATIONS=true migration-only
-          # mode support. Live Deployment rolled out on 2026-06-18; smoke passed
-          # (health/ready responding, JWT guard passed, SQL-backed router initialized).
-          # Still internal-only / not production-ready (single-node cluster, Recreate strategy).
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca
+          # Image tag :9e26aaa includes INTENT_API_RUN_MIGRATIONS=true migration-only
+          # mode support plus 401 response header hardening. Rolled out to prod
+          # and staging on 2026-06-18.
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:9e26aaa
           ports:
             - containerPort: 8080
               name: http
@@ -69,4 +70,5 @@ spec:
               memory: "512Mi"
 ---
 # Note: This Deployment targets a single internal replica for smoke validation.
-# Scale, HPA, podDisruptionBudget, and rolling-update tuning are deferred to production hardening.
+# Scale, HPA, podDisruptionBudget, and rolling-update tuning are Phase 1
+# hardening changes pending orchestrator apply (node pool >= 2).

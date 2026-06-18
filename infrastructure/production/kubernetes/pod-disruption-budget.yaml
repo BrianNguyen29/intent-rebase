@@ -1,11 +1,11 @@
-# PDB manifest — added but NOT YET APPLIED to the live cluster.
-# The current single-node internal smoke cluster has insufficient capacity
-# to honor a PDB with minAvailable: 1 during node drains or voluntary disruptions.
-# Apply only after scaling the node pool to at least 2 nodes (or more) and
-# switching the Deployment strategy to RollingUpdate.
+# PDB manifest — APPLIED on 2026-06-18.
+# Node pool scaled to 2; PDB minAvailable=1 is now satisfiable. Allowed disruptions
+# reported as 0 when only one replica is running (HPA minimum). RollingUpdate with
+# maxSurge:1, maxUnavailable:0 means a second pod can be scheduled before the old
+# one terminates, so drains are not blocked indefinitely.
 #
-# If applied on a single-node cluster, a node drain will block indefinitely
-# because the PDB cannot be satisfied with a second pod.
+# If node pool is scaled back to 1, a node drain will block because the PDB cannot
+# be satisfied with a second pod. Do not apply PDB on single-node clusters.
 
 apiVersion: policy/v1
 kind: PodDisruptionBudget

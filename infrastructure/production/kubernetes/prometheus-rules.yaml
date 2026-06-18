@@ -1,0 +1,31 @@
+# Prometheus Rules ConfigMap — APPLIED on 2026-06-18.
+# Contains safe alerting rules that do not fire unless a target is actually
+# down (up == 0). No synthetic always-firing rules are included. Rules are
+# mounted into the Prometheus Deployment; active targets are scraped and
+# evaluated against these rules. Alertmanager handles routing when a rule fires.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: intent-rebase
+data:
+  intent_rebase.yml: |
+    groups:
+      - name: intent_rebase_targets
+        rules:
+          - alert: IntentApiTargetDown
+            expr: up{job="intent-api"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "intent-api target is down"
+
+          - alert: AlertmanagerTargetDown
+            expr: up{job="alertmanager"} == 0
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "alertmanager target is down"

@@ -36,7 +36,7 @@ variable "postgres_tier" {
 variable "gke_node_count" {
   description = "Initial GKE node count"
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "gke_node_machine_type" {
@@ -46,9 +46,9 @@ variable "gke_node_machine_type" {
 }
 
 variable "gcs_bucket_name" {
-  description = "GCS bucket name prefix"
+  description = "GCS bucket name prefix. Default is set to the actual project prefix to avoid destructive placeholder plans. Full bucket name includes the environment suffix applied in storage.tf."
   type        = string
-  default     = "CHANGE_ME_GCS_BUCKET"
+  default     = "ire-prod-ferrum-497801"
 }
 
 variable "db_password" {

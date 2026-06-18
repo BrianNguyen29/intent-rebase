@@ -556,7 +556,7 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 | Stale rules removed | ✅ Removed dead `rules.yml`; compensation/dlq/error-budget-remaining alerts cleaned from docs | LOCAL DOCKER-COMPOSE |
 | Grafana dashboards | ✅ Valid panels retained; stale panels removed | LOCAL DOCKER-COMPOSE |
 | Alertmanager config | ✅ Healthy after removing invalid Prometheus-only/lifecycle flags | LOCAL DOCKER-COMPOSE |
-| Slack/SMTP receiver validation | ✅ Direct transport validated (2026-06-18): Slack `200 ok`, SMTP `sent` with `0` refused; temporary Alertmanager container POST `/api/v2/alerts` `200`, alert `SlackSMTPValidationTest` active with receiver `slack-and-email`, logs clean. Temp files cleaned. | RECEIVERS VALIDATED — GKE STACK OPEN |
+| Slack/SMTP receiver validation | ✅ Direct transport validated (2026-06-18): Slack `200 ok`, SMTP `sent` with `0` refused; temporary Alertmanager container POST `/api/v2/alerts` `200`, alert `SlackSMTPValidationTest` active with receiver `slack-and-email`, logs clean. Temp files cleaned.     | RECEIVERS VALIDATED + GKE DEPLOYED (2026-06-18) — SUSTAINED 30MIN + RE-SIGNOFF OPEN |
 | Trace context | ⏳ Not exercised | LOCAL DOCKER-COMPOSE |
 
 ---
@@ -601,7 +601,7 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 > - Live application metrics from a running intent-api instance
 > - End-to-end trace propagation across service boundaries
 >
-> **Receiver validation update (2026-06-18):** Real Slack/SMTP credentials were validated via direct transport send and temporary Alertmanager container (Slack `200 ok`, SMTP `sent` with `0` refused, Alertmanager POST `200`, alert `SlackSMTPValidationTest` active, logs clean). GKE Alertmanager/Prometheus Deployment is **NOT deployed**; production telemetry stack remains open. This is receiver credential/delivery validation only, not production telemetry connected.
+> **Receiver validation update (2026-06-18):** Real Slack/SMTP credentials were validated via direct transport send and temporary Alertmanager container (Slack `200 ok`, SMTP `sent` with `0` refused, Alertmanager POST `200`, alert `SlackSMTPValidationTest` active, logs clean). **GKE Prometheus + Alertmanager deployed on 2026-06-18** with ClusterIP-only Services; receivers validated (retest `GKEAlertPipelineValidationNoChannel` succeeded, POST 200, notifications email/slack 1, failures 0, 3 targets active). Sustained 30min load + alert firing + A-03/A-04 re-signoff remain open. This is receiver credential/delivery + deployment validation, not full production telemetry maturity.
 
 ---
 
@@ -645,4 +645,4 @@ Evidence Strength: LOCAL DOCKER-COMPOSE (not production)
 | April 2026 | (fixer) | Initial creation — metrics/Prometheus/Grafana/Alertmanager/traces evidence collection checklist templates |
 | April 29, 2026 | (fixer) | Added local evidence from evidence execution run; fixed Alertmanager invalid flags (`--web.console.libraries`, `--web.console.templates`); documented known gaps (placeholder metrics, unconfirmed Grafana health) |
 | April 29, 2026 | (orchestrator) | Re-verified local stack; removed remaining unsupported Alertmanager lifecycle flag; resolved Grafana duplicate-default datasource; confirmed Alertmanager and Grafana health endpoints locally |
-| 2026-06-18 | BrianNguyen (via authorized assistant fixer) | Receiver validation evidence added: real Slack/SMTP credentials validated via direct transport send and temporary Alertmanager container (Slack `200 ok`, SMTP `sent` with `0` refused, Alertmanager POST `200`, alert `SlackSMTPValidationTest` active, logs clean). GKE Alertmanager/Prometheus Deployment is NOT deployed; production telemetry stack remains open. Evidence Summary table updated with new row; Evidence Boundaries section updated with receiver validation caveat. No production-ready claim. |
+| 2026-06-18 | BrianNguyen (via authorized assistant fixer) | Receiver validation evidence added: real Slack/SMTP credentials validated via direct transport send and temporary Alertmanager container (Slack `200 ok`, SMTP `sent` with `0` refused, Alertmanager POST `200`, alert `SlackSMTPValidationTest` active, logs clean). **GKE Prometheus + Alertmanager deployed on 2026-06-18** with ClusterIP-only Services; receivers validated (retest `GKEAlertPipelineValidationNoChannel` succeeded, POST 200, notifications email/slack 1, failures 0, 3 targets active). Sustained 30min load + alert firing + A-03/A-04 re-signoff remain open. Evidence Summary table updated with new row; Evidence Boundaries section updated with receiver validation caveat. No production-ready claim. |

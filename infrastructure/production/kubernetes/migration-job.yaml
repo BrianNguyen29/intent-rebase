@@ -27,7 +27,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrations
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:733e1ca
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:9e26aaa
           envFrom:
             - secretRef:
                 name: app-secrets

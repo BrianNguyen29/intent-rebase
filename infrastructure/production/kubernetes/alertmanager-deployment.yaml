@@ -1,0 +1,94 @@
+# Alertmanager Deployment + Service — APPLIED on 2026-06-18.
+# Prometheus deployed concurrently; Alertmanager has a scraping target.
+# This manifest uses the ConfigMap `alertmanager-config` which was generated
+# from K8s Secret values out-of-band (no real credentials committed in repo).
+#
+# Health: Alertmanager `/-/healthy` returns OK.
+# Alert test `GKEAlertPipelineValidationNoChannel` succeeded: POST alert HTTP 200,
+# active receiver `slack-and-email`, `alertmanager_notifications_total` email/slack 1,
+# request failures 0, notifications failed 0.
+#
+# Service is ClusterIP only (no public IP). Access is via port-forward or
+# from within the VPC only.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: intent-rebase
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --web.listen-address=:9093
+            - --cluster.listen-address=
+          ports:
+            - containerPort: 9093
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9093
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9093
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: storage
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+            items:
+              - key: alertmanager.yml
+                path: alertmanager.yml
+        - name: storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: intent-rebase
+  labels:
+    app: alertmanager
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093
+      name: http

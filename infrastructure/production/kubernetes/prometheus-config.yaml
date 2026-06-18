@@ -1,0 +1,44 @@
+# Prometheus ConfigMap — APPLIED on 2026-06-18.
+# This ConfigMap provides the Prometheus scrape configuration and alerting
+# endpoints. It scrapes the intent-api service, the alertmanager service, and
+# Prometheus itself. No secrets are committed here; all credentials for alert
+# delivery live in the Alertmanager ConfigMap which is managed out-of-band.
+#
+# Config changed from kubernetes_sd_configs to static_configs to ensure reliable
+# target discovery. After restart, all 3 targets are active: `alertmanager up`,
+# `intent-api up`, `prometheus up`.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: intent-rebase
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager:9093
+
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'intent-api'
+        static_configs:
+          - targets: ['intent-api:8080']
+        metrics_path: /metrics
+
+      - job_name: 'alertmanager'
+        static_configs:
+          - targets: ['alertmanager:9093']
+        metrics_path: /metrics
