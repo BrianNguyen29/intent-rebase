@@ -1,0 +1,33 @@
+# Internal LoadBalancer Service — APPLIED on 2026-06-18.
+# This manifest creates a GKE Internal LoadBalancer for intent-api.
+# It is private-only (no public IP). GCP provisioned a regional internal
+# LoadBalancer IP visible only within the VPC.
+#
+# Applied evidence: Service `intent-api-internal-lb` in namespace `intent-rebase`,
+# type LoadBalancer, ClusterIP `34.118.233.220`, private/internal IP `10.0.0.12`,
+# port `8080:31731/TCP`, selector `app=intent-api`. Smoke test from app pod
+# confirmed `/health` and `/ready` responding via internal LB.
+#
+# Cost: LoadBalancer incurs GCP networking charges.
+# Do NOT use this as public ingress — public ingress remains gated.
+# Apply: kubectl apply -f infrastructure/production/kubernetes/internal-load-balancer-service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: intent-api-internal-lb
+  namespace: intent-rebase
+  labels:
+    app: intent-api
+    service-type: internal-lb
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  selector:
+    app: intent-api
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
