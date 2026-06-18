@@ -38,6 +38,8 @@ External gates required before production consideration:
   - [ ] External load testing (L3+)
   - [ ] Compliance checklist completion
 
+**A-07 Penetration Test staging requirement:** A-07 requires an **isolated staging environment** (separate GCP project or isolated VPC) with **synthetic data only** — no production credentials, no production customer data, no live API keys. The staging environment must be provisioned independently from the live production project `ferrum-497801` and destroyed after testing completes. See `docs/08-security/06-pen-test-scope.md` §Execution Readiness Addendum for the full prerequisite checklist.
+
 **Note:** Do not claim `infrastructure/local/docker-compose.yml` as staging. The local stack is for local development only. Use `infrastructure/staging/docker-compose.yml` for staging-like evidence collection.
 
 ## Production scaffold status

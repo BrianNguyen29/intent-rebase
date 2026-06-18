@@ -159,3 +159,44 @@ Pen test findings may result in new entries or updates to the [13-residual-risk-
 - [13-residual-risk-spec.md](../14-governance/13-residual-risk-spec.md) — residual risk register
 - [05-compliance-checklist.md](./05-compliance-checklist.md) — compliance control mapping
 - [14-incident-response-plan.md](../14-governance/14-incident-response-plan.md) — incident response procedures
+
+---
+
+## Execution Readiness Addendum (2026-06-18)
+
+> **Status:** PLAN DOCUMENTED — execution NOT started. A-07 remains 🔴 BLOCKED / PENDING until real external engagement completes.
+
+This addendum captures the execution prerequisites and evidence checklist required to move A-07 from "planning artifact" to "closed with evidence." Self-scanning (automated tools, internal reconnaissance) is acceptable as **preparation only** and will NOT close A-07.
+
+### Prerequisites Before Engaging External Tester
+
+| # | Prerequisite | Owner | Status |
+|---|-------------|-------|--------|
+| 1 | Named external tester/vendor selected (HackerOne, Bugcrowd, or vetted freelance) | Security | 🔴 OPEN |
+| 2 | Isolated staging environment provisioned (separate GCP project or isolated VPC; NOT the live production project) | SRE / Security | 🔴 OPEN |
+| 3 | Staging environment populated with **synthetic data only** — no production credentials, no production customer data, no live API keys | SRE / Security | 🔴 OPEN |
+| 4 | Separate staging credentials issued (staging API keys, staging JWT secrets, staging DB passwords) | Security | 🔴 OPEN |
+| 5 | Staging Alertmanager/Slack/SMTP channels configured for test notification (do not route to production channels) | SRE | 🔴 OPEN |
+| 6 | A-04 updated security signoff obtained for any new external surface (e.g., if public ingress is created for staging) | Security | 🔴 OPEN |
+| 7 | `deletion_protection = true` enabled on GKE and Cloud SQL before any external testing begins | SRE | 🔴 OPEN |
+| 8 | Legal/contractual scope agreement signed with external tester (no production exploitation, no data destruction, no lateral movement) | Security / Legal | 🔴 OPEN |
+
+### Evidence Checklist (Required to Close A-07)
+
+| # | Evidence Item | Format | Verified By |
+|---|-------------|--------|-------------|
+| 1 | External tester engagement contract / SOW | PDF | Security |
+| 2 | Executive summary report | PDF | External tester |
+| 3 | Detailed findings report with CVSS scores | PDF + JSON | External tester |
+| 4 | Remediation tracking spreadsheet with owner + timeline | CSV / Sheet | Security |
+| 5 | All HIGH and CRITICAL findings remediated with evidence (screenshots, test output, PR links) | PDF + repo links | Security |
+| 6 | Retest confirmation from external tester verifying remediations | PDF | External tester |
+| 7 | Staging environment destroyed / credentials rotated after testing completes | Terraform destroy / `gcloud` logs | SRE |
+
+### Forbidden Claims
+
+| Forbidden Claim | Allowed Replacement |
+|----------------|-------------------|
+| `A-07 pen test passed` | `A-07 pen test scope defined; execution pending external engagement` |
+| `A-07 closed` | `A-07 BLOCKED / PENDING — execution plan documented, no external tester engaged` |
+| `Self-scan closes A-07` | `Self-scan is preparation only; A-07 requires named external tester + evidence checklist` |

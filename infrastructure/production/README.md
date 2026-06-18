@@ -175,6 +175,20 @@ The following internal smoke deployment steps were executed against the provisio
 
 ---
 
+## Ingress Strategy
+
+> **Decision:** Private-only (ClusterIP) for the current phase. Public ingress is explicitly gated.
+
+| Phase | Target | Status | Prerequisites |
+|-------|--------|--------|---------------|
+| Current | `ClusterIP` (internal) only | ✅ Active | Intent-api pod reachable within `intent-rebase` namespace via `intent-api:8080` |
+| Next incremental (if needed) | Internal LoadBalancer, VPN, or bastion host | 🟡 Deferred | Justified by internal-consumer access needs; not a blocker for Phase 4 entry |
+| Public ingress | Public LoadBalancer / GKE Ingress with domain, TLS, WAF | 🔴 GATED | Requires: A-04 updated signoff (security review for external surface), A-07 completed and remediation verified, dedicated domain + TLS certificate management, Cloud Armor or WAF evaluation, `deletion_protection = true` on GKE, node pool ≥ 2 nodes, HPA + PDB applied, real Alertmanager receivers, and documented runbook. |
+
+**Rationale:** The current `intent-api` has no consumer requiring public access. Exposing it prematurely increases attack surface without business justification. When public ingress is needed, the gated checklist above must be completed in order.
+
+---
+
 ## Bootstrap Status
 
 > **Date:** 2026-06-18
@@ -216,5 +230,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | 9 | **Terraform state backend access validation**: GCS backend configured (`backend.tf`); routine access validation and recovery docs | SRE | A-05 scaffold exists | 🟡 DOCUMENTED |
 | 10 | **CI/CD pipeline for GKE**: Build, push, deploy automation; no CI changes have been made | Backend Lead / SRE | A-05 | 🔴 OPEN |
 | 11 | **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use `intent-api:733e1ca` image (includes `INTENT_API_RUN_MIGRATIONS=true` support). **Live Deployment rollout not yet applied** — orchestrator will apply if/when appropriate. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. The standardized Job is for future clean deploys after the live DB gap is resolved. | Backend Lead / SRE | A-05 | 🟡 CODE/MANIFESTS + IMAGE BUILT — LIVE DB NOT YET REPAIRED |
+| 12 | **Live DB sqlx metadata baseline/repair**: Strategy reviewed and documented (clone-then-baseline: validate on clone, compute sqlx baseline rows from clean DB, import/verify on clone, then apply metadata-only baseline to live if all checks pass). **Not executed** — requires a separate Cloud SQL clone and validation run before touching the primary. | SRE / Backend Lead | A-05, live DB availability | 🔴 OPEN — PLAN DOCUMENTED |
+| 13 | **A-07 Penetration Test execution**: Execution plan documented (see `docs/08-security/06-pen-test-scope.md`). Requires: named external tester (HackerOne/Bugcrowd/freelance), isolated staging environment with separate credentials and synthetic data, evidence checklist (PDF + JSON report, HIGH/CRITICAL remediation evidence, retest confirmation), scoped to staging only (no production exploitation). Self-scanning is prep only and will NOT close A-07. | External Pen Test | A-04, staging env, separate credentials | 🔴 OPEN — PLAN DOCUMENTED |
 
 > **No overclaim:** The scaffold is applied and the app is running internally, but none of the hardening items above are complete. Do not claim production readiness until all items are closed with evidence.

@@ -118,7 +118,7 @@ P1 items are required for safe production deployment but may be addressed in par
 **No overclaim:** Scaffold and internal smoke deploy are not production-equivalent. Production hardening (HPA, PDB, deletion protection, ingress/TLS, NATS, S3, secret manager, real Alertmanager, load test, pen test) remain open. PITR restore validated against separate Cloud SQL clone (2026-06-18); RPO/RTO not measured against live production traffic. Full DR program maturity remains open.
 
 **Remaining completion items (recommended order):**
-1. **Infrastructure hardening**: HPA + PDB manifests added under `kubernetes/` but NOT APPLIED to live cluster. Remaining: rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain, scale node pool before HPA/PDB apply.
+1. **Infrastructure hardening**: HPA + PDB manifests added under `kubernetes/` but NOT APPLIED to live cluster. Remaining: rolling-update (proper `maxSurge`/`maxUnavailable`), `deletion_protection = true` on GKE, ingress/TLS/domain, scale node pool before HPA/PDB apply. **Ingress decision:** Private-only ClusterIP for current phase; public ingress gated (requires A-04 updated signoff, A-07 completed, domain + TLS, Cloud Armor/WAF, node pool ≥ 2, HPA + PDB, real Alertmanager, runbook).
 2. **Secret manager migration**: Replace K8s Secret placeholder with Vault / Google Secret Manager / AWS SM; validate key rotation grace window.
 3. **NATS + S3 on GCP**: Provision NATS with JetStream or Cloud Pub/Sub; configure S3-compatible storage or GCS Object Lock equivalent.
 4. **Monitoring + Alertmanager**: Configure real Slack/SMTP receivers; validate all alert types fire under sustained load.
@@ -129,6 +129,8 @@ P1 items are required for safe production deployment but may be addressed in par
 9. **Terraform state backend**: GCS backend already configured (`backend.tf`); routine access validation and recovery docs remain.
 10. **CI/CD pipeline**: Build, push, deploy automation for GKE; no CI changes have been made.
 11. **Migration standardization**: `INTENT_API_RUN_MIGRATIONS=true` migration-only mode added to `intent-api` binary; K8s Job `migration-job.yaml` updated to use `intent-api:733e1ca` image (includes `INTENT_API_RUN_MIGRATIONS=true` support). **Live Deployment rollout not yet applied** — orchestrator will apply if/when appropriate. **Existing live DB `_sqlx_migrations` metadata gap remains** — the database was raw-psql migrated and needs a baseline/repair step or recreation before `_sqlx_migrations` is populated. The standardized Job is for future clean deploys after the live DB gap is resolved.
+12. **Live DB sqlx metadata baseline/repair**: Strategy reviewed and documented (clone-then-baseline: validate on clone, compute sqlx baseline rows from clean DB, import/verify on clone, then apply metadata-only baseline to live if all checks pass). **Not executed** — requires a separate Cloud SQL clone and validation run before touching the primary.
+13. **A-07 Penetration Test execution**: Execution plan documented (see `docs/08-security/06-pen-test-scope.md`). Requires: named external tester (HackerOne/Bugcrowd/freelance), isolated staging environment with separate credentials and synthetic data, evidence checklist (PDF + JSON report, HIGH/CRITICAL remediation evidence, retest confirmation), scoped to staging only (no production exploitation). Self-scanning is prep only and will NOT close A-07.
 
 ---
 
