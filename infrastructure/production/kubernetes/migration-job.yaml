@@ -1,0 +1,45 @@
+# INTERNAL SMOKE DEPLOY ONLY — not production-ready.
+# Apply once before the intent-api Deployment starts, or as a manual pre-deploy step.
+# Requires out-of-band secret `app-secrets` (DATABASE_URL) and ConfigMap `intent-rebase-migrations`.
+#
+# CAVEAT: This Job runs raw `psql` against the `.sql` migration files. It does NOT populate
+# sqlx metadata tables (`_sqlx_migrations`). If the application relies on sqlx runtime
+# verify or expects `_sqlx_migrations` rows, run `sqlx migrate run` inside the application
+# container or use a sqlx-cli sidecar instead of this Job for production.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: intent-rebase-migrations
+  namespace: intent-rebase
+spec:
+  template:
+    metadata:
+      labels:
+        app: intent-rebase-migrations
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrations
+          image: postgres:16-alpine
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              for file in $(ls /migrations/*.sql | sort); do
+                echo "Running $file"
+                psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"
+              done
+              echo "Migrations complete"
+      volumes:
+        - name: migrations
+          configMap:
+            name: intent-rebase-migrations
+  backoffLimit: 1

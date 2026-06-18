@@ -48,3 +48,9 @@ variable "gcs_bucket_name" {
   type        = string
   default     = "CHANGE_ME_GCS_BUCKET"
 }
+
+variable "db_password" {
+  description = "Cloud SQL application user password. Set via TF_VAR_db_password at apply time; never commit a default or tfvars file."
+  type        = string
+  sensitive   = true
+}

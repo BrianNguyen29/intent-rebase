@@ -34,5 +34,5 @@ resource "google_sql_database" "app" {
 resource "google_sql_user" "app" {
   name     = "intent_rebase_app"
   instance = google_sql_database_instance.postgres.name
-  password = "CHANGE_ME_DB_PASSWORD" # Must be replaced with a real secret before apply
+  password = var.db_password
 }

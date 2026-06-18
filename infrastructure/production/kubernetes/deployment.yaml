@@ -1,0 +1,68 @@
+# INTERNAL SMOKE DEPLOY ONLY — not production-ready.
+# Apply only after out-of-band secret `app-secrets` and ConfigMap `intent-rebase-migrations` exist.
+# Do not commit real secret values into this repository.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intent-api
+  namespace: intent-rebase
+  labels:
+    app: intent-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+    # Recreate is used for this single-node internal smoke cluster to avoid
+    # two pods pending simultaneously during rolling updates. Change to
+    # RollingUpdate with proper maxSurge/maxUnavailable before production.
+  selector:
+    matchLabels:
+      app: intent-api
+  template:
+    metadata:
+      labels:
+        app: intent-api
+    spec:
+      containers:
+        - name: intent-api
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:c166e57
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: INTENT_API_BIND_ADDR
+              value: "0.0.0.0:8080"
+            - name: INTENT_API_REQUIRE_JWT
+              value: "true"
+            - name: RUST_LOG
+              value: "info"
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+# Note: This Deployment targets a single internal replica for smoke validation.
+# Scale, HPA, podDisruptionBudget, and rolling-update tuning are deferred to production hardening.

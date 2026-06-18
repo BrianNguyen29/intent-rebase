@@ -21,6 +21,11 @@ infrastructure/local/postgres_data/
 infrastructure/local/nats_data/
 infrastructure/local/minio_data/
 
+# Local deploy secrets (never commit)
+*.secret
+*.deploy-secret
+local-secrets/
+
 # Forensic/dump files
 *.dump
 *.log
