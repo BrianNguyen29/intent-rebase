@@ -8,7 +8,7 @@ resource "google_service_account" "gke" {
 
 resource "google_container_cluster" "primary" {
   name     = "${var.environment}-gke"
-  location = var.gcp_region
+  location = var.gcp_zone
 
   remove_default_node_pool = true
   initial_node_count       = 1
@@ -20,16 +20,19 @@ resource "google_container_cluster" "primary" {
   # private_cluster_config { ... }
 
   # TEMPLATE ONLY — enable workload identity and other hardening before production
+
+  deletion_protection = false # Scaffold/test apply only; re-enable before production
 }
 
 resource "google_container_node_pool" "primary" {
   name       = "${var.environment}-node-pool"
-  location   = var.gcp_region
+  location   = var.gcp_zone
   cluster    = google_container_cluster.primary.name
   node_count = var.gke_node_count
 
   node_config {
     machine_type = var.gke_node_machine_type
+    disk_size_gb = 30
 
     service_account = google_service_account.gke.email
     oauth_scopes = [

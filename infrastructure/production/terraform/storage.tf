@@ -15,7 +15,7 @@ resource "google_storage_bucket" "artifacts" {
 
   retention_policy {
     retention_period = 2592000 # 30 days in seconds
-    is_locked        = true
+    is_locked        = false
   }
 
   versioning {

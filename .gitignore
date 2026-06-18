@@ -24,3 +24,14 @@ infrastructure/local/minio_data/
 # Forensic/dump files
 *.dump
 *.log
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.auto.tfvars
+!*.tfvars.example

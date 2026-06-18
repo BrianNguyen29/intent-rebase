@@ -5,9 +5,11 @@ resource "google_sql_database_instance" "postgres" {
   name             = "${var.environment}-postgres-${random_id.suffix.hex}"
   database_version = "POSTGRES_16"
   region           = var.gcp_region
+  depends_on       = [google_service_networking_connection.private_vpc_connection]
 
   settings {
-    tier = var.postgres_tier
+    tier    = var.postgres_tier
+    edition = "ENTERPRISE"
 
     ip_configuration {
       ipv4_enabled    = false

@@ -1,8 +1,8 @@
 # Production Infrastructure Scaffold (GCP + Terraform)
 
-> **⚠️ TEMPLATE ONLY — not applied; do not claim production-ready.**
+> **⚠️ CORE SCAFFOLD APPLIED — not production-ready.**
 >
-> This directory contains a **non-applied production scaffold** for the Intent Rebase Engine on GCP. It is execution-prep for A-05 and related findings (FIND-001, FIND-003, FIND-004). All gates remain OPEN until real GCP credentials are provided, Terraform is applied, and named external evidence is obtained.
+> This directory contains an **applied GCP infrastructure scaffold** for the Intent Rebase Engine. Core resources (VPC, GKE, GCS, Cloud SQL) have been provisioned, but the system is **not production-ready**: no application is deployed, no real secrets are configured, no remote Terraform state backend is set up, and no PITR restore, load test, or pen test has been executed. All gates (FIND-001, FIND-003, FIND-004, A-05) remain OPEN until named external evidence is obtained.
 
 ---
 
@@ -39,7 +39,7 @@ Before using this scaffold:
 
 | Gate / Finding | Status | Scaffold Role |
 |----------------|--------|-------------|
-| A-05 Production Infrastructure | 🔴 BLOCKED | Scaffold is template-only; not applied |
+| A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created. Not production-ready: no app deployed, no real secrets, no remote Terraform state, no PITR test, no load test, no pen test. |
 | FIND-001 Production telemetry / Alertmanager real receivers | 🔴 OPEN | Alertmanager ConfigMap + `alertmanager-prod.yml` placeholders exist; Slack/SMTP not configured |
 | FIND-003 Secret rotation / Vault or AWS SM | 🔴 OPEN | Kubernetes Secrets placeholder only; secret manager not deployed |
 | FIND-004 Backup/restore PITR not validated | 🔴 OPEN | Cloud SQL backup + PITR configured in Terraform; not executed or validated |
@@ -53,7 +53,7 @@ Before using this scaffold:
 
 | Forbidden Claim | Why It Is Forbidden Here |
 |----------------|--------------------------|
-| `Production-ready` | Scaffold is template-only; no infrastructure provisioned |
+| `Production-ready` | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); app not deployed, real secrets not configured, no remote Terraform state, no PITR/pen/load test validated |
 | `FIND-001 RESOLVED` | Alertmanager receivers are placeholders; no real Slack/SMTP configured |
 | `FIND-003 RESOLVED` | No secret manager deployed; Kubernetes Secrets are a placeholder |
 | `FIND-004 RESOLVED` | Cloud SQL backups are Terraform config only; no restore validated |
@@ -89,29 +89,67 @@ infrastructure/production/
 ## Notes
 
 - **GCS retention policy** is not equivalent to S3 Object Lock compliance mode. If immutable storage (A-13) requires strict Object Lock, consider a multi-cloud design or S3-compatible storage on GCP.
-- **Deletion protection** is enabled on Cloud SQL and GKE resources in Terraform to prevent accidental destruction.
+- **Deletion protection** is enabled on Cloud SQL in Terraform to prevent accidental destruction. GKE cluster has `deletion_protection = false` for this scaffold/test apply and must be re-enabled before any production claim.
 - **Private IP** is configured for Cloud SQL; public IP is disabled.
 - **Kubernetes Secrets** are used as a placeholder secret mechanism. A production deployment should migrate to Vault, Google Secret Manager, or AWS Secrets Manager before any production claim.
-- **No Terraform state backend** is configured in this scaffold. Add a GCS-backed state bucket before any apply in a team environment.
+- **No Terraform state backend** is configured in this scaffold. Local state exists and is gitignored; migrate to a GCS-backed state bucket before any team use or further apply.
+
+## Applied Scaffold Status
+
+> **Date:** 2026-06-18
+> **GCP Project:** `ferrum-497801`
+> **Account:** `nhduong020301@gmail.com`
+
+Terraform apply **completed** for the core GCP scaffold. This is **infrastructure scaffold applied + dry-run evidence**, not full production readiness. The following resources were created:
+
+| Category | Resources |
+|----------|-----------|
+| Network | VPC (`production-template-vpc`), subnet, private IP allocation, private services connection |
+| GKE | Zonal cluster `production-template-gke` in `us-central1-a`, node pool, GKE service account |
+| Storage | GCS bucket `ire-prod-ferrum-497801-production-template-ed2c5bdd` (retention policy, uniform access, versioning) |
+| Database | Cloud SQL Postgres `production-template-postgres-ed2c5bdd` (Enterprise edition, private IP `10.249.0.3`, backups, PITR), database `intent_rebase`, user `intent_rebase_app` |
+
+**Terraform outputs:**
+- `gcs_bucket_name` = `ire-prod-ferrum-497801-production-template-ed2c5bdd`
+- `gke_cluster_name` = `production-template-gke`
+- `gke_cluster_location` = `us-central1-a`
+- `postgres_instance_name` = `production-template-postgres-ed2c5bdd`
+- `postgres_private_ip` = `10.249.0.3`
+- `vpc_id` = `projects/ferrum-497801/global/networks/production-template-vpc`
+
+**Kubernetes:**
+- `kubectl` context configured for `production-template-gke` via `gcloud` access token (gke-gcloud-auth-plugin unavailable in this environment).
+- Namespace `intent-rebase` created via `kubectl apply -f infrastructure/production/kubernetes/namespace.yaml`.
+- Secret `app-secrets` and ConfigMap `alertmanager-config` passed **server dry-run only** (`kubectl apply --dry-run=server`); not applied to the cluster.
+
+**Remaining blockers (not resolved by this apply):**
+- No real Slack/SMTP credentials configured in Alertmanager.
+- Application containers are not deployed to GKE.
+- No PITR restore test has been executed against Cloud SQL.
+- No load test has been run against the provisioned infrastructure.
+- No penetration test has been conducted.
+- Local Terraform state exists in this directory; it is **gitignored** and must be migrated to a remote backend (e.g., GCS) before team use.
+
+---
 
 ## Bootstrap Status
 
 > **Date:** 2026-06-18
-> **Account:** nhduong020301@gmail.com
+> **Account:** `nhduong020301@gmail.com`
 > **GCP Project:** `ferrum-497801`
 
-The following GCP pre-work was completed to enable future Terraform apply. **No Terraform apply was executed; no GCP resources were created; no secrets were delivered.**
+The following GCP pre-work was completed to enable Terraform apply. Terraform apply was subsequently executed and the core scaffold is now provisioned (see **Applied Scaffold Status** above).
 
 | Step | Status | Details |
 |------|--------|---------|
 | Required APIs enabled | ✅ Done | `compute.googleapis.com`, `container.googleapis.com`, `iam.googleapis.com`, `servicenetworking.googleapis.com`, `sqladmin.googleapis.com`, `storage.googleapis.com` |
 | Terraform service account created | ✅ Done | `intent-rebase-terraform@ferrum-497801.iam.gserviceaccount.com` |
 | IAM roles bound to service account | ✅ Done | `roles/cloudsql.admin`, `roles/compute.networkAdmin`, `roles/container.admin`, `roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`, `roles/storage.admin` |
-| Terraform init/plan/apply | 🔴 Not executed | Scaffold remains template-only; no resources provisioned |
-| Kubernetes cluster provisioned | 🔴 Not executed | GKE cluster is Terraform config only |
-| Secrets delivered | 🔴 Not executed | All placeholders remain `CHANGE_ME`; no real Slack/SMTP credentials committed |
-| External review gates | 🔴 OPEN | FIND-001, FIND-003, FIND-004, and A-05 remain open until resources are applied and validated with named external evidence |
+| Terraform init/plan/apply | ✅ Done | Core scaffold applied (VPC, subnet, GKE, GCS, Cloud SQL). See Applied Scaffold Status for details. |
+| Kubernetes namespace created | ✅ Done | `intent-rebase` namespace created via `kubectl apply` |
+| Kubernetes secrets delivered | 🔴 Not applied | Server dry-run passed for `app-secrets` and `alertmanager-config`; real values not applied |
+| External review gates | 🔴 OPEN | FIND-001, FIND-003, FIND-004, and A-05 remain open until validated with named external evidence |
 
 ## Last Updated
 
-2026-06-17
+2026-06-18
