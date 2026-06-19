@@ -310,6 +310,28 @@ gcloud sql instances describe "${NEW_INSTANCE_NAME}" --project="${PROJECT}" 2>&1
 | `RPO/RTO SLA validated` | `Target RPO=1h/RTO=30m documented; validation pending execution against Cloud SQL instance` |
 | `Cloud SQL backups are immutable` | `Cloud SQL automated backups enabled; immutability not equivalent to S3 Object Lock` |
 
+### RPO/RTO Gap Analysis (2026-06-19)
+
+**Current evidence:** Cloud SQL PITR clone restore was validated on 2026-06-18 against a separate clone (`pitr-restore-test-20260618084607`). Clone reached `RUNNABLE`, validation Job confirmed database and core tables present.
+
+**What was NOT measured:**
+- **Clone provisioning time is NOT DR RTO.** Provisioning a Cloud SQL clone from PITR was observed at >40 minutes. This is infrastructure provisioning latency, not the full incident-response RTO. RTO must include: incident declaration, decision to restore, target selection, clone provisioning, schema validation, app cutover (connection string/DNS switch), smoke tests, and service restoration.
+- **RPO was not measured.** RPO requires a data-loss marker: write a timestamped/sequenced marker row to the database, trigger a restore to a point before that marker, compare the restored target against the source, and quantify how much data was lost. No such marker was written or compared.
+- **Real DR scenario not executed.** No incident scenario was run: no simulated failure, no notification, no runbook execution under time pressure, no app redeployment against the restored target, no DNS cutover, no stakeholder communication.
+
+**Suggested runbook checklist for real RPO/RTO measurement:**
+1. Pre-incident: write a `dr_marker` row with `marker_id`, `created_at`, `sequence_number`.
+2. Declare incident: record `incident_start_time`.
+3. Choose PITR target: `restore_target_time` just before the marker.
+4. Execute clone: record `clone_start_time` and `clone_ready_time`.
+5. Validate: connect to clone, check `dr_marker` absent or older, check schema/tables, run app test job against clone.
+6. Cutover: switch app connection string or DNS to restored target (or validate connectivity if not switching).
+7. Verify: `/health` and `/ready` ok, core business path smoke test.
+8. Record: `RPO = incident_start_time - last_confirmed_write_time`; `RTO = service_restored_time - incident_start_time`.
+9. Cleanup: delete clone, rotate any exposed credentials.
+
+**Conclusion:** PITR clone-only validated = infrastructure capability confirmed. Real RPO/RTO measurement = still open.
+
 ---
 
 ## PostgreSQL Backup & Restore

@@ -208,9 +208,14 @@ Pen test findings may result in new entries or updates to the [13-residual-risk-
 
 ## Execution Readiness Addendum (2026-06-18)
 
-> **Status:** PLAN DOCUMENTED — execution NOT started. A-07 remains 🔴 BLOCKED / PENDING until real external engagement completes.
-
-This addendum captures the execution prerequisites and evidence checklist required to move A-07 from "planning artifact" to "closed with evidence." Self-scanning (automated tools, internal reconnaissance) is acceptable as **preparation only** and will NOT close A-07.
+> **Status:** PLAN DOCUMENTED — execution NOT started. A-07 remains 🔴 NOT APPROVED / OPEN until real external engagement completes.
+>
+> **A-07 Strategy Options (2026-06-19):**
+> - **Preferred path:** Engage external pentester/vendor (HackerOne, Bugcrowd, or vetted freelance). Define scope (authenticated API surface, tenant isolation, cross-tenant leakage, approval bypass, audit tampering, runtime adapter injection), provide staging environment credentials, set execution window, require PDF/JSON report with CVSS scores, establish remediation/retest path. Budget and procurement required.
+> - **Alternative path:** Formal waiver/re-scope for internal/private-only operation. This requires explicit documented acceptance that no production-ready claim can be made while A-07 is waived/open. If this path is chosen, a governance decision record must be created and signed by project owner.
+> - **Current posture:** No external tester engaged. A-07 remains OPEN. No strategy decision has been made.
+>
+> This addendum captures the execution prerequisites and evidence checklist required to move A-07 from "planning artifact" to "closed with evidence." Self-scanning (automated tools, internal reconnaissance) is acceptable as **preparation only** and will NOT close A-07.
 
 ### Prerequisites Before Engaging External Tester
 
