@@ -204,6 +204,24 @@ Pen test findings may result in new entries or updates to the [13-residual-risk-
 - This scan does **not** cover: authenticated API surface, tenant isolation, cross-tenant data leakage, approval bypass, audit trail tampering, or runtime adapter injection. These require manual/expert testing.
 - A-07 remains **OPEN** until a named external tester completes the full scope and delivers evidence per the Execution Readiness Addendum checklist.
 
+### Authenticated ZAP API Scan Attempt (Blocked — Tool Limitation)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-19 |
+| **Objective** | Attempt authenticated ZAP API scan against staging OpenAPI surface using JWT header |
+| **Method** | Canonical OpenAPI ZAP API scan (`zap-api-scan.py`) via pod port-forward with `-config replacer.full_list\(0\).description=auth1`, `-config replacer.full_list\(0\).matchtype=REQ_HEADER`, `-config replacer.full_list\(0\).matchstr=Authorization`, `-config replacer.full_list\(0\).regex=false`, `-config replacer.full_list\(0\).replacement=Bearer <JWT>` |
+| **Attempts** | 3 attempts: (a) canonical OpenAPI 3.0.3 with explicit `servers: http://127.0.0.1:18089`, (b) clean OpenAPI copy with `servers`, (c) generated minimal OpenAPI with seeded staging endpoints |
+| **Result** | All attempts failed before scan: `Number of Imported URLs: 0`, `Failed to import any URLs`, `ZAP_RC=3`, no JSON report produced |
+| **Report dirs** | `/tmp/opencode/zap-auth-staging-20260619`, `/tmp/opencode/zap-auth-staging-20260619b`, `/tmp/opencode/zap-auth-minimal-20260619` |
+
+**Interpretation:**
+- This is a **tooling/import limitation**, not a security pass. ZAP's API scan failed to import URLs from the provided OpenAPI spec under all three attempted configurations.
+- Authenticated ZAP scan **not completed**. No authenticated API surface was exercised by ZAP.
+- The only ZAP evidence remains the **unauthenticated baseline self-scan** (0 FAIL, 1 WARN accepted) documented above.
+- Manual authenticated API self-tests were performed during synthetic data seeding (create intents/versions/graph nodes/webhook via JWT), but these are functional tests, not security scanning.
+- A-07 remains **OPEN**; external expert testing is still required for authenticated surface, tenant isolation, approval bypass, etc.
+
 ---
 
 ## Execution Readiness Addendum (2026-06-18)
@@ -223,7 +241,7 @@ Pen test findings may result in new entries or updates to the [13-residual-risk-
 |---|-------------|-------|--------|
 | 1 | Named external tester/vendor selected (HackerOne, Bugcrowd, or vetted freelance) | Security | 🔴 OPEN |
 | 2 | Isolated staging environment provisioned (separate GCP project or isolated VPC; NOT the live production project) | SRE / Security | 🟡 DEPLOYED — SAME PROJECT | Staging clone `a07-staging-postgres-20260618143121` and namespace `intent-rebase-staging` deployed within project `ferrum-497801`. Separate GCP project or isolated VPC still recommended for full isolation before external engagement. |
-| 3 | Staging environment populated with **synthetic data only** — no production credentials, no production customer data, no live API keys | SRE / Security | ✅ DONE | Synthetic data seeded via authenticated API calls into namespace `intent-rebase-staging` (2026-06-19). 2 synthetic tenants (`9a47fec7-f5e8-4fda-b676-c8f0aace455b`, `b38d546d-30f2-401e-92f6-59c12a9b5444`), 5 intents created (all 201), 5 version-2s created (all 201). Markers: `TENANT_COUNT 2`, `INTENT_COUNT 5`, `VERSION2_COUNT 5`, `STAGING_SYNTHETIC_DATA_SEEDED`. JWT token read out-of-band only; not printed or committed. No production data or credentials used. **Caveat:** Approval scenarios, audit/webhook/runtime-adapter mocks are not seeded; only intent/version data present. |
+| 3 | Staging environment populated with **synthetic data only** — no production credentials, no production customer data, no live API keys | SRE / Security | ✅ DONE | Synthetic data seeded via authenticated API calls into namespace `intent-rebase-staging` (2026-06-19). 2 synthetic tenants (`9a47fec7-f5e8-4fda-b676-c8f0aace455b`, `b38d546d-30f2-401e-92f6-59c12a9b5444`), 5 intents created (all 201), 5 version-2s created (all 201). Graph nodes `synthetic-graph-a` (`188c9cc3-5c6f-4b2b-af5e-473f3cfbd0ae`) and `synthetic-graph-b` (`a3124f2e-671b-4ce9-835e-126d6b2dfa2d`) created under tenant 1. Webhook subscription `3f4e81f5-9405-4cac-9f8e-897fda560728` created under tenant 1 / intent `ac55015d-6545-4fc9-94ee-0c695565fb24` with URL `https://example.invalid/intent-rebase-synthetic-webhook` (safe non-routable domain). Markers: `TENANT_COUNT 2`, `INTENT_COUNT 5`, `VERSION2_COUNT 5`, `EXTRA_SYNTHETIC_SEED_ATTEMPTED=true`. JWT token read out-of-band only; not printed or committed. No production data or credentials used. **Caveat:** Approval scenarios, audit/forensic entries, runtime-adapter mocks are not seeded; only intent/version/graph/webhook data present. |
 | 4 | Separate staging credentials issued (staging API keys, staging JWT secrets, staging DB passwords) | Security | ✅ DONE | Staging DB user password rotated to separate credential; staging K8s Secret `app-secrets` created out-of-band with staging DB URL and generated JWT/API/HMAC. Secret values stored outside repo only. |
 | 5 | Staging Alertmanager/Slack/SMTP channels configured for test notification (do not route to production channels) | SRE | 🔴 OPEN |
 | 6 | A-04 updated security signoff obtained for any new external surface (e.g., if public ingress is created for staging) | Security | 🔴 OPEN |

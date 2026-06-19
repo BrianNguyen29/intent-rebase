@@ -106,7 +106,30 @@ These targets inform backup frequency and restore procedure priority, but do not
 - `_sqlx_migrations` table was **absent** because the current migration Job uses raw `psql` and does not populate `sqlx` metadata. This is expected and does not indicate a PITR failure. Migration standardization (e.g., using `sqlx migrate run` or a `sqlx-cli` sidecar) is a separate work item.
 - This was a **clone-only validation** against a disposable target. The source instance was never touched.
 - RPO and RTO were not measured against live production traffic. The clone creation took ~18 minutes (from operation start to RUNNABLE), but this is not a production RTO measurement because no application cutover was performed.
-- Full disaster-recovery program maturity (scheduled drills, offsite replication, automated restore pipelines) remains open.
+  - Full disaster-recovery program maturity (scheduled drills, offsite replication, automated restore pipelines) remains open.
+
+### Solo DR Drill Evidence (Partial, Non-Destructive — 2026-06-19)
+
+> **Scope:** Non-destructive app-cutover timing validation against a Cloud SQL clone. Production was NOT scaled down or switched. This improves RTO evidence but is **not a full disaster recovery exercise**.
+
+| Field | Value |
+|-------|-------|
+| **Clone name** | `dr-solo-drill-20260619134132` |
+| **Source instance** | `production-template-postgres-ed2c5bdd` |
+| **Start time** | `2026-06-19T13:41:32+00:00` |
+| **Clone state logs** | PENDING_CREATE at 120s, 240s, 360s, 480s, 600s, 720s |
+| **Clone RUNNABLE** | `DR_CLONE_READY_SECONDS=1071` (~17 minutes 51 seconds) |
+| **Clone private IP** | `10.249.0.15` |
+| **App cutover pod Ready** | `DR_APP_READY_SECONDS=4` |
+| **Endpoint smoke** | `/health`/`/ready` fetch did **not** complete in captured output — **do not claim endpoint smoke pass for this drill** |
+| **Cleanup** | Solo-drill pod(s) deleted; clone delete waited for `NO_RUNNING_OPS` then returned `CLONE_DELETED_OR_DELETING` |
+
+**Caveats:**
+- This is a **solo, non-destructive** drill. No production traffic was redirected.
+- The app cutover pod became Ready quickly (`4` seconds), but endpoint responses were not captured.
+- Clone provisioning time (`~17m51s`) is an infrastructure observation, not a validated production RTO.
+- Full DR program (scheduled drills, live cutover, RPO/RTO measurement against production traffic, offsite replication) remains open.
+
 
 ### Phase 0 — Preflight (Fail-Closed)
 

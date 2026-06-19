@@ -747,3 +747,84 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
   ```bash
   docker compose -f infrastructure/local/docker-compose.yml --profile observability down
   ```
+
+---
+
+## RB20. API Key Secret Rotation (GSM + ESO Auto-Sync)
+
+> **Validated:** 2026-06-19 against staging and production.
+> **Scope:** API key secrets stored in Google Secret Manager (GSM) and synced to GKE via External Secrets Operator (ESO).
+> **Caveat:** This runbook covers API key rotation only. Broader secret rotation (DB URL, JWT, NATS/S3, TLS) is deferred — see `docs/09-operations/08-secrets-inventory.md` for defer rationale.
+
+### Symptoms / Trigger
+
+- Scheduled rotation cadence reached (e.g., 90 days).
+- API key suspected compromised or leaked.
+- Post-incident remediation requiring credential rotation.
+
+### Prerequisites
+
+- `gcloud` authenticated with IAM permission `roles/secretmanager.admin` or `roles/secretmanager.secretVersionManager`.
+- `kubectl` context configured for target cluster (`production-template-gke`).
+- GSM secret exists and ESO `ExternalSecret` is configured for it.
+
+### Procedure
+
+1. **Add new GSM version** (do not disable old version yet):
+   ```bash
+   gcloud secrets versions add "intent-rebase-prod-api-key" \
+     --data-file=<(openssl rand -base64 32) \
+     --project=ferrum-497801
+   ```
+
+2. **Force ESO sync**:
+   ```bash
+   kubectl -n intent-rebase annotate externalsecret app-secrets \
+     force-sync=$(date +%s) --overwrite
+   ```
+
+3. **Wait for ExternalSecret Ready=True**:
+   ```bash
+   kubectl -n intent-rebase wait --for=condition=Ready externalsecret/app-secrets --timeout=120s
+   ```
+
+4. **Hash comparison without printing secret**:
+   ```bash
+   # Get hash of current K8s Secret value
+   kubectl -n intent-rebase get secret app-secrets -o jsonpath='{.data.api-key}' | \
+     base64 -d | sha256sum
+   # Compare against expected new hash from GSM (obtained separately); do not print either value.
+   ```
+
+5. **Restart Deployment to pick up new secret**:
+   ```bash
+   kubectl -n intent-rebase rollout restart deployment intent-api
+   kubectl -n intent-rebase rollout status deployment intent-api --timeout=180s
+   ```
+
+6. **Smoke test**:
+   ```bash
+   NEW_POD=$(kubectl -n intent-rebase get pods -l app=intent-api -o jsonpath='{.items[0].metadata.name}')
+   kubectl -n intent-rebase exec "${NEW_POD}" -- curl -sf http://localhost:8080/health
+   kubectl -n intent-rebase exec "${NEW_POD}" -- curl -sf http://localhost:8080/ready
+   ```
+
+7. **Record evidence**:
+   - Document `PROD_ROTATION_VALIDATED=true` or `STAGING_ROTATION_VALIDATED=true`.
+   - Record timestamp, GSM version number, pod name, hash match result.
+
+8. **(Optional) Disable old GSM version after grace period**:
+   - If a grace window was defined (e.g., 24 hours), disable the old version after verification is complete.
+   - If immediate rollback is needed, re-enable the old version.
+
+### Rollback
+
+- If smoke test fails, re-enable the previous GSM version (if disabled) and force ESO sync again.
+- If the new secret is already synced and pods are running, a second restart with the previous version may be required.
+- Document rollback in incident tracker.
+
+### What NOT to do
+
+- Do NOT disable old GSM version immediately after rotation without a grace window.
+- Do NOT print secret values in logs, CI output, or chat.
+- Do NOT rotate DB URL or JWT secrets using this same procedure without additional coordination (see `docs/09-operations/08-secrets-inventory.md` for defer rationale).
