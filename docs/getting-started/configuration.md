@@ -44,7 +44,8 @@ visitors to remember.
 
 | Variable | Default | Purpose | Caveat |
 |----------|---------|---------|--------|
-| `JWT_SECRET` | placeholder in `.env.example` | HS256 signing key. | **Local-dev placeholder.** Replace with a strong value (`≥32` bytes, no `dev` / `secret` / `password`) before any non-local use. The placeholder is **not** a secret. |
+| `JWT_SECRET` | placeholder in `.env.example` | HS256 signing/verification key. | **Local-dev placeholder.** Replace with a strong value (`≥32` bytes, no `dev` / `secret` / `password`) before any non-local use. The placeholder is **not** a secret. |
+| `JWT_SECRET_PREVIOUS` | unset (optional) | Previous HS256 key for **verification-only fallback** during rotation grace window. | When set, tokens signed with the old secret are still accepted. New tokens are always issued with `JWT_SECRET`. Keep the same minimum length (`≥32` bytes). |
 | `INTENT_API_REQUIRE_JWT` | `false` | Strict guard. When `true`, the server fails to start if `JWT_SECRET` is missing / weak. | Kept **off by default** so the local dev loop does not require you to set a real secret. |
 
 > **Local fallback caveat:** When `INTENT_API_REQUIRE_JWT=false` (the

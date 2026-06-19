@@ -16,7 +16,6 @@ pub(crate) async fn jwt_auth_async(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::http::header;
-    use jsonwebtoken::{decode, DecodingKey, Validation};
 
     const PUBLIC_PATHS: &[&str] = &["/health", "/ready", "/metrics"];
     let path = request.uri().path();
@@ -35,14 +34,10 @@ pub(crate) async fn jwt_auth_async(
         Some(auth_value) if auth_value.starts_with("Bearer ") => {
             let token = &auth_value[7..];
 
-            match decode::<crate::auth::Claims>(
-                token,
-                &DecodingKey::from_secret(auth_config.jwt_secret.as_bytes()),
-                &Validation::new(auth_config.algorithm),
-            ) {
-                Ok(token_data) => {
+            match auth_config.verify_token(token) {
+                Ok(claims) => {
                     let mut request = request;
-                    request.extensions_mut().insert(token_data.claims);
+                    request.extensions_mut().insert(claims);
                     next.run(request).await
                 }
                 Err(_) => axum::response::Response::builder()

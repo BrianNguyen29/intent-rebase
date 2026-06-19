@@ -809,9 +809,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default()
         .eq_ignore_ascii_case("true")
     {
-        let database_url = std::env::var("DATABASE_URL").map_err(|_| {
-            "INTENT_API_RUN_MIGRATIONS=true requires DATABASE_URL to be set"
-        })?;
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| "INTENT_API_RUN_MIGRATIONS=true requires DATABASE_URL to be set")?;
         tracing::info!("INTENT_API_RUN_MIGRATIONS=true — connecting to database for migration run");
         let pool = sqlx::PgPool::connect(&database_url).await?;
         tracing::info!("Running sqlx migrations from infrastructure/migrations ...");

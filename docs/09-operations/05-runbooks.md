@@ -827,4 +827,73 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 
 - Do NOT disable old GSM version immediately after rotation without a grace window.
 - Do NOT print secret values in logs, CI output, or chat.
-- Do NOT rotate DB URL or JWT secrets using this same procedure without additional coordination (see `docs/09-operations/08-secrets-inventory.md` for defer rationale).
+- Do NOT rotate DB URL or JWT secrets using this same procedure without additional coordination (see `docs/09-operations/08-secrets-inventory.md` for defer rationale). JWT secret rotation has a separate runbook (RB21).
+
+---
+
+## RB21. JWT Secret Rotation (Dual-Key Grace Window)
+
+> **Implemented:** 2026-06-19.
+> **Scope:** JWT signing key rotation with `JWT_SECRET_PREVIOUS` verification-only fallback.
+> **Caveat:** This is a **code-level** rotation mechanism, not a GSM/ESO automated rotation. The app supports dual-key verification; the rotation itself is manual env-var updates.
+
+### How It Works
+
+- `JWT_SECRET` = current signing/verification key. All new tokens are issued with this key.
+- `JWT_SECRET_PREVIOUS` (optional) = previous verification-only key. During a grace window, tokens signed with the old secret are still accepted.
+- The app validates tokens against `JWT_SECRET` first; if that fails and `JWT_SECRET_PREVIOUS` is configured, it falls back to the previous secret.
+- Expired tokens are rejected regardless of which secret signed them.
+
+### Prerequisites
+
+- New `JWT_SECRET` generated (≥32 bytes, strong random).
+- Old `JWT_SECRET` value preserved for the grace window.
+- Deployment restart planned (env-var change requires pod restart).
+
+### Procedure
+
+1. **Generate new JWT secret**:
+   ```bash
+   NEW_JWT_SECRET=$(openssl rand -base64 32)
+   ```
+
+2. **Set the rotation env vars** (do NOT restart yet):
+   - Move current `JWT_SECRET` value to `JWT_SECRET_PREVIOUS`.
+   - Set `JWT_SECRET` to the new value.
+
+   ```bash
+   # Example (pseudo-code; actual mechanism depends on your secret delivery path)
+   # For Kubernetes Secrets:
+   kubectl -n intent-rebase patch secret app-secrets \
+     --type merge -p '{"stringData":{"jwt-secret":"'$NEW_JWT_SECRET'","jwt-secret-previous":"'$OLD_JWT_SECRET'"}}'
+   ```
+
+3. **Restart Deployment** to pick up new env vars:
+   ```bash
+   kubectl -n intent-rebase rollout restart deployment intent-api
+   kubectl -n intent-rebase rollout status deployment intent-api --timeout=180s
+   ```
+
+4. **Smoke test**:
+   - Issue a new token with the new `JWT_SECRET` and verify it works.
+   - Verify an old token (signed with previous secret) still works during the grace window.
+   - Verify an expired token is rejected regardless of key.
+
+5. **Record evidence**:
+   - Document `JWT_ROTATION_VALIDATED=true`.
+   - Record timestamp, new secret hash (not value), pod name.
+
+6. **(After grace window) Remove `JWT_SECRET_PREVIOUS`**:
+   - Once all clients have refreshed their tokens (e.g., 24 hours), unset `JWT_SECRET_PREVIOUS` and restart again.
+   - Tokens signed with the old secret will no longer be accepted.
+
+### Rollback
+
+- If smoke test fails, swap `JWT_SECRET` and `JWT_SECRET_PREVIOUS` back and restart.
+- Document rollback in incident tracker.
+
+### What NOT to do
+
+- Do NOT set `JWT_SECRET_PREVIOUS` to the same value as `JWT_SECRET`.
+- Do NOT disable the previous secret immediately without a grace window — active clients with old tokens will be locked out.
+- Do NOT print JWT secrets in logs, CI output, or chat.

@@ -14,5 +14,8 @@ clippy:
 test-lib:
     cargo test --workspace --lib --all-features
 
+verify-full: fmt-check check clippy
+    cargo test --workspace --all-features
+
 # Run all fast checks sequentially (no external services required)
 verify-fast: fmt-check check clippy test-lib

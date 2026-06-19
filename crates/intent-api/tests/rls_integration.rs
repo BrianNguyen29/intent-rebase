@@ -5166,6 +5166,7 @@ async fn test_i3_jwt_create_intent_rls_dml_isolation() {
 
     let auth_config = intent_api::auth::AuthConfig {
         jwt_secret: "test-secret-key-that-is-at-least-32-bytes-long-for-hs256".to_string(),
+        jwt_secret_previous: None,
         algorithm: jsonwebtoken::Algorithm::HS256,
     };
 

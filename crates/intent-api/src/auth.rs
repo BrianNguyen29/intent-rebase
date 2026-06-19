@@ -42,6 +42,10 @@ pub struct Claims {
 pub struct AuthConfig {
     /// JWT secret key (HS256). In production, load from environment variable.
     pub jwt_secret: String,
+    /// Optional previous JWT secret key for verification-only fallback during rotation.
+    /// When set, tokens signed with this secret are accepted for verification
+    /// but new tokens are always issued with `jwt_secret`.
+    pub jwt_secret_previous: Option<String>,
     /// Algorithm used for JWT verification
     pub algorithm: Algorithm,
 }
@@ -51,6 +55,9 @@ impl Default for AuthConfig {
         Self {
             jwt_secret: std::env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "dev-secret-key-do-not-use-in-production".to_string()),
+            jwt_secret_previous: std::env::var("JWT_SECRET_PREVIOUS")
+                .ok()
+                .filter(|s| !s.is_empty()),
             algorithm: Algorithm::HS256,
         }
     }
@@ -89,6 +96,9 @@ impl AuthConfig {
                 tracing::warn!("JWT_SECRET not set, using dev fallback (NOT for production use)");
                 return Ok(Self {
                     jwt_secret: "dev-secret-key-do-not-use-in-production".to_string(),
+                    jwt_secret_previous: std::env::var("JWT_SECRET_PREVIOUS")
+                        .ok()
+                        .filter(|s| !s.is_empty()),
                     algorithm: Algorithm::HS256,
                 });
             }
@@ -97,6 +107,50 @@ impl AuthConfig {
                     "JWT_SECRET environment variable is not set".into(),
                 ));
             }
+        };
+
+        // Optional previous secret for rotation grace window
+        let jwt_secret_previous = match std::env::var("JWT_SECRET_PREVIOUS") {
+            Ok(secret) if !secret.is_empty() => {
+                // Validate length (same rules as current secret)
+                if secret.len() < MIN_SECRET_LENGTH {
+                    if strict {
+                        return Err(AuthConfigError::WeakSecret(format!(
+                            "JWT_SECRET_PREVIOUS must be at least {} bytes for HS256, got {} bytes",
+                            MIN_SECRET_LENGTH,
+                            secret.len()
+                        )));
+                    } else {
+                        tracing::warn!(
+                            "JWT_SECRET_PREVIOUS is shorter than recommended {} bytes (got {}), \
+                            this is insecure for production",
+                            MIN_SECRET_LENGTH,
+                            secret.len()
+                        );
+                    }
+                }
+
+                // Check for forbidden/weak secrets
+                let lower_secret = secret.to_lowercase();
+                for forbidden in FORBIDDEN_SECRETS {
+                    if lower_secret.contains(forbidden) {
+                        if strict {
+                            return Err(AuthConfigError::WeakSecret(format!(
+                                "JWT_SECRET_PREVIOUS appears to be a weak/forbidden secret: '{}'",
+                                forbidden
+                            )));
+                        } else {
+                            tracing::warn!(
+                                "JWT_SECRET_PREVIOUS contains weak pattern '{}', this is insecure for production",
+                                forbidden
+                            );
+                        }
+                    }
+                }
+
+                Some(secret)
+            }
+            _ => None,
         };
 
         // Check minimum length
@@ -141,6 +195,7 @@ impl AuthConfig {
 
         Ok(Self {
             jwt_secret,
+            jwt_secret_previous,
             algorithm: Algorithm::HS256,
         })
     }
@@ -150,11 +205,70 @@ impl AuthConfig {
     /// A secret is production-ready if it:
     /// - Is at least 32 bytes long
     /// - Does not contain weak/forbidden patterns
+    /// - If a previous secret is configured, it also meets these criteria
     pub fn is_production_ready(&self) -> bool {
-        self.jwt_secret.len() >= MIN_SECRET_LENGTH
+        let current_ok = self.jwt_secret.len() >= MIN_SECRET_LENGTH
             && !FORBIDDEN_SECRETS
                 .iter()
-                .any(|f| self.jwt_secret.to_lowercase().contains(*f))
+                .any(|f| self.jwt_secret.to_lowercase().contains(*f));
+
+        let previous_ok = self
+            .jwt_secret_previous
+            .as_ref()
+            .map(|prev| {
+                prev.len() >= MIN_SECRET_LENGTH
+                    && !FORBIDDEN_SECRETS
+                        .iter()
+                        .any(|f| prev.to_lowercase().contains(*f))
+            })
+            .unwrap_or(true);
+
+        current_ok && previous_ok
+    }
+
+    /// Verifies a JWT token against the current secret, falling back to the
+    /// previous secret if configured.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Attempts verification with `jwt_secret` (current secret).
+    /// 2. If that fails and `jwt_secret_previous` is configured, attempts
+    ///    verification with the previous secret.
+    /// 3. Returns the decoded claims on success, or the original error if both
+    ///    attempts fail.
+    ///
+    /// # Security Note
+    ///
+    /// The previous secret is accepted **only for verification** — new tokens
+    /// should always be issued with the current secret. This supports a grace
+    /// window during rotation where tokens issued with the old secret are still
+    /// valid.
+    pub fn verify_token(&self, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+        use jsonwebtoken::{decode, DecodingKey, Validation};
+
+        let validation = Validation::new(self.algorithm);
+
+        match decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(self.jwt_secret.as_bytes()),
+            &validation,
+        ) {
+            Ok(token_data) => Ok(token_data.claims),
+            Err(err) => {
+                if let Some(ref prev) = self.jwt_secret_previous {
+                    match decode::<Claims>(
+                        token,
+                        &DecodingKey::from_secret(prev.as_bytes()),
+                        &validation,
+                    ) {
+                        Ok(token_data) => Ok(token_data.claims),
+                        Err(_) => Err(err),
+                    }
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 }
 
@@ -384,6 +498,205 @@ mod tests {
                 .get(header::CACHE_CONTROL)
                 .and_then(|v| v.to_str().ok()),
             Some("no-store")
+        );
+    }
+
+    #[test]
+    fn test_verify_token_with_current_secret_succeeds() {
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: None,
+            algorithm: Algorithm::HS256,
+        };
+
+        let token = generate_test_token(current_secret, "user1", "tenant-a", &["admin"]);
+        let claims = auth_config
+            .verify_token(&token)
+            .expect("token should verify");
+
+        assert_eq!(claims.sub, "user1");
+        assert_eq!(claims.tenant_id, "tenant-a");
+        assert_eq!(claims.roles, vec!["admin"]);
+    }
+
+    #[test]
+    fn test_verify_token_with_previous_secret_succeeds_when_configured() {
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let previous_secret = "previous-secret-key-that-is-at-least-32-bytes";
+
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: Some(previous_secret.to_string()),
+            algorithm: Algorithm::HS256,
+        };
+
+        // Token signed with the *previous* secret should still verify
+        let token = generate_test_token(previous_secret, "user2", "tenant-b", &["viewer"]);
+        let claims = auth_config
+            .verify_token(&token)
+            .expect("previous token should verify");
+
+        assert_eq!(claims.sub, "user2");
+        assert_eq!(claims.tenant_id, "tenant-b");
+    }
+
+    #[test]
+    fn test_verify_token_with_unknown_secret_fails() {
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let unknown_secret = "unknown-secret-key-that-is-at-least-32-bytes";
+
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: None,
+            algorithm: Algorithm::HS256,
+        };
+
+        let token = generate_test_token(unknown_secret, "user3", "tenant-c", &[]);
+        assert!(auth_config.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_verify_token_expired_fails() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: None,
+            algorithm: Algorithm::HS256,
+        };
+
+        let now = chrono::Utc::now().timestamp() as usize;
+        let expired_claims = Claims {
+            sub: "user4".to_string(),
+            tenant_id: "tenant-d".to_string(),
+            roles: vec![],
+            exp: now - 3600, // 1 hour in the past
+            iat: now - 7200,
+        };
+
+        let token = encode(
+            &Header::default(),
+            &expired_claims,
+            &EncodingKey::from_secret(current_secret.as_bytes()),
+        )
+        .unwrap();
+
+        assert!(auth_config.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_verify_token_expired_with_previous_secret_also_fails() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let previous_secret = "previous-secret-key-that-is-at-least-32-bytes";
+
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: Some(previous_secret.to_string()),
+            algorithm: Algorithm::HS256,
+        };
+
+        let now = chrono::Utc::now().timestamp() as usize;
+        let expired_claims = Claims {
+            sub: "user5".to_string(),
+            tenant_id: "tenant-e".to_string(),
+            roles: vec![],
+            exp: now - 3600, // expired
+            iat: now - 7200,
+        };
+
+        // Token signed with previous secret but expired
+        let token = encode(
+            &Header::default(),
+            &expired_claims,
+            &EncodingKey::from_secret(previous_secret.as_bytes()),
+        )
+        .unwrap();
+
+        assert!(auth_config.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_verify_token_previous_not_configured_ignores_previous_secret() {
+        let current_secret = "current-secret-key-that-is-at-least-32-bytes";
+        let previous_secret = "previous-secret-key-that-is-at-least-32-bytes";
+
+        let auth_config = AuthConfig {
+            jwt_secret: current_secret.to_string(),
+            jwt_secret_previous: None, // previous NOT configured
+            algorithm: Algorithm::HS256,
+        };
+
+        // Token signed with previous secret should fail because previous is not configured
+        let token = generate_test_token(previous_secret, "user6", "tenant-f", &[]);
+        assert!(auth_config.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_is_production_ready_with_previous_secret() {
+        let good = AuthConfig {
+            jwt_secret: "current-valid-key-that-is-at-least-32-bytes-long".to_string(),
+            jwt_secret_previous: Some("previous-valid-key-that-is-at-least-32-bytes".to_string()),
+            algorithm: Algorithm::HS256,
+        };
+        assert!(good.is_production_ready());
+
+        let weak_prev = AuthConfig {
+            jwt_secret: "current-valid-key-that-is-at-least-32-bytes-long".to_string(),
+            jwt_secret_previous: Some("short".to_string()),
+            algorithm: Algorithm::HS256,
+        };
+        assert!(!weak_prev.is_production_ready());
+    }
+
+    #[test]
+    fn test_from_env_reads_jwt_secret_previous() {
+        use temp_env::with_vars;
+
+        with_vars(
+            [
+                (
+                    "JWT_SECRET",
+                    Some("current-valid-key-that-is-at-least-32-bytes-long"),
+                ),
+                (
+                    "JWT_SECRET_PREVIOUS",
+                    Some("previous-valid-key-that-is-at-least-32-bytes"),
+                ),
+            ],
+            || {
+                let config = AuthConfig::from_env().expect("should load");
+                assert_eq!(
+                    config.jwt_secret,
+                    "current-valid-key-that-is-at-least-32-bytes-long"
+                );
+                assert_eq!(
+                    config.jwt_secret_previous,
+                    Some("previous-valid-key-that-is-at-least-32-bytes".to_string())
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_from_env_ignores_empty_jwt_secret_previous() {
+        use temp_env::with_vars;
+
+        with_vars(
+            [
+                (
+                    "JWT_SECRET",
+                    Some("current-valid-key-that-is-at-least-32-bytes-long"),
+                ),
+                ("JWT_SECRET_PREVIOUS", Some("")),
+            ],
+            || {
+                let config = AuthConfig::from_env().expect("should load");
+                assert_eq!(config.jwt_secret_previous, None);
+            },
         );
     }
 }

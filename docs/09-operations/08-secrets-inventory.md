@@ -27,7 +27,7 @@ This document provides a **secrets inventory template** and **rotation procedure
 | NATS credentials | ✅ Yes | 🟡 Template only | ❌ No |
 | MinIO/S3 credentials | ✅ Yes | 🟡 Template only | ❌ No |
 | API keys (tenant) | ✅ Yes | ✅ Validated — GSM + ESO auto-sync (2026-06-19) | ✅ Yes — prod API key rotation validated against GSM version [3], hash match, Deployment restart, smoke pass |
-| JWT signing keys | ✅ Yes | 🟡 Template only | ❌ No |
+| JWT signing keys | ✅ Yes | 🟡 Dual-key support implemented (`JWT_SECRET_PREVIOUS` for verification-only fallback); rotation validated only for API keys, not JWT | ❌ No |
 | TLS certificates | 🟡 Partial | 🟡 Template only | ❌ No |
 | Encryption keys (at-rest) | 🟡 Partial | ❌ Not documented | ❌ No |
 | Webhook subscription secrets | ✅ Yes | 🟡 Template only | ❌ No |
