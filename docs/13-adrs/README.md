@@ -27,6 +27,7 @@ The ADR pack records key architectural decisions that have been evaluated, discu
 | [ADR-13](./13-webhook-outbox-version-persistence.md) | Webhook Outbox Version Persistence | **Accepted — bounded implemented; no production readiness claim** | Phase 4a |
 | [ADR-14](./14-forensic-chain-hash.md) | Forensic Chain-Hash Algorithm and Linking Protocol | **Accepted — local algorithm implemented; Object Lock/production deferred** | Phase 4 |
 | [ADR-15](./15-nats-per-tenant-streams.md) | NATS Per-Tenant JetStream Stream Migration Strategy | **Proposed — design-only; implementation blocked on external gates** | Phase 4 |
+| [ADR-16](./16-solo-private-operation-waiver.md) | Solo Private-Only Operation Waiver and Self-Attestation | **Accepted — Solo Private-Only** | Phase 3–4 |
 
 ---
 
