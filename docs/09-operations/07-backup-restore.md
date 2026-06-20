@@ -130,6 +130,33 @@ These targets inform backup frequency and restore procedure priority, but do not
 - Clone provisioning time (`~17m51s`) is an infrastructure observation, not a validated production RTO.
 - Full DR program (scheduled drills, live cutover, RPO/RTO measurement against production traffic, offsite replication) remains open.
 
+### Final DR Smoke (2026-06-20)
+
+> **Scope:** Stronger solo/private DR smoke with captured endpoint responses and authenticated API validation. Production was NOT scaled down or switched.
+
+| Field | Value |
+|-------|-------|
+| **Clone name** | `dr-final-smoke-20260620051418` |
+| **Source instance** | `production-template-postgres-ed2c5bdd` |
+| **Start time** | `2026-06-20T05:14:18+00:00` |
+| **Clone state logs** | PENDING_CREATE at 120s, 240s, 360s, 480s, 600s, 720s, 840s |
+| **Clone RUNNABLE** | `DR_FINAL_CLONE_READY_SECONDS=1204` (~20 minutes 04 seconds) |
+| **Clone private IP** | `10.249.0.17` |
+| **App cutover pod Ready** | `DR_FINAL_APP_READY_SECONDS=6` |
+| **Endpoint smoke `/health`** | `{"status":"ok","uptime_seconds":5}` |
+| **Endpoint smoke `/ready`** | `{"status":"ready","uptime_seconds":0}` |
+| **Authenticated API smoke** | `DR_FINAL_AUTH_CREATE_STATUS 201` (create intent), `DR_FINAL_AUTH_READ_STATUS 200` (read intent) |
+| **Created intent ID** | `10d75f7f-bcf3-4b24-a18a-0148895af86e` |
+| **Tenant ID** | `e563f67e-ec7d-401b-8870-914ba7988b5a` |
+| **Total elapsed** | `DR_FINAL_TOTAL_SECONDS=1236` (~20 minutes 36 seconds) |
+| **Cleanup** | Initial delete hit 409 operation-in-progress; waited for `NO_RUNNING_OPS` then retried; final marker `DR_FINAL_CLONE_CLEANUP=DELETED` |
+
+**Caveats:**
+- This is a **solo, non-destructive** smoke test. No production traffic was redirected.
+- The clone+app+endpoint+authenticated API all passed, which is strong evidence for solo/private operation.
+- Clone provisioning time (`~20m`) and total elapsed (`~20m36s`) are infrastructure observations, not a validated production RTO under incident conditions.
+- Full DR program (scheduled drills, live cutover with production traffic, RPO/RTO measurement with data-loss markers, offsite replication) remains open.
+- **Not a full enterprise DR exercise.**
 
 ### Phase 0 — Preflight (Fail-Closed)
 
