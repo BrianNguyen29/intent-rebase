@@ -1,21 +1,21 @@
 # Project Completion Roadmap
 
-> **Status:** P0 complete, P1 complete, P2 docs audit complete (benchmarks deferred)
-> **Last updated:** 2026-05-21
+> **Status:** P0 complete, P1 complete, P2 docs audit complete (benchmarks deferred), **Phase 3 CLOSED — Non-Production Only**. Canonical source: [`docs/10-delivery/00-current-status.md`](./00-current-status.md).
+> **Last updated:** 2026-06-21
 > **Non-production caveat:** This project is explicitly **NOT production-ready**. All phases below are bounded non-production feature delivery. Production readiness requires external sign-off (SRE, Security, Runtime Integration), load testing, pen testing, and compliance audit — none of which are claimed here.
 
 ---
 
 ## Overview
 
-This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **P0, P1, and P2 docs audit are complete.** P3 is tracked for future planning and is NOT committed.
+This document tracks the remaining work to bring the Intent Rebase Engine from its current state to a clean, well-documented, and test-complete non-production codebase. Work is organized into four priority batches (P0–P3). **P0, P1, and P2 docs audit are complete.** Phase 3 is **CLOSED — Non-Production Only (2026-05-11)**. P3 is split into achieved private-only evidence (§P3.1) and still-open public-production gates (§P3.2). **No production readiness is claimed.**
 
 | Batch | Theme | Status | Scope |
 |-------|-------|--------|-------|
 | **P0** | Quality & Cleanup | ✅ Complete | Fast verification, test extraction, CI smoke, code hygiene |
 | **P1** | Test Completeness | ✅ Complete | Remaining inline test extractions, router decomposition Stage 1 |
 | **P2** | Observability & Docs | ✅ Docs Complete (benchmarks deferred) | Module-level documentation audit for extracted and handler modules; cross-link consistency review; benchmark integration deferred |
-| **P3** | Production Readiness | ⬜ Planned | External gates, load testing, pen testing, compliance (future scope) |
+| **P3** | Production Readiness | 🟡 Phase 3 Closed — Private-Only; Public Gates Open | Split: private-only evidence achieved (§P3.1) vs public-production gates still open (§P3.2) |
 
 ---
 
@@ -76,7 +76,7 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ---
 
-## P2 — Observability & Documentation (In Progress)
+## P2 — Observability & Documentation (Docs Complete — benchmarks deferred)
 
 **Goal:** Integrate benchmarks into CI, complete documentation gaps, and harden the local-dev experience.
 
@@ -95,23 +95,46 @@ This document tracks the remaining work to bring the Intent Rebase Engine from i
 
 ---
 
-## P3 — Production Readiness (Future Scope)
+## P3 — Production Readiness (Phase 3 CLOSED — Non-Production Only)
 
-**Goal:** Close external gates required for production deployment.
+**Goal:** Distinguish achieved private-only solo completion evidence from still-open public-production and commercial-readiness gates.
 
-> **IMPORTANT:** P3 is explicitly out of current scope. It is tracked here for roadmap completeness only. No production readiness claims are made.
+> **IMPORTANT:** Phase 3 is **CLOSED — Non-Production Only (2026-05-11)**. P3 is **not** out of current scope; it is reframed into two sub-sections: private-only evidence achieved (§P3.1) and public-production gates still open (§P3.2). No production readiness, commercial readiness, or external sign-off claims are made. See ADR-16 (`docs/13-adrs/16-solo-private-operation-waiver.md`) for solo/private waiver terms.
 
-**Items:**
-- [ ] External SRE sign-off (observability, alerting, runbooks)
-- [ ] External Security sign-off (pen testing, threat model v2 validation)
-- [ ] Full production load testing (k6/Artillery against staging)
-- [ ] Tenant isolation verification across all surfaces
-- [ ] Compliance audit (SOC2/GDPR/ISO27001 control validation)
-- [ ] Cross-process trace propagation (Temporal SDK, sqlx, NATS consumer, HTTP forwarding)
-- [ ] S3-backed forensic bundle retrieval and lifecycle
-- [ ] Production DLQ replay (exponential backoff, poison-message detection)
+### P3.1 — Private-Only Solo Completion Evidence (Achieved)
 
-**Gate:** P3 entry is gated on P0 and P1 completion.
+The following evidence was achieved as part of the final private close-out (commit `845b8b1`):
+
+- **verify-fast equivalent:** `cargo fmt`/`check`/`clippy`/`test --lib` all pass; `scripts/verify-fast.sh` and `just verify-fast` are the canonical local gates.
+- **Staging clone deletion:** PITR validation clone `a07-staging-postgres-20260618143121` deleted after use.
+- **Final DR smoke:** Clone `dr-final-smoke-20260620051418` created, app deployed, health/ready endpoints passed, authenticated API create+read passed, clone deleted.
+
+**Phase 4 bounded slices delivered (non-production only):**
+- NATS multi/full consumer bounded work (`INTENT_API_NATS_FULL_CONSUMER=true`, `DlqMetricsWorker`, `DlqReplayWorker`, `ConsumerRegistry`)
+- JWT dual-key support (kid-based rotation scaffold, `JWT_SECRET` + `JWT_SECRET_PREVIOUS` env support)
+- Webhook outbox/subscription/HMAC/retry/DLQ bounded work (migrations 019–022, `WebhookOutboxWorker`, `WebhookDeliveryDispatcher`, HMAC-SHA256 signing, retry/backoff classification, DLQ list/replay/bulk-replay/stats endpoints, subscription CRUD API)
+- Forensic chain-hash (ADR-14, `chain_hash.rs` pure module with tests, `BundleIntegrity.previous_bundle_hash`)
+- Worker/router decomposition/hardening (route-group split under `routes/`, `propagation_handlers.rs`, `panic_hardening.rs` with `process_panics_total` metric)
+
+These are **bounded non-production slices** and do not constitute production readiness.
+
+### P3.2 — Public Production & Commercial Readiness Gates (Still Open)
+
+| Gate | Status | Blocker |
+|------|--------|---------|
+| External SRE sign-off (A-03) | 🔴 Open — WAIVED-SOLO | Historical `APPROVED WITH CONDITIONS` (DuongNguyen, 2026-06-15) on record; **external re-signoff NOT obtained** per ADR-16 |
+| External Security sign-off (A-04) | 🔴 Open — WAIVED-SOLO | Historical `APPROVED WITH CONDITIONS` (DuongNguyen, 2026-06-15) on record; **external re-signoff NOT obtained** per ADR-16 |
+| Penetration testing (A-07) | 🔴 Open — WAIVED-SOLO / PRIVATE-ONLY | ZAP self-scan prep only (0 FAIL, 1 WARN); **external pen test NOT executed**; no public-ingress pen test |
+| Full production load testing (L3–L5) | 🔴 Open | Staging 30-min business-path load passed; production/public-ingress load NOT done |
+| Tenant isolation verification across all surfaces | 🔴 Open | Per-tenant JetStream streams (ADR-15) design complete; no production rollout |
+| Compliance audit (SOC2/GDPR/ISO27001) | 🔴 Open | Requires external auditor engagement |
+| Cross-process trace propagation | 🔴 Deferred | Temporal SDK limitation; upstream SDK-blocked |
+| S3-backed forensic bundle retrieval and lifecycle | 🔴 Open | Object Lock not deployed; S3 runtime wiring not deployed |
+| Production DLQ replay | 🔴 Open | Exponential backoff, poison-message detection, batch replay; requires production NATS topology |
+| Public ingress / TLS / Cloud Armor | 🔴 Intentionally deferred | Private-only decision; no public domain or ingress |
+| Commercial readiness (SLA/SLO, team, IR) | 🔴 Open | Requires team/on-call, SLA/SLO commitments, SBOM/dependency audit, incident-response drills, data deletion/residency, customer docs |
+
+**Gate:** Phase 3 close-out is gated on P0, P1, and P2 completion (all achieved). Phase 4 entry requires closing external evidence gates above. **No production-ready claim is made.**
 
 ---
 
@@ -122,12 +145,15 @@ This codebase delivers **bounded non-production features** per phase. The follow
 | Claim | Status |
 |-------|--------|
 | Production-ready | ❌ Not claimed |
-| External security sign-off | ❌ Not claimed |
-| External SRE sign-off | ❌ Not claimed |
-| Full load testing | ❌ Not claimed (bounded harness only) |
+| External security sign-off (A-04) | ❌ Not claimed — SELF-ATTESTED-SOLO / WAIVED-SOLO per ADR-16 |
+| External SRE sign-off (A-03) | ❌ Not claimed — SELF-ATTESTED-SOLO / WAIVED-SOLO per ADR-16 |
+| Penetration testing passed (A-07) | ❌ Not claimed — WAIVED-SOLO / PRIVATE-ONLY per ADR-16 |
+| Full load testing | ❌ Not claimed (bounded harness + staging 30-min only) |
 | Cross-process trace propagation | ❌ Not claimed (partial/in-process only) |
 | S3 runtime wiring | ❌ Not claimed (seam exists, not wired) |
 | Live NATS consumer production hardening | ❌ Not claimed (local-dev gates only) |
+| Commercial readiness | ❌ Not claimed |
+| Public ingress / TLS / Cloud Armor | ❌ Intentionally deferred (private-only) |
 
 ---
 

@@ -24,9 +24,9 @@ The following items are **already done** and are listed here only to avoid re-au
 
 ---
 
-## 2. Remaining Local-Executable Tasks
+## 2. Remaining Local-Executable Tasks (ALL COMPLETE)
 
-These tasks can be executed locally without external reviewers, production infrastructure, or vendor engagement. They are ordered roughly by bounded-slice effort (smallest first).
+These tasks can be executed locally without external reviewers, production infrastructure, or vendor engagement. They are ordered roughly by bounded-slice effort (smallest first). **All items A–G are now complete. Remaining work is external-gated, public-production-gated, commercial-readiness-gated, or risky/design-first (see §3 and §4).**
 
 ### A. Tier 3 Full Translations
 
@@ -182,11 +182,11 @@ These gates **cannot** be closed by local work. They require named independent t
 
 | Gate | Required Evidence | Owner | Local Status |
 |------|-------------------|-------|--------------|
-| **A-03** | Named external SRE reviewer; signed Section H of external review packet | DuongNguyen (designated; approval/evidence pending) | 🔴 Blocked |
-| **A-04** | Named external security reviewer; threat model v2 assessment | DuongNguyen (designated; approval/evidence pending) | 🔴 Blocked |
+| **A-03** | Named external SRE reviewer; signed Section H of external review packet | DuongNguyen (historical 2026-06-15 `APPROVED WITH CONDITIONS` on record); **SELF-ATTESTED-SOLO / WAIVED-SOLO per ADR-16 — external re-signoff NOT obtained** | 🔴 Blocked |
+| **A-04** | Named external security reviewer; threat model v2 assessment | DuongNguyen (historical 2026-06-15 `APPROVED WITH CONDITIONS` on record); **SELF-ATTESTED-SOLO / WAIVED-SOLO per ADR-16 — external re-signoff NOT obtained** | 🔴 Blocked |
 | **A-05** | Production Postgres/NATS/S3/monitoring operational; deployment runbook executed | SRE | 🔴 Blocked |
-| **A-06** | L4 30min sustained + all alert types + real receivers; L5 production load test | Backend Lead / SRE | 🔴 Blocked (I2a 10min + 1 alert sub-slice recorded only) |
-| **A-07** | External pen test report (PDF + JSON); HIGH/CRITICAL remediation | External Pen Test Team | 🔴 Blocked |
+| **A-06** | L4 30min sustained + all alert types + real receivers; L5 production load test | Backend Lead / SRE | 🟡 STAGING L4 PASSED — L3/L5 blocked (staging 30-min business-path load passed with receiver validation and synthetic Prometheus rule; production/public-ingress load NOT done) |
+| **A-07** | External pen test report (PDF + JSON); HIGH/CRITICAL remediation | External Pen Test Team | 🔴 Blocked — **WAIVED-SOLO / PRIVATE-ONLY per ADR-16**; ZAP self-scan prep only (0 FAIL, 1 WARN); external pen test NOT executed |
 | **A-10** | Production NATS topology; full DLQ replay worker validated; SRE sign-off | Backend Lead / SRE | 🔴 Blocked |
 | **A-11** | Temporal SDK safe per-request gRPC metadata injection; cross-process trace IDs in OTLP | Backend Lead / SRE | 🔴 Deferred / SDK-blocked |
 | **A-12** | Production secret manager + key rotation; staging/production SLO evidence; external review closure | SRE / Security | 🔴 Blocked |
@@ -226,3 +226,4 @@ These gates **cannot** be closed by local work. They require named independent t
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 7 (`docs/07-frontend/`) translated. One file (`02-ux-flows.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 9 to 8. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25l-documentation-language-tier3-frontend-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen (via authorized assistant fixer) | Tier 3 Batch 8 (`docs/08-security/`) translated. Four files (`01-threat-model.md`, `02-authn-authz.md`, `03-privacy-and-data-handling.md`, `04-audit-and-compliance.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 8 to 4. Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25m-documentation-language-tier3-security-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
 | 2026-06-10 | BrianNguyen29 (via authorized assistant fixer) | Tier 3 Batch 9 (final batch) translated. Four files (`03-acceptance-and-uat.md`, `01-agent-implementation-guide.md`, `03-prompts-contracts.md`, `01-rationale-and-external-patterns.md`) translated from Vietnamese to English in place. Remaining Tier 3 count updated from 4 to 0. All Tier 3 full translations now complete (34 files total). Verification: Vietnamese-diacritic scan clean, public-doc leakage scan clean, affirmative-claim scan clean, no new `.vi.md`, `git diff --check` pass. New evidence doc `docs/10-delivery/25n-documentation-language-tier3-final-evidence.md` created. Internal solo sign-off added. No public docs touched. No code changes. No production-readiness claim. External gates remain blocked. A-11 remains deferred/SDK-blocked. |
+| 2026-06-21 | BrianNguyen (via authorized assistant fixer) | Post-2026-06-10 close-out update. All local-executable tasks (§2 A–G) complete. Post-2026-06-10 deliverables recorded: ESO/GSM sync and ExternalSecrets readiness, staging/prod API key rotation validation, 30-min staging business-path load + receiver validation + synthetic Prometheus rule, external pentest engagement packet, ADR-16 solo/private waiver, final private DR smoke, JWT dual-key support, final private close-out docs. Section 4 external-gated blockers updated with ADR-16 terms (A-03/A-04 SELF-ATTESTED-SOLO / WAIVED-SOLO; A-07 WAIVED-SOLO / PRIVATE-ONLY). Remaining work framed as external-gated, public-production-gated, commercial-readiness-gated, or risky/design-first. No production-ready claim. No external sign-off claim. |
