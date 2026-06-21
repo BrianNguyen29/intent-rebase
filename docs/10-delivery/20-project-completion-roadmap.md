@@ -160,6 +160,7 @@ This codebase delivers **bounded non-production features** per phase. The follow
 ## Related Documents
 
 - [Current Project Status](./00-current-status.md)
+- [Post-Signoff Execution Plan](./26-post-signoff-execution-plan.md) — concrete next steps after private-only solo close-out: external artifact intake, safe execution lanes, and recommended execution order
 - [Completion Proposals Tracker](./09-completion-proposals-tracker.md)
 - [Phase 2b Residual Risk & Deferral Register](./10-phase-2b-residual-risk-deferral-register.md)
 - [Production Readiness Backlog](./17-production-readiness-backlog.md)
