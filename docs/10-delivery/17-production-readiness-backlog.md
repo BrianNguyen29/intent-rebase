@@ -85,7 +85,7 @@ P1 items are required for safe production deployment but may be addressed in par
 | **Current State** | Solo self-review completed; provisional SLO targets, Grafana dashboard, Alertmanager config self-reviewed |
 | **Evidence Required** | External SRE name, date, and sign-off statement |
 | **Owner** | SRE |
-| **Status** | 🟡 SELF-ATTESTED-SOLO — EXTERNAL RE-SIGNOFF NOT OBTAINED. Historical 2026-06-15 `APPROVED WITH CONDITIONS` by DuongNguyen remains on record. Post-2026-06-15 changes reviewed by project owner (self-attestation) for private-only operation. A-03 re-signoff with named evidence has not been obtained. FIND-001 (sustained-load alert firing) and FIND-004 (RPO/RTO not measured) remain open. ESO/GSM sync, GKE observability, 30-min load evidence, and PITR evidence address initial concerns but do not close the gate. For production/public claims, external re-signoff is required. **Not production-ready.** See `docs/13-adrs/16-solo-private-operation-waiver.md`. |
+| **Status** | 🟡 APPROVED WITH CONDITIONS (private-only solo operation per authorization review 2026-06-21). Historical 2026-06-15 `APPROVED WITH CONDITIONS` by DuongNguyen remains on record. Post-2026-06-15 evidence reviewed: GKE observability deployed, receivers validated under load, synthetic Prometheus rule firing validated, staging 30-min load passed, PITR clone + DR smoke validated. A-03 re-signoff with named evidence has not been obtained for public production. FIND-001 (sustained-load alert firing) and FIND-004 (RPO/RTO not measured) accepted as non-blocking for private-only; must be closed before public production claims. See `docs/09-operations/12-authorization-signoff-packet.md` and `docs/13-adrs/16-solo-private-operation-waiver.md`. |
 
 **No overclaim:** Solo self-review is weaker evidence. External SRE sign-off is a distinct, higher-confidence milestone.
 
@@ -99,7 +99,7 @@ P1 items are required for safe production deployment but may be addressed in par
 | **Current State** | Solo self-review completed; JWT auth, RLS, audit immutability, tenant isolation self-reviewed |
 | **Evidence Required** | External reviewer name, date, and sign-off statement |
 | **Owner** | Security |
-| **Status** | 🟡 SELF-ATTESTED-SOLO — EXTERNAL RE-SIGNOFF NOT OBTAINED. Historical 2026-06-15 `APPROVED WITH CONDITIONS` by DuongNguyen remains on record. Post-2026-06-15 changes reviewed by project owner (self-attestation) for private-only operation. A-04 re-signoff with named evidence has not been obtained. FIND-002 (RLS partial), FIND-003 (broader secret rotation program not completed), and A-07 (external pen test not engaged) remain open. GSM+ESO sync, staging rotation, prod API key rotation, ZAP self-scan, 401 header hardening, and RLS partial address initial concerns but do not close the gate. For production/public claims, external re-signoff is required. **Not production-ready.** See `docs/13-adrs/16-solo-private-operation-waiver.md`. |
+| **Status** | 🟡 APPROVED WITH CONDITIONS (private-only solo operation per authorization review 2026-06-21). Historical 2026-06-15 `APPROVED WITH CONDITIONS` by DuongNguyen remains on record. Post-2026-06-15 evidence reviewed: RLS bounded complete (P1-S1..S5i delivered, 13 RLC tests pass), 401 headers hardened + ZAP re-run confirmed, GSM+ESO provisioned, API key rotation validated. A-04 re-signoff with named evidence has not been obtained for public production. FIND-002 (RLS partial) and FIND-003 (broader secret rotation program not completed) accepted as non-blocking for private-only; must be closed before public production claims. A-07 remains WAIVED-SOLO. See `docs/09-operations/12-authorization-signoff-packet.md` and `docs/13-adrs/16-solo-private-operation-waiver.md`. |
 
 **No overclaim:** Solo self-review does not substitute for external security review.
 
@@ -157,7 +157,7 @@ P1 items are required for safe production deployment but may be addressed in par
 | **Current State** | Threat model v2 documented; pen test scope defined |
 | **Evidence Required** | External pen test report; evidence of HIGH/CRITICAL findings remediated |
 | **Owner** | Security |
-| **Status** | 🔴 WAIVED-SOLO / PRIVATE-ONLY — EXTERNAL NOT APPROVED. ZAP self-scan prep completed (0 FAIL, 1 WARN accepted); engagement packet prepared (`docs/08-security/08-external-pentest-engagement.md`) but no vendor selected. External pen test is **waived for private-only operation** because this is a personal solo project with no budget for third-party testing. A-07 remains **NOT APPROVED** for any production/public claim. **Not production-ready.** See `docs/13-adrs/16-solo-private-operation-waiver.md`. |
+| **Status** | 🚫 WAIVED-SOLO / PRIVATE-ONLY — EXTERNAL NOT APPROVED (per ADR-16 + authorization review 2026-06-21). ZAP self-scan prep completed (0 FAIL, 1 WARN accepted); engagement packet prepared (`docs/08-security/08-external-pentest-engagement.md`) but no vendor selected. External pen test is **waived for private-only operation** because this is a personal solo project with no budget for third-party testing. A-07 remains **NOT APPROVED** for any production/public claim. **Not production-ready.** See `docs/09-operations/12-authorization-signoff-packet.md` and `docs/13-adrs/16-solo-private-operation-waiver.md`. |
 
 **No overclaim:** Threat model documentation and pen test scope definition are not pen test execution.
 
