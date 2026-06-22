@@ -42,3 +42,8 @@ data:
         static_configs:
           - targets: ['alertmanager:9093']
         metrics_path: /metrics
+
+      - job_name: 'nats'
+        static_configs:
+          - targets: ['nats:7777']
+        metrics_path: /metrics

@@ -69,6 +69,10 @@ visitors to remember.
 | Variable | Default | Purpose | Caveat |
 |----------|---------|---------|--------|
 | `NATS_URL` | `nats://localhost:4222` | NATS connection URL. | When unset, the in-memory event bus is used. |
+| `INTENT_API_NATS_CONSUMER` | `false` (not set) | Enables the bounded `CheckpointCreatorConsumer` on the `audit_events` JetStream stream. | Pilot-only. The consumer polls a single JetStream stream. Not validated for production HA, auth, or multi-tenant streams. |
+| `INTENT_API_NATS_FULL_CONSUMER` | `false` (not set) | Enables the full NATS consumer suite (all consumers + DLQ wiring). | Requires `INTENT_API_NATS_CONSUMER=true`. Not production-validated. |
+| `INTENT_API_NATS_DLQ_WORKER` | `false` (not set) | Enables the bounded DLQ metrics worker (depth/age gauges). | Requires `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`. Not production-validated. |
+| `INTENT_API_NATS_DLQ_REPLAY_WORKER` | `false` (not set) | Enables the bounded DLQ replay worker. | Requires `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`. Not production-validated. |
 
 ### Object store (S3 / MinIO, local dev)
 
@@ -114,11 +118,17 @@ visitors to remember.
 
 ## Default-off workers
 
-A few environment variables gate bounded workers (NATS checkpoint consumer,
-DLQ metrics, DLQ replay). They look like production knobs but are
-**intentionally off by default** and are **not production-validated**. They
-are listed here so visitors do not mistake "the env var exists" for "we
-recommend turning it on." See `.env.example` for the exact names and the
+A few environment variables gate bounded workers:
+
+- `INTENT_API_NATS_CONSUMER` — NATS checkpoint consumer (bounded `CheckpointCreatorConsumer`)
+- `INTENT_API_NATS_FULL_CONSUMER` — full NATS consumer suite (not production-validated)
+- `INTENT_API_NATS_DLQ_WORKER` — DLQ metrics worker (bounded depth/age gauges)
+- `INTENT_API_NATS_DLQ_REPLAY_WORKER` — DLQ replay worker (local-dev only)
+
+They look like production knobs but are **intentionally off by default**
+and are **not production-validated**. They are listed here so visitors
+do not mistake "the env var exists" for "we recommend turning it on."
+See `.env.example` for the exact names and the
 [Test Strategy](../11-quality/01-test-strategy.md) for the policy and
 prerequisites.
 

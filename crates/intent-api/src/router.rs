@@ -15,6 +15,45 @@ use tower_http::trace::TraceLayer;
 
 use crate::routes;
 
+// ============================================================================
+// HTTP Metrics Middleware (Phase 4 SLO instrumentation)
+// ============================================================================
+
+/// Record generic HTTP request metrics for Prometheus SLO rules.
+///
+/// Emits:
+/// - `http_requests_total{method,status}` — counter
+/// - `http_request_duration_seconds{method,status}` — histogram
+///
+/// Labels use HTTP method + status code only (no path) to avoid
+/// high-cardinality time series from ID-bearing routes.
+///
+/// Layered at the router boundary so it captures wall-clock time for all
+/// handlers and middleware registered inside `build_router` (CORS, trace, etc.).
+/// In JWT builds (`build_router_with_jwt_auth`), the JWT middleware is applied
+/// outside this router, so JWT validation timing is not included in these
+/// metrics. This is acceptable for SLO rules because JWT failures are rare
+/// and auth latency is tracked separately if needed.
+pub async fn http_metrics_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let start = std::time::Instant::now();
+    let method = request.method().to_string();
+
+    let response = next.run(request).await;
+
+    let status = response.status().as_u16().to_string();
+    let duration = start.elapsed().as_secs_f64();
+
+    metrics::counter!("http_requests_total", "method" => method.clone(), "status" => status.clone())
+        .increment(1);
+    metrics::histogram!("http_request_duration_seconds", "method" => method, "status" => status)
+        .record(duration);
+
+    response
+}
+
 /// Build a CORS layer from the `INTENT_API_CORS_ALLOWED_ORIGINS` env var.
 ///
 /// Defaults to safe localhost origins for local-dev use.
@@ -122,6 +161,8 @@ pub fn build_router(
             routes::health::trace_context_middleware,
         ))
         .layer(TraceLayer::new_for_http())
+        // HTTP metrics must be outermost so it captures total request time
+        .layer(axum::middleware::from_fn(http_metrics_middleware))
 }
 
 pub mod auth_middleware;

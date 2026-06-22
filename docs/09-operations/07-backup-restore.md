@@ -194,6 +194,31 @@ These targets inform backup frequency and restore procedure priority, but do not
 - **Not a full enterprise DR exercise.**
 - **Not a committed SLA.** RPO ≤ 1h and RTO ≤ 30min are documented targets but not empirically validated against live production traffic or contractual obligations.
 
+---
+
+### RPO Measurement — Closest Measurable Evidence (2026-06-22)
+
+> **Scope:** Document the closest measurable recovery point objective evidence from Cloud SQL configuration and backup history. Empirical WAL lag measurement against live production traffic was not performed.
+> **Status:** 🟡 DOCUMENTED — Theoretical RPO < 1 minute; empirical WAL lag not measured.
+
+| Field | Value |
+|-------|-------|
+| **Instance** | `production-template-postgres-ed2c5bdd` |
+| **Automated backups** | Enabled, daily at 03:00 |
+| **PITR** | Enabled (`pointInTimeRecoveryEnabled: true`) |
+| **Replication log archiving** | Enabled (`replicationLogArchivingEnabled: true`, `transactionalLogStorageState: CLOUD_STORAGE`) |
+| **Transaction log retention** | 7 days |
+| **Last automated backup** | 2026-06-22T05:19:07Z (about 1 hour prior to measurement) |
+| **Backup interval** | ~24 hours (daily) |
+| **Theoretical RPO with PITR** | < 1 minute (Cloud SQL WAL streaming lag) |
+| **Empirical RPO without PITR** | ~24 hours (backup interval) |
+| **Empirical RPO with PITR (measured)** | **Not measured** — requires live workload + `pg_stat_archiver` query or Cloud SQL logs |
+
+**Limitation:** Exact WAL lag was not empirically verified against live production writes. The `pg_stat_archiver` query requires a DB connection and active write activity to measure the time between the last WAL archive and the current LSN. The documented RPO is the closest measurable recovery window based on backup configuration and PITR enablement, not an empirical measurement.
+
+**Next step for true empirical RPO:** Run a controlled write workload (e.g., `pgbench` or app load test) while monitoring `pg_stat_archiver.last_archived_time` and `pg_stat_activity.backend_start` to calculate the actual lag between transaction commit and WAL archive completion.
+
+---
 
 ### Phase 0 — Preflight (Fail-Closed)
 

@@ -524,6 +524,54 @@ This checklist enumerates the gates that must close before any production-readin
 
 ---
 
+## 2026-06-22 Evidence Refresh — Private-Only Post-Signoff Execution
+
+> **Status:** Evidence refresh only. No external reviewer engaged. No sign-off claimed. A-03/A-04 remain PENDING DIRECT REVIEWER CONFIRMATION. A-07 remains NOT APPROVED.
+
+This section captures the post-2026-06-15 execution evidence collected for private-only solo operation. It is intended for future external reviewer intake and does not constitute any form of self-signoff or production readiness claim.
+
+For a structured index of all evidence by gate (A-03, A-04, A-07), see the **Reviewer Intake Package** at `docs/09-operations/13-reviewer-intake-package.md`.
+
+### New Evidence Since 2026-06-15
+
+| Lane / Task | Evidence | Document |
+|-------------|----------|----------|
+| Lane 4: Real SLO Rules | `IntentApiLatencyP95High` and `IntentApiErrorRateHigh` applied to Prometheus; validated under bounded 5 VU k6 load; temporary `AppMetricsValidationRule` fired and removed | `docs/09-operations/11-slo-targets.md` §5.6 |
+| Lane 4: Prometheus PVC | `prometheus-storage` PVC (10Gi, RWO) applied; TSDB WAL replay started; `fsGroup: 65534` fix | `infrastructure/production/README.md` §Prometheus PVC Persistence |
+| Lane 2: NATS Prometheus scrape | `prometheus-nats-exporter:0.15.0` sidecar on port 7777; Prometheus target UP; `gnatsd_connz_num_connections` queryable | `infrastructure/production/README.md` §NATS Prometheus Scrape Target |
+| Lane 2: NATS app consumer | `NATS_URL=nats://nats:4222`, `INTENT_API_NATS_CONSUMER=true` wired; `audit_events` stream created; `CheckpointCreatorConsumer` polling; DLQ workers not enabled | `infrastructure/production/README.md` §NATS App Consumer Wired |
+| Lane 3: Forensic bucket | `gs://forensic-evidence-ferrum-497801-ed2c5bdd` created with versioning, 30-day retention (UNLOCKED), PAP enforced, uniform access; runtime wiring blocked (no GCS backend, HMAC keys not created, Workload Identity not implemented) | `infrastructure/production/README.md` §Dedicated Forensic Immutable Bucket / §Forensic Bundle Runtime Wiring — Blocked |
+| Lane 5: DR formal RTO drill | Clone `dr-formal-rto-20260622023356` created; RUNNABLE in ~16m58s; app migration validated; total elapsed ~21m37s; all temp resources cleaned up | `docs/09-operations/07-backup-restore.md` §Formal DR RTO/RPO Drill |
+| Lane 5: RPO measurement | Cloud SQL backup config inspected; PITR enabled, WAL archiving enabled, transaction log retention 7 days; theoretical RPO < 1 min; empirical WAL lag **not measured** | `docs/09-operations/07-backup-restore.md` §RPO Measurement |
+| Lane 1: JWT grace closed | `JWT_SECRET_PREVIOUS` removed from K8s secret; new token verified; deployment healthy; old secret retained in GSM for rollback but not in runtime | `docs/09-operations/05-runbooks.md` RB21 Evidence |
+| Lane 6: CI/CD audit trail | `.github/workflows/audit-trail.yml` created; manual `workflow_dispatch` only; quality + SBOM jobs; signing deferred | `infrastructure/production/README.md` §Lane 6 CI/CD Audit Trail |
+| Lane 8: NATS docs | `INTENT_API_NATS_CONSUMER`, `INTENT_API_NATS_FULL_CONSUMER`, `INTENT_API_NATS_DLQ_WORKER`, `INTENT_API_NATS_DLQ_REPLAY_WORKER` added to `.env.example` and `docs/getting-started/configuration.md` with pilot-only caveats | `.env.example`, `docs/getting-started/configuration.md` |
+| Lane 8: Stale docs | Error-budget note in `11-slo-targets.md` updated; Prometheus rules description in `README.md` Reproducible Assets updated | `docs/09-operations/11-slo-targets.md`, `infrastructure/production/README.md` |
+
+### Post-Signoff Execution Plan Status
+
+All 20 lanes are tracked in `docs/10-delivery/26-post-signoff-execution-plan.md`:
+- Phase A (lanes 1–6): Completed 2026-06-21/22
+- Phase B (lanes 7–11): Completed 2026-06-21/22 (with lane 9 partial: RPO theoretical only, lane 11 blocked: runtime wiring deferred)
+- Phase C (lanes 12–15): Blocked on external engagement (A-07 vendor, A-03/A-04 re-signoff, public ingress)
+- Phase D (lanes 16–22): Long-term enterprise readiness; not required for private-only
+
+### No Production-Ready Claim
+
+All evidence above is bounded to:
+- Internal/private-only operation
+- No public ingress
+- No TLS/WAF/Cloud Armor
+- No external sign-off
+- No contractual SLA or committed error budgets
+- No S3 Object Lock compliance
+- No production-grade NATS HA/auth/TLS
+- No empirical RPO measurement against live traffic
+- No formal live-traffic DR cutover
+- No external pen test vendor engaged
+
+---
+
 ## Update Log
 
 | Date | Updated By | Changes |

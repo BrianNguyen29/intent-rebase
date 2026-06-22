@@ -802,6 +802,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing (supports OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set)
     init_tracing();
 
+    // Install Prometheus metrics recorder so metrics are captured from startup
+    intent_api::routes::health::init_metrics();
+
     // =============================================================================
     // Migration-only mode: run sqlx migrations and exit without starting the server
     // =============================================================================

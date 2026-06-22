@@ -15,13 +15,34 @@ use axum::{
     extract::State, http::Request, middleware::Next, response::IntoResponse, routing::get, Json,
     Router,
 };
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::collections::HashMap;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 // Re-export types needed from the crate for handlers
 use crate::types::HealthResponse;
 use crate::AppState;
+
+/// Global Prometheus metrics handle — initialized once at startup.
+///
+/// The handle is installed by `init_metrics()` in `main.rs` before the server
+/// starts so that metrics recorded before the first `/metrics` scrape are not
+/// lost. The `/metrics` handler reads from this handle rather than lazily
+/// installing the recorder.
+static METRICS_HANDLE: std::sync::OnceLock<PrometheusHandle> = std::sync::OnceLock::new();
+
+/// Install the Prometheus metrics recorder at application startup.
+///
+/// Must be called exactly once before any metrics are recorded. Calling this
+/// after the server has already started is safe (no-op via `OnceLock`).
+pub fn init_metrics() {
+    METRICS_HANDLE.get_or_init(|| {
+        PrometheusBuilder::new()
+            .install_recorder()
+            .expect("Failed to install Prometheus recorder")
+    });
+    tracing::info!("Prometheus metrics recorder installed");
+}
 
 // ============================================================================
 // Request ID Middleware (Phase 3 Batch 2 Slice 2 — bounded tracing foundation)
@@ -202,14 +223,9 @@ pub async fn ready_handler() -> Json<HealthResponse> {
 
 /// GET /metrics - Returns Prometheus-formatted metrics
 pub async fn metrics_handler() -> impl IntoResponse {
-    use metrics_exporter_prometheus::PrometheusHandle;
-    // Use a static handle initialized once — install_recorder() starts a background server
-    static HANDLE: std::sync::OnceLock<PrometheusHandle> = std::sync::OnceLock::new();
-    let handle = HANDLE.get_or_init(|| {
-        PrometheusBuilder::new()
-            .install_recorder()
-            .expect("Failed to install Prometheus recorder")
-    });
+    let handle = METRICS_HANDLE
+        .get()
+        .expect("Prometheus metrics recorder not initialized — call init_metrics() at startup");
     let metrics = handle.render();
     axum::response::Response::builder()
         .header(

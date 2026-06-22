@@ -1,8 +1,10 @@
-# Prometheus Rules ConfigMap — APPLIED on 2026-06-18.
-# Contains safe alerting rules that do not fire unless a target is actually
-# down (up == 0). No synthetic always-firing rules are included. Rules are
-# mounted into the Prometheus Deployment; active targets are scraped and
-# evaluated against these rules. Alertmanager handles routing when a rule fires.
+# Prometheus Rules ConfigMap — APPLIED on 2026-06-18; UPDATED with real app SLO rules 2026-06-22.
+# Contains alerting rules for target down, latency SLO, and error rate SLO.
+# All rules use real app metrics emitted by intent-api (http_requests_total,
+# http_request_duration_seconds summary with quantile labels).
+# No synthetic always-firing rules are included as permanent rules.
+# Temporary validation rules are applied, verified, and removed in the same session.
+# Internal/private-only. No production-ready SLO claim.
 
 apiVersion: v1
 kind: ConfigMap
@@ -29,3 +31,36 @@ data:
               severity: warning
             annotations:
               summary: "alertmanager target is down"
+
+      - name: intent_rebase_slo
+        rules:
+          # Latency SLO: p95 > 100ms (0.1s) for 5 minutes.
+          # Note: intent-api exposes http_request_duration_seconds as a summary
+          # (quantile labels, not histogram buckets). This evaluates the instantaneous
+          # p95 emitted by the app. For histogram-based aggregated p95, the app would
+          # need to use histogram metrics instead of summary.
+          - alert: IntentApiLatencyP95High
+            expr: http_request_duration_seconds{quantile="0.95"} > 0.1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "intent-api p95 latency exceeds 100ms for 5 minutes"
+              description: "p95 latency is {{ $value }}s for job {{ $labels.job }}"
+
+          # Error rate SLO: 5xx rate > 0.1% (0.001) over 5 minutes.
+          # Uses http_requests_total counter with status label regex.
+          # If no 5xx requests exist, the numerator is 0 and the alert does not fire.
+          - alert: IntentApiErrorRateHigh
+            expr: |
+              (
+                sum(rate(http_requests_total{status=~"5.."}[5m]))
+                /
+                sum(rate(http_requests_total[5m]))
+              ) > 0.001
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "intent-api 5xx error rate exceeds 0.1% for 5 minutes"
+              description: "5xx error rate is {{ $value }} for job {{ $labels.job }}"

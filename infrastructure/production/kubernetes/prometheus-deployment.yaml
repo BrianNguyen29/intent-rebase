@@ -1,12 +1,7 @@
-# Prometheus Deployment + Service — APPLIED on 2026-06-18.
-# Uses emptyDir for TSDB; persistence is not configured for this minimal
-# private observability stack. If retention or crash-recovery is required,
-# add a PersistentVolumeClaim and update the volume below.
-#
-# Health: Prometheus `/-/healthy` returns `Prometheus Server is Healthy.`
-# All 3 targets active after static-target config: `alertmanager up`,
-# `intent-api up`, `prometheus up`.
-#
+# Prometheus Deployment + Service — APPLIED on 2026-06-18; PVC added 2026-06-22.
+# Uses PersistentVolumeClaim for TSDB persistence (replaces emptyDir).
+# Retention: default 15 days (not configured explicitly; Prometheus default).
+# If retention or crash-recovery is required, add --storage.tsdb.retention.time flag.
 # Service is ClusterIP only (no public IP). Access is via port-forward or
 # from within the VPC only.
 
@@ -27,6 +22,8 @@ spec:
       labels:
         app: prometheus
     spec:
+      securityContext:
+        fsGroup: 65534
       containers:
         - name: prometheus
           image: prom/prometheus:v2.54.1
@@ -79,7 +76,8 @@ spec:
           configMap:
             name: prometheus-rules
         - name: storage
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: prometheus-storage
 ---
 apiVersion: v1
 kind: Service

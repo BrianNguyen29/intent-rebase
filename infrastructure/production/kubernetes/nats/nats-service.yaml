@@ -18,5 +18,8 @@ spec:
   - name: monitor
     port: 8222
     targetPort: 8222
+  - name: metrics
+    port: 7777
+    targetPort: 7777
   # INTERNAL ONLY: ClusterIP, no external LB, no public ingress
   # Production NATS would use a headless service for clustering

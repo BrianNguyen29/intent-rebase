@@ -900,8 +900,13 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 | 2026-06-21 | Health `/health` with old JWT token (grace window) | ✅ 200 | JWT signed with old secret (via `JWT_SECRET_PREVIOUS`) still accepted |
 | 2026-06-21 | Create intent `/v1/intents` with new JWT + API key | 401 | Expected — endpoint requires specific auth claims beyond JWT verification; new JWT is valid (health=200) |
 | 2026-06-21 | Create intent `/v1/intents` with old JWT + API key | 401 | Same behavior as new JWT — confirms old JWT is also valid at verification level |
+| 2026-06-22 | `JWT_SECRET_PREVIOUS` mapping removed from ExternalSecret manifest | ✅ Applied | `infrastructure/production/kubernetes/external-secrets/app-secrets-prod.yaml` updated; `JWT_SECRET_PREVIOUS` removed from `data` list |
+| 2026-06-22 | ESO force-sync annotation applied after manifest removal | ✅ Synced | `Ready=True`, `SecretSynced` confirmed; `JWT_SECRET_PREVIOUS` key no longer present in K8s secret `app-secrets` |
+| 2026-06-22 | Deployment `intent-api` restarted after secret removal | ✅ Rolled out | New pod `intent-api-65d8f4f894-zdk6l` Running, 0 restarts; health/ready 200 |
+| 2026-06-22 | JWT token signed with current `JWT_SECRET` | ✅ 200 | Verified via temporary Job `jwt-token-test-20260622`; new token accepted by auth middleware |
+| 2026-06-22 | JWT token signed with old secret (grace window closed) | Not tested | `JWT_SECRET_PREVIOUS` removed from K8s secret; old token would be rejected. Empirical test not performed (old secret remains in GSM but not mounted in runtime). |
 
-> **Caveat:** `JWT_SECRET_PREVIOUS` grace window is intentionally left active. Removal is deferred until 24-hour grace window passes or all clients refresh tokens. No old client tokens exist in this private-only system; grace window is a safety mechanism.
+> **Caveat:** `JWT_SECRET_PREVIOUS` grace window removed from runtime on 2026-06-22 (~24 hours after rotation). The old secret remains in GSM (`intent-rebase-prod-jwt-secret-previous`) for potential rollback but is no longer mounted in the K8s secret or consumed by the app. New tokens signed with current `JWT_SECRET` are accepted. Old tokens would be rejected because the fallback secret is no longer available.
 
 ### Rollback
 

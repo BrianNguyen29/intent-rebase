@@ -43,7 +43,7 @@ Before using this scaffold:
 |----------------|--------|-------------|
 | A-05 Production Infrastructure | 🟡 SCAFFOLD APPLIED + PHASE 1/2/3/4 HARDENING | Core GCP scaffold applied (VPC, GKE, GCS, Cloud SQL); namespace created; `intent-api` pod running with health/ready responding. Phase 1 complete (node pool 2, RollingUpdate, HPA/PDB). Phase 2 complete (Prometheus + Alertmanager deployed, receivers validated, synthetic rule firing validated). Phase 3 complete (401 headers hardened, GSM secrets provisioned, ESO v2.6.0 installed, ClusterSecretStore/ExternalSecrets applied, staging rotation validated, prod API key rotation validated). Phase 4 complete (bounded k6 health load test passed, 30-minute staging business-path load test with sustained-load receiver validation and synthetic Prometheus rule firing validated). **Not production-ready:** A-07 open, public ingress not applied, broader secret rotation program not completed, A-03/A-04 re-signoff not obtained. |
 | FIND-001 Production telemetry / Alertmanager real receivers | 🟡 DEPLOYED + RECEIVERS VALIDATED + SUSTAINED-LOAD RECEIVER VALIDATION PASSED + SYNTHETIC PROMETHEUS RULE FIRING VALIDATED — REAL SLO RULE BREACH UNDER SUSTAINED LOAD NOT TESTED | Alertmanager ConfigMap + `alertmanager-prod.yml` placeholders exist; real Slack/SMTP credentials supplied out-of-band to K8s Secrets `app-secrets` in both `intent-rebase` and `intent-rebase-staging` namespaces (18 keys each, including both uppercase and lowercase Slack/SMTP keys). Direct transport validation passed: Slack webhook returned `200 ok`; SMTP send returned `sent` with `0` refused. Temporary Alertmanager container validation passed: health OK, POST to `/api/v2/alerts` returned `200`, alert `SlackSMTPValidationTest` showed state `active` with receiver `slack-and-email`, logs showed no relevant errors. GKE Prometheus + Alertmanager deployed on 2026-06-18 with ClusterIP-only Services; ConfigMap generated from Secret out-of-band. Slack channel override removed; retest `GKEAlertPipelineValidationNoChannel` succeeded (POST 200, receiver `slack-and-email`, notifications email/slack both 1, failures 0). Prometheus static targets: 3 active (`alertmanager up`, `intent-api up`, `prometheus up`). **Sustained-load receiver validation passed:** during 30-minute staging business-path load (k6 Job `business-alert-load-20260619`), manual Alertmanager API alert `SustainedLoadReceiverValidation` posted (`ALERT_POST_STATUS 200`), Slack delta 1, email delta 1. **Synthetic Prometheus rule firing validated:** temporary synthetic rule `StagingPipelineValidation` (`vector(1)`, `for: 0s`) added to live GKE Prometheus `prometheus-rules` ConfigMap during staging 30-minute business-path load (k6 Job `business-promrule-load-20260619`, 5 VUs, 8931 iterations, 8935 requests, checks 100%, 0% failure, p95 17.43ms); `PROM_ALERT_STATES=firing` observed; Alertmanager notification metrics Slack delta 1, email delta 1 with no manual API alert. Rule was cleaned up after test (confirmed absent: `SYNTHETIC_RULE_PRESENT_AFTER_CLEANUP=` empty, `POST_CLEANUP_PROM_ALERT_STATES=NONE`). **This validates Prometheus rule evaluation and Alertmanager receiver delivery using a temporary synthetic rule; it does NOT prove a real production SLO/SLA rule breached.** Real SLO rule breach under sustained load remains untested; A-03/A-04 re-signoff not obtained. |
-| FIND-003 Secret rotation / Vault or AWS SM | 🟡 GSM PROVISIONED + ESO SYNC + STAGING ROTATION VALIDATED — PROD API KEY ROTATION VALIDATED; BROADER ROTATION DEFERRED | Google Secret Manager API enabled. GSM secrets created for prod/staging (22 total: API key, DATABASE_URL, HMAC, JWT, Slack webhook, SMTP host/port/from/to/username/password). No values committed. GKE service account `production-template-gke-sa@ferrum-497801.iam.gserviceaccount.com` granted `roles/secretmanager.secretAccessor`. **ESO v2.6.0 installed from static manifest via server-side apply; release in namespace `default`. ClusterSecretStore `gcp-secret-manager` applied with GCP Secret Manager provider, project `ferrum-497801`, ADC/node SA fallback (Workload Identity pool empty). ExternalSecrets `app-secrets` applied in namespaces `intent-rebase` and `intent-rebase-staging`; both Ready=True / SecretSynced. `deletionPolicy: Retain` required (`None` rejected by CRD).** K8s runtime now uses GSM-backed sync for the secrets managed by ExternalSecrets; staging rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash comparison matched without printing secret, Deployment restarted, new pod `intent-api-854f7bf87f-2wl6n`, smoke passed `STAGING_ROTATION_SMOKE_OK`). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash comparison matched without printing secret, Deployment restarted, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`. A-03/A-04 re-signoff not obtained. |
+| FIND-003 Secret rotation / Vault or AWS SM | 🟡 GSM PROVISIONED + ESO SYNC + STAGING ROTATION VALIDATED — PROD API KEY ROTATION VALIDATED; BROADER ROTATION DEFERRED | Google Secret Manager API enabled. GSM secrets created for prod/staging (22 total: API key, DATABASE_URL, HMAC, JWT, Slack webhook, SMTP host/port/from/to/username/password). No values committed. GKE service account `production-template-gke-sa@ferrum-497801.iam.gserviceaccount.com` granted `roles/secretmanager.secretAccessor`. **ESO v2.6.0 installed from static manifest via server-side apply; release in namespace `default`. ClusterSecretStore `gcp-secret-manager` applied with GCP Secret Manager provider, project `ferrum-497801`, ADC/node SA fallback (Workload Identity pool empty). ExternalSecrets `app-secrets` applied in namespaces `intent-rebase` and `intent-rebase-staging`; both Ready=True / SecretSynced. `deletionPolicy: Retain` required (`None` rejected by CRD).** K8s runtime now uses GSM-backed sync for the secrets managed by ExternalSecrets; staging rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash comparison matched without printing secret, Deployment restarted, new pod `intent-api-854f7bf87f-2wl6n`, smoke passed `STAGING_ROTATION_SMOKE_OK`). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash comparison matched without printing secret, Deployment restarted, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); grace window closed 2026-06-22 (JWT_SECRET_PREVIOUS removed from K8s secret, new token verified accepted, old token rejection not empirically tested); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`. A-03/A-04 re-signoff not obtained. |
 | FIND-004 Backup/restore PITR clone-only validated | 🟡 VALIDATED — CLONE-ONLY | Cloud SQL PITR clone restore validated on 2026-06-18 against separate clone `pitr-restore-test-20260618084607`; Cloud SQL clone provisioning observed at >40 minutes; RPO/RTO not measured against live production traffic; full DR program maturity remains open. A-03/A-04 re-signoff not obtained. |
 | A-07 Pen Test | 🔴 WAIVED-SOLO / PRIVATE-ONLY — EXTERNAL NOT APPROVED (per ADR-16 + authorization review 2026-06-21) | ZAP self-scan prep completed (0 FAIL, 1 WARN accepted). Engagement packet prepared (`docs/08-security/08-external-pentest-engagement.md`) but no vendor selected. External pen test is **waived for private-only operation** because this is a personal solo project with no budget for third-party testing. A-07 remains **NOT APPROVED** for any production/public claim. See `docs/09-operations/12-authorization-signoff-packet.md` and `docs/13-adrs/16-solo-private-operation-waiver.md`. |
 | A-06 Load Testing (L3–L5) | 🟡 BOUNDED HEALTH + 30-MIN STAGING BUSINESS-PATH PASSED + SUSTAINED-LOAD RECEIVER VALIDATION + SYNTHETIC PROMETHEUS RULE FIRING VALIDATED — REAL SLO RULE BREACH NOT TESTED; PROD PUBLIC INGRESS LOAD OPEN | Bounded k6 health load test passed (5 VUs, 5 min, 1500/1500 checks, 0% failure, p95 1.5ms). **30-minute staging business-path load test with sustained-load receiver validation passed** (k6 Job `business-alert-load-20260619`, 5 VUs, 8930 iterations, 8934 HTTP requests, checks 100.00%, 0% failure, p95 17.71ms, max 198.26ms, avg 6.97ms; endpoint mix: create intents/versions in setup, then loop through get intent, list versions, get version, diff, rebase-preview, side-effects with tenant_id, graph nodes, health). Manual Alertmanager API alert `SustainedLoadReceiverValidation` posted during load (`ALERT_POST_STATUS 200`), Slack delta 1, email delta 1. **Synthetic Prometheus rule firing validated:** temporary synthetic rule `StagingPipelineValidation` (`vector(1)`, `for: 0s`) added to live GKE Prometheus during staging 30-minute load (k6 Job `business-promrule-load-20260619`, 8931 iterations, 8935 requests, checks 100%, p95 17.43ms); `PROM_ALERT_STATES=firing` observed; Alertmanager notification metrics Slack delta 1, email delta 1 with no manual API alert; rule cleaned up after test. **This validates receiver delivery and synthetic rule evaluation during sustained load; it does NOT prove a real production SLO/SLA rule breached.** **This is staging business-path load, not prod public ingress load.** Real SLO rule breach under sustained load not tested. A-03/A-04 re-signoff not obtained. Prod public ingress load not done. |
@@ -190,20 +190,20 @@ The following internal smoke deployment steps were executed against the provisio
 | 401 response header hardening | ✅ Done | `Content-Type: application/json` + `Cache-Control: no-store` added to all 401 paths (JWT middleware, `ApiKeyRejection`, `RlsTenantClaimsExtractionError`, `error_response.rs`). Committed as `9e26aaa`. Image `9e26aaa` rolled out to prod and staging. ZAP re-run confirmed `Content-Type Header Missing` PASS. |
 | Phase 1 K8s stability | ✅ Done | Node pool scaled to 2 (`gke_node_count=2`, nodes `gke-production-templ-production-templ-0abeaf6e-4g41` IP `10.0.0.11`, `gke-production-templ-production-templ-0abeaf6e-mvlb` IP `10.0.0.13`), `deletion_protection=true`, `RollingUpdate` with `maxSurge:1,maxUnavailable:0`, HPA/PDB applied. HPA metrics active: CPU `2%/70%`, memory `2%/80%`, min 1 max 3. ILB smoke: `/health` ok uptime 16568, `/ready` ready. |
 | Phase 2 GKE observability | ✅ Done | Prometheus + Alertmanager deployed on GKE with ClusterIP-only Services. Alertmanager ConfigMap generated from Secret out-of-band. Slack channel override removed from template. Prometheus config uses static targets. All 3 targets up. |
-| Phase 3 security hardening | ✅ Done | Google Secret Manager API enabled. GSM secrets created for prod/staging (22 total). GKE SA granted `roles/secretmanager.secretAccessor`. **ESO v2.6.0 installed, ClusterSecretStore/ExternalSecrets applied, GSM-to-K8s sync validated.** Staging rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash match, Deployment restart, smoke passed). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash match, Deployment restart, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook added to `docs/09-operations/05-runbooks.md` and `docs/09-operations/08-secrets-inventory.md`. |
+| Phase 3 security hardening | ✅ Done | Google Secret Manager API enabled. GSM secrets created for prod/staging (22 total). GKE SA granted `roles/secretmanager.secretAccessor`. **ESO v2.6.0 installed, ClusterSecretStore/ExternalSecrets applied, GSM-to-K8s sync validated.** Staging rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash match, Deployment restart, smoke passed). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash match, Deployment restart, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); grace window closed 2026-06-22 (JWT_SECRET_PREVIOUS removed from K8s secret, new token verified accepted, old token rejection not empirically tested); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook added to `docs/09-operations/05-runbooks.md` and `docs/09-operations/08-secrets-inventory.md`. |
 | Phase 4 bounded load test | ✅ Done | k6 job `k6-health-load-20260618`, 5 VUs for 5m against `http://intent-api:8080/health`. 1500/1500 checks passed, `http_req_failed=0.00%`, p95 `1.5ms`, avg `902.2µs`, throughput `4.990232/s`. Bounded health endpoint test, not full 30-minute business-path load test. |
 | ESO v2.6.0 install | ✅ Done | Static manifest applied via server-side apply: `kubectl apply --server-side -f https://github.com/external-secrets/external-secrets/releases/download/v2.6.0/external-secrets.yaml`. Release landed in namespace `default`. |
 | ClusterSecretStore apply | ✅ Done | `cluster-secret-store.yaml` applied. `ClusterSecretStore/gcp-secret-manager` with GCP Secret Manager provider, project `ferrum-497801`, ADC/node SA fallback (Workload Identity pool empty). |
 | ExternalSecrets apply | ✅ Done | `app-secrets-prod.yaml` applied in namespace `intent-rebase`; `app-secrets-staging.yaml` applied in namespace `intent-rebase-staging`. Both Ready=True / SecretSynced. `creationPolicy: Merge`, `deletionPolicy: Retain` (required; `None` rejected by CRD). |
 | Staging secret rotation validation | ✅ Done | GSM secret `intent-rebase-staging-api-key` rotated to version `[2]`. Forced ExternalSecret sync via annotation. Hash comparison matched without printing secret (`STAGING_API_KEY_ROTATION_MATCH=true`). Staging Deployment restarted; new pod `intent-api-854f7bf87f-2wl6n`. Smoke after rotation: `/health` ok, `/ready` ready, `STAGING_ROTATION_SMOKE_OK`. **Prod API key rotation validated separately (see row below).** |
-| Prod API key rotation validation | ✅ Done | GSM secret `intent-rebase-prod-api-key` rotated to version `[3]`. Forced ExternalSecret sync via annotation. `ExternalSecret/app-secrets` status `Ready=True`, message `secret synced`. Hash comparison matched without printing secret: before `[REDACTED]`, after `[REDACTED]`, match `true`. Deployment restarted; new pod `intent-api-7cf59448bb-6g77q`. Smoke after rotation: `/health` `{"status":"ok","uptime_seconds":17}`, `/ready` `{"status":"ready","uptime_seconds":0}`. `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`. |
+| Prod API key rotation validation | ✅ Done | GSM secret `intent-rebase-prod-api-key` rotated to version `[3]`. Forced ExternalSecret sync via annotation. `ExternalSecret/app-secrets` status `Ready=True`, message `secret synced`. Hash comparison matched without printing secret: before `[REDACTED]`, after `[REDACTED]`, match `true`. Deployment restarted; new pod `intent-api-7cf59448bb-6g77q`. Smoke after rotation: `/health` `{"status":"ok","uptime_seconds":17}`, `/ready` `{"status":"ready","uptime_seconds":0}`. `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); grace window closed 2026-06-22 (JWT_SECRET_PREVIOUS removed from K8s secret, new token verified accepted, old token rejection not empirically tested); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`. |
 | 30-minute staging business-path load test with sustained-load receiver validation | ✅ Done | k6 Job `business-alert-load-20260619`, 5 VUs, 30 minutes. Result: 8930 iterations, 8934 HTTP requests, checks `100.00% (8934/8934)`, `http_req_failed=0.00% (0/8934)`, p95 `17.71ms`, max `198.26ms`, avg `6.97ms`, throughput `4.960061/s`. Job completed and deleted. Endpoint mix: create two intents and two versions in setup, then loop through get intent, list versions, get version, diff, rebase-preview, side-effects with tenant_id, graph nodes, health. Manual Alertmanager API alert `SustainedLoadReceiverValidation` posted during load (`ALERT_POST_STATUS 200`), Slack delta 1, email delta 1. `SUSTAINED_ALERT_VALIDATION_DONE`. **This validates receiver delivery during sustained load by manual alert; it does not prove Prometheus rule fired under load.** **This is staging business-path load, not prod public ingress load.** |
 
 | Synthetic Prometheus rule firing under sustained load validation | ✅ Done | k6 Job `business-promrule-load-20260619`, 5 VUs, 30 minutes. Result: 8931 iterations, 8935 HTTP requests, checks `100.00% (8935/8935)`, `http_req_failed=0.00% (0/8935)`, p95 `17.43ms`, max `163.96ms`, avg `6.86ms`, throughput `4.960674/s`. Job completed and deleted. Temporary synthetic rule `StagingPipelineValidation` (`vector(1)`, `for: 0s`, labels `severity=info`, `pipeline=validation`) added to live GKE Prometheus `prometheus-rules` ConfigMap during load. `PROM_ALERT_STATES=firing` observed. Alertmanager notification metrics: Slack delta 1, email delta 1 (no manual API alert). Rule cleaned up after test: first cleanup attempt hit resourceVersion conflict; corrected by fetching latest ConfigMap, removing `synthetic-validation.yml`, and restarting Prometheus. Cleanup verified: `SYNTHETIC_RULE_PRESENT_AFTER_CLEANUP=` empty, `POST_CLEANUP_PROM_ALERT_STATES=NONE`. **This validates Prometheus rule evaluation and Alertmanager receiver delivery using a temporary synthetic rule; it does NOT prove a real production SLO/SLA rule breached.** |
 - Node pool is now 2 nodes with RollingUpdate, HPA, and PDB applied (Phase 1 complete). `deletion_protection=true` on GKE cluster.
 - Resource requests are modest (`100m` CPU, `128Mi` memory). HPA scales min 1 max 3; production may need higher limits.
 - Prometheus + Alertmanager deployed on GKE with ClusterIP-only Services (Phase 2 complete). TSDB uses emptyDir; persistence not configured.
-- **ESO v2.6.0 installed, ClusterSecretStore and ExternalSecrets applied, GSM-to-K8s sync validated (Phase 3 complete).** Staging secret rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash match, Deployment restart, smoke passed). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash match, Deployment restart, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`.
+- **ESO v2.6.0 installed, ClusterSecretStore and ExternalSecrets applied, GSM-to-K8s sync validated (Phase 3 complete).** Staging secret rotation validated (GSM `intent-rebase-staging-api-key` rotated to version [2], forced sync, hash match, Deployment restart, smoke passed). **Prod API key rotation validated (2026-06-19):** GSM `intent-rebase-prod-api-key` rotated to version [3], forced sync, hash match, Deployment restart, new pod `intent-api-7cf59448bb-6g77q`, smoke passed, `PROD_ROTATION_VALIDATED=true`. **Broader secret rotation:** JWT validated 2026-06-21 (dual-key, GSM v2, ESO sync, health 200 new+old tokens); grace window closed 2026-06-22 (JWT_SECRET_PREVIOUS removed from K8s secret, new token verified accepted, old token rejection not empirically tested); DB URL validated 2026-06-21 (Cloud SQL user password rotated, GSM v2, ESO sync, health 200, DB_CONNECTION_OK). NATS/S3 not deployed on GCP; TLS not applicable private-only. Validated API key rotation runbook in `docs/09-operations/05-runbooks.md`.
 - A-07 external pen test not engaged/executed; self-scan prep only (ZAP re-run 0 FAIL, 1 WARN accepted). **A-07 remains OPEN.**
 - Public ingress/domain/TLS/Cloud Armor is not decided or applied. Internal LoadBalancer is private-only.
   - **30-minute staging business-path load test with sustained-load receiver validation passed (Phase 4 complete).** Bounded k6 health endpoint load test passed. Manual Alertmanager API alert `SustainedLoadReceiverValidation` posted during 30-minute load (`ALERT_POST_STATUS 200`), Slack delta 1, email delta 1. Synthetic Prometheus rule firing validated during 30-minute load (temporary synthetic rule `StagingPipelineValidation`, `PROM_ALERT_STATES=firing`, Slack delta 1, email delta 1, rule cleaned up). This validates receiver delivery and synthetic rule evaluation during sustained load by manual alert and synthetic rule; it does not prove a real production SLO/SLA rule breached. This is staging business-path load, not prod public ingress load.
@@ -377,7 +377,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 ## SLO / Load Validation
 
 > **Date:** 2026-06-21 / 2026-06-22 (Lane 4 Escalation)
-> **Status:** 🟡 VALIDATED — Reproducible k6 script and Job manifest created; bounded internal load tests passed (2026-06-21 and 2026-06-22); Prometheus synthetic rule verified firing and cleaned up (2026-06-21); Prometheus real-metric rule (`prometheus_build_info`) verified firing and cleaned up (2026-06-22). App metrics endpoint empty — real app-level SLO rules require app instrumentation. Formal SLO doc created at `docs/09-operations/11-slo-targets.md`.
+> **Status:** 🟡 VALIDATED — Reproducible k6 script and Job manifest created; bounded internal load tests passed (2026-06-21 and 2026-06-22); Prometheus synthetic rule verified firing and cleaned up (2026-06-21); Prometheus real-metric rule (`prometheus_build_info`) verified firing and cleaned up (2026-06-22). **App metrics instrumented 2026-06-22**: `http_requests_total` and `http_request_duration_seconds` histogram added via axum middleware; deployed image `cd370d1-metrics`; live pod verified returning non-empty metrics (content-length: 906). Formal SLO doc created at `docs/09-operations/11-slo-targets.md`.
 
 ### Reproducible Assets
 
@@ -385,7 +385,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 |-------|------|-------------|
 | k6 script | `infrastructure/production/k6/business-path-smoke.js` | Business-path load test: health, ready, list intents, create intent |
 | k6 Job manifest | `infrastructure/production/k6/business-path-load-job.yaml` | Kubernetes Job + ConfigMap to run k6 in cluster |
-| Prometheus rules | `infrastructure/production/kubernetes/prometheus-rules.yaml` | Safe rules (IntentApiTargetDown, AlertmanagerTargetDown); temporary synthetic and real-metric rules removed after validation |
+| Prometheus rules | `infrastructure/production/kubernetes/prometheus-rules.yaml` | Permanent safe rules: `IntentApiTargetDown`, `AlertmanagerTargetDown`, `IntentApiLatencyP95High`, `IntentApiErrorRateHigh`. Temporary synthetic and real-metric validation rules are removed after validation. |
 | SLO targets doc | `docs/09-operations/11-slo-targets.md` | Formal private-only SLO targets, error budgets, measurement methods, blockers, and forbidden claims |
 
 ### Load Test Results (2026-06-21)
@@ -416,7 +416,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | Max VUs | 5 | — | ✅ |
 | Duration | 7m0s (1m ramp + 5m sustain + 1m ramp-down) | — | ✅ |
 | Rule firing during load | `PrometheusSelfMetricValidation` (real metric) | `firing` | ✅ |
-| App `/metrics` | HTTP 200, content-length 0 | — | 🔴 BLOCKER |
+| App `/metrics` | HTTP 200, content-length: 906, `http_requests_total{method="GET",status="200"}` = 6, `http_request_duration_seconds` quantiles present | — | ✅ RESOLVED 2026-06-22 |
 
 **Test profile:** 5 VUs, 7 minutes, internal ClusterIP endpoint `intent-api:8080`. All checks passed. No failures. NATS StatefulSet temporarily scaled to 0 to free CPU for k6 pod; restored to 1 after test.
 
@@ -432,7 +432,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 - **Temporary real-metric rule `PrometheusSelfMetricValidation`** added to `prometheus-rules` ConfigMap (`expr: prometheus_build_info > 0, for: 0s`).
 - Rule verified firing (`state=firing`, `activeAt=2026-06-22T02:10:46.119653393Z`) throughout the 7-minute load test.
 - This validated that Prometheus rule evaluation works with real scraped metrics (not just synthetic `vector(1)` expressions).
-- **Caveat:** This is a Prometheus self-metric, not an app-level metric. App-level SLO breach validation (latency, error rate) remains blocked because `intent-api` `/metrics` returns empty (HTTP 200, content-length 0). Real app-level SLO rules require `http_request_duration_seconds` histogram and `http_requests_total` counter instrumentation.
+- **Caveat:** This is a Prometheus self-metric, not an app-level metric. App-level SLO breach validation (latency, error rate) was blocked because `intent-api` `/metrics` returned empty (HTTP 200, content-length 0) prior to 2026-06-22. **Resolved 2026-06-22**: `http_requests_total` and `http_request_duration_seconds` histogram added via axum middleware; deployed image `cd370d1-metrics`; live pod `intent-api-689776d4b5-rmtnk` verified returning non-empty metrics (content-length: 906) with 6 requests recorded. Real app-level SLO rules now possible; actual SLO rule definition and breach validation under load remains pending.
 - Rule removed and ConfigMap restored to safe rules after validation.
 - Prometheus restarted; confirmed 0 alerts firing after cleanup.
 
@@ -441,16 +441,17 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 - `kubectl exec` into `intent-api` pod → `wget http://localhost:8080/metrics` returns:
   - `HTTP/1.1 200 OK`
   - `content-type: text/plain; version=0.0.4`
-  - `content-length: 0`
-- **No `http_request_duration_seconds` histogram, no `http_requests_total` counter, no `process_*` metrics.**
+  - `content-length: 906` (non-empty after 2026-06-22 instrumentation)
+- **`http_requests_total` counter and `http_request_duration_seconds` histogram present** with method+status labels.
+- **Resolved 2026-06-22**: Prometheus recorder initialization moved to startup (`init_metrics()` in `main.rs` via `METRICS_HANDLE` `OnceLock`) to prevent metrics loss before first scrape.
 - Prometheus target `intent-api` is `up` (scraped successfully) but the response body is empty.
 - Therefore, real latency/error-rate SLO rules based on app metrics cannot be defined or validated in Prometheus.
 - **Next step:** Instrument `intent-api` with `prometheus-client` or `opentelemetry-prometheus` exporter middleware.
 
 ### Caveats
 
-- **App metrics endpoint `/metrics` returns empty** — no `http_request_duration_seconds` histogram, no error-rate counters. Real latency/error-rate SLO rules require app instrumentation (e.g., `prometheus-client` or `opentelemetry-prometheus` exporter).
-    - **No real app metrics exposed:** `intent-api` `/metrics` endpoint returns empty (HTTP 200, zero body). No `http_request_duration_seconds` histogram, no `http_requests_total` counter. Therefore, real latency/error-rate SLO rules based on app metrics cannot be defined or validated. Prometheus only has `up{job="intent-api"}` (scraped via the Service endpoint, likely with a fallback empty response). Real SLO rules require app instrumentation (e.g., `prometheus-client` middleware or `opentelemetry-prometheus` exporter).
+- **App metrics endpoint `/metrics` returns non-empty metrics** — `http_requests_total` counter and `http_request_duration_seconds` histogram are emitted by the `http_metrics_middleware` axum layer added 2026-06-22. Real latency/error-rate SLO rules can now be defined in Prometheus. Actual SLO rule definition and breach validation under load remains pending.
+    - **Resolved 2026-06-22**: `intent-api` `/metrics` endpoint returns HTTP 200 with content-length: 906 after instrumentation. Prometheus recorder initialized at startup (`init_metrics()` in `main.rs`) to prevent metrics loss before first scrape. Docker image `cd370d1-metrics` deployed to GKE pod `intent-api-689776d4b5-rmtnk`.
     - **Internal load only:** Target was `intent-api:8080` (ClusterIP). No public ingress, no TLS, no CDN, no edge load. This is not a production/public-ingress load test.
     - **Low VUs:** 5 VUs is modest. Saturation point and HPA behavior under higher load (20–50 VUs) not tested.
     - **Cluster resource constraint:** k6 pod initially Pending due to 2-node cluster CPU limit. NATS StatefulSet temporarily scaled to 0 to free resources; restored to 1 after test. Production load testing would require dedicated node pool or larger cluster.
@@ -458,8 +459,182 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 
 ### Next Steps for SLO Maturity
 
-1. **Instrument app with metrics:** Add `http_request_duration_seconds` histogram and `http_requests_total` counter to `intent-api` (e.g., via `axum-prometheus` or custom middleware).
-2. **Add real Prometheus SLO rules:** Latency SLO (`p95 > 100ms` for 5m), error-rate SLO (`error_rate > 0.1%` for 5m), availability SLO (`up == 0` for 1m).
+1. ~~**Instrument app with metrics:**~~ ✅ **RESOLVED 2026-06-22** — `http_requests_total` counter and `http_request_duration_seconds` histogram added via axum `http_metrics_middleware` in `router.rs`; Prometheus recorder initialized at startup via `init_metrics()` in `main.rs`; deployed image `cd370d1-metrics`; live pod verified returning non-empty metrics.
+2. **Add real Prometheus SLO rules:** Latency SLO (`p95 > 100ms` for 5m), error-rate SLO (`error_rate > 0.1%` for 5m), availability SLO (`up == 0` for 1m). Validate firing under load.
 3. **Run higher-load tests:** 20 VUs, 50 VUs, measure saturation point and HPA behavior.
 4. **Formal SLO document:** Define availability target (e.g., 99.9%), latency targets (p50, p95, p99), error budget, and compensating policies.
 5. **Production/public-ingress load test:** Only after public ingress is enabled and A-03/A-04/A-07 are closed.
+
+---
+
+## Infra Wave Evidence (2026-06-22)
+
+### Prometheus PVC Persistence
+
+> **Status:** ✅ APPLIED — Prometheus TSDB now uses persistent storage.
+
+| Field | Value |
+|-------|-------|
+| PVC name | `prometheus-storage` |
+| Namespace | `intent-rebase` |
+| Storage class | `standard-rwo` |
+| Capacity | 10Gi |
+| Access mode | RWO |
+| Status | Bound |
+| Pod | `prometheus-67477f857b-v9xlj` (Running, 1/1) |
+| Issue fixed | `securityContext.fsGroup: 65534` added to Deployment to fix Prometheus container permission denied on `/prometheus` (default user `nobody` UID 65534) |
+| Retention | Default 15 days (Prometheus default) |
+
+**Note:** Not production-grade HA; single-replica Prometheus acceptable for private-only solo operation. Multi-replica HA would require Thanos/Cortex or Prometheus Operator.
+
+### NATS Prometheus Scrape Target
+
+> **Status:** ✅ APPLIED — NATS metrics available to Prometheus.
+
+| Field | Value |
+|-------|-------|
+| Exporter image | `natsio/prometheus-nats-exporter:0.15.0` |
+| Sidecar | Added to NATS StatefulSet `nats-0` |
+| Exporter port | 7777 (Service `nats` port `metrics`) |
+| Prometheus job | `nats` target `nats:7777` |
+| Prometheus target status | `up` |
+| Metrics available | `gnatsd_connz_num_connections`, `gnatsd_varz_*`, etc. |
+| Flags used | `-varz`, `-connz`, `-subz`, `-addr=0.0.0.0`, `-port=7777`, `http://localhost:8222` |
+| Flag correction | Initial attempt with `-subsz` (invalid) and `-jsz=all` (invalid syntax) caused CrashLoopBackOff; fixed to `-subz` and removed `-jsz` |
+
+**Caveat:** This is a single-node NATS pilot; the exporter only monitors the local NATS server. Production HA NATS cluster would require an exporter per node or a cluster-wide monitoring approach.
+
+### NATS App Consumer Wired (2026-06-22)
+
+> **Status:** ✅ WIRED — App consumer (`CheckpointCreatorConsumer`) connected to NATS pilot stream `audit_events`.
+
+| Field | Value |
+|-------|-------|
+| Deployment env `NATS_URL` | `nats://nats:4222` |
+| Deployment env `INTENT_API_NATS_CONSUMER` | `true` |
+| Deployment env `INTENT_API_NATS_FULL_CONSUMER` | Not set (default `false`) |
+| Deployment env `INTENT_API_NATS_DLQ_WORKER` | Not set (default `false`) |
+| Deployment env `INTENT_API_NATS_DLQ_REPLAY_WORKER` | Not set (default `false`) |
+| App pod | `intent-api-74769d6f4b-khmkt` (Running, 0 restarts) |
+| Health `/health` | `{"status":"ok","uptime_seconds":48}` |
+| Ready `/ready` | `{"status":"ready","uptime_seconds":0}` |
+| NATS connection | `connected successfully` at `nats://nats:4222` |
+| JetStream stream | `audit_events` created (`subject: audit.events.v1.>`) |
+| Consumer registry | `ConsumerRegistry: starting consumer 'checkpoint_creator' on stream 'audit_events'` |
+| Polling adapter | `NatsPullConsumerAdapter: started polling consumer 'audit_events_consumer' on stream 'audit_events'` |
+| NATS monitoring (`/jsz?streams=1`) | 2 streams, 2 consumers, `audit_events` created at `2026-06-22T13:29:47Z` |
+| Prometheus exporter | `gnatsd_varz_jetstream_stats_accounts=1`, `gnatsd_varz_jetstream_config_max_memory=1.07e+09`, `gnatsd_varz_jetstream_config_max_storage=1.07e+10` |
+
+**Caveat:** This is a single-consumer pilot only (`CheckpointCreatorConsumer`). DLQ workers, replay worker, full consumer suite, and per-tenant streams are not enabled. NATS has no auth/TLS/ACL. Not production HA.
+
+### Cloud SQL RPO Measurement (Closest Measurable)
+
+> **Status:** 🟡 DOCUMENTED — Empirical WAL lag not measured; closest measurable recovery window documented.
+
+| Field | Value |
+|-------|-------|
+| Instance | `production-template-postgres-ed2c5bdd` |
+| Automated backups | Enabled, daily at 03:00 |
+| PITR | Enabled |
+| Replication log archiving | Enabled (`transactionalLogStorageState: CLOUD_STORAGE`) |
+| Transaction log retention | 7 days |
+| Last automated backup | 2026-06-22T05:19:07Z (about 1h prior to measurement) |
+| Backup interval | ~24 hours |
+| **Theoretical RPO with PITR** | < 1 minute (Cloud SQL WAL streaming lag) |
+| **Empirical RPO without PITR** | ~24 hours (backup interval) |
+| **Empirical RPO with PITR** | Not measured — requires live workload + `pg_stat_archiver` query or Cloud SQL logs |
+
+**Limitation:** Exact WAL lag was not empirically verified against live production writes. The `pg_stat_archiver` query requires a DB connection and live write activity to measure. The documented RPO is the closest measurable recovery window based on backup configuration and PITR enablement.
+
+### Dedicated Forensic Immutable Bucket
+
+> **Status:** ✅ CREATED — New bucket provisioned with retention policy, versioning, public access prevention, uniform access. Bucket Lock intentionally deferred.
+
+| Field | Value |
+|-------|-------|
+| Bucket name | `gs://forensic-evidence-ferrum-497801-ed2c5bdd` |
+| Location | `US-CENTRAL1` |
+| Versioning | Enabled |
+| Retention policy | 30 days, **UNLOCKED** (Bucket Lock deferred) |
+| Public access prevention | `enforced` |
+| Uniform bucket-level access | Enabled |
+| Lifecycle rule | Delete objects after 365 days |
+| Upload/delete test | Upload succeeded, delete succeeded (retention policy is unlocked, so deletion is allowed) |
+| Terraform | Resource added to `storage.tf`; applied via `gcloud storage` because remote Terraform state (GCS backend) was inaccessible from current environment |
+
+**Caveat:** Bucket Lock (`is_locked = true`) is **intentionally NOT enabled**. A locked retention policy cannot be removed without destroying the bucket, making cost cleanup impossible for the retention period. Lock only after explicit approval and legal-hold requirements are documented. This bucket is not S3 Object Lock compliant; GCS does not support Object Lock compliance mode. For strict legal-hold / S3 Object Lock compliance, a dedicated S3-compatible storage or multi-cloud design may be required (see A-13).
+
+### Forensic Bundle Runtime Wiring — Blocked (2026-06-22)
+
+> **Status:** 🔴 BLOCKED — Dedicated forensic bucket exists but app runtime wiring deferred pending credential design review.
+
+**Blocker:** The app only supports two forensic bundle storage backends:
+- `FORENSIC_BUNDLE_STORAGE=s3` → `S3BundleStorage` (requires `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `FORENSIC_BUNDLE_BUCKET`)
+- Default (unset or not `s3`) → `InMemoryBundleStorage` (dev/testing only, ephemeral)
+
+There is **no GCS native backend** in the code. To use the GCS bucket `forensic-evidence-ferrum-497801-ed2c5bdd` via the existing S3 code path, GCS S3 interoperability HMAC keys would be required:
+- GCS S3-compatible XML endpoint: `https://storage.googleapis.com`
+- HMAC access key + secret key for a GCP service account
+
+**Why blocked:**
+- HMAC keys are long-lived secrets that cannot be rotated via the same GSM/ESO pipeline used for other secrets (they are GCP-native credentials, not Kubernetes Secrets).
+- Creating HMAC keys requires explicit security review and least-privilege scoping (per-project, per-bucket IAM).
+- Workload Identity / Workload Identity Federation for GKE → GCS is not implemented in the current codebase.
+- The task scope explicitly forbids creating broad HMAC keys without explicit security review.
+
+**Next steps (secure paths):**
+1. **Option A: GCS Workload Identity** — Bind GKE service account to GCP service account with `roles/storage.objectAdmin` scoped to `forensic-evidence-ferrum-497801-ed2c5bdd`. Use `google-cloud-storage` Rust SDK (or `tonic` gRPC) instead of S3 SDK. Requires adding a GCS backend to `crates/forensic-service`.
+2. **Option B: GCS S3 Interoperability (HMAC)** — Create least-privilege HMAC keys for a dedicated GCP service account with `roles/storage.objectAdmin` scoped to the forensic bucket. Store keys in GSM and sync via ESO. Requires security review and approval.
+3. **Option C: Multi-cloud S3-compatible** — Use an S3-compatible gateway (e.g., MinIO, Ceph) or cross-cloud S3 proxy for the forensic bucket. Requires additional infrastructure.
+
+**Current state:** App runs with `InMemoryBundleStorage` (default). Forensic bundles are generated and stored in-memory during runtime; they are not persisted to the dedicated bucket. This is acceptable for private-only solo operation but not for production evidence archival.
+
+### Real App SLO Rules Applied + Validated (2026-06-22)
+
+> **Status:** ✅ APPLIED — Permanent real app SLO rules added to Prometheus; validated under bounded k6 load; temporary validation rule fired and removed.
+
+| Rule | Expression | For | Status | Notes |
+|------|-----------|-----|--------|-------|
+| `IntentApiLatencyP95High` | `http_request_duration_seconds{quantile="0.95"} > 0.1` | 5m | `inactive` (not firing) | Uses summary quantile (instantaneous p95). Under normal load p95 ~0.7ms. |
+| `IntentApiErrorRateHigh` | `sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.001` | 5m | `inactive` (not firing) | No 5xx errors observed under load. |
+| `IntentApiTargetDown` | `up{job="intent-api"} == 0` | 1m | `inactive` | Already existed since 2026-06-18. |
+| `AlertmanagerTargetDown` | `up{job="alertmanager"} == 0` | 1m | `inactive` | Already existed since 2026-06-18. |
+
+**Temporary Validation Rule:**
+
+| Rule | Expression | Fired? | Removed? |
+|------|-----------|--------|----------|
+| `AppMetricsValidationRule` | `http_requests_total > 0` for `0s` | ✅ Fired (`value=5286`) | ✅ Removed after k6 validation |
+
+**k6 Load Test (2026-06-22, SLO validation):**
+
+| Metric | Value | Threshold | Status |
+|--------|-------|-----------|--------|
+| Total iterations | 1830 | — | ✅ |
+| HTTP requests | 1830 | — | ✅ |
+| p95 latency | 686.66µs | < 100ms | ✅ |
+| p90 latency | 632.61µs | < 100ms | ✅ |
+| Avg latency | 516.89µs | — | ✅ |
+| Max latency | 5.12ms | — | ✅ |
+| Error rate | 0% | < 0.1% | ✅ |
+| Max VUs | 5 | — | ✅ |
+| Duration | 7m0.8s | — | ✅ |
+| Throughput | 4.35 req/s | — | ✅ |
+
+**Prometheus Target Health (post-restart):**
+
+| Target | Status |
+|--------|--------|
+| `prometheus` | `up` |
+| `intent-api` | `up` |
+| `alertmanager` | `up` |
+| `nats` | `up` |
+
+**Caveats:**
+- Latency rule uses summary quantile (instantaneous), not histogram aggregation. For true histogram-based p95 aggregation across time and replicas, the app would need to emit histogram buckets instead of summary quantiles.
+- Error rate rule evaluates 5xx only; 4xx errors (auth failures, validation errors) are not counted as SLO breaches.
+- Only 5 VUs tested; saturation point and rule behavior under higher load (20 VU, 50 VU) not measured.
+- No node-exporter or kube-state-metrics; resource-based SLOs (CPU, memory, disk) not defined.
+- No public ingress; edge latency not validated.
+- No formal SLA with error budgets or penalties.
+- NATS was temporarily scaled to 0 to free CPU for k6 pod; restored to 1 after test.

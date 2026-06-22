@@ -28,10 +28,10 @@ spec:
     spec:
       containers:
         - name: intent-api
-          # Image tag :9e26aaa includes INTENT_API_RUN_MIGRATIONS=true migration-only
-          # mode support plus 401 response header hardening. Rolled out to prod
-          # and staging on 2026-06-18.
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:9e26aaa
+          # Image tag :cd370d1-metrics includes HTTP metrics instrumentation
+          # (http_requests_total + http_request_duration_seconds) for Prometheus SLO rules.
+          # Built from working tree at commit cd370d1 with uncommitted metrics middleware changes.
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:cd370d1-metrics
           ports:
             - containerPort: 8080
               name: http
@@ -42,6 +42,10 @@ spec:
               value: "true"
             - name: RUST_LOG
               value: "info"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: INTENT_API_NATS_CONSUMER
+              value: "true"
           envFrom:
             - secretRef:
                 name: app-secrets
@@ -63,7 +67,9 @@ spec:
             failureThreshold: 3
           resources:
             requests:
-              cpu: "100m"
+              # Reduced from 100m to 50m to allow scheduling on the 2-node GKE cluster.
+              # Revisit when the node pool grows or RollingUpdate scheduling is no longer constrained.
+              cpu: "50m"
               memory: "128Mi"
             limits:
               cpu: "500m"
