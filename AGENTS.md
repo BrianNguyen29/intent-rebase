@@ -55,8 +55,8 @@
 
 ## Infra / Ops Gotchas (Private-Only)
 - **No public ingress.** GCP/GKE/GSM/ESO stack is private-only. Do not enable or claim public production without A-03/A-04/A-07 artifacts.
-- GCS forensic bucket: **not immutable** (no retention, no versioning, no public access prevention). App-layer hash detection works; storage-layer immutability is not enforced.
-- NATS JetStream pilot: single-node, internal ClusterIP, no auth/TLS/HA. App consumer not enabled by default.
+- GCS forensic bucket: versioning, 30-day retention, public access prevention enforced. Bucket Lock deferred (unlocked). No S3 Object Lock compliance. App-layer hash detection works; storage-layer immutability is not fully enforced.
+- NATS JetStream pilot: single-node, internal ClusterIP, token auth enforced (shell substitution workaround for NATS config env var limitation), no TLS/HA. App consumer enabled via env gates.
 - JWT and DB URL rotations validated 2026-06-21; `JWT_SECRET_PREVIOUS` grace window closed 2026-06-22.
 - A-07: waived / not approved (no external pen test). A-03/A-04: private-only conditional only. **No production-ready claim.**
 

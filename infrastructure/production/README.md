@@ -453,7 +453,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 - **App metrics endpoint `/metrics` returns non-empty metrics** — `http_requests_total` counter and `http_request_duration_seconds` histogram are emitted by the `http_metrics_middleware` axum layer added 2026-06-22. Real latency/error-rate SLO rules can now be defined in Prometheus. Actual SLO rule definition and breach validation under load remains pending.
     - **Resolved 2026-06-22**: `intent-api` `/metrics` endpoint returns HTTP 200 with content-length: 906 after instrumentation. Prometheus recorder initialized at startup (`init_metrics()` in `main.rs`) to prevent metrics loss before first scrape. Docker image `cd370d1-metrics` deployed to GKE pod `intent-api-689776d4b5-rmtnk`.
     - **Internal load only:** Target was `intent-api:8080` (ClusterIP). No public ingress, no TLS, no CDN, no edge load. This is not a production/public-ingress load test.
-    - **Low VUs:** 5 VUs is modest. Saturation point and HPA behavior under higher load (20–50 VUs) not tested.
+    - **Higher VUs tested:** 20 VU and 50 VU tests executed 2026-06-22. 20 VU: 7219 iterations, p95=760µs, 0% 5xx, ~68.7 req/s. 50 VU: 17989 iterations, p95=127µs, 0% 5xx, ~171 req/s. No saturation observed on single replica with 50m CPU request. HPA not configured.
     - **Cluster resource constraint:** k6 pod initially Pending due to 2-node cluster CPU limit. NATS StatefulSet temporarily scaled to 0 to free resources; restored to 1 after test. Production load testing would require dedicated node pool or larger cluster.
     - **No formal SLO document:** SLO targets are defined in the k6 script thresholds (`p95<100ms`, `error_rate<0.001`) but no formal SLO/SLA document with error budgets and committed penalties exists.
 
@@ -461,7 +461,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 
 1. ~~**Instrument app with metrics:**~~ ✅ **RESOLVED 2026-06-22** — `http_requests_total` counter and `http_request_duration_seconds` histogram added via axum `http_metrics_middleware` in `router.rs`; Prometheus recorder initialized at startup via `init_metrics()` in `main.rs`; deployed image `cd370d1-metrics`; live pod verified returning non-empty metrics.
 2. **Add real Prometheus SLO rules:** Latency SLO (`p95 > 100ms` for 5m), error-rate SLO (`error_rate > 0.1%` for 5m), availability SLO (`up == 0` for 1m). Validate firing under load.
-3. **Run higher-load tests:** 20 VUs, 50 VUs, measure saturation point and HPA behavior.
+3. ~~**Run higher-load tests:**~~ ✅ **RESOLVED 2026-06-22** — 20 VU and 50 VU tests executed against single-replica deployment on 2-node GKE cluster. No saturation observed; p95 remained well under 100ms; 0% 5xx errors; Prometheus SLO rules remained `inactive`. HPA not tested (not configured).
 4. **Formal SLO document:** Define availability target (e.g., 99.9%), latency targets (p50, p95, p99), error budget, and compensating policies.
 5. **Production/public-ingress load test:** Only after public ingress is enabled and A-03/A-04/A-07 are closed.
 
@@ -527,9 +527,9 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 
 **Caveat:** This is a single-consumer pilot only (`CheckpointCreatorConsumer`). DLQ workers, replay worker, full consumer suite, and per-tenant streams are not enabled. NATS has no auth/TLS/ACL. Not production HA.
 
-### Cloud SQL RPO Measurement (Closest Measurable)
+### Cloud SQL RPO Measurement (Empirical)
 
-> **Status:** 🟡 DOCUMENTED — Empirical WAL lag not measured; closest measurable recovery window documented.
+> **Status:** ✅ EMPIRICALLY MEASURED — RPO ~2.7 seconds validated via controlled write + PITR clone on 2026-06-22.
 
 | Field | Value |
 |-------|-------|
@@ -542,9 +542,37 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 | Backup interval | ~24 hours |
 | **Theoretical RPO with PITR** | < 1 minute (Cloud SQL WAL streaming lag) |
 | **Empirical RPO without PITR** | ~24 hours (backup interval) |
-| **Empirical RPO with PITR** | Not measured — requires live workload + `pg_stat_archiver` query or Cloud SQL logs |
+| **Empirical RPO with PITR (measured)** | **~2.7 seconds** (WAL archive lag) |
 
-**Limitation:** Exact WAL lag was not empirically verified against live production writes. The `pg_stat_archiver` query requires a DB connection and live write activity to measure. The documented RPO is the closest measurable recovery window based on backup configuration and PITR enablement.
+**Measurement Method:**
+
+| Phase | Timestamp | Action | Evidence |
+|-------|-----------|--------|----------|
+| **Marker write** | 2026-06-22T14:36:09.165701Z | Inserted marker row into `audit_events` table (`event_type='IntentCreated'`, `tenant_id='00000000-0000-0000-0000-000000000000'`, `payload='{"marker_id":"rpo-20260622-empirical"}'`) | Kubernetes Job `rpo-marker-write3`; `INSERT 0 1` confirmed |
+| **WAL archive** | 2026-06-22T14:36:11.889271Z | `pg_stat_archiver.last_archived_time` showed WAL `0000000100000004000000F7` archived | Kubernetes Job `rpo-wal-check`; `archived_count=1277`, `failed_count=6` (failures from 2026-06-18) |
+| **PITR clone** | 2026-06-22T14:38:28Z started | `gcloud sql instances clone` with `--point-in-time="2026-06-22T14:36:15.000000Z"` | Clone `rpo-empirical-20260622`; operation `DONE` |
+| **Clone verify** | 2026-06-22T14:58:33Z | Queried clone via Kubernetes Job `rpo-clone-verify`; marker present | `SELECT` returned `occurred_at=2026-06-22T14:36:09.165701Z`, `marker_id=rpo-20260622-empirical` |
+| **Clone cleanup** | 2026-06-22T14:58:33Z+ | `gcloud sql instances delete rpo-empirical-20260622` | Confirmed 404 on describe; clone deleted |
+
+**RPO Calculation:**
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Marker commit time | 2026-06-22T14:36:09.165701Z | `audit_events.occurred_at` |
+| WAL archive time | 2026-06-22T14:36:11.889271Z | `pg_stat_archiver.last_archived_time` |
+| **RPO (WAL archive lag)** | **~2.7 seconds** | `14:36:11.889271 - 14:36:09.165701 = 2.72357 seconds` |
+| PITR clone recovery point | 2026-06-22T14:36:15.000000Z | `--point-in-time` parameter (5 seconds after marker) |
+| Marker recoverable at PITR | ✅ Yes | Verified in clone query |
+| Clone provisioning time | ~20 minutes | Cloud SQL clone operation duration |
+| Clone RUNNABLE | 14:58:33Z | `gcloud sql instances describe` |
+
+**Caveats:**
+- Single measurement under moderate load (app running normally during test); not statistically significant.
+- RPO may vary during maintenance windows, backup windows, or high-load periods.
+- `pg_stat_archiver` is the closest observable proxy; Cloud SQL internal WAL archiving behavior is not fully transparent.
+- PITR clone was created at 14:36:15Z (5 seconds after marker) to avoid edge cases; a clone at 14:36:10Z might also succeed.
+- **Not a committed SLA.** The ~2.7 second RPO is an empirical observation, not a contractual guarantee.
+- Marker row remains in primary (`audit_events` is immutable by `enforce_audit_immutability()` trigger); does not affect application logic due to null-UUID tenant_id outside normal RLS scoping.
 
 ### Dedicated Forensic Immutable Bucket
 
@@ -564,30 +592,52 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
 
 **Caveat:** Bucket Lock (`is_locked = true`) is **intentionally NOT enabled**. A locked retention policy cannot be removed without destroying the bucket, making cost cleanup impossible for the retention period. Lock only after explicit approval and legal-hold requirements are documented. This bucket is not S3 Object Lock compliant; GCS does not support Object Lock compliance mode. For strict legal-hold / S3 Object Lock compliance, a dedicated S3-compatible storage or multi-cloud design may be required (see A-13).
 
-### Forensic Bundle Runtime Wiring — Blocked (2026-06-22)
+### Forensic Bundle Runtime Wiring — Implemented (2026-06-22)
 
-> **Status:** 🔴 BLOCKED — Dedicated forensic bucket exists but app runtime wiring deferred pending credential design review.
+> **Status:** ✅ IMPLEMENTED — GCS native backend added; metadata-server OAuth; no HMAC keys; end-to-end smoke test passed.
 
-**Blocker:** The app only supports two forensic bundle storage backends:
-- `FORENSIC_BUNDLE_STORAGE=s3` → `S3BundleStorage` (requires `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `FORENSIC_BUNDLE_BUCKET`)
-- Default (unset or not `s3`) → `InMemoryBundleStorage` (dev/testing only, ephemeral)
+**Implementation:**
+- New `GcsBundleStorage` struct in `crates/forensic-service/src/gcs_bundle_storage.rs` implements the `BundleStorage` trait.
+- Uses `reqwest` + GCS JSON API (`https://storage.googleapis.com/storage/v1`).
+- Authentication via GKE metadata server (`169.254.169.254`) OAuth token with TTL caching and 60-second safety margin refresh.
+- No HMAC keys, no long-lived secrets, no S3 interoperability.
+- Object key format: `tenants/{tenant_id}/bundles/{bundle_id}`.
+- IAM binding: `production-template-gke-sa@ferrum-497801.iam.gserviceaccount.com` granted `roles/storage.objectAdmin` at bucket level (`gs://forensic-evidence-ferrum-497801-ed2c5bdd`).
+- Least-privilege caveat: `objectAdmin` is broader than strictly needed (would prefer `objectCreator` + `objectViewer` or custom role with `storage.objects.create/get/delete/list`). Documented as acceptable for pilot.
 
-There is **no GCS native backend** in the code. To use the GCS bucket `forensic-evidence-ferrum-497801-ed2c5bdd` via the existing S3 code path, GCS S3 interoperability HMAC keys would be required:
-- GCS S3-compatible XML endpoint: `https://storage.googleapis.com`
-- HMAC access key + secret key for a GCP service account
+**Deployment env:**
+- `FORENSIC_BUNDLE_STORAGE=gcs`
+- `FORENSIC_BUNDLE_BUCKET=forensic-evidence-ferrum-497801-ed2c5bdd`
+- No secrets required in env.
 
-**Why blocked:**
-- HMAC keys are long-lived secrets that cannot be rotated via the same GSM/ESO pipeline used for other secrets (they are GCP-native credentials, not Kubernetes Secrets).
-- Creating HMAC keys requires explicit security review and least-privilege scoping (per-project, per-bucket IAM).
-- Workload Identity / Workload Identity Federation for GKE → GCS is not implemented in the current codebase.
-- The task scope explicitly forbids creating broad HMAC keys without explicit security review.
+**End-to-end smoke test (2026-06-22):**
+- Temporary Kubernetes Job created in `intent-rebase` namespace.
+- Fetched metadata-server OAuth token from `169.254.169.254`.
+- Uploaded test JSON object to `gs://forensic-evidence-ferrum-497801-ed2c5bdd/smoke-test/{timestamp}-gcs-forensic-validation.json`.
+- Verified `retentionExpirationTime` set to 30 days in the future (retention policy active).
+- Downloaded object and verified content matches upload.
+- Deleted object (allowed because retention policy is UNLOCKED).
+- Result: `SUCCESS: GCS forensic bucket smoke test passed`.
 
-**Next steps (secure paths):**
-1. **Option A: GCS Workload Identity** — Bind GKE service account to GCP service account with `roles/storage.objectAdmin` scoped to `forensic-evidence-ferrum-497801-ed2c5bdd`. Use `google-cloud-storage` Rust SDK (or `tonic` gRPC) instead of S3 SDK. Requires adding a GCS backend to `crates/forensic-service`.
-2. **Option B: GCS S3 Interoperability (HMAC)** — Create least-privilege HMAC keys for a dedicated GCP service account with `roles/storage.objectAdmin` scoped to the forensic bucket. Store keys in GSM and sync via ESO. Requires security review and approval.
-3. **Option C: Multi-cloud S3-compatible** — Use an S3-compatible gateway (e.g., MinIO, Ceph) or cross-cloud S3 proxy for the forensic bucket. Requires additional infrastructure.
+**App verification:**
+- App logs show: `FORENSIC_BUNDLE_STORAGE=gcs — using GcsBundleStorage with bucket 'forensic-evidence-ferrum-497801-ed2c5bdd' (metadata-server OAuth)`.
+- Health `/health` → `{"status":"ok"}`.
+- Ready `/ready` → `{"status":"ready"}`.
+- Metrics `/metrics` returns non-empty metrics with `http_requests_total` and `http_request_duration_seconds`.
+- No crashloops or GCS-related errors in app logs.
 
-**Current state:** App runs with `InMemoryBundleStorage` (default). Forensic bundles are generated and stored in-memory during runtime; they are not persisted to the dedicated bucket. This is acceptable for private-only solo operation but not for production evidence archival.
+**Caveats:**
+- `GcsBundleStorage` is not production-validated: no retry logic, no circuit breaker, no cross-region replication, no lifecycle tiering.
+- IAM role `roles/storage.objectAdmin` is broader than least-privilege.
+- Bucket Lock (`is_locked = true`) is **intentionally NOT enabled**.
+- Not S3 Object Lock compliant; GCS does not support Object Lock compliance mode.
+- Forensic bundle retrieval/download API (`GET /forensic/bundles/:bundle_id/download`) exists but is not production-validated for GCS backend specifically.
+
+**Rejected paths:**
+- Option B (HMAC/S3 interoperability) rejected per task constraints — no HMAC keys created.
+- Option C (multi-cloud gateway) rejected — additional infrastructure not needed for private-only pilot.
+
+**Selected path:** Option A (GCS native + metadata server OAuth) implemented.
 
 ### Real App SLO Rules Applied + Validated (2026-06-22)
 
@@ -633,7 +683,7 @@ There is **no GCS native backend** in the code. To use the GCS bucket `forensic-
 **Caveats:**
 - Latency rule uses summary quantile (instantaneous), not histogram aggregation. For true histogram-based p95 aggregation across time and replicas, the app would need to emit histogram buckets instead of summary quantiles.
 - Error rate rule evaluates 5xx only; 4xx errors (auth failures, validation errors) are not counted as SLO breaches.
-- Only 5 VUs tested; saturation point and rule behavior under higher load (20 VU, 50 VU) not measured.
+- 20 VU and 50 VU tested against single replica; saturation point and multi-replica behavior not measured.
 - No node-exporter or kube-state-metrics; resource-based SLOs (CPU, memory, disk) not defined.
 - No public ingress; edge latency not validated.
 - No formal SLA with error budgets or penalties.

@@ -138,7 +138,16 @@ impl NatsEventPublisher {
             self.connect_timeout
         );
 
-        let result = timeout(self.connect_timeout, async_nats::connect(&url)).await;
+        let result = match std::env::var("NATS_TOKEN").ok().filter(|t| !t.is_empty()) {
+            Some(token) => {
+                timeout(
+                    self.connect_timeout,
+                    async_nats::ConnectOptions::with_token(token).connect(&url),
+                )
+                .await
+            }
+            None => timeout(self.connect_timeout, async_nats::connect(&url)).await,
+        };
 
         match result {
             Ok(Ok(client)) => Ok(client),

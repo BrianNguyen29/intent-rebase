@@ -199,7 +199,8 @@ These targets inform backup frequency and restore procedure priority, but do not
 ### RPO Measurement — Closest Measurable Evidence (2026-06-22)
 
 > **Scope:** Document the closest measurable recovery point objective evidence from Cloud SQL configuration and backup history. Empirical WAL lag measurement against live production traffic was not performed.
-> **Status:** 🟡 DOCUMENTED — Theoretical RPO < 1 minute; empirical WAL lag not measured.
+> **Status:** ✅ EMPIRICALLY MEASURED — Theoretical RPO < 1 minute; empirical RPO ~2.7 seconds validated via controlled write + PITR clone on 2026-06-22. See §Empirical RPO Measurement (2026-06-22) below for full measurement procedure and results.
+> **Note:** The theoretical RPO (< 1 minute) was confirmed by empirical measurement on 2026-06-22.
 
 | Field | Value |
 |-------|-------|
@@ -212,11 +213,51 @@ These targets inform backup frequency and restore procedure priority, but do not
 | **Backup interval** | ~24 hours (daily) |
 | **Theoretical RPO with PITR** | < 1 minute (Cloud SQL WAL streaming lag) |
 | **Empirical RPO without PITR** | ~24 hours (backup interval) |
-| **Empirical RPO with PITR (measured)** | **Not measured** — requires live workload + `pg_stat_archiver` query or Cloud SQL logs |
+| **Empirical RPO with PITR (measured)** | **~2.7 seconds** — see §Empirical RPO Measurement (2026-06-22) below |
 
-**Limitation:** Exact WAL lag was not empirically verified against live production writes. The `pg_stat_archiver` query requires a DB connection and active write activity to measure the time between the last WAL archive and the current LSN. The documented RPO is the closest measurable recovery window based on backup configuration and PITR enablement, not an empirical measurement.
+**Limitation:** Prior to 2026-06-22, exact WAL lag was not empirically verified. On 2026-06-22, a controlled write + PITR clone measurement was performed and confirmed an RPO of approximately 2.7 seconds.
 
-**Next step for true empirical RPO:** Run a controlled write workload (e.g., `pgbench` or app load test) while monitoring `pg_stat_archiver.last_archived_time` and `pg_stat_activity.backend_start` to calculate the actual lag between transaction commit and WAL archive completion.
+**Next step for true empirical RPO:** ~~Run a controlled write workload (e.g., `pgbench` or app load test) while monitoring `pg_stat_archiver.last_archived_time` and `pg_current_wal_lsn()` to calculate the actual lag between transaction commit and WAL archive completion.~~ ✅ **COMPLETED 2026-06-22** — see §Empirical RPO Measurement (2026-06-22) below.
+
+---
+
+### Empirical RPO Measurement (2026-06-22)
+
+> **Status:** ✅ COMPLETED — Controlled write + PITR clone measurement executed; marker recovered; clone verified; all temporary resources cleaned up.
+> **Method:** Write marker to `audit_events` table (immutable, append-only), query `pg_stat_archiver`, create PITR clone at time after marker, verify marker present in clone, compute RPO from WAL archive lag.
+
+| Phase | Timestamp | Action | Evidence |
+|-------|-----------|--------|----------|
+| **Marker write** | 2026-06-22T14:36:09.165701Z | Inserted marker row into `audit_events` table (`event_type='IntentCreated'`, `tenant_id='00000000-0000-0000-0000-000000000000'`, `payload='{"marker_id":"rpo-20260622-empirical"}'`) | Kubernetes Job `rpo-marker-write3` completed; `INSERT 0 1` confirmed |
+| **WAL archive** | 2026-06-22T14:36:11.889271Z | `pg_stat_archiver.last_archived_time` showed WAL `0000000100000004000000F7` archived | Kubernetes Job `rpo-wal-check` completed; `pg_stat_archiver` query confirmed; `archived_count=1277`, `failed_count=6` (failures from 2026-06-18, not current) |
+| **PITR clone** | 2026-06-22T14:38:28Z started | `gcloud sql instances clone` with `--point-in-time="2026-06-22T14:36:15.000000Z"` | Clone `rpo-empirical-20260622` created; operation ID `0cf45ba9-0113-430e-97c7-b26400000032`; status `DONE` |
+| **Clone verify** | 2026-06-22T14:58:33Z | Queried clone via Kubernetes Job `rpo-clone-verify`; marker present | `SELECT` returned `occurred_at=2026-06-22T14:36:09.165701Z`, `event_type=IntentCreated`, `marker_id=rpo-20260622-empirical`; `COUNT(*)=1` |
+| **Clone cleanup** | 2026-06-22T14:58:33Z+ | `gcloud sql instances delete rpo-empirical-20260622` | Confirmed 404 on describe; clone deleted |
+
+**RPO Calculation:**
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Marker commit time | 2026-06-22T14:36:09.165701Z | `audit_events.occurred_at` from INSERT RETURNING |
+| WAL archive time | 2026-06-22T14:36:11.889271Z | `pg_stat_archiver.last_archived_time` |
+| **RPO (WAL archive lag)** | **~2.7 seconds** | `14:36:11.889271 - 14:36:09.165701 = 2.72357 seconds` |
+| PITR clone recovery point | 2026-06-22T14:36:15.000000Z | `--point-in-time` parameter (5 seconds after marker) |
+| Marker recoverable at PITR | ✅ Yes | Verified in clone query |
+| Clone provisioning time | ~20 minutes (14:38:28 → ~14:58:00) | Cloud SQL clone operation |
+| Clone RUNNABLE | 14:58:33Z | `gcloud sql instances describe` |
+
+**Interpretation:**
+- The empirical RPO is bounded by the WAL streaming and archive lag, which was measured at **~2.7 seconds** during this test.
+- This is within the theoretical RPO of "< 1 minute" advertised by Cloud SQL PITR.
+- The actual RPO may vary depending on write volume, network conditions, and Cloud SQL internal scheduling. This single measurement is a data point, not a guarantee.
+- The marker row remains in the primary database (`audit_events` is immutable by design via `enforce_audit_immutability()` trigger). This does not affect application logic because the tenant_id is a null-UUID (`00000000-0000-0000-0000-000000000000`), which is outside normal tenant scoping and will be filtered by RLS policies.
+
+**Caveats:**
+- This is a **single measurement** under moderate load (the app was running normally during the test). It is not a statistically significant sample.
+- The measurement was taken during the day; RPO may differ during maintenance windows, backup windows, or high-load periods.
+- Cloud SQL internal WAL archiving behavior is not fully observable; the `pg_stat_archiver` metric is the closest proxy available.
+- The PITR clone was created at 14:36:15Z (5 seconds after marker), which is safely after the WAL archive time. A clone at exactly 14:36:10Z (1 second after marker) might also succeed, but the 5-second buffer was chosen to avoid edge cases.
+- **Not a committed SLA.** The ~2.7 second RPO is an empirical observation, not a contractual guarantee.
 
 ---
 

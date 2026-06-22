@@ -11,13 +11,19 @@ data:
       max_file_store: 10GB
     }
 
+    # Internal token auth (private ClusterIP only; no TLS/HA)
+    # Token is supplied via NATS_TOKEN env var; reference uses ${NATS_TOKEN}.
+    # StatefulSet entrypoint performs shell substitution before NATS startup.
+    authorization: {
+      token: "${NATS_TOKEN}"
+    }
+
     # No clustering (single-node pilot)
-    # No auth for pilot (internal ClusterIP only)
-    # Production would require auth/accounts
+    # Production would require TLS/mTLS, accounts, and HA clustering
 
     # Logging
     debug: false
     trace: false
 
-    # HTTP monitoring port (internal only)
+    # HTTP monitoring port (internal only; no auth by default)
     http_port: 8222

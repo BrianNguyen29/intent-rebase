@@ -69,6 +69,7 @@ visitors to remember.
 | Variable | Default | Purpose | Caveat |
 |----------|---------|---------|--------|
 | `NATS_URL` | `nats://localhost:4222` | NATS connection URL. | When unset, the in-memory event bus is used. |
+| `NATS_TOKEN` | unset (optional) | Token for NATS token authentication. | Required when the NATS server is configured with `authorization: { token: ... }`. URL-safe base64url (no padding) recommended. Not used when the server has no auth. |
 | `INTENT_API_NATS_CONSUMER` | `false` (not set) | Enables the bounded `CheckpointCreatorConsumer` on the `audit_events` JetStream stream. | Pilot-only. The consumer polls a single JetStream stream. Not validated for production HA, auth, or multi-tenant streams. |
 | `INTENT_API_NATS_FULL_CONSUMER` | `false` (not set) | Enables the full NATS consumer suite (all consumers + DLQ wiring). | Requires `INTENT_API_NATS_CONSUMER=true`. Not production-validated. |
 | `INTENT_API_NATS_DLQ_WORKER` | `false` (not set) | Enables the bounded DLQ metrics worker (depth/age gauges). | Requires `INTENT_API_NATS_CONSUMER=true` + `NATS_URL`. Not production-validated. |
@@ -89,7 +90,7 @@ visitors to remember.
 
 | Variable | Default | Purpose | Caveat |
 |----------|---------|---------|--------|
-| `FORENSIC_BUNDLE_STORAGE` | unset (→ in-memory) | When set to `s3`, forensic bundles are written to S3 / MinIO. Any other value falls back to **in-memory** dev storage. | S3 wiring is bounded and not production-validated. |
+| `FORENSIC_BUNDLE_STORAGE` | unset (→ in-memory) | When set to `s3`, forensic bundles are written to S3 / MinIO. When set to `gcs`, forensic bundles are written to GCS using metadata-server OAuth (no HMAC keys). Any other value falls back to **in-memory** dev storage. | S3 wiring is bounded and not production-validated. GCS wiring requires GKE workload with appropriate IAM bucket binding and is not production-validated. |
 | `S3_ACCESS_KEY` | unset | Explicit MinIO / S3 access key for forensic bundles. | Optional override of `AWS_ACCESS_KEY_ID`. |
 | `S3_SECRET_KEY` | unset | Explicit MinIO / S3 secret key for forensic bundles. | Optional override of `AWS_SECRET_ACCESS_KEY`. |
 | `FORENSIC_BUNDLE_BUCKET` | unset | Bucket for forensic bundles. | Defaults to `S3_BUCKET` when unset. |

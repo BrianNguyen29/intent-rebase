@@ -27,10 +27,17 @@ spec:
           name: client
         - containerPort: 8222
           name: monitor
+        env:
+        - name: NATS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: NATS_TOKEN
         command:
-        - "nats-server"
-        - "--config"
-        - "/etc/nats/nats.conf"
+        - "/bin/sh"
+        args:
+        - "-c"
+        - "cp /etc/nats/nats.conf /tmp/nats.conf && sed -i 's/\\${NATS_TOKEN}/'\"$NATS_TOKEN\"'/g' /tmp/nats.conf && nats-server --config /tmp/nats.conf"
         volumeMounts:
         - name: config
           mountPath: /etc/nats

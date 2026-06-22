@@ -573,21 +573,44 @@ impl ConsumerRegistry {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Connect to NATS with timeout
-        let client = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            async_nats::connect(nats_url),
-        )
-        .await
-        {
-            Ok(Ok(client)) => client,
-            Ok(Err(e)) => {
-                return Err(ConsumerRegistryError::NatsConnectionFailed(e.to_string()));
+        // Connect to NATS with optional token auth
+        let nats_token = std::env::var("NATS_TOKEN").ok();
+        let client = match nats_token {
+            Some(token) if !token.is_empty() => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    async_nats::ConnectOptions::with_token(token).connect(nats_url),
+                )
+                .await
+                {
+                    Ok(Ok(client)) => client,
+                    Ok(Err(e)) => {
+                        return Err(ConsumerRegistryError::NatsConnectionFailed(e.to_string()));
+                    }
+                    Err(_) => {
+                        return Err(ConsumerRegistryError::NatsConnectionFailed(
+                            "NATS connection timed out after 5s".to_string(),
+                        ));
+                    }
+                }
             }
-            Err(_) => {
-                return Err(ConsumerRegistryError::NatsConnectionFailed(
-                    "NATS connection timed out after 5s".to_string(),
-                ));
+            _ => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    async_nats::connect(nats_url),
+                )
+                .await
+                {
+                    Ok(Ok(client)) => client,
+                    Ok(Err(e)) => {
+                        return Err(ConsumerRegistryError::NatsConnectionFailed(e.to_string()));
+                    }
+                    Err(_) => {
+                        return Err(ConsumerRegistryError::NatsConnectionFailed(
+                            "NATS connection timed out after 5s".to_string(),
+                        ));
+                    }
+                }
             }
         };
 

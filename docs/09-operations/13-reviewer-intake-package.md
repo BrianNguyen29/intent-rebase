@@ -23,7 +23,7 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 | App deployment | `infrastructure/production/README.md` §Applied App Smoke Status | Internal smoke deploy running | Pod running, health/ready 200, JWT guard passed, SQL-backed router initialized |
 | Prometheus + Alertmanager | `infrastructure/production/README.md` §Phase 2 Observability | Deployed on GKE, 4 targets UP | Prometheus, Alertmanager, intent-api, NATS targets all UP |
 | Prometheus persistent storage | `infrastructure/production/README.md` §Prometheus PVC Persistence | PVC applied 2026-06-22 | `prometheus-storage` 10Gi RWO, TSDB WAL replay started, `fsGroup: 65534` fix |
-| SLO rules + k6 validation | `docs/09-operations/11-slo-targets.md` §5.6 | Real app SLO rules applied 2026-06-22 | `IntentApiLatencyP95High`, `IntentApiErrorRateHigh` loaded and inactive under normal load; temporary validation rule fired and removed; 5 VU k6 passed (1830 iterations, p95=687µs, 0% errors) |
+| SLO rules + k6 validation | `docs/09-operations/11-slo-targets.md` §5.6–5.8 | Real app SLO rules applied 2026-06-22; validated at 5 VU, 20 VU, and 50 VU | `IntentApiLatencyP95High`, `IntentApiErrorRateHigh` loaded and `inactive` under normal load; temporary validation rule fired and removed; 5 VU k6 passed (1830 iterations, p95=687µs, 0% errors); 20 VU passed (7219 iterations, p95=760µs, 0% 5xx); 50 VU passed (17989 iterations, p95=127µs, 0% 5xx) |
 | Load testing | `infrastructure/production/README.md` §Load Test Results | 7-min bounded k6 passed 2026-06-21 and 2026-06-22 | 100% checks, 0% failures, p95 < 1ms, 4.35 req/s |
 | Staging 30-min business-path load | `infrastructure/production/README.md` §30-Minute Staging Business-Path Load | 8930 iterations, 0% failure, p95 17.5ms | Manual Alertmanager alert posted during sustained load; Slack/email delta 1 each |
 | Receiver validation | `infrastructure/production/README.md` §Alert Validation | Slack + SMTP direct transport + Alertmanager POST validated | Real credentials out-of-band; temporary container + GKE retest passed |
@@ -32,17 +32,17 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 | JWT rotation | `docs/09-operations/05-runbooks.md` RB21 Evidence | Dual-key rotation validated 2026-06-21; grace window closed 2026-06-22 | GSM v2, ESO sync, deployment restart, health 200 with new+old tokens; `JWT_SECRET_PREVIOUS` removed from K8s secret, new token verified, old token no longer in runtime |
 | DB URL rotation | `docs/09-operations/05-runbooks.md` | Cloud SQL user password rotated 2026-06-21 | GSM v2, ESO sync, deployment restart, health 200, DB_CONNECTION_OK |
 | DR / PITR | `docs/09-operations/07-backup-restore.md` | Clone-only validated 2026-06-18; formal RTO drill 2026-06-22 | PITR clone created, validated, deleted; formal RTO ~21m37s (clone 16m58s + app 6s); temp resources cleaned up |
-| RPO measurement | `docs/09-operations/07-backup-restore.md` §RPO Measurement | Closest measurable documented 2026-06-22 | PITR enabled, automated backups daily 03:00, WAL archiving enabled, transaction log retention 7 days; theoretical RPO < 1 min; empirical WAL lag **not measured** |
+| RPO measurement | `docs/09-operations/07-backup-restore.md` §RPO Measurement | Empirically measured 2026-06-22 | PITR enabled, automated backups daily 03:00, WAL archiving enabled, transaction log retention 7 days; theoretical RPO < 1 min; **empirical RPO ~2.7 seconds** measured via live marker→WAL archive lag + PITR clone verification |
 | Runbooks | `docs/09-operations/05-runbooks.md` RB1–RB14 | Documented | Prometheus query, restart procedure, NATS consumer lag, checkpoint rollback, audit failover, compensation retry, rebase timeout, approval escalation, quarantine, DLQ investigation, secret rotation, synthetic data seeding |
 | NATS pilot | `infrastructure/production/README.md` §NATS JetStream Pilot | Provisioned and validated 2026-06-21 | StatefulSet, PVC, Service, ConfigMap, validation Job; stream create/list, durable consumer create/list, pub/consume verified |
 | NATS Prometheus scrape | `infrastructure/production/README.md` §NATS Prometheus Scrape Target | Applied 2026-06-22 | `prometheus-nats-exporter:0.15.0` sidecar on port 7777; Prometheus target UP; `gnatsd_connz_num_connections` queryable |
-| NATS app consumer | `infrastructure/production/README.md` §NATS App Consumer Wired | Wired 2026-06-22 | `NATS_URL=nats://nats:4222`, `INTENT_API_NATS_CONSUMER=true`; `audit_events` stream created; `CheckpointCreatorConsumer` polling; DLQ workers not enabled |
-| Forensic bucket | `infrastructure/production/README.md` §Dedicated Forensic Immutable Bucket | Created 2026-06-22 | `gs://forensic-evidence-ferrum-497801-ed2c5bdd`; versioning, 30-day retention (UNLOCKED), PAP enforced, uniform access; **runtime wiring blocked** (no GCS backend, no HMAC keys, Workload Identity not implemented) |
+| NATS app consumer | `infrastructure/production/README.md` §NATS App Consumer Wired | Wired 2026-06-22 | `NATS_URL=nats://nats:4222`, `NATS_TOKEN` token auth enforced, `INTENT_API_NATS_CONSUMER=true`, `INTENT_API_NATS_FULL_CONSUMER=true`, `INTENT_API_NATS_DLQ_WORKER=true`, `INTENT_API_NATS_DLQ_REPLAY_WORKER=true`; `audit_events` stream created; three consumers (checkpoint_creator, snapshot_creator, notifier) polling; DLQ metrics/replay workers started; not production HA cluster, not per-tenant streams, not production-certified |
+| Forensic bucket | `infrastructure/production/README.md` §Dedicated Forensic Immutable Bucket | Created 2026-06-22 | `gs://forensic-evidence-ferrum-497801-ed2c5bdd`; versioning, 30-day retention (UNLOCKED), PAP enforced, uniform access; **GCS BundleStorage backend implemented 2026-06-22** using metadata-server OAuth (no HMAC keys); end-to-end smoke test passed (upload/download/delete verified, 30-day retention active); not S3 Object Lock compliant |
 | CI/CD audit trail | `infrastructure/production/README.md` §Lane 6 CI/CD Audit Trail | `.github/workflows/audit-trail.yml` created 2026-06-22 | Manual workflow_dispatch only; quality + SBOM jobs; signing deferred; no auto-deploy |
 
 **A-03 Blockers for Public Production:**
-- FIND-001: Real SLO breach under sustained higher load (20 VU, 50 VU) not tested; error budgets not committed; node-exporter/kube-state-metrics not deployed
-- FIND-004: Formal RPO empirically measured against live traffic; formal RTO with live-traffic cutover; scheduled DR drills
+- FIND-001: Real SLO rules validated under 5 VU, 20 VU, and 50 VU bounded internal load; SLO breach firing (artificial latency/error injection) not tested; error budgets not committed; node-exporter/kube-state-metrics not deployed
+- FIND-004: Formal RPO empirically measured (~2.7s WAL lag); formal RTO with live-traffic cutover; scheduled DR drills remain open
 - Public ingress: Not enabled; prerequisite checklist exists
 - No external SRE has reviewed or signed off unconditionally
 
@@ -67,7 +67,7 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 
 **A-04 Blockers for Public Production:**
 - FIND-002: Full RLS transaction wrapping across all SQL paths; NATS per-tenant streams (ADR-15); production certification
-- FIND-003: Broader secret rotation (JWT grace window closed, DB URL rotated, NATS/S3 pending provisioning); NATS/S3 credentials not yet provisioned or rotated
+- FIND-003: Broader secret rotation (JWT grace window closed, DB URL rotated, NATS token provisioned and rotated; S3 not wired to app); GCS forensic backend uses metadata-server OAuth (no HMAC keys)
 - A-07: External pen test not executed; ZAP self-scan is prep only
 - No external security reviewer has reviewed or signed off unconditionally
 
@@ -104,10 +104,10 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 | TLS | **Not deployed** | Required before public ingress; no certificates |
 | WAF / Cloud Armor | **Not deployed** | Required before public ingress |
 | Domain | **None** | Required before public ingress |
-| NATS | **Single-node pilot** | No auth, no TLS, no HA; internal ClusterIP only |
-| Forensic storage | **GCS bucket exists** | Runtime wiring blocked; no GCS backend in code; HMAC keys not created |
+| NATS | **Single-node pilot** | Token auth, no TLS, no HA; internal ClusterIP only |
+| Forensic storage | **GCS BundleStorage backend implemented** | GCS bucket `gs://forensic-evidence-ferrum-497801-ed2c5bdd`; metadata-server OAuth (no HMAC keys); runtime wired; end-to-end smoke test passed; `roles/storage.objectAdmin` at bucket level (broader than least-privilege); retention policy UNLOCKED; no Bucket Lock; not S3 Object Lock compliant |
 | Database | **Cloud SQL private IP** | PITR enabled, backups daily, automated user rotation possible |
-| Secrets | **GSM + ESO** | 22 secrets; API key/JWT/DB URL rotations validated; NATS/S3 pending |
+| Secrets | **GSM + ESO** | 22 secrets; API key/JWT/DB URL/NATS token rotations validated; S3 not wired |
 
 ---
 
@@ -144,8 +144,8 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 | Public ingress load tested | `NOT CLAIMED` — internal ClusterIP only; no public ingress, no TLS, no CDN, no edge load |
 | SLO committed with penalties | `NOT CLAIMED` — conceptual error budgets only; no contractual SLA; no committed penalties |
 | DR validated with live traffic | `NOT CLAIMED` — clone-only validation; no live-traffic cutover; RPO not empirically measured against live writes |
-| Forensic storage production-ready | `NOT CLAIMED` — bucket exists but runtime wiring blocked; no storage-layer immutability (Bucket Lock deferred); not S3 Object Lock compliant |
-| NATS production-ready | `NOT CLAIMED` — single-node pilot, no auth/TLS/HA, no per-tenant streams, DLQ workers not enabled |
+| Forensic storage production-ready | `NOT CLAIMED` — bucket exists with versioning/retention/PAP; GCS BundleStorage backend implemented and smoke-tested; `roles/storage.objectAdmin` broader than least-privilege; Bucket Lock deferred; not S3 Object Lock compliant; forensic bundle download API not production-validated for GCS backend |
+| NATS production-ready | `NOT CLAIMED` — single-node pilot, token auth but no TLS/mTLS/HA, no per-tenant streams, DLQ stream not yet created, not production-certified |
 | Commercial-ready / Enterprise-ready | `NOT CLAIMED` — private-only; requires SOC2/GDPR/team/SLA/SBOM/IR drills/customer docs |
 
 ---
@@ -155,3 +155,4 @@ It is **not a completed review** and does **not** contain any reviewer sign-off.
 | Date | Updated By | Changes |
 |------|------------|---------|
 | 2026-06-22 | BrianNguyen (via authorized assistant fixer) | Initial intake package created: evidence index for A-03/A-04/A-07, access posture, quick reference, forbidden claims. No external reviewer engaged. No sign-off claimed. All statuses reflect private-only solo operation with open gates. |
+| 2026-06-22 | BrianNguyen (via authorized assistant fixer) | Evidence refreshed: SLO validation updated to include 20 VU and 50 VU load test results; RPO updated to empirical ~2.7s measurement; A-03 blockers updated (FIND-001 partial, FIND-004 RPO measured); A-04 blockers updated (NATS token provisioned); access posture updated (forensic storage runtime wired, secrets NATS token validated). No external reviewer engaged. No sign-off claimed. |

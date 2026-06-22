@@ -34,8 +34,8 @@ use compensation_service::{
     SqlxSideEffectRepository,
 };
 use forensic_service::{
-    BundleStorage, ForensicArchiveGenerator, ForensicVerificationService, InMemoryBundleStorage,
-    InMemoryForensicArchiveGenerator, InMemoryForensicVerificationService,
+    BundleStorage, ForensicArchiveGenerator, ForensicVerificationService, GcsBundleStorage,
+    InMemoryBundleStorage, InMemoryForensicArchiveGenerator, InMemoryForensicVerificationService,
     RealForensicDataCollector, RealForensicVerificationService, S3BundleStorage,
 };
 use graph_service::{GraphService, InMemoryGraphRepository, SqlxGraphRepository};
@@ -130,16 +130,29 @@ async fn select_runtime_adapter() -> Arc<dyn RuntimeAdapter> {
 
 /// Select forensic bundle storage based on FORENSIC_BUNDLE_STORAGE env var.
 ///
+/// - `FORENSIC_BUNDLE_STORAGE=gcs` → GcsBundleStorage (requires FORENSIC_BUNDLE_BUCKET; uses GKE metadata-server OAuth)
 /// - `FORENSIC_BUNDLE_STORAGE=s3` → S3BundleStorage (requires S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, FORENSIC_BUNDLE_BUCKET)
 /// - Otherwise → InMemoryBundleStorage (dev/testing only)
 ///
-/// S3 Object Lock, retention enforcement, and chain-hash remain Phase 4+ deferred scope.
+/// S3 Object Lock, GCS Bucket Lock, retention enforcement, and chain-hash remain Phase 4+ deferred scope.
 async fn select_forensic_bundle_storage() -> Arc<dyn BundleStorage> {
     let storage_type = std::env::var("FORENSIC_BUNDLE_STORAGE")
         .unwrap_or_default()
         .to_lowercase();
 
-    if storage_type == "s3" {
+    if storage_type == "gcs" {
+        let bucket = std::env::var("FORENSIC_BUNDLE_BUCKET").unwrap_or_else(|_| {
+            tracing::warn!("FORENSIC_BUNDLE_STORAGE=gcs but FORENSIC_BUNDLE_BUCKET not set");
+            "intent-rebase-artifacts".to_string()
+        });
+
+        tracing::info!(
+            "FORENSIC_BUNDLE_STORAGE=gcs — using GcsBundleStorage with bucket '{}' (metadata-server OAuth)",
+            bucket
+        );
+        let storage = GcsBundleStorage::new(bucket);
+        Arc::new(storage) as Arc<dyn BundleStorage>
+    } else if storage_type == "s3" {
         let bucket = std::env::var("FORENSIC_BUNDLE_BUCKET").unwrap_or_else(|_| {
             tracing::warn!("FORENSIC_BUNDLE_STORAGE=s3 but FORENSIC_BUNDLE_BUCKET not set");
             "intent-rebase-artifacts".to_string()
@@ -167,7 +180,7 @@ async fn select_forensic_bundle_storage() -> Arc<dyn BundleStorage> {
         Arc::new(storage) as Arc<dyn BundleStorage>
     } else {
         tracing::info!(
-            "Using InMemoryBundleStorage (default) — set FORENSIC_BUNDLE_STORAGE=s3 for S3"
+            "Using InMemoryBundleStorage (default) — set FORENSIC_BUNDLE_STORAGE=gcs or s3 for cloud storage"
         );
         Arc::new(InMemoryBundleStorage::new("prod-bucket")) as Arc<dyn BundleStorage>
     }

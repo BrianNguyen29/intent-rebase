@@ -83,11 +83,21 @@ impl JetStreamInitializer {
             nats_url
         );
 
-        // Connect to NATS with timeout
-        let client = timeout(self.connect_timeout, async_nats::connect(nats_url))
+        // Connect to NATS with optional token auth
+        let nats_token = std::env::var("NATS_TOKEN").ok();
+        let client = match nats_token {
+            Some(token) if !token.is_empty() => timeout(
+                self.connect_timeout,
+                async_nats::ConnectOptions::with_token(token).connect(nats_url),
+            )
             .await
             .map_err(|_| format!("NATS connection timed out after {:?}", self.connect_timeout))?
-            .map_err(|e| format!("NATS connection failed: {}", e))?;
+            .map_err(|e| format!("NATS connection failed: {}", e))?,
+            _ => timeout(self.connect_timeout, async_nats::connect(nats_url))
+                .await
+                .map_err(|_| format!("NATS connection timed out after {:?}", self.connect_timeout))?
+                .map_err(|e| format!("NATS connection failed: {}", e))?,
+        };
 
         // Create JetStream context
         let jetstream = async_nats::jetstream::new(client);

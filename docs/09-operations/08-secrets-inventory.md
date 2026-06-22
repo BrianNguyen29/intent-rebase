@@ -88,9 +88,10 @@ echo "[$(date -Iseconds)] PostgreSQL rotation complete. Verify all services."
 
 | Secret | Location | Used By | Rotation Cadence | Current Status |
 |--------|----------|---------|-----------------|----------------|
-| `NATS_CREDS` (user credentials) | `.env` / secrets manager | intent-api (JetStream) | 180 days | Template — not rotated |
-| `NATS_USERNAME` | `.env` / secrets manager | NATS authentication | 180 days | Template — not rotated |
-| `NATS_PASSWORD` | `.env` / secrets manager | NATS authentication | 180 days | Template — not rotated |
+| `NATS_TOKEN` (token auth) | GSM `intent-rebase-prod-nats-token` + ESO → K8s secret `app-secrets` | intent-api (JetStream), NATS server (token auth) | 180 days | **Rotated 2026-06-22** — URL-safe base64url token, 44 chars; shell substitution workaround for NATS config env var limitation; see RB22 |
+| `NATS_CREDS` (user credentials) | `.env` / secrets manager | intent-api (JetStream) | 180 days | Template — not rotated (local dev only) |
+| `NATS_USERNAME` | `.env` / secrets manager | NATS authentication | 180 days | Template — not rotated (local dev only) |
+| `NATS_PASSWORD` | `.env` / secrets manager | NATS authentication | 180 days | Template — not rotated (local dev only) |
 
 **Rotation Procedure Template:**
 

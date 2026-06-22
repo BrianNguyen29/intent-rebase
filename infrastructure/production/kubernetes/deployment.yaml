@@ -28,10 +28,12 @@ spec:
     spec:
       containers:
         - name: intent-api
-          # Image tag :cd370d1-metrics includes HTTP metrics instrumentation
-          # (http_requests_total + http_request_duration_seconds) for Prometheus SLO rules.
-          # Built from working tree at commit cd370d1 with uncommitted metrics middleware changes.
-          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:cd370d1-metrics
+          # Image tag :gcs-forensic-retry3-20260622 includes GCS BundleStorage backend
+          # with corrected media upload URL (https://storage.googleapis.com/upload/storage/v1)
+          # plus retry/HEAD fixes (bounded 3-attempt backoff, HEAD for exists, metadata URL)
+          # AND Authorization header refresh on each retry attempt (401/403 token clear fix).
+          # Built 2026-06-22.
+          image: us-central1-docker.pkg.dev/ferrum-497801/intent-rebase/intent-api:gcs-forensic-retry3-20260622
           ports:
             - containerPort: 8080
               name: http
@@ -42,10 +44,25 @@ spec:
               value: "true"
             - name: RUST_LOG
               value: "info"
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: NATS_TOKEN
             - name: NATS_URL
               value: "nats://nats:4222"
             - name: INTENT_API_NATS_CONSUMER
               value: "true"
+            - name: INTENT_API_NATS_DLQ_WORKER
+              value: "true"
+            - name: INTENT_API_NATS_DLQ_REPLAY_WORKER
+              value: "true"
+            - name: INTENT_API_NATS_FULL_CONSUMER
+              value: "true"
+            - name: FORENSIC_BUNDLE_STORAGE
+              value: "gcs"
+            - name: FORENSIC_BUNDLE_BUCKET
+              value: "forensic-evidence-ferrum-497801-ed2c5bdd"
           envFrom:
             - secretRef:
                 name: app-secrets

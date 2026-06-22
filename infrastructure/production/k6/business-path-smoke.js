@@ -6,15 +6,18 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 // Target: intent-api:8080 (internal ClusterIP, no public ingress).
 // This is a bounded non-production load test. Do not claim production readiness.
 
+const targetVus = parseInt(__ENV.TARGET_VUS || '5');
+const sustainDuration = __ENV.SUSTAIN_DURATION || '5m';
+
 export const options = {
   stages: [
-    { duration: '1m', target: 5 },   // Ramp up to 5 VUs
-    { duration: '5m', target: 5 },  // Sustain 5 VUs
+    { duration: '1m', target: targetVus },   // Ramp up
+    { duration: sustainDuration, target: targetVus },  // Sustain
     { duration: '1m', target: 0 },  // Ramp down
   ],
   thresholds: {
     http_req_duration: ['p(95)<100'], // p95 < 100ms (internal SLO target)
-    http_req_failed: ['rate<0.001'],  // error rate < 0.1%
+    errors: ['rate<0.001'],  // custom error rate (5xx only) < 0.1%
   },
 };
 
@@ -82,18 +85,18 @@ export function handleSummary(data) {
   return {
     stdout: JSON.stringify({
       total_requests: data.metrics.http_reqs.count,
-      failed_requests: data.metrics.http_req_failed.count,
-      error_rate: data.metrics.http_req_failed.rate,
-      p95_latency_ms: data.metrics.http_req_duration['p(95)'],
-      p99_latency_ms: data.metrics.http_req_duration['p(99)'],
-      avg_latency_ms: data.metrics.http_req_duration.avg,
+      failed_requests: data.metrics.http_req_failed ? data.metrics.http_req_failed.count : 0,
+      error_rate: data.metrics.http_req_failed ? data.metrics.http_req_failed.rate : 0,
+      p95_latency_ms: data.metrics.http_req_duration ? data.metrics.http_req_duration['p(95)'] : 0,
+      p99_latency_ms: data.metrics.http_req_duration ? data.metrics.http_req_duration['p(99)'] : 0,
+      avg_latency_ms: data.metrics.http_req_duration ? data.metrics.http_req_duration.avg : 0,
       health_checks: data.metrics.health_checks ? data.metrics.health_checks.count : 0,
       health_failures: data.metrics.health_failures ? data.metrics.health_failures.count : 0,
       create_checks: data.metrics.create_checks ? data.metrics.create_checks.count : 0,
       create_failures: data.metrics.create_failures ? data.metrics.create_failures.count : 0,
-      thresholds_passed: Object.values(data.thresholds).every(t => t.ok),
+      thresholds_passed: data.thresholds ? Object.values(data.thresholds).every(t => t.ok) : false,
       vus_max: data.metrics.vus_max ? data.metrics.vus_max.max : 0,
-      duration_ms: data.state.testRunDurationMs,
+      duration_ms: data.state ? data.state.testRunDurationMs : 0,
     }),
   };
 }

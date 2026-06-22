@@ -918,3 +918,63 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
 - Do NOT set `JWT_SECRET_PREVIOUS` to the same value as `JWT_SECRET`.
 - Do NOT disable the previous secret immediately without a grace window — active clients with old tokens will be locked out.
 - Do NOT print JWT secrets in logs, CI output, or chat.
+
+---
+
+## RB22. NATS Token Rotation (GSM + ESO + StatefulSet Restart)
+
+**Preconditions:**
+- GSM `intent-rebase-prod-nats-token` exists (current active token).
+- ESO `ExternalSecret` `app-secrets` maps `NATS_TOKEN` from GSM.
+- NATS StatefulSet `nats` uses shell entrypoint to substitute `${NATS_TOKEN}` into `/tmp/nats.conf` before starting `nats-server` (workaround for NATS v2.10.29 not expanding env vars natively in config files).
+- App Deployment `intent-api` reads `NATS_TOKEN` from K8s secret `app-secrets` and uses `async_nats::ConnectOptions::with_token()` for auth.
+- Maintenance window: NOT required — token rotation requires NATS + app restart, causing ~5–10s consumer unavailability.
+
+**Procedure:**
+
+1. **Generate new token:**
+   ```bash
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+   ```
+   (URL-safe base64url, no padding; 44 characters.)
+
+2. **Store new token in GSM:**
+   ```bash
+   gcloud secrets versions add intent-rebase-prod-nats-token --data-file=<(echo -n '<new-token>')
+   ```
+
+3. **Force ESO sync:**
+   ```bash
+   kubectl annotate externalsecret app-secrets -n intent-rebase force-sync=$(date +%s) --overwrite
+   kubectl wait externalsecret app-secrets -n intent-rebase --for=condition=Ready=True --timeout=120s
+   ```
+
+4. **Restart NATS StatefulSet** (picks up new token from env var, renders new config):
+   ```bash
+   kubectl delete pod -n intent-rebase nats-0
+   kubectl wait pod -n intent-rebase nats-0 --for=condition=Ready --timeout=120s
+   ```
+   Verify: `kubectl logs -n intent-rebase nats-0` should show `Server is ready` with no config errors.
+
+5. **Restart app Deployment** (picks up new token from secret, reconnects consumers):
+   ```bash
+   kubectl rollout restart deployment/intent-api -n intent-rebase
+   kubectl rollout status deployment/intent-api -n intent-rebase --timeout=300s
+   ```
+
+6. **Smoke test:**
+   - App health: `kubectl exec -n intent-rebase deploy/intent-api -- wget -qO- http://localhost:8080/health` → `{"status":"ok"}`
+   - App ready: `kubectl exec -n intent-rebase deploy/intent-api -- wget -qO- http://localhost:8080/ready` → `{"status":"ready"}`
+   - NATS connections: `kubectl exec -n intent-rebase nats-0 -- wget -qO- http://localhost:8222/connz` → `num_connections >= 2` (JetStream + consumer registry)
+   - App logs: `kubectl logs -n intent-rebase -l app=intent-api --tail=20` should show `connected successfully`, `JetStream stream 'audit_events' ready`, `ConsumerRegistry: starting consumer`
+   - Prometheus targets: `intent-api`, `nats` both UP.
+
+7. **Update `docs/09-operations/08-secrets-inventory.md`** with rotation date and GSM version.
+
+**Rollback:**
+- If smoke test fails, revert GSM to previous version (or restore from backup if versions are not versioned), re-sync ESO, restart NATS + app.
+
+**What NOT to do:**
+- Do NOT hardcode the token in the NATS ConfigMap (the ConfigMap must remain `${NATS_TOKEN}`; the StatefulSet entrypoint performs substitution).
+- Do NOT restart only the app without restarting NATS — token mismatch will cause `authorization violation` errors.
+- Do NOT print the NATS token in logs, CI output, or chat.

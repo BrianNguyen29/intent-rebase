@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gcs-forensic-smoke-test
+  namespace: intent-rebase
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: debian:bookworm-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1
+              echo "Fetching metadata token..."
+              TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
+                "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" \
+                | jq -r '.access_token')
+              BUCKET="forensic-evidence-ferrum-497801-ed2c5bdd"
+              OBJECT="smoke-test/$(date +%s)-gcs-forensic-validation.json"
+              ENCODED_OBJECT=$(printf '%s' "${OBJECT}" | jq -sRr @uri)
+              DATA='{"test":"gcs-forensic-smoke","timestamp":"'$(date -Iseconds)'"}'
+              echo "Uploading test object..."
+              curl -sf -X POST \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                "https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${ENCODED_OBJECT}" \
+                -d "${DATA}"
+              echo "Downloading and verifying..."
+              DOWNLOADED=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
+                "https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${ENCODED_OBJECT}?alt=media")
+              if [ "${DOWNLOADED}" = "${DATA}" ]; then
+                echo "VERIFIED: upload/download match"
+              else
+                echo "MISMATCH: expected '${DATA}' got '${DOWNLOADED}'"
+                exit 1
+              fi
+              echo "Deleting test object..."
+              curl -sf -X DELETE -H "Authorization: Bearer ${TOKEN}" \
+                "https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${ENCODED_OBJECT}"
+              echo "SUCCESS: GCS forensic bucket smoke test passed"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
