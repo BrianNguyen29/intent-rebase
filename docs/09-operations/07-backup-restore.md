@@ -3,7 +3,7 @@
 **Status:** `LOCAL VALIDATED — Templates + Docker-Compose Non-Destructive Restore Verified`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** 2026-06-18
+**Last Updated:** 2026-06-22
 
 ---
 
@@ -157,6 +157,43 @@ These targets inform backup frequency and restore procedure priority, but do not
 - Clone provisioning time (`~20m`) and total elapsed (`~20m36s`) are infrastructure observations, not a validated production RTO under incident conditions.
 - Full DR program (scheduled drills, live cutover with production traffic, RPO/RTO measurement with data-loss markers, offsite replication) remains open.
 - **Not a full enterprise DR exercise.**
+
+### Formal DR RTO/RPO Drill (2026-06-22)
+
+> **Scope:** Formal timed non-destructive DR drill measuring clone provisioning time, app validation time, and total elapsed time. Production was NOT scaled down or switched. This is a timed exercise, not a live-traffic cutover.
+> **Status:** ✅ EXECUTED — Non-destructive; all temporary resources cleaned up.
+
+| Field | Value |
+|-------|-------|
+| **Clone name** | `dr-formal-rto-20260622023356` |
+| **Source instance** | `production-template-postgres-ed2c5bdd` |
+| **Start time (clone creation)** | `2026-06-22T02:33:56+00:00` |
+| **Clone RUNNABLE** | `DR_CLONE_READY_SECONDS=1018` (~16 minutes 58 seconds) |
+| **Clone private IP** | `10.249.0.19` |
+| **App validation start** | `DR_APP_START=1782096851` (postgres Job applied) |
+| **DB connection smoke** | `DB_CONNECTION_OK` via `psql` SELECT 1 against clone |
+| **App migration validation** | `Migrations completed successfully. Exiting without starting server.` (sqlx migrations passed on clone) |
+| **App validation end** | `DR_APP_END=1782096857` (postgres Job complete) |
+| **App migration Job start** | `DR_APP_MIGRATION_START=1782096941` |
+| **Total elapsed (clone ready → app validation complete)** | `DR_APP_READY_SECONDS=90` (postgres Job) / `~5s` (migration Job) |
+| **Total elapsed (start → cleanup)** | `DR_TOTAL_SECONDS=1297` (~21 minutes 37 seconds) |
+| **Cleanup** | Temp Jobs deleted (`dr-formal-rto-20260622023356`, `dr-formal-rto-20260622023356-app`); temp Secrets deleted (`dr-formal-rto-20260622023356-secrets`, `dr-formal-rto-20260622023356-app-secrets`); clone deleted (`gcloud sql instances delete` confirmed 404) |
+
+**Timings Summary:**
+- Clone creation to RUNNABLE: ~16m58s (1018s)
+- App validation (postgres SELECT 1): ~6s (from Job start to DB_CONNECTION_OK)
+- App migration validation (sqlx migrations on clone): ~5s (from Job start to completion)
+- Total wall-clock from clone creation start to app validation complete: ~21m37s (1297s)
+
+**Caveats:**
+- This is a **solo, non-destructive timed drill**. No production traffic was redirected or cut over.
+- Clone provisioning time (~16m58s) is an infrastructure observation, not a validated production RTO under incident conditions with live traffic.
+- RPO was not empirically measured (PITR log replay lag). Cloud SQL documentation states WAL streaming lag is typically < 1 minute, but this was not verified against live production writes.
+- The drill used temporary Kubernetes Jobs and Secrets against the clone, not a live production Deployment cutover.
+- Full DR program (scheduled drills, live cutover with production traffic, RPO/RTO measurement with data-loss markers, offsite replication, automated restore pipelines) remains open.
+- **Not a full enterprise DR exercise.**
+- **Not a committed SLA.** RPO ≤ 1h and RTO ≤ 30min are documented targets but not empirically validated against live production traffic or contractual obligations.
+
 
 ### Phase 0 — Preflight (Fail-Closed)
 

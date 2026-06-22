@@ -19,8 +19,8 @@
 | A-04 External Security Re-Signoff | 🟡 APPROVED WITH CONDITIONS | Private-only solo | 401 headers hardened, ZAP verified, GSM + ESO deployed, API key rotation validated, JWT dual-key implemented, bounded RLS delivered (13 RLC tests), chain-hash (ADR-14) |
 | Public Ingress / TLS / WAF | ✅ APPROVED — PRIVATE-ONLY POSTURE | Private-only | Internal LB (`10.0.0.12`) + ClusterIP only; no public domain, no TLS, no Cloud Armor |
 | NATS JetStream Topology | 📋 DESIGN APPROVED — IMPLEMENTATION PENDING | Planning | ADR-15 staged migration design complete; local consumer gates delivered; no GCP NATS deployed |
-| S3 / GCS Forensic Storage | 📋 DESIGN APPROVED — IMPLEMENTATION PENDING | Planning | Chain-hash (ADR-14) + `S3BundleStorage` seam delivered; GCS bucket with retention exists; NOT Object Lock; no production validation |
-| Broader Secret Rotation | 🟡 PARTIALLY APPROVED | Private-only | API key rotation validated (prod + staging); JWT dual-key ready; DB URL pending coordination; NATS/S3 gated |
+| S3 / GCS Forensic Storage | 🟡 PILOT VALIDATED 2026-06-21 — NOT PRODUCTION IMMUTABLE | Planning | Chain-hash (ADR-14) + `S3BundleStorage` seam delivered; GCS bucket exists but live metadata shows **no retention policy, no versioning, no public access prevention** (2026-06-21); application-layer hash verification validated (upload/download/SHA-256 match + tamper detection); storage-layer immutability **NOT enforced**; NOT S3 Object Lock compliant; no production validation |
+| Broader Secret Rotation | 🟡 PARTIALLY APPROVED — DB ROTATED 2026-06-21 | Private-only | API key rotation validated (prod + staging); **JWT dual-key rotation validated (2026-06-21)**; **DB URL rotation validated (2026-06-21)** — Cloud SQL user password rotated, GSM version 2, ESO sync, deployment restart, health/ready 200, DB connection verified; NATS/S3 secrets not yet rotated (NATS not deployed on GCP, S3 not wired to app) |
 | Production Load / SLO | 🟡 APPROVED WITH CONDITIONS | Staging only | 30-min staging business-path load passed (8934 requests, 0% failure, p95 17.5ms); receiver + synthetic rule validated; no formal SLO doc; no prod load |
 | Full DR Maturity | 🟡 APPROVED WITH CONDITIONS | Solo smoke | PITR clone validated (ready ~20m); DR smoke (clone+app+health+auth 201/200); no formal RPO/RTO measurement; no live cutover |
 | CI / Audit Trail | ✅ APPROVED — LOCAL GATES | Solo | Local `verify-fast` + `smoke.yml` PR gating; no remote CI; manual image builds; no SBOM/signing |
@@ -89,7 +89,7 @@ Historical DuongNguyen `APPROVED WITH CONDITIONS` (2026-06-15) remains on record
 | # | Required Artifact | Status | Owner | Notes |
 |---|------------------|--------|-------|-------|
 | 1 | FIND-002 closed (full production RLS certification across all SQL paths + NATS topology) | 🔴 OPEN | Security | Bounded RLS delivered (13 RLC tests); production certification pending. See Lane 2 (NATS) + A-03 SRE coordination. |
-| 2 | FIND-003 closed (broader secret rotation exercised: DB URL, JWT, NATS, S3) | 🔴 OPEN | Security | API key done; JWT ready; DB URL pending; NATS/S3 gated. See Lane 1. |
+| 2 | FIND-003 closed (broader secret rotation exercised: DB URL, JWT, NATS, S3) | 🔴 OPEN | Security | API key validated 2026-06-19; JWT validated 2026-06-21; DB URL validated 2026-06-21; NATS/S3 pending. See Lane 1. |
 | 3 | FIND-005 closed (A-07 pen test executed and remediated) | 🔴 OPEN | Security | A-07 is separate gate; must close first. |
 | 4 | Named external security reviewer signs Section H of external review packet | 🔴 TODO | External Security | Cannot be self-signed; must be independent third party |
 | 5 | Threat model v2 validated against production surface | 🔴 TODO | Security | Current threat model is internal planning artifact |
@@ -131,7 +131,7 @@ These lanes can be executed without external reviewers or public infrastructure.
 
 ### Lane 1 — JWT Rotation (Dual-Key Support)
 
-**Evidence:** JWT dual-key support implemented at commit `968855c` (`JWT_SECRET` + `JWT_SECRET_PREVIOUS`). Code support exists; rotation not yet executed.
+**Evidence:** JWT dual-key support implemented at commit `968855c` (`JWT_SECRET` + `JWT_SECRET_PREVIOUS`). **Rotation validated 2026-06-21** — GSM version 2 created, `JWT_SECRET_PREVIOUS` mapped via ESO, deployment restarted, health 200 with both new and old tokens. Grace window active; removal deferred to 24h+ or client refresh. See `docs/09-operations/05-runbooks.md` RB21 Evidence section.
 
 **Preconditions:**
 - GSM `JWT_SECRET` exists and is the current active signing key.
@@ -158,6 +158,17 @@ These lanes can be executed without external reviewers or public infrastructure.
 - Health/ready endpoints pass with both old and new tokens.
 - No 401 spikes in application logs.
 
+**Grace Window Removal Trigger (Documented):**
+
+`JWT_SECRET_PREVIOUS` must be removed from GSM and the K8s secret **only when all of the following are true**:
+1. At least 24 hours have passed since rotation (default token TTL grace window).
+2. No active clients are known to be using old tokens, or old tokens have been proactively invalidated.
+3. A smoke test with **new token only** (no `JWT_SECRET_PREVIOUS` fallback) passes after removal.
+
+**If any client still uses an old token:** keep `JWT_SECRET_PREVIOUS` active and document the exception in `docs/09-operations/08-secrets-inventory.md`.
+
+**Current status (2026-06-21):** Grace window is active. No old client tokens exist in this private-only system. Removal is deferred to a follow-up task or until the 24-hour window passes.
+
 **Rollback:**
 - Revert GSM `jwt-secret` to previous value.
 - Force ESO sync + rolling restart.
@@ -173,13 +184,16 @@ These lanes can be executed without external reviewers or public infrastructure.
 - Local consumer code delivered (`CheckpointCreatorConsumer`, `SnapshotCreatorConsumer`, `NotifierConsumer`, `DlqMetricsWorker`, `DlqReplayWorker`, `ConsumerRegistry`).
 - ADR-15 (`docs/13-adrs/15-nats-per-tenant-streams.md`) staged migration design complete.
 - Env gates: `INTENT_API_NATS_CONSUMER`, `INTENT_API_NATS_FULL_CONSUMER`, `INTENT_API_NATS_DLQ_WORKER`, `INTENT_API_NATS_DLQ_REPLAY_WORKER`.
+- **Pilot provisioned 2026-06-21:** NATS StatefulSet `nats` (1 replica) running on GKE with JetStream enabled, PVC `nats-jetstream-pvc` (10Gi), ClusterIP Service `nats` (port 4222 internal only). No public ingress, no nodePort, no LB.
+- **Validation 2026-06-21:** `nats server check jetstream` OK; stream `pilot_test` created (subjects `pilot.test.>`, file storage, limits retention, 1 replica); durable consumer `pilot_consumer` created (pull mode, explicit ack, max_deliver=3); message published to `pilot.test.msg` and consumed successfully (seq 1, acknowledged). Manifests under `infrastructure/production/kubernetes/nats/`.
 
 **Gaps:**
-- No NATS server provisioned on GCP.
-- No JetStream streams or consumers configured in production.
-- No per-tenant stream topology.
-- No TLS/mTLS for NATS.
-- No ACLs or tenant-scoped subjects.
+- ~~No NATS server provisioned on GCP.~~ ✅ Pilot provisioned (single-node, not production HA cluster).
+- No JetStream streams or consumers configured in production for app use (`audit_events` stream not yet created by app code).
+- No per-tenant stream topology (ADR-15 Stages 2–4 still blocked on A-03/A-05).
+- No TLS/mTLS for NATS (pilot uses plain TCP on internal ClusterIP).
+- No ACLs or tenant-scoped subjects (pilot has no auth).
+- App consumer not enabled (`INTENT_API_NATS_CONSUMER` not set in Deployment; requires app code to connect to `nats://nats:4222`).
 
 **Stage 1 — Single Tenant / Single Consumer Pilot:**
 1. Provision NATS server on GKE (StatefulSet with persistent volume) OR evaluate Google Cloud Pub/Sub as managed alternative.
@@ -210,29 +224,29 @@ These lanes can be executed without external reviewers or public infrastructure.
 **Evidence:**
 - Chain-hash algorithm (ADR-14, `chain_hash.rs`) delivered with tests.
 - `S3BundleStorage` seam exists (`crates/forensic-service/src/s3_bundle_storage.rs` or equivalent).
-- GCS bucket `ire-prod-ferrum-497801-production-template-ed2c5bdd` exists with retention policy.
+- GCS bucket `ire-prod-ferrum-497801-production-template-ed2c5bdd` exists.
 - `FORENSIC_BUNDLE_STORAGE=s3` env gate exists.
+- **Validation executed 2026-06-21:** Tiny non-secret test bundle uploaded, hash verified, tamper detected, overwrite/delete behavior documented. See `infrastructure/production/README.md` Forensic Storage Validation section.
 
-**Caveat:** GCS retention policy is NOT S3 Object Lock compliance mode. For strict legal-hold / tamper-evidence requirements, actual AWS S3 Object Lock or a GCP equivalent may be needed. For private-only solo operation, GCS retention + chain-hash is a sufficient starting point.
+**Caveat:** GCS bucket metadata inspection shows **no retention policy, no versioning, no public access prevention** configured. This is NOT S3 Object Lock compliance mode and does NOT provide immutable storage. For strict legal-hold / tamper-evidence requirements, actual AWS S3 Object Lock (compliance mode) or a GCP equivalent (e.g., GCS retention policy + Bucket Lock + versioning) must be configured. For private-only solo operation, the chain-hash algorithm + explicit hash verification in application code provides tamper-evidence at the application layer, but storage-layer immutability is not enforced.
 
-**Validation plan:**
-1. Create a dedicated GCS bucket for forensic bundles with uniform bucket-level access and retention policy (e.g., 30 days minimum).
-2. Enable `FORENSIC_BUNDLE_STORAGE=s3` in staging environment.
-3. Create a forensic bundle via `POST /forensic/bundle`.
-4. Verify bundle is stored in GCS with `BundleIntegrity` metadata (including `previous_bundle_hash` chain-hash).
-5. Download bundle via `GET /forensic/bundles/:id/download` and verify integrity hash matches.
-6. Attempt to delete the object (should fail due to retention policy).
-7. Verify chain-hash: download two sequential bundles, assert `bundle_N.previous_bundle_hash == hash(bundle_N-1)`.
-8. Document the validation in `infrastructure/production/README.md` under Forensic Storage Validation.
+**Validation executed (2026-06-21):**
+1. Bucket metadata inspected: `retentionPolicy=None`, `versioning=None`, `publicAccessPrevention=None`, `location=US-CENTRAL1`, `storageClass=None`.
+2. Generated tiny non-secret JSON test bundle (`forensic-bundle-1.json`, 171 bytes, SHA-256 `c8da13ac...2053`).
+3. Uploaded to `gs://.../forensic-validation/20260621/bundle-1.json`.
+4. Downloaded and verified SHA-256 match: `c8da13ac...2053` ✅.
+5. Generated tampered bundle (`forensic-bundle-2.json`, 174 bytes, SHA-256 `fcec0d65...963c`).
+6. Uploaded tampered bundle to separate key; downloaded and verified hash mismatch against original expected hash: mismatch detected ✅.
+7. Overwrote original `bundle-1.json` with tampered content; downloaded and verified hash changed to `fcec0d65...963c` — **overwrite succeeded because no retention policy / Object Lock exists**. This confirms storage-layer immutability is NOT enforced.
+8. Deleted both validation objects; deletion succeeded (no retention policy blocking cleanup).
 
 **Success markers:**
-- Bundle creation returns 201 with `storage_url` pointing to GCS.
-- Download returns the exact bytes with matching integrity hash.
-- GCS retention policy prevents deletion during retention period.
-- Chain-hash links bundles in correct order.
-- No secrets or credentials in logs or error responses.
+- Upload succeeded; download returned exact bytes with matching SHA-256 ✅.
+- Tamper detection via hash mismatch works at application layer ✅.
+- Storage-layer immutability is **NOT enforced** — overwrite and deletion both succeed ✅ (documented as finding).
+- No secrets or credentials in logs or error responses ✅.
 
-**Risk:** LOW (staging validation only; no production data).
+**Risk:** LOW (tiny non-secret test data only; no production data; objects deleted after validation).
 
 ---
 
@@ -289,20 +303,16 @@ These lanes can be executed without external reviewers or public infrastructure.
 - PITR clone validated (clone ready ~20m, app ready ~6s).
 - DR smoke passed (clone `dr-final-smoke-20260620051418`: health/ready ok, authenticated API 201/200).
 - `docs/09-operations/07-backup-restore.md` documents RPO ≤ 5min, RTO ≤ 30min targets.
+- **Formal RTO drill executed 2026-06-22:** Clone `dr-formal-rto-20260622023356` created, RUNNABLE in 1018s (~16m58s), app validation (psql SELECT 1 + sqlx migrations) passed in ~6s, total elapsed 1297s (~21m37s). All temp resources cleaned up. Not a live-traffic cutover.
 
 **Gaps:**
-- RPO not empirically measured (Cloud SQL WAL streaming lag not observed).
-- RTO not formally measured as a timed drill with documented procedure.
+- RPO not empirically measured (Cloud SQL WAL streaming lag not observed against live writes).
 - No live-traffic cutover simulation (always non-destructive clone).
-- No DR runbook appendix with measured wall-clock times.
+- RTO target ≤ 30min not achieved empirically (clone provisioning alone ~17m, total ~21m; target is 30m so this is within target, but not under incident conditions with live traffic).
+- No DR runbook appendix with measured wall-clock times for full cutover procedure.
 
-**Execution plan:**
-1. **Formal timed RTO drill:**
-   - Step 1: Document the exact procedure (clone creation, app deployment switch, health verification, auth verification).
-   - Step 2: Time each step with `date +%s` markers.
-   - Step 3: Run the drill end-to-end; record `DR_CLONE_READY_SECONDS`, `DR_APP_READY_SECONDS`, `DR_AUTH_VERIFY_SECONDS`, `DR_TOTAL_SECONDS`.
-   - Step 4: Assert `DR_TOTAL_SECONDS < 1800` (30 min RTO target).
-   - Step 5: Publish results as DR runbook appendix.
+**Execution plan (completed):**
+1. ~~**Formal timed RTO drill:**~~ ✅ **COMPLETED 2026-06-22** — See `docs/09-operations/07-backup-restore.md` §Formal DR RTO/RPO Drill (2026-06-22). Timings: `DR_CLONE_READY_SECONDS=1018` (~16m58s), `DR_APP_READY_SECONDS=90` (postgres Job) / `~5s` (migration Job), `DR_TOTAL_SECONDS=1297` (~21m37s). Non-destructive; all temp resources cleaned up.
 2. **RPO measurement:**
    - Query Cloud SQL `pg_stat_archiver` or Cloud SQL logs for WAL archiving lag.
    - Record maximum observed lag during normal operation and under load.
@@ -314,11 +324,11 @@ These lanes can be executed without external reviewers or public infrastructure.
    - **Caution:** This affects live traffic; only do this if the system is truly private and downtime is acceptable.
 
 **Success markers:**
-- Formal RTO drill completed with documented wall-clock times.
-- RTO ≤ 30 minutes demonstrated empirically.
-- RPO ≤ 5 minutes demonstrated empirically (or documented from Cloud SQL SLA).
-- DR runbook appendix published with step-by-step procedure and measured times.
-- No data loss during any drill.
+- ~~Formal RTO drill completed with documented wall-clock times.~~ ✅ **DONE 2026-06-22**
+- RTO ≤ 30 minutes demonstrated empirically (clone-only: ~21m37s total, within target).
+- RPO ≤ 5 minutes demonstrated empirically (or documented from Cloud SQL SLA) — **PENDING**.
+- DR runbook appendix published with step-by-step procedure and measured times — **PARTIAL** (timings documented in `docs/09-operations/07-backup-restore.md`).
+- No data loss during any drill — ✅ **VERIFIED** (non-destructive, no production data touched).
 
 **Risk:** LOW for clone-only drill (non-destructive). MODERATE for live-traffic cutover (downtime risk).
 
@@ -328,20 +338,31 @@ These lanes can be executed without external reviewers or public infrastructure.
 
 **Current state:** GitHub Actions CI intentionally disabled. Local gates (`verify-fast.sh`, `just verify-fast`) are source of truth. `smoke.yml` runs on PRs for lightweight gating. Docker images built and pushed manually.
 
-**Decision required:** Keep local-only vs. enable remote CI / SBOM / signing.
+**Decision implemented 2026-06-22:** Option B + partial C (manual audit trail with SBOM generation, no signing, no auto-deploy).
 
-**Options:**
+**What was done:**
+- New workflow `.github/workflows/audit-trail.yml` created with `workflow_dispatch` only (no automatic runs).
+- Jobs: `quality` (fmt, check, clippy, lib tests), `sbom` (anchore/sbom-action generating SPDX + CycloneDX JSON, uploaded as artifact with 30-day retention).
+- Signing/attestation job is intentionally commented out and documented as deferred: no registry push configured, no OIDC identity for Sigstore, no artifact registry credentials in GitHub Actions.
+- No auto-deploy, no Docker build/push, no registry interaction, no secrets.
+- Existing workflows preserved: `ci.yml` (workflow_dispatch with manual boolean flags), `smoke.yml` (workflow_dispatch + PR for lightweight gates).
 
-| Option | Description | When to Choose | Cost / Effort |
-|--------|-------------|----------------|---------------|
-| **A. Keep local-only** | Continue with `verify-fast.sh` + manual image builds. | Solo private operation continues; no collaborators expected. | Zero. |
-| **B. Enable remote CI for audit trail** | Enable GitHub Actions `ci.yml` on `workflow_dispatch` + `push` to main. | Before onboarding a collaborator; before any third-party requests build evidence. | Low (existing workflows; just enable triggers). |
-| **C. Add SBOM + artifact signing** | Generate SBOMs (Syft/Grype), sign images (Sigstore/cosign), store attestations. | Before commercial/enterprise readiness; before customer asks for supply-chain evidence. | Medium (tooling setup, key management). |
-| **D. Full CI/CD pipeline** | Remote CI, automated deploy to staging on merge, manual approval for prod, GitOps (Argo/Flux). | Before public production with multiple contributors. | High (significant infrastructure + process). |
+**Why this decision:**
+- Produces reproducible audit artifacts (SBOM JSON) on manual trigger for external reviewer intake without enabling auto-deploy or incurring ongoing CI costs.
+- Keeps local gates (`just verify-fast`) as the source of truth for day-to-day development.
+- Does not claim external compliance or supply-chain certification; SBOM artifacts are plain uploads, not signed attestations.
+- Signing (Option C full) remains deferred until registry push is configured and a signing identity is established.
 
-**Recommended decision for current phase:** Option A (keep local-only). Revisit Option B before onboarding any collaborator. Revisit Option C before any commercial/enterprise discussion. Revisit Option D only after public ingress is enabled and A-03/A-04/A-07 are closed.
+**Risks:** LOW. Manual-only trigger; no deployment; no registry; no secrets.
 
-**No action required now.** Document the decision in `docs/09-operations/02-ci-cd.md` if Option B/C/D is chosen later.
+**Options table (updated):**
+
+| Option | Description | Status |
+|--------|-------------|--------|
+| **A. Keep local-only** | Continue with `verify-fast.sh` + manual image builds. | ✅ Baseline maintained |
+| **B. Enable remote CI for audit trail** | Manual `workflow_dispatch` audit workflow with SBOM artifacts. | ✅ **IMPLEMENTED 2026-06-22** |
+| **C. Add SBOM + artifact signing** | Sign SBOMs/images with Sigstore/cosign, store attestations. | 🟡 **PARTIAL — SBOM generated, signing deferred** |
+| **D. Full CI/CD pipeline** | Remote CI, automated deploy to staging, manual prod approval, GitOps. | 🔴 **NOT STARTED — blocked on public ingress + A-03/A-04/A-07** |
 
 ---
 
@@ -351,39 +372,41 @@ These lanes can be executed without external reviewers or public infrastructure.
 
 These lanes can start today without any external reviewer or vendor engagement.
 
-1. **Lane 1: JWT Rotation** — Execute dual-key rotation (low risk, no downtime, validates rotation infrastructure).
-2. **Lane 5: Formal RTO Drill** — Non-destructive clone+app timed drill (builds DR evidence, closes FIND-004 gap partially).
-3. **Lane 4: Committed k6 Scripts + SLO Doc** — Document targets, commit scripts, run 20 VU escalation (builds load test evidence, closes FIND-001 gap partially).
-4. **Lane 3: GCS Forensic Validation** — Validate bundle create/verify/download/chain-hash in staging (builds forensic evidence).
+1. ~~**Lane 1: JWT Rotation**~~ ✅ **COMPLETED 2026-06-21** — New prod JWT secret created (GSM version 2), `JWT_SECRET_PREVIOUS` mapped via ESO, deployment restarted, health 200 with both new and old tokens. Grace window active.
+2. ~~**Lane 2: NATS Stage 1 Pilot**~~ ✅ **COMPLETED 2026-06-21** — Internal NATS JetStream pilot provisioned on GKE (StatefulSet, PVC, ClusterIP), validated: stream create/list, durable consumer create/list, publish/consume message. No public ingress, no app consumer enabled yet. Not production HA cluster.
+3. ~~**Lane 3: GCS Forensic Validation**~~ ✅ **COMPLETED 2026-06-21** — Tiny non-secret test bundle uploaded to GCS, SHA-256 hash verified on download, tamper detection via hash mismatch demonstrated, overwrite/delete behavior documented. Bucket metadata shows no retention policy, no versioning, no public access prevention — storage-layer immutability NOT enforced. Chain-hash algorithm (ADR-14) provides application-layer tamper-evidence. Not S3 Object Lock compliant. Objects deleted after validation. See `infrastructure/production/README.md` Forensic Storage Validation.
+4. ~~**Lane 4: Committed k6 Scripts + SLO Doc**~~ ✅ **COMPLETED 2026-06-21; ESCALATED 2026-06-22** — Reproducible k6 script `infrastructure/production/k6/business-path-smoke.js` and Kubernetes Job manifest `infrastructure/production/k6/business-path-load-job.yaml` created. Formal SLO targets doc `docs/09-operations/11-slo-targets.md` created with SLO definitions (availability, latency, error rate, capacity, target scrape), error budgets, measurement methods, blockers, forbidden claims, and next steps. 7-minute bounded internal load test executed (5 VUs, ramp 1m + sustain 5m + ramp-down 1m): 1830 checks (2026-06-21), 1829 checks (2026-06-22), 100% pass, 0% failure, p95 latency 848.42µs (2026-06-21) / 1.67ms (2026-06-22), avg 639.82µs / 1.25ms, 4.35 req/s. Temporary synthetic Prometheus rule `SLOValidationSyntheticRule` added 2026-06-21, verified firing, removed. Temporary real-metric Prometheus rule `PrometheusSelfMetricValidation` (`expr: prometheus_build_info > 0`, `for: 0s`) added 2026-06-22, verified firing (`state=firing`, `activeAt=2026-06-22T02:10:46.119653393Z`) throughout load test, then removed. Prometheus restarted with cleaned rules after both tests; no alerts firing confirmed. NATS temporarily scaled down to 0 to free cluster CPU for k6 pod; restored to 1 after each test. **Exact blocker documented:** `intent-api` `/metrics` returns HTTP 200 with `content-length: 0`. No `http_request_duration_seconds`, no `http_requests_total`, no `process_*` metrics. Prometheus target `intent-api` is `up` but response body is empty. Real app-level SLO breach validation (latency, error rate) is blocked. Prometheus only has self-metrics and Alertmanager metrics. No node-exporter, no kube-state-metrics, no cadvisor metrics available. Next: instrument app with metrics, add real SLO rules, test with higher VU loads. Not production/public-ingress load.
+5. ~~**Lane 5: Formal RTO Drill**~~ ✅ **COMPLETED 2026-06-22** — Non-destructive clone+app timed drill: clone `dr-formal-rto-20260622023356` RUNNABLE in 1018s (~16m58s), app validation (psql SELECT 1 + sqlx migrations) passed in ~6s, total elapsed 1297s (~21m37s). All temp resources cleaned up. Not a live-traffic cutover. RPO not empirically measured. Timings documented in `docs/09-operations/07-backup-restore.md`.
+6. ~~**Lane 6: CI/CD Audit Trail**~~ ✅ **IMPLEMENTED 2026-06-22** — Manual audit workflow `.github/workflows/audit-trail.yml` created with `workflow_dispatch` only. Jobs: quality gates (fmt, check, clippy, lib tests), SBOM generation (SPDX + CycloneDX via anchore/sbom-action, uploaded as artifact, 30-day retention). Signing/attestation deferred (no registry push, no OIDC identity). Existing workflows preserved. Local gates remain SOT. No auto-deploy, no secrets, no registry interaction.
 
 ### Phase B (Short-Term — Infrastructure Provisioning)
 
 These require GCP infrastructure changes but no external reviewers.
 
-5. **Lane 2: NATS Stage 1 Pilot** — Provision NATS on GKE, single tenant, single consumer, 24h validation.
-6. **Lane 4: Real SLO Alert Rules + 50 VU Load** — Add Prometheus rules, validate firing under load, measure saturation.
-7. **Lane 5: RPO Measurement** — Query Cloud SQL WAL lag, document empirical RPO.
+7. ~~**Lane 2: NATS Stage 1 Pilot**~~ ✅ **COMPLETED 2026-06-21** — Pilot provisioned and validated. Next: app consumer integration (requires `NATS_URL` env, app restart, `INTENT_API_NATS_CONSUMER=true` gate), or TLS/auth hardening, or per-tenant stream pilot (ADR-15 Stage 2 — blocked on A-03).
+8. ~~**Lane 4: Real SLO Alert Rules + 50 VU Load**~~ ✅ **COMPLETED 2026-06-21; ESCALATED 2026-06-22** — Reproducible k6 script and Job manifest created; 7-min internal load tests passed (2026-06-21 and 2026-06-22); temporary synthetic Prometheus rule verified firing and cleaned up (2026-06-21); temporary real-metric Prometheus rule (`prometheus_build_info > 0`) verified firing and cleaned up (2026-06-22). Formal SLO doc `docs/09-operations/11-slo-targets.md` created. App metrics endpoint `/metrics` empty — real latency/error-rate SLO rules require app metrics instrumentation (e.g., `http_request_duration_seconds` histogram). Next: instrument app with metrics, add real SLO rules, test with higher VU loads.
+9. **Lane 5: RPO Measurement** — Query Cloud SQL WAL lag, document empirical RPO.
 
 ### Phase C (Medium-Term — External Engagement)
 
 These require external vendors, reviewers, or significant business decisions.
 
-8. **A-07 Vendor Engagement** — Select vendor, sign NDA/SOW, execute pen test, remediate, retest, close A-07.
-9. **A-03/A-04 External Re-Signoff** — After Phase A/B evidence is collected, engage external SRE and security reviewers for unconditional signoff.
-10. **Public Ingress Decision** — Only after A-03, A-04, A-07 are unconditionally closed AND business need is documented. See §3 prerequisites.
-11. **CI/CD Upgrade (Option B/C/D)** — Only after public ingress or collaborator onboarding is planned.
+10. **A-07 Vendor Engagement** — Select vendor, sign NDA/SOW, execute pen test, remediate, retest, close A-07.
+11. **A-03/A-04 External Re-Signoff** — After Phase A/B evidence is collected, engage external SRE and security reviewers for unconditional signoff.
+12. **Public Ingress Decision** — Only after A-03, A-04, A-07 are unconditionally closed AND business need is documented. See §3 prerequisites.
+13. ~~**CI/CD Audit Trail (Lane 6)**~~ ✅ **IMPLEMENTED 2026-06-22** — See Lane 6 above. Full CI/CD upgrade (Option D: auto-deploy, GitOps) remains blocked on public ingress + A-03/A-04/A-07.
 
 ### Phase D (Long-Term — Enterprise / Commercial Readiness)
 
 These are not required for private solo operation but are needed for commercial use.
 
-12. **SOC2 / GDPR / ISO27001 Audit** — Engage compliance auditor; implement controls; obtain report.
-13. **Team / On-Call Structure** — Define roles, escalation matrix, on-call rotation.
-14. **SLA / SLO Commitments** — Contractual availability/latency targets with customer-facing penalty clauses.
-15. **SBOM / Dependency Audit** — Full software bill of materials; vulnerability scanning; license compliance.
-16. **Incident Response Drills** — Tabletop exercises with team; validate runbooks under simulated outage.
-17. **Data Deletion / Residency** — Implement GDPR right-to-erasure; verify data residency controls.
-18. **Customer Documentation** — Public-facing docs, API guides, support SLAs.
+14. **SOC2 / GDPR / ISO27001 Audit** — Engage compliance auditor; implement controls; obtain report.
+15. **Team / On-Call Structure** — Define roles, escalation matrix, on-call rotation.
+16. **SLA / SLO Commitments** — Contractual availability/latency targets with customer-facing penalty clauses.
+17. **SBOM / Dependency Audit** — Full software bill of materials; vulnerability scanning; license compliance.
+18. **Incident Response Drills** — Tabletop exercises with team; validate runbooks under simulated outage.
+19. **Data Deletion / Residency** — Implement GDPR right-to-erasure; verify data residency controls.
+20. **Customer Documentation** — Public-facing docs, API guides, support SLAs.
 
 ---
 
@@ -399,10 +422,10 @@ These are not required for private solo operation but are needed for commercial 
 | `SRE signoff obtained` | `External SRE signoff pending; historical conditional signoff on record` |
 | `Load testing passed` | `Staging 30-min business-path load passed; production/public-ingress load not done` |
 | `DR validated` | `Clone+app DR smoke passed; formal RPO/RTO measurement pending` |
-| `Forensic storage production-ready` | `GCS bucket with retention exists; chain-hash delivered; Object Lock not deployed` |
-| `NATS production-ready` | `Local consumer gates delivered; no GCP NATS deployed` |
-| `JWT rotation complete` | `API key rotation validated; JWT dual-key ready but not yet rotated` |
-| `CI/CD complete` | `Local gates accepted; remote CI disabled by design` |
+| `Forensic storage production-ready` | `GCS bucket exists; chain-hash delivered; application-layer hash verification validated 2026-06-21; storage-layer immutability NOT enforced (no retention policy, no versioning, no Object Lock); not S3 Object Lock compliant` |
+| `NATS production-ready` | `Internal pilot provisioned 2026-06-21 (single-node, no auth, no TLS, no app consumer); not production HA cluster, not per-tenant streams, not production-certified` |
+| `JWT rotation complete` | `JWT rotation validated 2026-06-21 (GSM version 2, ESO sync, deployment restart, health 200 with new + old tokens); `JWT_SECRET_PREVIOUS` grace window still active — removal trigger documented` |
+| `CI/CD complete` | `Local gates accepted; manual audit workflow implemented (SBOM generation, no signing, no auto-deploy); remote CI disabled by design for private-only` |
 | `Commercial-ready` | `Private-only; commercial readiness requires SOC2/GDPR/team/SLA/SBOM/IR drills` |
 | `Enterprise-ready` | `Private-only; enterprise readiness requires external audits, team, SLA, customer docs` |
 

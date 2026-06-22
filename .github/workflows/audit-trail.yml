@@ -1,0 +1,148 @@
+name: Audit Trail
+
+# Manual-only audit workflow: produces reproducible build-quality + SBOM artifacts
+# for external reviewer evidence. No automatic runs. No deployment. No registry push.
+# This workflow is designed to be triggered from the Actions tab when a reviewer
+# or the project owner needs signed/attested evidence of code quality and
+# software-bill-of-materials.
+#
+# Scope: fmt, check, clippy, lib tests, SBOM generation, artifact upload.
+# Out of scope: Docker build/push, container signing, deployment, integration tests
+# requiring external services (Postgres/NATS), benchmark runs.
+#
+# Signing/attestation: intentionally deferred. Keyless Sigstore/cosign signing
+# requires an OIDC identity (GitHub token) and a registry to push attestations to.
+# This repository has no registry publishing configured and no artifact registry
+# credentials in GitHub Actions. SBOM artifacts are uploaded as plain GitHub
+# Action artifacts — sufficient for manual reviewer intake. If signing is needed
+# later, add a "sign" job with cosign/sign-action after enabling registry push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      generate_sbom:
+        description: 'Generate SBOM artifact (requires network)'
+        required: false
+        default: true
+        type: boolean
+      upload_artifacts:
+        description: 'Upload workflow artifacts (SBOM, logs)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  quality:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Type check
+        run: cargo check --workspace --all-features
+
+      - name: Clippy lints
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run in-memory lib tests
+        run: cargo test --workspace --lib --all-features
+
+  sbom:
+    name: SBOM Generation
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.generate_sbom == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate SBOM from source
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      - name: Upload SBOM artifacts
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-sbom-${{ github.run_id }}
+          path: |
+            sbom.spdx.json
+            sbom.cyclonedx.json
+          retention-days: 30
+          overwrite: true
+
+  # ─── Signing / Attestation (Deferred) ───────────────────────────────────────
+  # This job is intentionally disabled. Keyless signing via Sigstore/cosign
+  # requires:
+  #   1. Registry push (to attach attestation to an image or artifact)
+  #   2. OIDC identity provider (GitHub Actions token, enabled by default)
+  #   3. Registry credentials (not configured in this repository)
+  #
+  # To enable later:
+  #   - Add registry push to a separate workflow (e.g., build-and-push.yml)
+  #   - Add cosign/sign-action or sigstore/cosign-installer + "cosign sign"
+  #   - Use GitHub's OIDC token (id-token: write permission)
+  #   - Publish SBOM as attestation to the registry (e.g., GHCR or Artifact Registry)
+  #
+  # For now, SBOM artifacts are uploaded as plain GitHub Action artifacts.
+  # This is sufficient for manual reviewer intake and audit trail evidence.
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # sign:
+  #   name: Keyless Sign SBOM
+  #   runs-on: ubuntu-latest
+  #   needs: sbom
+  #   permissions:
+  #     contents: read
+  #     id-token: write   # Required for Sigstore OIDC
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: audit-sbom-${{ github.run_id }}
+  #     - uses: sigstore/cosign-installer@v3
+  #     - name: Sign SBOM with keyless cosign
+  #       run: |
+  #         cosign sign-blob --yes \
+  #           --output-signature sbom.spdx.json.sig \
+  #           --output-certificate sbom.spdx.json.cert \
+  #           sbom.spdx.json
+  #       env:
+  #         COSIGN_EXPERIMENTAL: 1
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: audit-sbom-signed-${{ github.run_id }}
+  #         path: |
+  #           sbom.spdx.json.sig
+  #           sbom.spdx.json.cert
+  #         retention-days: 30

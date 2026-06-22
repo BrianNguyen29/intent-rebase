@@ -1,0 +1,81 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-business-path-smoke
+  namespace: intent-rebase
+spec:
+  template:
+    metadata:
+      labels:
+        app: k6-load-test
+        component: slo-validation
+        run-id: "20260622-lane4-escalation"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: k6
+        image: grafana/k6:0.51.0
+        env:
+        - name: API_BASE_URL
+          value: "http://intent-api:8080"
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: API_KEY
+        command:
+        - k6
+        - run
+        - /script/business-path-smoke.js
+        volumeMounts:
+        - name: script
+          mountPath: /script
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: script
+        configMap:
+          name: k6-business-path-smoke-script
+          # The script must be loaded into this ConfigMap before the Job runs.
+          # kubectl create configmap k6-business-path-smoke-script \
+          #   --from-file=infrastructure/production/k6/business-path-smoke.js \
+          #   -n intent-rebase
+---
+# ConfigMap for the k6 script (must be created separately before applying the Job).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-business-path-smoke-script
+  namespace: intent-rebase
+data:
+  business-path-smoke.js: |
+    // Inline fallback: if the ConfigMap is created from file, this key is
+    // overwritten by the file content. This placeholder is here so the manifest
+    // can be applied as a whole if the ConfigMap is patched after creation.
+    // See infrastructure/production/k6/business-path-smoke.js for the real script.
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    export const options = {
+      stages: [
+        { duration: '1m', target: 5 },
+        { duration: '5m', target: 5 },
+        { duration: '1m', target: 0 },
+      ],
+      thresholds: {
+        http_req_duration: ['p(95)<100'],
+        http_req_failed: ['rate<0.001'],
+      },
+    };
+    export default function () {
+      const BASE_URL = __ENV.API_BASE_URL || 'http://intent-api:8080';
+      const headers = { 'X-Api-Key': __ENV.API_KEY || 'test-key-not-real' };
+      const r = http.get(BASE_URL + '/health', { headers });
+      check(r, { 'health 200': (x) => x.status === 200 });
+      sleep(1);
+    }

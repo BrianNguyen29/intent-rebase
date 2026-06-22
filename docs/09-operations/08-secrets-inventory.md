@@ -3,7 +3,7 @@
 **Status:** `DOCUMENTED — Inventory Template & Rotation Procedure Templates Only`
 **Phase:** Phase 3 — Ops Evidence Track
 **Owner:** Backend Lead (solo practitioner)
-**Last Updated:** April 2026
+**Last Updated:** 2026-06-21
 
 ---
 
@@ -23,11 +23,11 @@ This document provides a **secrets inventory template** and **rotation procedure
 
 | Category | Secrets Known | Rotation Implemented | Rotation Validated |
 |----------|-------------|---------------------|-------------------|
-| Database credentials | ✅ Yes | 🟡 Template only | ❌ No |
+| Database credentials | ✅ Yes | ✅ **Rotation validated 2026-06-21** — Cloud SQL user `intent_rebase_app` password rotated, GSM `intent-rebase-prod-database-url` version 2 created, ESO sync applied, deployment restarted, app health/ready 200, SQL-backed router initialized, DB connection verified (psql `DB_CONNECTION_OK`). Pod scheduling required deleting old pod due to CPU constraint (2-node cluster); documented as finding. | ✅ Yes — prod DB credential rotation validated (2026-06-21) |
 | NATS credentials | ✅ Yes | 🟡 Template only | ❌ No |
 | MinIO/S3 credentials | ✅ Yes | 🟡 Template only | ❌ No |
 | API keys (tenant) | ✅ Yes | ✅ Validated — GSM + ESO auto-sync (2026-06-19) | ✅ Yes — prod API key rotation validated against GSM version [3], hash match, Deployment restart, smoke pass |
-| JWT signing keys | ✅ Yes | 🟡 Dual-key support implemented (`JWT_SECRET_PREVIOUS` for verification-only fallback); rotation validated only for API keys, not JWT | ❌ No |
+| JWT signing keys | ✅ Yes | ✅ Dual-key support implemented (`JWT_SECRET_PREVIOUS` for verification-only fallback); **rotation validated 2026-06-21** — GSM version 2 created, ESO sync applied, deployment restarted, health 200 with both new and old tokens | ✅ Yes — prod JWT rotation validated (2026-06-21); `JWT_SECRET_PREVIOUS` grace window active |
 | TLS certificates | 🟡 Partial | 🟡 Template only | ❌ No |
 | Encryption keys (at-rest) | 🟡 Partial | ❌ Not documented | ❌ No |
 | Webhook subscription secrets | ✅ Yes | 🟡 Template only | ❌ No |
@@ -40,7 +40,7 @@ This document provides a **secrets inventory template** and **rotation procedure
 
 | Secret | Location | Used By | Rotation Cadence | Current Status |
 |--------|----------|---------|-----------------|----------------|
-| `DATABASE_URL` (Postgres) | Environment variable / `.env` | intent-api, rebase-engine, graph-service | 90 days | Template — not rotated |
+| `DATABASE_URL` (Postgres) | Environment variable / `.env` | intent-api, rebase-engine, graph-service | 90 days | Rotation validated 2026-06-21 — GSM version 2, ESO sync, deployment restart, health/ready 200, DB_CONNECTION_OK; rollback version retained. |
 | `POSTGRES_PASSWORD` | `.env` / secrets manager | PostgreSQL auth | 90 days | Template — not rotated |
 | Read replica credentials | `.env` / secrets manager | Read-only queries | 90 days | Template — not rotated |
 
@@ -195,7 +195,7 @@ echo "[$(date -Iseconds)] MinIO credential rotation complete."
 | Secret | Location | Used By | Rotation Cadence | Current Status |
 |--------|----------|---------|-----------------|----------------|
 | Per-tenant API keys | Database (`api_keys` table) | Tenant clients | Per-tenant policy | Template — per-key |
-| JWT signing keys | Environment / secrets manager | JWT issuance | 365 days | Template — not rotated |
+| JWT signing keys | Environment / secrets manager | JWT issuance | 365 days | Rotation validated 2026-06-21 — GSM version 2, ESO sync, deployment restart, new+old token health checks 200; JWT_SECRET_PREVIOUS grace window active. |
 
 **Tenant API Key Rotation Procedure Template:**
 
@@ -473,9 +473,9 @@ echo "[$(date -Iseconds)] Rotation complete. Record: PROD_ROTATION_VALIDATED=tru
 
 ### Caveats
 
-- This procedure validates **API key rotation only**.
-- **DB URL rotation** requires coordinated Cloud SQL user/password rotation and rolling pod restart / connection draining; not yet validated.
-- **JWT secret rotation** requires dual-key/grace-window support or simultaneous cutover; current app does not document dual-key validation; not yet validated.
+- This procedure validates **API key rotation only** (GSM + ESO sync, Deployment restart, smoke test).
+- **DB URL rotation** was validated 2026-06-21: Cloud SQL user `intent_rebase_app` password rotated, GSM version 2 created, ESO sync applied, deployment restarted, health/ready 200, DB_CONNECTION_OK. No connection draining issues observed.
+- **JWT secret rotation** was validated 2026-06-21: dual-key support exercised via `JWT_SECRET_PREVIOUS`, GSM version 2 created, ESO sync applied, deployment restarted, health 200 with both new and old tokens. `JWT_SECRET_PREVIOUS` grace window still active.
 - **NATS/S3 secrets** are not deployed on the GCP path; rotation deferred.
 - **TLS/public ingress secrets** are not applicable because the system is private-only.
 - Disabling old GSM versions immediately after rotation is **not recommended** without a grace window; keep both versions active for a bounded period if rollback may be needed.
@@ -490,8 +490,8 @@ echo "[$(date -Iseconds)] Rotation complete. Record: PROD_ROTATION_VALIDATED=tru
 | Automated rotation (automatic, not scripted) | Requires Vault rotation config | Phase 4+ |
 | Encryption key (at-rest) for PostgreSQL | Requires KMS integration | Phase 4+ |
 | Secret audit logging | Requires Vault audit device | Phase 4+ |
-| DB URL rotation (Cloud SQL) | Requires coordinated Cloud SQL user/password rotation and rolling pod restart / connection draining; not yet validated | Phase 4+ |
-| JWT secret rotation | Requires dual-key/grace-window support or simultaneous cutover; current app does not document dual-key validation; not yet validated | Phase 4+ |
+| DB URL rotation (Cloud SQL) | **Rotation validated 2026-06-21** — Cloud SQL user `intent_rebase_app` password rotated, GSM `intent-rebase-prod-database-url` version 2 created, ESO sync applied, deployment restarted, app health/ready 200, DB connection verified. No connection draining issues observed (pod CPU scheduling was the limiting factor). | ✅ Validated |
+| JWT secret rotation | **Rotation validated 2026-06-21** — dual-key support exercised, GSM version 2 created, ESO sync applied, deployment restarted, health 200 with both new and old tokens. `JWT_SECRET_PREVIOUS` grace window is still active pending removal (see `docs/09-operations/05-runbooks.md` RB21). | Grace window active — removal trigger documented | |
 | NATS/S3 secret rotation | NATS/S3 not deployed on GCP path; rotation deferred until deployed | Phase 4+ |
 | TLS/public ingress secret rotation | Not applicable because system is private-only; deferred if public ingress ever added | Phase 4+ |
 

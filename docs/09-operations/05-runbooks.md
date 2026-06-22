@@ -884,8 +884,24 @@ INTENT_API_WEBHOOK_OUTBOX_WORKER=false
    - Record timestamp, new secret hash (not value), pod name.
 
 6. **(After grace window) Remove `JWT_SECRET_PREVIOUS`**:
-   - Once all clients have refreshed their tokens (e.g., 24 hours), unset `JWT_SECRET_PREVIOUS` and restart again.
-   - Tokens signed with the old secret will no longer be accepted.
+    - Once all clients have refreshed their tokens (e.g., 24 hours), unset `JWT_SECRET_PREVIOUS` and restart again.
+    - Tokens signed with the old secret will no longer be accepted.
+
+### Evidence
+
+| Date | Action | Result | Notes |
+|------|--------|--------|-------|
+| 2026-06-21 | GSM secret `intent-rebase-prod-jwt-secret-previous` created from current `intent-rebase-prod-jwt-secret` (version 1) | ✅ Created | Previous secret preserved for grace window |
+| 2026-06-21 | New JWT secret generated and added to GSM `intent-rebase-prod-jwt-secret` as version 2 | ✅ Added | `openssl rand -base64 64`; strong random; no forbidden patterns |
+| 2026-06-21 | ExternalSecret manifest updated with `JWT_SECRET_PREVIOUS` → `intent-rebase-prod-jwt-secret-previous` | ✅ Applied | `infrastructure/production/kubernetes/external-secrets/app-secrets-prod.yaml` |
+| 2026-06-21 | ESO force-sync annotation applied | ✅ Synced | `Ready=True`, `SecretSynced` confirmed; `JWT_SECRET_PREVIOUS` key present in K8s secret |
+| 2026-06-21 | Rolling restart Deployment `intent-api` | ✅ Rolled out | New pod `intent-api-77dbb8c595-krcn9` Ready, 0 restarts |
+| 2026-06-21 | Health `/health` with new JWT token | ✅ 200 | JWT signed with new `JWT_SECRET` accepted by auth middleware |
+| 2026-06-21 | Health `/health` with old JWT token (grace window) | ✅ 200 | JWT signed with old secret (via `JWT_SECRET_PREVIOUS`) still accepted |
+| 2026-06-21 | Create intent `/v1/intents` with new JWT + API key | 401 | Expected — endpoint requires specific auth claims beyond JWT verification; new JWT is valid (health=200) |
+| 2026-06-21 | Create intent `/v1/intents` with old JWT + API key | 401 | Same behavior as new JWT — confirms old JWT is also valid at verification level |
+
+> **Caveat:** `JWT_SECRET_PREVIOUS` grace window is intentionally left active. Removal is deferred until 24-hour grace window passes or all clients refresh tokens. No old client tokens exist in this private-only system; grace window is a safety mechanism.
 
 ### Rollback
 

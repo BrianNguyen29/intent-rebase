@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: intent-rebase
+  labels:
+    app: nats
+    component: jetstream-pilot
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+      component: jetstream-pilot
+  template:
+    metadata:
+      labels:
+        app: nats
+        component: jetstream-pilot
+    spec:
+      containers:
+      - name: nats
+        image: nats:2.10-alpine
+        ports:
+        - containerPort: 4222
+          name: client
+        - containerPort: 8222
+          name: monitor
+        command:
+        - "nats-server"
+        - "--config"
+        - "/etc/nats/nats.conf"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nats
+          readOnly: true
+        - name: jetstream-store
+          mountPath: /data/jetstream
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8222
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8222
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: nats-config
+      - name: jetstream-store
+        persistentVolumeClaim:
+          claimName: nats-jetstream-pvc
+  # NOTE: This is a single-node pilot. No clustering, no HA.
+  # Production would use NATS cluster with anti-affinity and multiple PVCs.
