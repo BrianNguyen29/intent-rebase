@@ -187,6 +187,14 @@ All sign-offs below are bounded to **private-only, internal-only, solo-operated*
 
 **Sign-off:** 📋 **DESIGN APPROVED — IMPLEMENTATION PENDING** (no production NATS deployed)
 
+**Forbidden Claims for NATS:**
+| Claim | Status | Why It Is Forbidden Here |
+|-------|--------|--------------------------|
+| `NATS TLS enabled` | ❌ NOT CLAIMED | No TLS/mTLS on pilot. Token auth only via shell substitution. No cert-manager or CA. |
+| `NATS HA cluster` | ❌ NOT CLAIMED | Single-node StatefulSet (1 replica). No clustering, no anti-affinity, no headless service. |
+| `NATS per-tenant streams` | ❌ NOT CLAIMED | ADR-15 design-only. No implementation, no migration, no ACLs. |
+| `NATS production-grade` | ❌ NOT CLAIMED | Pilot only. App consumer env-gated but not validated under production load. No SRE signoff for production NATS. |
+
 **Conditions:**
 1. The local-dev bounded consumer work demonstrates the code is NATS-ready with env gates
 2. ADR-15 design for per-tenant streams is accepted; staged migration (Stage 1 readiness → Stage 2 pilot tenant → Stage 3 rollout → Stage 4 cleanup) is the correct approach
@@ -215,6 +223,14 @@ All sign-offs below are bounded to **private-only, internal-only, solo-operated*
 **S3/S4 auto-compensation constraint check:** This gate concerns **forensic bundle storage** (immutable evidence archival), NOT side-effect auto-compensation. The AGENTS.md §5 constraint ("S3/S4 side-effect auto-compensation requires explicit approval") does NOT apply here. No explicit approval is required before provisioning S3 forensic storage.
 
 **Sign-off:** 📋 **DESIGN APPROVED — IMPLEMENTATION PENDING** (no production S3/Object Lock deployed)
+
+**Forbidden Claims for Forensic Storage:**
+| Claim | Status | Why It Is Forbidden Here |
+|-------|--------|--------------------------|
+| `S3 Object Lock compliance` | ❌ NOT CLAIMED | GCS does not support Object Lock compliance mode. GCS retention policy ≠ S3 Object Lock. |
+| `Bucket Lock enabled` | ❌ NOT CLAIMED | `is_locked = false` intentionally. Locked retention policy is irreversible without bucket destruction. Lock only after explicit owner approval. |
+| `Least-privilege IAM` | ❌ NOT CLAIMED | `roles/storage.objectAdmin` used for pilot. Broader than `objectCreator` + `objectViewer`. Custom role deferred. |
+| `Forensic storage production-validated` | ❌ NOT CLAIMED | GCS native backend implemented but not validated for retry, circuit breaker, cross-region replication, or lifecycle tiering. |
 
 **Conditions:**
 1. Chain-hash algorithm (ADR-14) is delivered and tested — the code foundation for tamper-evidence is ready
@@ -275,6 +291,15 @@ All sign-offs below are bounded to **private-only, internal-only, solo-operated*
 - Gap: no production environment load test exists (gated on items 4, 5, 6)
 
 **Sign-off:** 🟡 **APPROVED WITH CONDITIONS — PRIVATE-ONLY SOLO OPERATION** (staging evidence sufficient for current load; production load gated)
+
+**Forbidden Claims for SLO/Load:**
+| Claim | Status | Why It Is Forbidden Here |
+|-------|--------|--------------------------|
+| `SLO breach validated under artificial load` | ❌ NOT CLAIMED | No artificial latency/error injection performed. Rules validated via temporary always-true rule only. |
+| `Resource-based SLOs defined` | ❌ NOT CLAIMED | node-exporter and kube-state-metrics not yet deployed. No container/node resource metrics in Prometheus. |
+| `Production load tested` | ❌ NOT CLAIMED | Staging internal ClusterIP only. No prod public ingress load. No A-03 re-signoff. |
+| `Formal SLA committed` | ❌ NOT CLAIMED | No error budgets, no burn-rate alerts, no compensating policies, no contractual penalties. |
+| `Multi-replica SLO behavior validated` | ❌ NOT CLAIMED | Single-replica deployment tested. HPA not configured. Saturation point unknown. |
 
 **Conditions:**
 1. Staging 30-min business-path load with receiver validation is sufficient evidence for private-only operation
@@ -425,4 +450,5 @@ If any trigger fires, all external gates (A-03, A-04, A-07) must be reopened wit
 
 | Date | Updated By | Changes |
 |------|------------|---------|
-| 2026-06-21 | opencode AI agent (authorized delegate of BrianNguyen) | Initial authorization sign-off packet created. All 10 gates reviewed against existing evidence in repo. A-03/A-04 upgraded from SELF-ATTESTED-SOLO to APPROVED WITH CONDITIONS (private-only scope). A-07 remains WAIVED-SOLO / PRIVATE-ONLY. Items 4–10 individually assessed with evidence citations. No production-ready claim. No external sign-off claim. |
+  | 2026-06-23 | BrianNguyen (project owner, via authorized assistant) | Owner-approved hardening batch executed. Personal-project/private-only conditions explicitly accepted by owner. No external vendor/signoff/public/enterprise claim added. Safe hardening artifacts for NATS/forensic/SLO added without breaking existing pilot. Public ingress remains disabled. |
+  | 2026-06-23 | opencode AI agent (authorized delegate of BrianNguyen) | Owner-approved hardening batch executed. Personal-project/private-only conditions explicitly accepted by owner per task `hardening-approved-20260623`. No external vendor/signoff/public/enterprise claim added. Safe hardening artifacts added for NATS (future TLS/HA/per-tenant docs), forensic (Bucket Lock guard with irreversibility warning), and SLO (node-exporter/kube-state-metrics manifests, artificial breach test job). Public ingress remains disabled. All gates unchanged; no production-ready claim. |

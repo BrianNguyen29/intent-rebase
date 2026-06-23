@@ -56,3 +56,14 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+# Forensic Bucket Lock guard — intentionally defaulted to false.
+# A locked retention policy cannot be removed without destroying the bucket,
+# which makes cost cleanup impossible for the retention period.
+# Set to true ONLY after explicit owner approval and documented legal-hold
+# requirements. Not a substitute for S3 Object Lock compliance mode.
+variable "forensic_bucket_lock_enabled" {
+  description = "Enable GCS Bucket Lock (is_locked = true) on the forensic-evidence bucket. WARNING: irreversible without bucket destruction. Default false for safety."
+  type        = bool
+  default     = false
+}

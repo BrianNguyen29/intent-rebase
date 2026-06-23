@@ -63,6 +63,11 @@ Before using this scaffold:
 | `FIND-004 RESOLVED` | Cloud SQL PITR clone-only validated (2026-06-18), but full DR/live RPO-RTO not validated; use only VALIDATED — CLONE-ONLY |
 | `FIND-005 RESOLVED` | No pen test executed; scope remains planning-only |
 | `External sign-off obtained` | A-03/A-04 are APPROVED WITH CONDITIONS (2026-06-15); A-07 is NOT APPROVED. Any 2026-06-19 re-signoff notes are assistant-generated and require direct reviewer confirmation before any production claim. |
+| `NATS TLS/HA/per-tenant` | Single-node pilot. No TLS/mTLS, no clustering, no HA, no per-tenant streams (ADR-15 design-only), no ACLs. NATS is not production-grade. |
+| `Forensic Bucket Lock` | `is_locked = false` intentionally. Locked retention policy is irreversible without bucket destruction. Lock only after explicit owner approval. GCS retention policy ≠ S3 Object Lock. |
+| `Least-privilege forensic IAM` | `roles/storage.objectAdmin` used for pilot. Broader than `objectCreator` + `objectViewer`. Custom role deferred. |
+| `SLO breach under artificial load` | No artificial latency/error injection performed. Rules validated via temporary always-true rule only. |
+| `Resource-based SLOs` | node-exporter and kube-state-metrics not yet deployed. No container/node resource metrics in Prometheus. |
 | `CI-green` | No CI changes; local gates remain source of truth |
 
 ## Directory Layout
@@ -81,6 +86,9 @@ infrastructure/production/
 │   ├── storage.tf                     # GCS bucket (retention, uniform access, no Object Lock)
 │   └── outputs.tf                     # Terraform outputs
 ├── kubernetes/
+│   ├── node-exporter-daemonset.yaml   # Node Exporter DaemonSet (NOT APPLIED; optional hardening for node metrics)
+│   ├── kube-state-metrics-deployment.yaml # Kube-State-Metrics Deployment + RBAC (NOT APPLIED; optional hardening for K8s object metrics)
+│   ├── slo-breach-test-job.yaml       # Artificial SLO breach test Job (NOT APPLIED; safe, bounded, auto-resolving alert post)
 │   ├── alertmanager-deployment.yaml   # Alertmanager Deployment + Service (APPLIED on 2026-06-18; health OK, alert test passed)
 │   ├── prometheus-config.yaml         # Prometheus scrape config ConfigMap (APPLIED on 2026-06-18; 3 targets active after static target fix)
 │   ├── prometheus-deployment.yaml     # Prometheus Deployment + Service (APPLIED on 2026-06-18; emptyDir TSDB)
@@ -99,6 +107,15 @@ infrastructure/production/
 │       ├── cluster-secret-store.yaml   # ClusterSecretStore for Google Secret Manager (APPLIED on 2026-06-19; ESO v2.6.0 installed, ADC/node SA fallback)
 │       ├── app-secrets-prod.yaml      # ExternalSecret prod: syncs GSM -> K8s app-secrets (APPLIED on 2026-06-19; Ready=True, SecretSynced, deletionPolicy: Retain)
 │       └── app-secrets-staging.yaml   # ExternalSecret staging: syncs GSM -> K8s app-secrets (APPLIED on 2026-06-19; Ready=True, SecretSynced, deletionPolicy: Retain; staging rotation validated)
+│   └── nats/
+│       ├── README.md                    # NATS hardening roadmap, forbidden claims, future TLS/HA/per-tenant checklist
+│       ├── nats-config.yaml             # Current single-node pilot ConfigMap (APPLIED on 2026-06-21)
+│       ├── nats-config-ha.yaml          # Optional 3-node HA cluster ConfigMap (NOT APPLIED; requires headless service + anti-affinity)
+│       ├── nats-tls-config.yaml         # Optional TLS/mTLS ConfigMap (NOT APPLIED; requires certs + A-04 review)
+│       ├── nats-pvc.yaml                # JetStream PVC (APPLIED on 2026-06-21; 10Gi RWO)
+│       ├── nats-service.yaml            # ClusterIP Service (APPLIED on 2026-06-21; internal only)
+│       ├── nats-statefulset.yaml        # Single-node StatefulSet (APPLIED on 2026-06-21; 1 replica, no TLS/HA)
+│       └── nats-validation-job.yaml     # JetStream validation Job (APPLIED on 2026-06-21; pilot_test stream + consumer validated)
 └── alertmanager/
     └── alertmanager-prod.yml          # Standalone Alertmanager YAML with Slack + SMTP placeholders
 ```
@@ -250,7 +267,7 @@ The following GCP pre-work was completed to enable Terraform apply. Terraform ap
 
 ## Last Updated
 
-2026-06-21
+2026-06-23
 
 ---
 
@@ -366,7 +383,7 @@ This section mirrors the Phase 4 tracker in `docs/10-delivery/23-project-assessm
    - Object versioning enabled
    - Uniform bucket-level access
    - Public access prevention = `enforced`
-2. Update Terraform (`infrastructure/production/terraform/storage.tf`) to provision the dedicated bucket.
+2. Update Terraform (`infrastructure/production/terraform/storage.tf`) to provision the dedicated bucket. Use `var.forensic_bucket_lock_enabled` (default `false`) to control Bucket Lock. WARNING: `is_locked = true` is irreversible without bucket destruction. Enable only after explicit owner approval and documented legal-hold requirements.
 3. Enable `FORENSIC_BUNDLE_STORAGE=s3` in staging and test end-to-end app bundle creation/download/verification.
 4. Verify chain-hash across two sequential app-created bundles.
 5. Attempt retention-blocked deletion to confirm immutability.

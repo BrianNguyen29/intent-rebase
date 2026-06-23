@@ -1,0 +1,55 @@
+# NATS TLS Config — NOT APPLIED by default.
+# Safe hardening artifact for future TLS/mTLS termination.
+# Requires certificates (cert-manager, Google-managed CA, or self-signed).
+# Do not apply without owner approval, cert generation, and A-04 security review.
+# Private-only. No production-ready claim.
+#
+# If applied, replace the existing `nats-config` ConfigMap with this file
+# and update `nats-statefulset.yaml` to mount cert Secrets from GSM/ESO or
+# cert-manager-generated TLS Secrets.
+#
+# NOTE: This example uses placeholder cert paths. Update to match actual
+# Secret names and mount paths after cert provisioning.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config-tls
+  namespace: intent-rebase
+  annotations:
+    note: "NOT APPLIED by default. Optional future TLS config."
+data:
+  nats.conf: |
+    jetstream: {
+      store_dir: "/data/jetstream"
+      max_memory_store: 1GB
+      max_file_store: 10GB
+    }
+
+    # TLS configuration (placeholder — requires real certs)
+    # tls: {
+    #   cert_file: "/etc/nats/certs/tls.crt"
+    #   key_file:  "/etc/nats/certs/tls.key"
+    #   ca_file:   "/etc/nats/certs/ca.crt"
+    #   verify:    true
+    # }
+
+    # For mTLS, also set:
+    #   verify_and_map: true
+    # And configure authorization with user certificates.
+
+    # Internal token auth (current pilot; replace with accounts/JWT for production)
+    authorization: {
+      token: "${NATS_TOKEN}"
+    }
+
+    # No clustering (single-node pilot)
+    # Production would require TLS/mTLS, accounts, and HA clustering
+
+    # Logging
+    debug: false
+    trace: false
+
+    # HTTP monitoring port (internal only; no auth by default)
+    # For HTTPS monitoring, change to https_port: 8222 and add tls block above.
+    http_port: 8222

@@ -40,7 +40,11 @@ resource "google_storage_bucket" "forensic-evidence" {
 
   retention_policy {
     retention_period = 2592000 # 30 days in seconds
-    is_locked        = false   # Bucket Lock intentionally deferred to avoid irreversible cost lock-in
+    # WARNING: Setting is_locked = true is IRREVERSIBLE without destroying the
+    # bucket. Cost cleanup is impossible for the retention period. Enable only
+    # after explicit owner approval and documented legal-hold requirements.
+    # GCS Bucket Lock is NOT equivalent to S3 Object Lock compliance mode.
+    is_locked = var.forensic_bucket_lock_enabled
   }
 
   versioning {

@@ -1,0 +1,82 @@
+# Artificial SLO Breach Test Job — NOT APPLIED by default.
+# Safe, bounded procedure to trigger an alert in-cluster without changing
+# production code permanently.
+#
+# How it works:
+#   Posts a simulated SLO breach alert directly to Alertmanager's
+#   /api/v2/alerts endpoint. This tests the alerting pipeline (Alertmanager
+#   -> Slack/SMTP) without affecting the intent-api application.
+#   The alert auto-resolves after 5 minutes (endsAt timestamp).
+#
+# How to run (manual, gated):
+#   kubectl apply -f infrastructure/production/kubernetes/slo-breach-test-job.yaml
+#   kubectl logs -n intent-rebase job/slo-breach-test -f
+#   kubectl delete job slo-breach-test -n intent-rebase
+#
+# Owner approval required before running in any environment.
+# Private-only. No production-ready claim.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: slo-breach-test
+  namespace: intent-rebase
+  labels:
+    app: slo-breach-test
+    purpose: artificial-slo-breach
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: slo-breach-test
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: breach-test
+          image: curlimages/curl:8.9.1
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              ALERTMANAGER_URL="http://alertmanager:9093/api/v2/alerts"
+              NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              ENDS_AT=$(date -u -d "+5 minutes" +%Y-%m-%dT%H:%M:%SZ || date -u -v+5M +%Y-%m-%dT%H:%M:%SZ)
+
+              echo "Posting artificial SLO breach alert to ${ALERTMANAGER_URL}..."
+              echo "  startsAt: ${NOW}"
+              echo "  endsAt:   ${ENDS_AT}"
+
+              curl -s -X POST "${ALERTMANAGER_URL}" \
+                -H "Content-Type: application/json" \
+                -d "[
+                  {
+                    \"labels\": {
+                      \"alertname\": \"ArtificialSloBreachTest\",
+                      \"severity\": \"warning\",
+                      \"test_type\": \"latency\",
+                      \"source\": \"slo-breach-test-job\"
+                    },
+                    \"annotations\": {
+                      \"summary\": \"Artificial SLO breach test: simulated latency spike\",
+                      \"description\": \"This is a bounded test job. It does not indicate real app degradation. Posted by slo-breach-test Job.\"
+                    },
+                    \"startsAt\": \"${NOW}\",
+                    \"endsAt\": \"${ENDS_AT}\"
+                  }
+                ]"
+
+              echo ""
+              echo "Artificial SLO breach alert posted. It will auto-resolve at ${ENDS_AT}."
+              echo "Verify in Alertmanager UI (port-forward) or Slack/email channel."
+              echo "Delete this job after verification:"
+              echo "  kubectl delete job slo-breach-test -n intent-rebase"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "50m"
+              memory: "32Mi"

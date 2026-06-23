@@ -82,6 +82,19 @@ The following checklist must be completed **in order** before public ingress is 
 
 ---
 
+## Forbidden Claims
+
+| Claim | Status | Why It Is Forbidden Here |
+|-------|--------|--------------------------|
+| `Public ingress enabled` | 🔴 GATED | Private-only by explicit decision. No public IP, no domain, no TLS, no Cloud Armor, no WAF. |
+| `Production-ready external surface` | ❌ NOT CLAIMED | A-04 external security review not obtained for public surface. A-07 external pen test not executed. No domain/TLS/WAF configured. |
+| `External user access` | ❌ NOT CLAIMED | Internal LoadBalancer (`10.0.0.12`) + ClusterIP only. No external consumers. |
+| `TLS termination configured` | ❌ NOT CLAIMED | No certificates, no cert-manager, no managed certificates. |
+| `Cloud Armor / WAF evaluated` | ❌ NOT CLAIMED | Not evaluated. Not needed for private-only. |
+| `Public ingress load tested` | ❌ NOT CLAIMED | No public ingress exists. Load tests are internal ClusterIP only. |
+
+---
+
 ## Related Documents
 
 - `infrastructure/production/kubernetes/internal-load-balancer-service.yaml` — Internal LB manifest

@@ -232,22 +232,26 @@
 
 ## 6. Forbidden Claims
 
-| Claim | Actual Status |
-|-------|-------------|
-| Production-ready | ❌ Not claimed. Private-only solo operation with open gates. |
-| Public ingress load tested | ❌ Not claimed. Internal ClusterIP only. |
-| Real app SLO rules validated | ✅ Validated. Rules applied, loaded, temporary rule fired, permanent rules not firing under normal load. Validated under 5 VU, 20 VU, and 50 VU bounded internal load. |
-| SLA committed | ❌ Not claimed. No error budgets or penalties defined. |
+| Claim | Actual Status | Why It Is Forbidden Here |
+|-------|-------------|--------------------------|
+| Production-ready | ❌ Not claimed. | Private-only solo operation with open gates (A-03/A-04 conditional, A-07 waived). No external signoff. |
+| Public ingress load tested | ❌ Not claimed. | Internal ClusterIP only. No public ingress, no edge/CDN latency validation. |
+| Real app SLO rules validated | ✅ Validated. | Rules applied, loaded, temporary rule fired, permanent rules not firing under normal load. Validated under 5 VU, 20 VU, and 50 VU bounded internal load. |
+| SLA committed | ❌ Not claimed. | No error budgets or penalties defined. No contractual obligations. SLOs are internal guidelines only. |
+| SLO breach validated under artificial load | ❌ Not claimed. | No artificial latency/error injection performed. Rules validated via temporary always-true rule only. |
+| Resource-based SLOs (CPU/memory/disk) | ❌ Not claimed. | node-exporter and kube-state-metrics not yet deployed. No container/node resource metrics in Prometheus. |
+| Multi-replica SLO behavior | ❌ Not claimed. | Load tests run against single-replica deployment. HPA not configured. Saturation point unknown. |
+| Formal burn-rate alerts | ❌ Not claimed. | No recording rules or error-budget burn-rate alerts defined. |
 
 ## 7. Next Steps
 
 1. ~~**Instrument app metrics**~~ ✅ **RESOLVED 2026-06-22** — `http_requests_total` and `http_request_duration_seconds` histogram added via axum middleware; deployed and verified live.
 2. ~~**Add real Prometheus SLO rules**~~ ✅ **RESOLVED 2026-06-22** — `IntentApiLatencyP95High` and `IntentApiErrorRateHigh` applied, loaded, validated with temporary rule under bounded k6 load. Permanent rules active and not firing under normal load.
-3. **Deploy node-exporter + kube-state-metrics**: Enable resource and container-level SLOs.
-4. **SLO breach validation under artificial load**: Inject artificial latency or errors to verify rules fire correctly (not yet done).
+3. **Deploy node-exporter + kube-state-metrics**: ~~Blocked~~ ✅ **ARTIFACTS ADDED 2026-06-23** — `infrastructure/production/kubernetes/node-exporter-daemonset.yaml` and `infrastructure/production/kubernetes/kube-state-metrics-deployment.yaml` created. Prometheus config includes commented scrape targets. Apply manually after owner approval and conflict verification.
+4. **SLO breach validation under artificial load**: ~~Not yet done~~ ✅ **ARTIFACT ADDED 2026-06-23** — `infrastructure/production/kubernetes/slo-breach-test-job.yaml` created (safe, bounded Job that posts simulated alert to Alertmanager; auto-resolves after 5 minutes; does not change prod code). Run manually after owner approval. Actual injection test not yet executed.
 5. **Define formal SLA**: Error budgets, burn-rate alerts, customer-facing penalties after SLOs are stable.
 
 ---
 > **Signed:** BrianNguyen (via authorized assistant fixer)
-> **Date:** 2026-06-22
+> **Date:** 2026-06-23
 > **No production-ready claim. No external signoff claim. A-07 WAIVED-SOLO. A-03/A-04 SELF-ATTESTED-SOLO.**
