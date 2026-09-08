@@ -40,3 +40,6 @@ crash.*.log
 *.tfvars
 *.auto.tfvars
 !*.tfvars.example
+
+# Internal documentation and private review artifacts
+.internal/
